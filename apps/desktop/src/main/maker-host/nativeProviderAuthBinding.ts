@@ -156,6 +156,7 @@ export interface NativeProviderCredentialRejectionDecision {
 type AtomicStateFileSnapshot =
   { kind: 'absent' } | { kind: 'present'; raw: string } | { kind: 'unreadable' };
 
+let bindingLockDepth = 0;
 let bindingMutationLockDepth = 0;
 
 /**
@@ -572,7 +573,7 @@ export function resolveNativeProviderAuthCredentialRejectionForBindingTransactio
   fingerprint: string,
   authorizationRevision?: string | null,
 ): NativeProviderCredentialRejectionDecision {
-  if (bindingMutationLockDepth === 0) {
+  if (bindingLockDepth === 0) {
     return { state: 'unreadable', effectiveAuthorizationRevision: null };
   }
   try {
@@ -668,9 +669,9 @@ function clearAtomicStateFile(file: string): void {
   }
 }
 
-function withBindingMutationLock<T>(mutation: () => T): T {
+function withBindingLock<T>(mode: 'mutation' | 'snapshot', operation: () => T): T {
   const dir = app.getPath('userData');
-  fs.mkdirSync(dir, { recursive: true });
+  if (mode === 'mutation') fs.mkdirSync(dir, { recursive: true });
   let compromised: unknown = null;
   let release: () => void;
   try {
@@ -690,8 +691,8 @@ function withBindingMutationLock<T>(mutation: () => T): T {
       (cause as NodeJS.ErrnoException).code === 'ELOCKED';
     throw new Error(
       busy
-        ? 'native provider auth binding is busy; refusing concurrent ownership mutation'
-        : 'failed to acquire native provider auth binding lock',
+        ? `native provider auth binding is busy; refusing concurrent ownership ${mode}`
+        : `failed to acquire native provider auth binding ${mode} lock`,
       { cause },
     );
   }
@@ -701,11 +702,13 @@ function withBindingMutationLock<T>(mutation: () => T): T {
   let value!: T;
   try {
     if (compromised) throw compromised;
-    bindingMutationLockDepth += 1;
+    bindingLockDepth += 1;
+    if (mode === 'mutation') bindingMutationLockDepth += 1;
     try {
-      value = mutation();
+      value = operation();
     } finally {
-      bindingMutationLockDepth -= 1;
+      if (mode === 'mutation') bindingMutationLockDepth -= 1;
+      bindingLockDepth -= 1;
     }
     if (compromised) throw compromised;
   } catch (error) {
@@ -719,6 +722,14 @@ function withBindingMutationLock<T>(mutation: () => T): T {
   }
   if (failure !== noFailure) throw failure;
   return value;
+}
+
+function withBindingMutationLock<T>(mutation: () => T): T {
+  return withBindingLock('mutation', mutation);
+}
+
+function withBindingSnapshotLock<T>(snapshot: () => T): T {
+  return withBindingLock('snapshot', snapshot);
 }
 
 export function isNativeProviderAuthOwnerFenceCurrent(
@@ -1340,14 +1351,16 @@ export function getNativeProviderAuthBindingState(
 }
 
 /**
- * Credential-store transactions already hold `.storage-write`; take the
+ * Read-only credential snapshots already hold `.storage-write`; take the
  * binding lock second so token and owner are observed in the same lock order as
- * login/logout writers. Never call this from a binding-locked callback.
+ * login/logout writers. Snapshot mode keeps backup-only sidecars unreadable;
+ * only a real binding mutation may restore them. Never call this from a
+ * binding-locked callback.
  */
 export function getNativeProviderAuthBindingStateForCredentialTransaction(
   provider: NativeProviderId,
 ): NativeProviderAuthBindingState {
-  return withBindingMutationLock(() => getNativeProviderAuthBindingStateUnlocked(provider));
+  return withBindingSnapshotLock(() => getNativeProviderAuthBindingStateUnlocked(provider));
 }
 
 /**

@@ -125,6 +125,25 @@ describe('Claude credential + ownership recovery integration', () => {
     expect(store.readClaudeAiOAuth()?.accessToken).toBe('at-owner-a');
   });
 
+  it('read-only credential snapshots leave backup-only ownership state untouched', async () => {
+    const binding = await import('../nativeProviderAuthBinding.js');
+    const store = await import('../claude-credentials-store.js');
+
+    expect(binding.bindNativeProviderAuth('anthropic')).toBe(true);
+    store.writeClaudeAiOAuth({ accessToken: 'at-owner-a', refreshToken: 'rt-owner-a' });
+    const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+    const backupFile = `${bindingFile}.bak`;
+    fs.renameSync(bindingFile, backupFile);
+    const renameSpy = vi.spyOn(fs, 'renameSync');
+
+    expect(store.hasClaudeAiOAuth()).toBe(false);
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(bindingFile)).toBe(false);
+    expect(fs.existsSync(backupFile)).toBe(true);
+
+    renameSpy.mockRestore();
+  });
+
   it('pending revocation survives module reload and blocks another owner from claiming a residual token', async () => {
     let binding = await import('../nativeProviderAuthBinding.js');
     let store = await import('../claude-credentials-store.js');
