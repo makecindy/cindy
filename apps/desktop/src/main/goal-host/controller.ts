@@ -478,7 +478,6 @@ export class GoalController {
     const evt: GoalRunEvent = {
       type,
       goalSessionId,
-      generation: boundary?.generation ?? 0,
       turnIndex: (state?.turnsUsed ?? 0) + (type === 'turn-dispatched' ? 1 : 0),
       ...(state
         ? {
@@ -1497,9 +1496,9 @@ export class GoalController {
     turn.tokensThisTurn = 0;
     turn.continuationTokens = 0;
     turn.finalized = false;
-    // 清收口审计标志:同一 TurnAccumulator 续跑下一轮,stale 的 auditFinalized
-    // 会让 accepted 误放行无收口的孤儿 dispatch(Codex P2)。
-    turn.auditFinalized = false;
+    // 注意:auditFinalized 不在此清——快终态时序是 finalizeTurn 置位 →
+    // resetTurn → stopSession → accepted(晚到),在此清会把配对标志清掉,
+    // accepted 误跳过 dispatch(Codex P1)。清除移到 fireTurn 开头(dispatch 前)。
     turn.generation += 1;
   }
 
@@ -2181,6 +2180,10 @@ export class GoalController {
     // 实际操作——重建 turns、attach listener、emit 旧账号状态)。
     if (this.disposed) return;
     const lifecycleBoundary = this.turns.get(sessionId);
+    // 清上一轮残留的收口审计标志:本派发轮次开始前必须归零(续跑复用同一
+    // TurnAccumulator,不清会让 accepted 把上一轮的 auditFinalized 当本轮的,
+    // 误放行无收口的孤儿 dispatch)。快终态时 finalizeTurn 会重新置位,不受影响。
+    if (lifecycleBoundary) lifecycleBoundary.auditFinalized = false;
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) {
       // 生命周期已接管(cancelled / 无 owner):仅清除属于本次 boundary 的恢复标记
       // (此 early return 早于 preflight/finally;并发新恢复的标记不误删)。
