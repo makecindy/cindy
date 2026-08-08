@@ -793,6 +793,29 @@ describe('remoteProjectsStore.hydrateFromCache', () => {
     expect(sessions[0].deviceLinkConnectionStatus).toBe('connected');
   });
 
+  it('缓存里的 archived 行可先显示，但重连后仍需按需权威校准', () => {
+    remoteProjectsStore.hydrateFromCache([
+      {
+        deviceId: 'dev-cold',
+        deviceName: 'Cold',
+        sessions: [{ id: 'cached-archived', status: 'archived' }] as never,
+      },
+    ]);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-cold', 'archived')).toBe(false);
+
+    remoteProjectsStore.setDeviceSessions('dev-cold', 'Cold', [{ id: 'fresh-active' }] as never);
+
+    expect(remoteProjectsStore.getDeviceSessions('dev-cold', 'archived')).toEqual([
+      expect.objectContaining({
+        id: 'cached-archived',
+        status: 'archived',
+        deviceLinkConnectionStatus: 'connected',
+      }),
+    ]);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-cold', 'active')).toBe(true);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-cold', 'archived')).toBe(false);
+  });
+
   it('空会话列表的设备不种入(不画出一台空壳设备)', () => {
     remoteProjectsStore.hydrateFromCache([
       { deviceId: 'dev-empty', deviceName: 'Empty', sessions: [] },

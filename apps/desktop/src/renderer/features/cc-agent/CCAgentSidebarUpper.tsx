@@ -217,7 +217,14 @@ import {
   prefetchDeviceGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
-import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import {
+  requestRemoteSessionStatus,
+  useRemoteArchivedFailedDeviceIds,
+  useRemoteArchivedLoadedDeviceIds,
+  useRemoteArchivedLoadingDeviceIds,
+  useRemoteDevices,
+  useRemoteProjectSessions,
+} from '@/features/device-link/remoteProjectsStore';
 import {
   selectVisibleSessions,
   setSelectedMachineIdTransient,
@@ -229,11 +236,14 @@ import {
   isRemoteSessionWriteBlocked,
 } from './lib/remoteSessionWriteGuard';
 import {
+  selectRemoteSessionBootstrapFailures,
+  selectRemoteSessionBootstrapLoadingDevices,
   useEffectiveSelectedMachineId,
   useRemoteSessionBootstrapFailures,
   useRemoteSessionBootstrapLoading,
   useRemoteSessionBootstrapLoadingDevices,
   useSelectedMachineConnecting,
+  useSwitcherDevices,
 } from '@/features/device-link/useMachineSwitcher';
 import {
   retryDeviceLinkDeviceList,
@@ -540,19 +550,40 @@ export function CCAgentSidebarUpper() {
   // 机器切换栏选中某机器后按 selectedMachineId 整体过滤(本机 → 只本地;远程 → 只该机器),
   // rail 与展开态共用同一选择态,保证 rail 折叠后仍尊重选中机器。
   const remoteProjectSessions = useRemoteProjectSessions();
+  const remoteDevices = useRemoteDevices();
   const selectedMachineId = useEffectiveSelectedMachineId();
+  useEffect(() => {
+    if (filter.status === 'active') return;
+    const selectedRemoteIds =
+      selectedMachineId === MACHINE_ALL
+        ? null
+        : new Set(selectedMachineId.filter((deviceId) => deviceId !== MACHINE_LOCAL));
+    for (const device of remoteDevices) {
+      if (!device.connected) continue;
+      if (selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)) continue;
+      requestRemoteSessionStatus(device.deviceId, 'archived');
+    }
+  }, [filter.status, remoteDevices, selectedMachineId]);
   const sessionsWithRemote = useMemo(
     () => selectVisibleSessions(sessionsHook.sessions, remoteProjectSessions, selectedMachineId),
     [sessionsHook.sessions, remoteProjectSessions, selectedMachineId],
   );
+  const statusFilteredSessionsWithRemote = useMemo(() => {
+    const effectiveStatus = sessionsHook.effectiveIncludeArchived;
+    return sessionsWithRemote.filter((session) =>
+      effectiveStatus === 'all'
+        ? filter.status === 'all' || session.status === filter.status
+        : session.status === effectiveStatus,
+    );
+  }, [filter.status, sessionsHook.effectiveIncludeArchived, sessionsWithRemote]);
   const visibleSessionsWithRemote = useMemo(
     () =>
       sidebarSessionsWithHiddenProjectsAsDialogues(
-        sessionsWithRemote,
+        statusFilteredSessionsWithRemote,
         hiddenProjectKeys,
         localPlatform,
       ),
-    [sessionsWithRemote, hiddenProjectKeys, localPlatform],
+    [statusFilteredSessionsWithRemote, hiddenProjectKeys, localPlatform],
   );
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
@@ -1106,10 +1137,101 @@ function ExpandedView({
   const selectedMachineId = useEffectiveSelectedMachineId();
   // 「所有」或含远程设备的作用域还要等 device-link 首次 sessions snapshot；
   // 否则本地 sessions 先完成时会把尚未知的远程空数组误报成真实空态。
-  const remoteSessionBootstrapLoading = useRemoteSessionBootstrapLoading(selectedMachineId);
-  const remoteSessionBootstrapLoadingDevices =
+  const activeRemoteSessionBootstrapLoading = useRemoteSessionBootstrapLoading(selectedMachineId);
+  const activeRemoteSessionBootstrapLoadingDevices =
     useRemoteSessionBootstrapLoadingDevices(selectedMachineId);
-  const remoteSessionBootstrapFailures = useRemoteSessionBootstrapFailures(selectedMachineId);
+  const activeRemoteSessionBootstrapFailures = useRemoteSessionBootstrapFailures(selectedMachineId);
+  const switcherDevices = useSwitcherDevices();
+  const archivedLoadingDeviceIds = useRemoteArchivedLoadingDeviceIds();
+  const archivedFailedDeviceIds = useRemoteArchivedFailedDeviceIds();
+  const archivedLoadedDeviceIds = useRemoteArchivedLoadedDeviceIds();
+  const archivedRemoteSessionLoadingDevices = useMemo(
+    () =>
+      selectRemoteSessionBootstrapLoadingDevices({
+        selectedMachineId,
+        devices: switcherDevices,
+        bootstrapLoadingDeviceIds: archivedLoadingDeviceIds,
+      }),
+    [archivedLoadingDeviceIds, selectedMachineId, switcherDevices],
+  );
+  const archivedRemoteSessionFailures = useMemo(
+    () =>
+      selectRemoteSessionBootstrapFailures({
+        selectedMachineId,
+        devices: switcherDevices,
+        bootstrapFailedDeviceIds: archivedFailedDeviceIds,
+      }),
+    [archivedFailedDeviceIds, selectedMachineId, switcherDevices],
+  );
+  const activeArchivedPrerequisiteLoadingDevices = useMemo(
+    () =>
+      activeRemoteSessionBootstrapLoadingDevices.filter(
+        (device) => !archivedLoadedDeviceIds.has(device.deviceId),
+      ),
+    [activeRemoteSessionBootstrapLoadingDevices, archivedLoadedDeviceIds],
+  );
+  const activeArchivedPrerequisiteFailures = useMemo(
+    () =>
+      activeRemoteSessionBootstrapFailures.filter(
+        (device) => !archivedLoadedDeviceIds.has(device.deviceId),
+      ),
+    [activeRemoteSessionBootstrapFailures, archivedLoadedDeviceIds],
+  );
+  const remoteSessionBootstrapLoadingDevices = useMemo(() => {
+    if (filter.status === 'active') return activeRemoteSessionBootstrapLoadingDevices;
+    if (filter.status === 'archived') {
+      return [
+        ...new Map(
+          [
+            ...activeArchivedPrerequisiteLoadingDevices,
+            ...archivedRemoteSessionLoadingDevices,
+          ].map((device) => [device.deviceId, device]),
+        ).values(),
+      ];
+    }
+    return [
+      ...new Map(
+        [...activeRemoteSessionBootstrapLoadingDevices, ...archivedRemoteSessionLoadingDevices].map(
+          (device) => [device.deviceId, device],
+        ),
+      ).values(),
+    ];
+  }, [
+    activeArchivedPrerequisiteLoadingDevices,
+    activeRemoteSessionBootstrapLoadingDevices,
+    archivedRemoteSessionLoadingDevices,
+    filter.status,
+  ]);
+  const remoteSessionBootstrapFailures = useMemo(() => {
+    if (filter.status === 'active') return activeRemoteSessionBootstrapFailures;
+    if (filter.status === 'archived') {
+      return [
+        ...new Map(
+          [...activeArchivedPrerequisiteFailures, ...archivedRemoteSessionFailures].map(
+            (device) => [device.deviceId, device],
+          ),
+        ).values(),
+      ];
+    }
+    return [
+      ...new Map(
+        [...activeRemoteSessionBootstrapFailures, ...archivedRemoteSessionFailures].map(
+          (device) => [device.deviceId, device],
+        ),
+      ).values(),
+    ];
+  }, [
+    activeArchivedPrerequisiteFailures,
+    activeRemoteSessionBootstrapFailures,
+    archivedRemoteSessionFailures,
+    filter.status,
+  ]);
+  const remoteSessionBootstrapLoading =
+    filter.status === 'active'
+      ? activeRemoteSessionBootstrapLoading
+      : filter.status === 'archived'
+        ? remoteSessionBootstrapLoadingDevices.length > 0
+        : activeRemoteSessionBootstrapLoading || archivedRemoteSessionLoadingDevices.length > 0;
   const deviceListRequestState = useDeviceLinkDeviceListRequestState();
   const remoteDeviceDirectoryRelevant =
     selectedMachineId === MACHINE_ALL ||
