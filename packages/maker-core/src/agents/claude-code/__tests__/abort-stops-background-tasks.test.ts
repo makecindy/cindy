@@ -2663,7 +2663,7 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
-  it('clears turnInFlight immediately, not after interrupt resolves', async () => {
+  it('keeps turnInFlight true during interrupt, clears after (P1-A fix)', async () => {
     const { handle, stream, fakeQuery } = await startSessionWithStream();
 
     // 模拟 SDK 在 retry backoff 中不立即响应 interrupt(如全池冷却 503)。
@@ -2679,21 +2679,24 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
 
     const abortPromise = handle.abort();
 
-    // turnInFlight 应在 interrupt 返回前就已清除。
+    // P1-A 修复：turnInFlight 在 interrupt 返回前保持 true，
+    // 防止并发 send 漏进旧 q 的 inputQueue 后被 clear() 抹掉。
     await new Promise((r) => setTimeout(r, 10));
-    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(true);
     expect(interruptResolved).toBe(false);
 
     await abortPromise;
     // interrupt 已 await(带 5s 超时)，200ms 延迟应已过。
     expect(interruptResolved).toBe(true);
+    // interrupt 成功且无后台任务需清理时，turnInFlight 已被显式清除。
+    expect(handle.isTurnRunning?.()).toBe(false);
     expect(fakeQuery.interrupt).toHaveBeenCalled();
 
     stream.end();
     await handle.close().catch(() => undefined);
   });
 
-  it('clears turnInFlight immediately and closes query when interrupt times out', async () => {
+  it('keeps turnInFlight true until timeout then closes query', async () => {
     vi.useFakeTimers();
     try {
       const { handle, stream, fakeQuery } = await startSessionWithStream();
@@ -2707,11 +2710,11 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
 
       const abortPromise = handle.abort();
 
-      // turnInFlight 应立刻清除。
+      // P1-A 修复：turnInFlight 在 interrupt 返回前保持 true。
       await vi.advanceTimersByTimeAsync(10);
-      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(handle.isTurnRunning?.()).toBe(true);
 
-      // 快进到 5s 超时。超时后 query 被标记为 cancelled，forward loop 负责收口。
+      // 快进到 5s 超时。超时后 query 被标记为 cancelled + turnInFlight 清除。
       await vi.advanceTimersByTimeAsync(6_000);
       expect(handle.isTurnRunning?.()).toBe(false);
 
