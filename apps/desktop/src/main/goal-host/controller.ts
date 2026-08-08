@@ -417,9 +417,11 @@ export class GoalController {
   private disposed = false;
   /**
    * firing 冲突时登记的续跑请求:由当前持有 firing 的 fireTurn 在 finally 释放后
-   * 单次调度(避免旧 fireTurn 悬挂时的每 debounceMs 轮询,Copilot suppressed)。
+   * 单次调度(避免旧 fireTurn 悬挂时的每 debounceMs 轮询)。**绑定登记者的
+   * lifecycleBoundary**——调度前校验该 boundary 仍是当前 turns owner,换代/清除后
+   * 旧请求自动失效,不会给新生命周期派发多余 continuation。
    */
-  private readonly firingRetryRequested = new Set<string>();
+  private readonly firingRetryRequested = new Map<string, TurnAccumulator>();
   /**
    * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
    * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
@@ -2200,11 +2202,11 @@ export class GoalController {
     if (this.firing.has(sessionId)) {
       // 已在派发(并发旧 fireTurn 持有所有权):本次 fireTurn 不派发——**保留恢复标记**
       // (新恢复登记后若在此删除,旧 fireTurn 随后派发只记 turn-dispatched,
-      // 缺配对的 resumed)。**登记续跑请求而非立即调度**(Copilot suppressed:若直接
+      // 缺配对的 resumed)。**登记续跑请求而非立即调度**(若直接
       // scheduleContinuation,旧 fireTurn 悬挂(send 不 resolve)时会形成"每 debounceMs
       // 一次"的轮询;由当前持有 firing 的 fireTurn 在 finally 释放后单次调度)。
       // 串台由 boundary 身份校验防住。
-      this.firingRetryRequested.add(sessionId);
+      this.firingRetryRequested.set(sessionId, lifecycleBoundary);
       return;
     }
     // 首轮 vs 续轮由 state 派生(turnsUsed===0 = 首轮尚未真正跑完),不再由调用方指定。
@@ -2344,15 +2346,21 @@ export class GoalController {
         // 报终态,finalizeTurn 已换代/停 session,isCurrentDispatch 为 false 会跳过事件,
         // 但 onDispatching 已标记 goal-owned 且 finalizer 已记 turn-finalized/terminal
         // —— 用捕获的 dispatchBoundary/generation 发,保证 finalize 有配对 dispatch)。
+        // generation 显式传捕获值(reviewer P1/P2:recordRunEvent 内部从 this.turns
+        // 读 generation,快终态时 boundary 已被 stopSession 清掉会写成 0,与
+        // finalize/terminal 脱节)。
         const pendingResume = this.pendingResumeEvents.get(sessionId);
         if (pendingResume && pendingResume.boundary === dispatchBoundary) {
           this.pendingResumeEvents.delete(sessionId);
           this.recordRunEvent('resumed', sessionId, state, {
             to: 'active',
             reason: pendingResume.reason,
+            generation: dispatchGeneration,
           });
         }
-        this.recordRunEvent('turn-dispatched', sessionId, state);
+        this.recordRunEvent('turn-dispatched', sessionId, state, {
+          generation: dispatchGeneration,
+        });
         if (!isCurrentDispatch()) {
           // 快终态/换代:终态已由 finalizeTurn 处理,这里只抑制 stale 副作用。
           return;
@@ -2376,10 +2384,16 @@ export class GoalController {
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
       }
-      // 消费 firing 冲突登记的续跑请求:firing 已释放,单次调度(Copilot suppressed:
-      // 避免旧 fireTurn 悬挂时的每 debounceMs 轮询;此处只在真正结束后触发一次)。
-      if (this.firingRetryRequested.delete(sessionId)) {
+      // 消费 firing 冲突登记的续跑请求:firing 已释放,单次调度(避免旧 fireTurn
+      // 悬挂时的每 debounceMs 轮询;此处只在真正结束后触发一次)。校验登记者的
+      // boundary 仍是当前 turns owner——换代/清除后旧请求失效,不给新生命周期
+      // 派发多余 continuation。
+      const retryBoundary = this.firingRetryRequested.get(sessionId);
+      if (retryBoundary && this.turns.get(sessionId) === retryBoundary) {
+        this.firingRetryRequested.delete(sessionId);
         this.scheduleContinuation(sessionId);
+      } else {
+        this.firingRetryRequested.delete(sessionId);
       }
       // 清除残留恢复标记():正常派发时已在 accepted 分支消费删除,
       // 此处幂等兜底 send 失败/拒绝/未派发路径——按本次 dispatchBoundary 身份清理,

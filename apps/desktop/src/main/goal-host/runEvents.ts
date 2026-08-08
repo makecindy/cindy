@@ -70,7 +70,7 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
   return {
     record(evt: GoalRunEvent) {
       // 浅拷贝(含嵌套 budget)后存入环:snapshot/sink 消费者若意外修改事件对象,
-      // 不会反向污染内存环里的审计数据(Copilot suppressed)。sink 仍收原始 evt。
+      // 不会反向污染内存环里的审计数据。sink 仍收原始 evt。
       ring.push({
         ...evt,
         budget: evt.budget ? { ...evt.budget } : undefined,
@@ -80,7 +80,7 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
     },
     snapshot() {
       // 与 record 同样浅拷贝(含 budget):slice 只复制数组,消费者修改返回的事件
-      // 对象仍会污染环(Copilot suppressed 03:50)。
+      // 对象仍会污染环(reviewer)。
       return ring.map((evt) => ({
         ...evt,
         budget: evt.budget ? { ...evt.budget } : undefined,
