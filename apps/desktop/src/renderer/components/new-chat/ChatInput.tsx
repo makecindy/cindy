@@ -204,6 +204,7 @@ import {
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
+  hasUnavailableProjectSkillPreview,
   isSlashCommandUnavailable,
   loadAllCommands,
   nextAvailableSlashCommandIndex,
@@ -3820,16 +3821,7 @@ export function ChatInput({
       return;
     }
     if (paletteAgentKind !== 'pi' || !sessionId) return;
-    const projectSkills = mergedCommands.filter((command) => (
-      command.kind === 'agent-skill' && command.scope === 'repo'
-    ));
-    if (
-      projectSkills.length === 0
-      || projectSkills.some((command) => (
-        command.kind === 'agent-skill' && command.runtimeStatus === 'loaded'
-      ))
-      || !projectSkills.some(isSlashCommandUnavailable)
-    ) return;
+    if (!hasUnavailableProjectSkillPreview(mergedCommands)) return;
     const attempt = piRuntimeRetryRef.current;
     if (attempt >= PI_RUNTIME_SKILL_RETRY_DELAYS_MS.length) return;
     piRuntimeRetryRef.current = attempt + 1;

@@ -169,6 +169,11 @@ function hasShadowedUnavailableSkill(
   return shadowedUnavailableSkillsByCommands.get(commands)?.has(commandName.toLowerCase()) ?? false;
 }
 
+export function hasUnavailableProjectSkillPreview(commands: UnifiedCommand[]): boolean {
+  return commands.some(isSlashCommandUnavailable)
+    || (shadowedUnavailableSkillsByCommands.get(commands)?.size ?? 0) > 0;
+}
+
 /**
  * 包含过滤(case-insensitive); 精确匹配优先,其次是前缀匹配,最后是普通包含匹配。
  *

@@ -4,6 +4,7 @@ import {
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
+  hasUnavailableProjectSkillPreview,
   isSlashCommandUnavailable,
   mergeCommands,
   nextAvailableSlashCommandIndex,
@@ -190,6 +191,21 @@ describe('Pi project skill availability', () => {
     };
 
     expect(mergeCommands([desktop], [], [discovered])).toEqual([desktop]);
+  });
+
+  it('keeps hidden discovered collisions visible to Pi palette polling', () => {
+    const discovered = skill({ name: 'help', scope: 'repo', runtimeStatus: 'discovered' });
+    const desktop: UnifiedCommand = {
+      kind: 'desktop',
+      name: 'help',
+      description: 'Open help',
+    };
+
+    const commands = mergeCommands([desktop], [], [discovered]);
+
+    expect(commands).toEqual([desktop]);
+    expect(hasUnavailableProjectSkillPreview(commands)).toBe(true);
+    expect(hasUnavailableProjectSkillPreview([desktop])).toBe(false);
   });
 
   it('initializes and moves keyboard focus past unavailable project skills', () => {
