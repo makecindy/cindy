@@ -1281,6 +1281,9 @@ export class GoalController {
    * 这样重开会话能让 active 目标自己跑下去,而不是卡死等用户重发 /goal。
    */
   async resumeOnOpen(sessionId: string): Promise<void> {
+    // dispose 后丢弃(reviewer P1:GOAL_GET_STATUS 捕获实例 await 期间登出,不得重建
+    // turns / attach 旧 listener / emit 旧账号状态)。每个 await 后重查。
+    if (this.disposed) return;
     if (this.unsubscribers.has(sessionId) || this.turns.has(sessionId)) return; // 已在管或正在 Stop
     const lifecycleBoundary = freshTurn();
     this.turns.set(sessionId, lifecycleBoundary);
@@ -1291,6 +1294,7 @@ export class GoalController {
       if (this.turns.get(sessionId) === lifecycleBoundary) this.turns.delete(sessionId);
       throw error;
     }
+    if (this.disposed) return;
     if (this.turns.get(sessionId) !== lifecycleBoundary) return;
     if (!state || state.status !== 'active') {
       if (this.turns.get(sessionId) === lifecycleBoundary) this.turns.delete(sessionId);
@@ -1766,10 +1770,10 @@ export class GoalController {
       );
       // 观测:completion 提交(达成记录 + clear + null emit)成功后才宣告终态
       // (提交卡住或 clear 拒绝时,不得产生假 terminal complete)。
-      // 再次校验生命周期(await trackCompletion 期间登出/切账号会
-      // resetGoalController → dispose 清 turns + 环,本完成轮不得把旧账号事件重新
-      // 写入已清空的环;trackCompletion 本身已提交,达成记录/clear 不受影响)。
-      if (isCurrentTurn()) {
+      // 守卫仅针对账号边界(同账号 pause/clear/新 /goal 的 handoff 也会换代,但
+      // completion 已提交、环未被清,事件必须保留——用捕获的 completedGeneration;
+      // 只有登出/切账号 dispose 后才跳过,防旧账号事件写回已清空的环)。
+      if (!this.disposed) {
         this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
           from: state.status,
           to: 'complete',
@@ -1790,7 +1794,7 @@ export class GoalController {
           generation: completedGeneration,
         });
       } else {
-        this.deps.logger.info('[goal] completion audit skipped — lifecycle no longer current', {
+        this.deps.logger.info('[goal] completion audit skipped — controller disposed', {
           sessionId,
         });
       }
