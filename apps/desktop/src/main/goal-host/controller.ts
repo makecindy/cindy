@@ -469,14 +469,18 @@ export class GoalController {
     type: GoalRunEventType,
     goalSessionId: string,
     state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
-    // 只允许补充/覆盖 helper 未计算/归一化的字段(from/to/generation/reason/at);
+    // 只允许补充/覆盖 helper 未计算/归一化的字段(from/to/generation/lifecycleId/reason/at);
     // type/goalSessionId/turnIndex/budget 由 helper 负责,调用方不可意外覆盖。
     // at 允许传入(快终态重放顺序需要派发时刻锚点,如 dispatchAt),
     // helper 内 extra.at ?? now 优先。
+    // lifecycleId 允许传入(fast-terminal 补发时 turns owner 可能已被 stopSession
+    // 清掉,必须用捕获的 dispatchBoundary.lifecycleId 显式盖章)。
     // reason 单独定义(不放进 Pick):交叉类型对同名属性取交集,会把 reason 收窄成
     // string,无法接受 GoalState.lastReason 的 string | null;单独给 nullable 类型后
     // helper 内归一化为 undefined,strict 下安全。
-    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation' | 'at'> & { reason?: string | null },
+    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation' | 'lifecycleId' | 'at'> & {
+      reason?: string | null;
+    },
   ): void {
     // dispose 后丢弃观测(登出/切账号 reset 后,in-flight 的旧 controller
     // 扫描/收口不得把旧账号事件写回已清空的环)。
@@ -486,7 +490,6 @@ export class GoalController {
     const evt: GoalRunEvent = {
       type,
       goalSessionId,
-      lifecycleId: boundary?.lifecycleId,
       turnIndex: (state?.turnsUsed ?? 0) + (type === 'turn-dispatched' ? 1 : 0),
       ...(state
         ? {
@@ -502,6 +505,9 @@ export class GoalController {
         : {}),
       ...extra,
       reason: extra?.reason ?? undefined,
+      // extra.lifecycleId 优先(fast-terminal 补发显式盖章,防 turns owner 被清后
+      // 写出 undefined 或新生命周期的 id),否则回退当前 boundary。
+      lifecycleId: extra?.lifecycleId ?? boundary?.lifecycleId,
       // extra.generation 可能为 undefined(派发未固化时),不得覆盖已设的
       // boundary.generation 破坏 schema——显式兜底。
       generation: extra?.generation ?? boundary?.generation ?? 0,
@@ -2196,10 +2202,9 @@ export class GoalController {
     // 实际操作——重建 turns、attach listener、emit 旧账号状态)。
     if (this.disposed) return;
     const lifecycleBoundary = this.turns.get(sessionId);
-    // 清上一轮残留的收口审计标志:本派发轮次开始前必须归零(续跑复用同一
-    // TurnAccumulator,不清会让 accepted 把上一轮的 auditFinalized 当本轮的,
-    // 误放行无收口的孤儿 dispatch)。快终态时 finalizeTurn 会重新置位,不受影响。
-    if (lifecycleBoundary) lifecycleBoundary.auditFinalized = false;
+    // 注意:auditFinalized 的清除在 onDispatching(真实派发边界)做,不在 fireTurn
+    // 开头——fast-terminal 收口会安排 continuation,重入 fireTurn 命中 firing
+    // owner 在派发前返回,若在开头清会把刚置位的配对标志清掉(Greptile P1)。
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) {
       // 生命周期已接管(cancelled / 无 owner):仅清除属于本次 boundary 的恢复标记
       // (此 early return 早于 preflight/finally;并发新恢复的标记不误删)。
@@ -2379,6 +2384,11 @@ export class GoalController {
           onDispatching: () => {
             if (!isCurrentDispatch()) return;
             this.goalTurnsInFlight.add(sessionId);
+            // 真实派发边界:清上一轮残留的收口审计标志(续跑复用同一
+            // TurnAccumulator,不清会让 accepted 把上一轮的 auditFinalized 当本轮的,
+            // 误放行无收口的孤儿 dispatch)。fast-terminal 重入 fireTurn 在派发前
+            // 返回,不会在这里误清新一轮 finalizeTurn 刚置位的标志(Greptile P1)。
+            if (dispatchBoundary) dispatchBoundary.auditFinalized = false;
             // signal 只负责取消 dispatch 前的 gate。跨过这个边界后由 coordinator Stop
             // 负责 active turn；否则快速终态的 stopSession 会把真实已派发轮次误报为
             // cancelled-before-dispatch。
@@ -2444,11 +2454,15 @@ export class GoalController {
             to: 'active',
             reason: dispatchResumeReason,
             generation: dispatchGeneration,
+            // fast-terminal 后 turns owner 可能已被 stopSession 清掉,显式盖章
+            // 捕获的 lifecycleId 保证与收口事件同生命周期配对/排序。
+            lifecycleId: dispatchBoundary?.lifecycleId,
             at: dispatchAt ?? this.now(),
           });
         }
         this.recordRunEvent('turn-dispatched', sessionId, state, {
           generation: dispatchGeneration,
+          lifecycleId: dispatchBoundary?.lifecycleId,
           at: dispatchAt ?? this.now(),
         });
         if (!isCurrentDispatch()) {
