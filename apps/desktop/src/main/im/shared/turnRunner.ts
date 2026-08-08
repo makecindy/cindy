@@ -731,7 +731,12 @@ export function createTurnRunner(
       ((operation: () => Promise<void>): void => {
         void operation();
       });
-    if (target.attached && text.trim().length > 0) {
+    // 受保护群的触发消息不能被总结成会话标题。标题是**长期记录**, 会一直挂在
+    // 侧边栏上 —— 把「禁止保存内容」的正文摘要留在那里, 与把它写进 transcript
+    // 是同一条边界被绕过, 而且主 turn 最终没被 provider 接受时照样会留下。
+    // 宁可停在草稿标题。
+    const titleFromText = args.protectedContent !== true;
+    if (titleFromText && target.attached && text.trim().length > 0) {
       startBackgroundTask(() =>
         maybeGenerateFbotTitleOnFirstMessage(row.id, text, {
           botContextId,
@@ -741,6 +746,7 @@ export function createTurnRunner(
         }),
       );
     } else if (
+      titleFromText &&
       text.trim().length > 0 &&
       (adapter.threadScoped
         ? target.created

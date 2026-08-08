@@ -2744,6 +2744,29 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
       expect(mocks.generateAndPersistFbotTitle).not.toHaveBeenCalled();
     });
+
+    it('受保护群的首条消息不拿去起名 —— 标题也是长期记录', async () => {
+      // 标题会一直挂在侧边栏上。把「禁止保存内容」的正文摘要留在那里, 与把它
+      // 写进 transcript 是同一条边界被绕过, 而且主 turn 最终没被 provider 接受
+      // 时照样会留下。
+      const prefixedRunner = makePrefixedRunner();
+      setupSession(async () => ({ accepted: false, reason: 'cancelled-before-dispatch' }));
+      try {
+        await prefixedRunner.runAgentTurn({
+          botContextId: 'cli_test_bot',
+          userId: 'ou_user',
+          userMessageId: 'msg-user',
+          text: '帮我修个 bug',
+          attachments: [],
+          protectedContent: true,
+        });
+        await flushMicrotasks();
+      } finally {
+        await prefixedRunner.disposeAllSessions();
+      }
+
+      expect(mocks.generateAndPersistFbotTitle).not.toHaveBeenCalled();
+    });
   });
 
   describe('受保护群的触发消息不进会话存档', () => {
