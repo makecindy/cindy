@@ -93,8 +93,8 @@ export interface TurnState {
   /** interrupt 置位时的 generation 快照(见 generation 注释)。 */
   interruptGeneration: number;
   /**
-   * 最近一条 assistant API 消息是否带「实质内容」(非空 text 块或 tool_use 块;
-   * 只有 thinking——包括空 thinking——不算)。逐条 assistant 消息覆盖写,turn end
+   * 最近一条 assistant API 消息是否带「实质内容」(非空 text 或任何非 thinking 块;
+   * thinking / redacted_thinking 不算)。逐条 assistant 消息覆盖写,turn end
    * 时留下的即"最后一条 assistant 消息"的判定,是 silent-stop 观测的核心依据:
    * 上游偶发用一条空内容消息收尾整个 turn(空 thinking + end_turn,或 SSE 流被
    * 静默中断后 stop_reason 缺失;社区同型报告 anthropics/claude-code#50597 /
@@ -986,6 +986,20 @@ function mapTaskUpdatedStatus(status: string | undefined, hasError: boolean): Ag
 
 // ── assistant 子分支 ─────────────────────────────────────────────────────────
 
+/**
+ * 只有不可见的 thinking 块不算 assistant 的实质产出。未知/新增块按有实质内容
+ * 保守处理，避免 SDK 增加 server tool / control block 后被误判成 silent stop。
+ */
+function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
+  if (block.type === 'text') {
+    return typeof block.text === 'string' && block.text.length > 0;
+  }
+  if (block.type === 'thinking' || block.type === 'redacted_thinking') {
+    return false;
+  }
+  return true;
+}
+
 function handleAssistant(
   msg: { message?: { content?: Array<Record<string, unknown>> }; error?: string },
   queue: EventQueue,
@@ -1048,15 +1062,10 @@ function handleAssistant(
   ctx.rt.lastAssistantMeta = assistantMeta;
 
   const content = msg.message?.content ?? [];
-  // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / tool_use;thinking 不算)。
+  // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
+  // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
   // 逐条覆盖写, turn end 时留下的就是最后一条 assistant 消息的判定(见 TurnState 字段注释)。
-  ctx.turn.lastAssistantMsgHadSubstance = content.some((blockRaw) => {
-    const block = blockRaw as { type?: string; text?: string };
-    return (
-      (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) ||
-      block.type === 'tool_use'
-    );
-  });
+  ctx.turn.lastAssistantMsgHadSubstance = content.some(assistantBlockHasSubstance);
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
@@ -1627,13 +1636,15 @@ function handleResult(
       source: 'claude-code',
     });
   }
-  // silent-stop 判定: turn 内干过活(有 tool 调用), 但最后一条 assistant 消息没有任何
-  // 实质内容(典型: 只有一个空 thinking 块), result 也没兜出可补的文本 —— 上游把"任务
-  // 进行到一半"的 turn 静默收了尾, 用户侧表现为"干着干着停了、看起来像正常结束"。已知
+  // silent-stop 判定: turn 内干过活(有 tool 调用),或整轮没有任何用户可见正文,且最后
+  // 一条 assistant 消息没有实质内容(典型: 只有 thinking 块),result 也没兜出可补的
+  // 文本 —— 上游把 turn 静默收了尾,用户侧表现为"干着干着停了、看起来像正常结束"。已知
   // 上游形态: 模型偶发 thinking-only 空响应(anthropics/claude-code#50597,
   // stop_reason=end_turn)与 SSE 流被静默中断后 SDK 按正常结束处理(#38905, 此形态
   // stop_reason 常缺失)。与 isEmptyResponseTurn(整轮 0 产出 + usage 全 0)互斥:
-  // 这里要求 toolUses > 0。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
+  // 零 tool 但零可见正文也必须命中:第一次自动补发「继续」后,上游可能再次只返回
+  // thinking；旧的 toolUses > 0 守卫会把第二次当正常完成。已有可见正文的零 tool turn
+  // 则不扩张判定。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
   // interruptRequested(用户停止/watchdog)、sawCompactBoundary(compact 轮合法空)。
   // 命中后事件流仍走正常 Done/done 收尾(记账/收口零变更), 只在 done.data 附加
   // silentStop 标记交给 host 的自动续跑守卫决策; WARN 日志保留作 dev 排查。
@@ -1642,7 +1653,7 @@ function handleResult(
     !ctx.turn.interruptRequested &&
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
-    ctx.turn.toolUses > 0 &&
+    (ctx.turn.toolUses > 0 || ctx.turn.uiEmittedText.length === 0) &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
