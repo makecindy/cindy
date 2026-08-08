@@ -611,10 +611,11 @@ async function persistPrecreatedSessionCreateStarted(task: InternalTask): Promis
 
 /** createSession 一步:瞬态失败 probe-before-retry,确定性失败直接抛。 */
 /** 返回被控端分配的 workDir(dialogue 会话此刻才有;probe 收敛路径取权威行的值)。 */
+/** 返回 started 写盘后二次重验修正的最终草稿(排队消息合成用,codex review P2)。 */
 async function createSessionIdempotent(
   task: InternalTask,
   effectiveDraft: NewSessionDraft,
-): Promise<{ workDir: string | null }> {
+): Promise<{ workDir: string | null; finalDraft: NewSessionDraft }> {
   const { maker } = task.params.transport;
   const sleep = task.params.sleep ?? realSleep;
   // 鉴权后联合校验的最终草稿(codex review P2):只影响本次创建,不改 task.draft
@@ -639,12 +640,21 @@ async function createSessionIdempotent(
     if (task.params.revalidateDraftAfterAuth) {
       const auth = await task.params.confirmUnauthenticated();
       assertTaskOwnerCurrent(task);
+      // 二次重验中处理未鉴权结果(codex review P2):started 写盘期间所有适用于
+      // 当前 Agent 的来源可能全部断开——此时应中止创建并显示鉴权提示,而不是
+      // 继续 createSession 变成创建失败(管线最初的鉴权检查在该写盘 await 之前,
+      // 无法覆盖此窗口,retain-only 阶段的任务也无法正常重试)。
+      if (auth?.unauthenticated) {
+        task.params.onUnauthenticated();
+        throw new Error(task.params.authGateHint);
+      }
       if (auth?.fresh) {
         const patch = await task.params.revalidateDraftAfterAuth(auth.fresh);
         assertTaskOwnerCurrent(task);
         if (patch) {
+          effectiveDraft = { ...effectiveDraft, ...patch };
           createOpts = {
-            ...buildRemoteCreateSessionOptions({ ...effectiveDraft, ...patch }),
+            ...buildRemoteCreateSessionOptions(effectiveDraft),
             id: task.sessionId,
           };
         }
@@ -658,7 +668,7 @@ async function createSessionIdempotent(
       if (!result || result.sessionId !== task.sessionId) {
         throw new Error(i18n.t('session.new.worktreeCleanupPending'));
       }
-      return { workDir: result.workDir ?? null };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft };
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       try {
@@ -668,7 +678,7 @@ async function createSessionIdempotent(
           task.sessionId,
         );
         assertTaskOwnerCurrent(task);
-        if (probed) return { workDir: probed.workingDir ?? null };
+        if (probed) return { workDir: probed.workingDir ?? null, finalDraft: effectiveDraft };
       } catch (probeError) {
         if (isStaleNewSessionOwnerError(probeError)) throw probeError;
       }
@@ -689,7 +699,7 @@ async function createSessionIdempotent(
         );
         assertTaskOwnerCurrent(task);
         if (!probed) throw new Error('Invalid remote session ownership response');
-        return { workDir: probed.workingDir ?? null };
+        return { workDir: probed.workingDir ?? null, finalDraft: effectiveDraft };
       } catch (error) {
         if (isStaleNewSessionOwnerError(error)) throw error;
         // 未创建(或 probe 也失败):按重试继续。
@@ -710,7 +720,7 @@ async function createSessionIdempotent(
         // 错误会话。按确定性失败收敛到重试面(不自动重试,避免再建一个空会话)。
         throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
       }
-      return { workDir: result.workDir ?? null };
+      return { workDir: result.workDir ?? null, finalDraft: effectiveDraft };
     } catch (err) {
       if (isStaleNewSessionOwnerError(err)) throw err;
       // 确定性失败(鉴权 / 参数 / 路径 guard 等)重试无意义,直接抛给重试面;
@@ -730,7 +740,7 @@ async function createSessionIdempotent(
     );
     assertTaskOwnerCurrent(task);
     if (!probed) throw new Error('Invalid remote session ownership response');
-    return { workDir: probed.workingDir ?? null };
+    return { workDir: probed.workingDir ?? null, finalDraft: effectiveDraft };
   } catch (error) {
     if (isStaleNewSessionOwnerError(error)) throw error;
     // 确认未创建(或 probe 也失败):按最后的瞬态错误交给重试面(同 id 重试幂等)。
@@ -858,6 +868,11 @@ async function runPipeline(task: InternalTask): Promise<void> {
     const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
 
     const createOutcome = await createSessionIdempotent(task, finalDraft);
+    // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
+    // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
+    // 修正版:否则 getSession 弱网失败时 sessionForQueue 按旧 finalDraft 合成,
+    // 乐观会话与首条排队消息的 lazy-create 参数仍携带已删除来源 A。
+    const effectiveFinalDraft = createOutcome.finalDraft;
     assertTaskOwnerCurrent(task);
     if (!tasks.has(sessionId)) return; // 已被用户 dismiss
     // 从这一刻起 worktree 已被会话认领；即使首条消息 enqueue 后续失败，
@@ -905,7 +920,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 会让「桌面重启后、首 turn 前」的 lazy-create 无法回到已分配的对话工作区
     // (codex review P2);project 会话两者一致,补齐是 no-op。
     const sessionForQueue = freshSession ?? {
-      ...synthesizeSession(params, finalDraft),
+      ...synthesizeSession(params, effectiveFinalDraft),
       ...(createOutcome.workDir ? { workingDir: createOutcome.workDir } : {}),
     };
     // fallback 路径把 reconciled 运行字段写回乐观行(codex review P1):鉴权后
@@ -917,7 +932,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
     }
     const queuedDraft = attachFirstMessageSessionReferences(buildQueuedTextMessage(
       sessionForQueue,
-      finalDraft.firstMessage,
+      effectiveFinalDraft.firstMessage,
       new Date(),
       task.firstMessageClientId,
       { attachments: [...params.attachments] },
