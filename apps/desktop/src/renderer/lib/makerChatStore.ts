@@ -2695,18 +2695,6 @@ const localSentUserMessageIds = new Map<string, Set<string>>();
 /** Generous per-session cap — the lookup only matters right after sending. */
 const LOCAL_SENT_IDS_CAP = 200;
 
-/**
- * #2194 (review P1): 人工「重试」（错误横幅 Retry）走 main 的
- * performRetryLastError，可见的克隆重发行在 main 侧以**新 clientId** 落库，
- * renderer 发送侧无从登记。点击本身是明确的本地意图——点击时记下会话当前
- * 末尾 user 消息为基线；此后第一条**新的** user 消息（即克隆行）按本端
- * 发送处理并消费标记。基线守卫避免标记被渲染期对既有末尾消息的查询误消费。
- * 有产出分支补发的是隐藏续跑指令（UI_ACTION_TRIGGER 前缀，渲染过滤），
- * 不产生可见 user 气泡，标记会留到 purge——届时若误入一条外部消息，
- * 至多错 pin 一次，可接受。
- */
-const pendingLocalRetryIntent = new Map<string, string>();
-
 function markLocalSentUserMessage(sessionId: string, clientId: string): void {
   let ids = localSentUserMessageIds.get(sessionId);
   if (!ids) {
@@ -2720,18 +2708,9 @@ function markLocalSentUserMessage(sessionId: string, clientId: string): void {
   ids.add(clientId);
 }
 
-/**
- * Whether the given user message was sent from this renderer's composer.
- * 对本端发送集合做纯查询；retry 标记在命中新 clientId 时消费（一次性）。
- */
+/** Whether the given user message was sent from this renderer's composer. */
 function isLocalSentUserMessage(sessionId: string, clientId: string): boolean {
-  if (localSentUserMessageIds.get(sessionId)?.has(clientId)) return true;
-  const baseline = pendingLocalRetryIntent.get(sessionId);
-  if (baseline !== undefined && clientId !== baseline) {
-    pendingLocalRetryIntent.delete(sessionId);
-    return true;
-  }
-  return false;
+  return localSentUserMessageIds.get(sessionId)?.has(clientId) ?? false;
 }
 
 /**
@@ -3116,7 +3095,6 @@ function _purgeSession(sessionId: string): void {
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
-  pendingLocalRetryIntent.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
   _stopTransitions.delete(sessionId);
@@ -12197,16 +12175,20 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
-  // #2194 (review P1): 人工 Retry 是本地意图——零产出分支的克隆行在 main 以新
-  // clientId 落库，发送侧登记不到，这里记基线让 isLocalSentUserMessage 认领它。
-  const tailUser = [...getOrCreateState(sessionId).messages]
-    .reverse()
-    .find((m) => m.role === 'user');
-  pendingLocalRetryIntent.set(sessionId, tailUser?.clientId ?? '');
+  // #2194 (review P1): 人工 Retry 是本地意图，但重试项（零产出克隆行 / 有产出
+  // 隐藏续跑指令）由 main 在 performRetryLastError 以**新 clientId** 生成并
+  // unshift 到 pendingQueue 队首，发送侧登记不到。利用投影回执里**队首
+  // clientId 的变化**做权威归属——显式 local-intent，不做文本猜测，也不给
+  // 并发到达的外部消息留误判窗口（维护者口径，#2222）。
+  const headBefore = getOrCreateState(sessionId).pendingQueue[0]?.clientId ?? null;
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
-  ).then(() => undefined);
+  ).then(() => {
+    // 队首变了 = 本次重试生成的新项；队首不变 = superseded / no-op，不标记。
+    const headAfter = getOrCreateState(sessionId).pendingQueue[0]?.clientId ?? null;
+    if (headAfter && headAfter !== headBefore) markLocalSentUserMessage(sessionId, headAfter);
+  });
 }
 
 /**

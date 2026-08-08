@@ -73,10 +73,13 @@ const EFFORT = 'medium';
 const PERM = 'default';
 const WD = 'C:\\workspace';
 
-const enqueue = vi.fn(
-  async (sessionId: string, item: AgentInputQueuedMessage): Promise<AgentInputProjection> => ({
+function projection(
+  sessionId: string,
+  patch: Partial<AgentInputProjection> = {},
+): AgentInputProjection {
+  return {
     sessionId,
-    pendingQueue: [item],
+    pendingQueue: [],
     steeringQueueClientIds: [],
     queuePaused: false,
     queueExpanded: false,
@@ -87,28 +90,46 @@ const enqueue = vi.fn(
     recovery: null,
     errorRetryText: null,
     credentialSwitchWait: null,
-  }),
+    ...patch,
+  };
+}
+
+function queuedItem(clientId: string, text: string): AgentInputQueuedMessage {
+  return {
+    clientId,
+    text,
+    persistedContent: JSON.stringify({ text, images: [], files: [] }),
+    model: MODEL,
+    effort: EFFORT,
+    permissionMode: PERM,
+    workingDir: WD,
+    chatMessage: {
+      clientId,
+      role: 'user',
+      content: text,
+      isStreaming: false,
+      createdAt: '2026-06-07T00:00:00.000Z',
+    },
+    createOpts: {
+      agentKind: 'claude-code',
+      workingDir: WD,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERM,
+      userPrompt: 'test user prompt',
+      makerMemoryEnabled: true,
+      displayReasoning: 'summarized',
+    },
+  };
+}
+
+const enqueue = vi.fn((sessionId: string, item: AgentInputQueuedMessage) =>
+  Promise.resolve(projection(sessionId, { pendingQueue: [item] })),
 );
 
-const retryLastError = vi.fn(async (sessionId: string): Promise<AgentInputProjection> => ({
-  sessionId,
-  pendingQueue: [],
-  steeringQueueClientIds: [],
-  queuePaused: false,
-  queueExpanded: false,
-  queueInteractionLocks: [],
-  queueEditLocks: [],
-  queueAbortPending: false,
-  error: null,
-  recovery: null,
-  errorRetryText: null,
-  credentialSwitchWait: null,
-}));
-
-let messageCreatedHandler: ((payload: unknown) => void) | null = null;
+const retryLastError = vi.fn((sessionId: string) => Promise.resolve(projection(sessionId)));
 
 function installElectronBridge(): void {
-  messageCreatedHandler = null;
   const w = globalThis as unknown as { window?: Record<string, unknown> };
   if (!w.window) w.window = {};
   w.window.electronAPI = {
@@ -128,10 +149,7 @@ function installElectronBridge(): void {
     },
     localDb: {
       messages: {
-        onCreated: vi.fn((cb: (payload: unknown) => void) => {
-          messageCreatedHandler = cb;
-          return vi.fn();
-        }),
+        onCreated: vi.fn(() => vi.fn()),
       },
     },
     deviceLink: { invoke: vi.fn().mockResolvedValue(undefined) },
@@ -190,34 +208,31 @@ describe('isLocalSentUserMessage (#2194)', () => {
     expect(makerChatStore.isLocalSentUserMessage(sid, item.clientId)).toBe(false);
   });
 
-  // review P1: 人工 Retry 的克隆重发行由 main 以新 clientId 落库，发送侧登记不到；
-  // renderer 在点击时记基线，此后第一条新 user 消息按本端发送认领（一次性）。
-  it('人工 Retry 后的克隆 user 行按本端发送认领，且只认领一次', async () => {
+  // review P1: 人工 Retry 的重试项（零产出克隆行 / 有产出隐藏续跑指令）由 main
+  // 以新 clientId 生成并 unshift 到 pendingQueue 队首；renderer 按投影回执的
+  // 队首变化做权威归属——显式 local-intent，不做文本猜测（维护者口径，#2222）。
+  it('人工 Retry 生成的新队首项按本端发送登记，外部消息不受影响', async () => {
     const sid = `retry-${Math.random().toString(36).slice(2, 8)}`;
-
-    makerChatStore.initGlobalListeners();
-    messageCreatedHandler?.({
-      sessionId: sid,
-      message: {
-        id: 'm-1',
-        clientId: 'orig-user',
-        sessionId: sid,
-        role: 'user',
-        content: 'failed text',
-        toolUseId: null,
-        agentMeta: null,
-        createdAt: '2026-06-07T00:00:00.000Z',
-      },
-    });
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('retry-clone', 'failed text')] }),
+    );
 
     await makerChatStore.retryLastError(sid);
     await flushPromises();
     expect(retryLastError).toHaveBeenCalledTimes(1);
 
-    // 基线消息本身不被误领（渲染期对既有末尾消息的查询不消费标记）。
-    expect(makerChatStore.isLocalSentUserMessage(sid, 'orig-user')).toBe(false);
-    // main 以新 clientId 落库的克隆行 → 认领为本端意图，消费后失效。
+    // 新队首（重试项）被登记；同会话外部注入的消息不受影响。
     expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone')).toBe(true);
-    expect(makerChatStore.isLocalSentUserMessage(sid, 'later-im-message')).toBe(false);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'injected-from-im')).toBe(false);
+  });
+
+  it('Retry 未生成新队首项（superseded / no-op）时不做标记', async () => {
+    const sid = `retry-noop-${Math.random().toString(36).slice(2, 8)}`;
+
+    // 默认 mock 返回空 pendingQueue——队首无变化，等价 superseded / no-op。
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'anything')).toBe(false);
   });
 });
