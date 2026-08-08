@@ -5893,6 +5893,43 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     );
   });
 
+  it('does not cancel an old-team active item after vendor dispatch has started', async () => {
+    const h = createHarness();
+    const sid = 'orca-team-vendor-dispatch-started';
+    const vendorSendStarted = deferred<void>();
+    const sendSettled = deferred<AgentInputSendResult>();
+
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      vendorSendStarted.resolve();
+      return sendSettled.promise;
+    });
+    await h.coordinator.ensureQueueRestored(sid);
+
+    h.coordinator.enqueue(sid, makeOrcaItem('orca-old', 'old worker report', 'team-old'));
+    await vendorSendStarted.promise;
+
+    await expect(
+      h.coordinator.discardQueuedItemsWhere(
+        sid,
+        (item) => item.origin?.kind === 'orca' && item.origin.teamId === 'team-old',
+      ),
+    ).resolves.toMatchObject({ activeCancelled: false });
+    expect(h.onUndispatchedUserTurn).not.toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+      'cancelled',
+    );
+
+    sendSettled.resolve(sendSuccess());
+    await flush();
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'orca-old' }),
+      expect.any(Number),
+    );
+  });
+
   it('persists the queue after restore and shrinks the snapshot once the head crosses the DB boundary', async () => {
     const h = createHarness();
     const sid = 'snapshot-persist';

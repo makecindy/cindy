@@ -7622,6 +7622,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const endedOrcaTeamIds = new Set<string>();
   const endedOrcaTeamIdOrder: string[] = [];
 
+  function withOrcaLeadLifecycleLock<T>(
+    leadSessionId: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    return withSendToSessionLock(leadSessionId, task);
+  }
+
   function addEndedOrcaTeamId(teamId: string): void {
     if (endedOrcaTeamIds.has(teamId)) return;
     endedOrcaTeamIds.add(teamId);
@@ -7835,7 +7842,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           'workerPermissionMode must be auto or bypassPermissions',
         );
       }
-      return enableOrcaInternal(leadSessionId, {
+      return enableOrcaWithLeadLifecycleLock(leadSessionId, {
         workerAgent,
         delegateTask,
         role: typeof body.role === 'string' ? body.role : undefined,
@@ -7999,10 +8006,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { ok: true };
   }
 
+  function enableOrcaWithLeadLifecycleLock(
+    leadSessionId: string,
+    opts: EnableOrcaOptions,
+  ) {
+    return withOrcaLeadLifecycleLock(leadSessionId, () =>
+      enableOrcaInternal(leadSessionId, opts),
+    );
+  }
+
+  function disableOrcaWithLeadLifecycleLock(leadSessionId: string) {
+    return withOrcaLeadLifecycleLock(leadSessionId, () => disableOrcaInternal(leadSessionId));
+  }
+
   ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string')
       throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    return disableOrcaInternal(leadSessionId);
+    return disableOrcaWithLeadLifecycleLock(leadSessionId);
   });
 
   // ─── Orca worker IPC handlers ────────────────────────────────────────────
@@ -8115,7 +8135,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.TEAM_END, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string')
       throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    const result = await disableOrcaInternal(leadSessionId);
+    const result = await disableOrcaWithLeadLifecycleLock(leadSessionId);
     broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, {
       leadSessionId: leadSessionId as string,
     });
@@ -8564,8 +8584,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 走与 IPC handler 完全相同的业务路径。
   orcaCollabServiceHolder = {
     sendToSession: sendToSessionInternal,
-    enableOrca: enableOrcaInternal,
-    disableOrca: disableOrcaInternal,
+    enableOrca: enableOrcaWithLeadLifecycleLock,
+    disableOrca: disableOrcaWithLeadLifecycleLock,
     // MCP worker 派活必须经 OrcaTeamService，确保 running、resume idle、广播和
     // 公开错误码映射都与 IPC handler WORKER_SEND_TO 保持同一套状态机。
     sendToWorker: ({ callerLeadSessionId, targetSessionId, message }) =>
@@ -8591,7 +8611,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 title: t('newChat.chatInput.fullAccessConfirmation.title'),
                 description: `${t('newChat.chatInput.fullAccessConfirmation.description')} ${t('newChat.chatInput.fullAccessConfirmation.note')}`,
               }),
-            startTeam: (params) => orcaLifecycleService.startTeam(params),
+            startTeam: (params) =>
+              withOrcaLeadLifecycleLock(params.leadSessionId, () =>
+                orcaLifecycleService.startTeam(params),
+              ),
           },
         );
       } catch (err) {
@@ -8761,7 +8784,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     endTeam: async ({ leadSessionId }) => {
       try {
-        await disableOrcaInternal(leadSessionId);
+        await disableOrcaWithLeadLifecycleLock(leadSessionId);
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true };
       } catch (err) {

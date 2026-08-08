@@ -2401,7 +2401,7 @@ export class AgentInputCoordinator {
 
     let activeCancelled = false;
     const active = state.activeTurn;
-    if (active?.item && !isActiveTurnDispatched(active) && predicate(active.item)) {
+    if (active?.item && isActiveTurnBeforeVendorDispatch(active) && predicate(active.item)) {
       activeCancelled = true;
       this.drainAfterStaleActiveTurns.add(active);
       this.abortInputBoundary(sessionId);

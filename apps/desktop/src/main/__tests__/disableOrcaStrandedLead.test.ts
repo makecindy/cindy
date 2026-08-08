@@ -60,4 +60,17 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     const resolverCalls = registerSource.match(/resolveOrcaQueueItemTeamId\(item\)/g) ?? [];
     expect(resolverCalls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('serializes every external Lead start/end entrypoint on the session lifecycle lock', () => {
+    expect(registerSource).toContain('function withOrcaLeadLifecycleLock<T>(');
+    expect(registerSource).toContain('return withSendToSessionLock(leadSessionId, task);');
+    expect(registerSource).toContain('enableOrca: enableOrcaWithLeadLifecycleLock');
+    expect(registerSource).toContain('disableOrca: disableOrcaWithLeadLifecycleLock');
+    expect(registerSource).toMatch(
+      /startTeam: \(params\) =>\s+withOrcaLeadLifecycleLock\(params\.leadSessionId, \(\) =>\s+orcaLifecycleService\.startTeam\(params\)/,
+    );
+    const lockedDisableCalls =
+      registerSource.match(/disableOrcaWithLeadLifecycleLock\(leadSessionId\)/g) ?? [];
+    expect(lockedDisableCalls.length).toBeGreaterThanOrEqual(3);
+  });
 });
