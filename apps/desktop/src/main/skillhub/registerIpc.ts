@@ -45,6 +45,11 @@ interface LocalImportGrant {
   expiresAt: number;
 }
 
+interface ScannedSkillGrant {
+  ownerId: string;
+  roots: Set<string>;
+}
+
 export interface RegisterSkillhubIpcOptions {
   getMaker: () => Maker;
   getAllowedProjectRoots: () => Promise<readonly string[]>;
@@ -96,7 +101,7 @@ async function validateRequestedProjects(
 export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   const marketService = options.marketService ?? new SkillhubMarketService();
   const localImportGrants = new Map<string, LocalImportGrant>();
-  const scannedSkillRootsBySender = new Map<number, Set<string>>();
+  const scannedSkillRootsBySender = new Map<number, ScannedSkillGrant>();
   const scanGenerationBySender = new Map<number, number>();
   const scanGrantCleanupRegistered = new WeakSet<object>();
 
@@ -111,6 +116,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   const rememberScannedSkillRoots = (
     event: Electron.IpcMainInvokeEvent,
+    ownerId: string,
     skills: import('./scanner').Skill[],
   ) => {
     const roots = new Set<string>();
@@ -125,7 +131,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
         }
       }
     }
-    scannedSkillRootsBySender.set(event.sender.id, roots);
+    scannedSkillRootsBySender.set(event.sender.id, { ownerId, roots });
   };
 
   const hasScannedSkillGrant = (
@@ -133,8 +139,18 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     targetPath: string,
   ): boolean => {
     assertTrustedAppRendererEvent(event);
-    const roots = scannedSkillRootsBySender.get(event.sender.id);
-    return Boolean(roots && isExistingSkillPathGranted(targetPath, roots));
+    const grant = scannedSkillRootsBySender.get(event.sender.id);
+    const ownerId = getCurrentDataOwnerId();
+    if (
+      !grant
+      || !ownerId
+      || isAppSessionBoundaryPending()
+      || grant.ownerId !== ownerId
+    ) {
+      if (grant) scannedSkillRootsBySender.delete(event.sender.id);
+      return false;
+    }
+    return isExistingSkillPathGranted(targetPath, grant.roots);
   };
 
   const scanGrantDenied = () => ({
@@ -225,13 +241,21 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       // discovery fails, stale paths must not remain authorized.
       scannedSkillRootsBySender.delete(event.sender.id);
       try {
+        const scanOwnerId = getCurrentDataOwnerId();
+        if (!scanOwnerId || isAppSessionBoundaryPending()) {
+          throw new Error('active data owner is unavailable');
+        }
         const projects = await validateRequestedProjects(
           params?.projects,
           options.getAllowedProjectRoots,
         );
         const result = await scanAllSkills({ projects }, options.getMaker());
-        if (scanGenerationBySender.get(event.sender.id) === scanGeneration) {
-          rememberScannedSkillRoots(event, result.skills);
+        if (
+          scanGenerationBySender.get(event.sender.id) === scanGeneration
+          && !isAppSessionBoundaryPending()
+          && getCurrentDataOwnerId() === scanOwnerId
+        ) {
+          rememberScannedSkillRoots(event, scanOwnerId, result.skills);
         }
         return { success: true, ...result };
       } catch (err) {

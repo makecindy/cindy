@@ -137,6 +137,23 @@ describe('Pi project skill availability', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it('does not retry a Pi slash name absent from the refreshed filesystem catalog', async () => {
+    const sleeps: number[] = [];
+    const reload = vi.fn(async () => [] as UnifiedCommand[]);
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'missing',
+      commands: [],
+      retryDelaysMs: [10, 20],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload,
+    })).resolves.toEqual({ command: undefined, commands: [] });
+    expect(sleeps).toEqual([]);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it('disables only discovered project skills', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);

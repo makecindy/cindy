@@ -2718,6 +2718,7 @@ export function ChatInput({
       ) {
         event.preventDefault();
         event.stopPropagation();
+        if (panelBridgeRef.current?.captureKey(event)) return;
         clearPressTimer();
         voiceShortcutPressRef.current = null;
         void dispatchSendRef.current(enterIntent);

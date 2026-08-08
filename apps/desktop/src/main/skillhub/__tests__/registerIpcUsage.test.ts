@@ -32,9 +32,8 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent,
 }));
 
-vi.mock('../../authManager', () => ({
-  getCurrentDataOwnerId: vi.fn(() => 'local-v1'),
-}));
+const getCurrentDataOwnerId = vi.fn((): string | null => 'local-v1');
+vi.mock('../../authManager', () => ({ getCurrentDataOwnerId }));
 
 const ensureReady = vi.fn();
 const getRawDb = vi.fn(() => ({ id: 'db' }));
@@ -103,6 +102,7 @@ describe('registerSkillhubIpc usage handlers', () => {
   beforeEach(async () => {
     handlers.clear();
     vi.clearAllMocks();
+    getCurrentDataOwnerId.mockReturnValue('local-v1');
     ensureReady.mockResolvedValue({ ready: true });
     requestLocalSkillUsageAnalyticsRefresh.mockReturnValue(null);
     showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
@@ -235,6 +235,36 @@ describe('registerSkillhubIpc usage handlers', () => {
     await expect(handlers.get('skillhub:read-raw')?.(
       { sender },
       { filePath: '/old/.pi/skills/old-skill/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+  });
+
+  it('revokes a sender scan grant when the active data owner changes', async () => {
+    const sender = { id: 34, once: vi.fn() };
+    scanAllSkills.mockResolvedValueOnce({
+      skills: [{
+        absolutePath: '/physical/demo',
+        discoveredPath: '/repo/.pi/skills/authorized/demo',
+      }],
+      sources: [],
+    });
+    readSkillRawFile.mockResolvedValue({ success: true, content: 'raw' });
+
+    await handlers.get('skillhub:scan')?.({ sender }, { projects: [] });
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: true });
+
+    getCurrentDataOwnerId.mockReturnValue('local-v2');
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+
+    getCurrentDataOwnerId.mockReturnValue('local-v1');
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
     )).resolves.toMatchObject({ success: false });
   });
 
