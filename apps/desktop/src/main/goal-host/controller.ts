@@ -700,12 +700,18 @@ export class GoalController {
     // 本次 patch 仍在就按成功返回并广播最新状态；已被后续操作覆盖则明确报竞态，
     // 不能把生命周期取消伪装成 GOAL_NOT_FOUND，也不能把未应用的编辑谎报成功。
     const reconcileLifecycleChange = async (): Promise<GoalState | null> => {
+      // dispose 后丢弃(reviewer P1:await trackPersistence/ensureSession 期间登出,
+      // entryChanged 路由到这里,undefined boundary 会被当稳定——必须显式拦截)。
+      if (this.disposed) return null;
       const readSettledState = async (): Promise<GoalState | null> => {
         while (true) {
+          if (this.disposed) return null;
           const boundary = this.turns.get(sessionId);
           await this.awaitPendingLifecycle(boundary);
+          if (this.disposed) return null;
           if (this.turns.get(sessionId) !== boundary) continue;
           const current = await this.deps.storage.get(sessionId);
+          if (this.disposed) return null;
           if (this.turns.get(sessionId) === boundary) return current;
         }
       };
@@ -1491,6 +1497,9 @@ export class GoalController {
     turn.tokensThisTurn = 0;
     turn.continuationTokens = 0;
     turn.finalized = false;
+    // 清收口审计标志:同一 TurnAccumulator 续跑下一轮,stale 的 auditFinalized
+    // 会让 accepted 误放行无收口的孤儿 dispatch(Codex P2)。
+    turn.auditFinalized = false;
     turn.generation += 1;
   }
 

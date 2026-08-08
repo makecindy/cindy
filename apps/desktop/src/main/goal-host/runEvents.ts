@@ -112,20 +112,21 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         .sort((a, b) => {
           const byAt = (a.at ?? 0) - (b.at ?? 0);
           if (byAt !== 0) return byAt;
-          // 同 at:仅同 generation(同生命周期)用 turnIndex——跨生命周期换代时
-          // 新 run 的 turnIndex 比旧 run 的 terminal 小,全局 turnIndex 会把
-          // "新 run 开始"排到"旧 run 结束"之前;跨 generation 保持插入序。
+          // 同 at:仅同 generation(同生命周期)用 turnIndex 与派发/收口类型次序——
+          // 跨 generation 换代时新 run 的 turnIndex 小于旧 run 的 terminal,
+          // 且新 run 的 turn-dispatched 不得排到旧 run 的 terminal 之前,
+          // 直接回退到插入序 _seq。
           if ((a.generation ?? 0) === (b.generation ?? 0)) {
             const byTurn = a.turnIndex - b.turnIndex;
             if (byTurn !== 0) return byTurn;
+            // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序。
+            const aD = dispatchGroup.has(a.type);
+            const bD = dispatchGroup.has(b.type);
+            const aF = closeoutGroup.has(a.type);
+            const bF = closeoutGroup.has(b.type);
+            if (aD && bF) return -1;
+            if (aF && bD) return 1;
           }
-          // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序。
-          const aD = dispatchGroup.has(a.type);
-          const bD = dispatchGroup.has(b.type);
-          const aF = closeoutGroup.has(a.type);
-          const bF = closeoutGroup.has(b.type);
-          if (aD && bF) return -1;
-          if (aF && bD) return 1;
           // 显式插入序号作最终 tie-breaker(规范不保证 sort 稳定)。
           return a._seq - b._seq;
         })
