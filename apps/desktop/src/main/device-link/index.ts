@@ -526,9 +526,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
-    // 当代权威事实已到:上一代的离线结论让位(无论本帧 online / offline,
-    // 判据都改由当代视图回答)。
-    presenceOfflineGate.observeReachable(snap.deviceId);
+    // 权威 presence 帧已到:早于本帧的可达证据与跨代结论一并让位,判据交回刚写入
+    // 的当代值(无论本帧 online / offline)。
+    presenceOfflineGate.observePresenceFrame(snap.deviceId);
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
     // `!== false` 与重放侧的 `!== true` 对称:视图清空后重连的首帧不可用 presence
@@ -595,10 +595,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 带上来源 deviceId(src),renderer 据此把事件路由到对应远程设备的 store
   client.onFrame((env: Envelope) => {
     if (!env.src) return;
-    // 收到来自该设备的帧 = 当代可达证据(对端活着且 relay 路由通),跨代离线结论
-    // 让位。必需而非加强:控制端 link-open 回归后,定向 flush 若瞬时失败,后续
-    // 重试是无参全量轮、不再携带 onlySrc 证据,只靠 presence 让位会让已建链的
-    // peer 被门禁持续跳过(review P2)。gate 内部对空集合短路,热路径无开销。
+    // 收到来自该设备的帧 = 本代最新的可达证据(帧发出时对端活着、relay 路由通),
+    // 门禁内优先于当代 presence(优先级链与三轮 review 推导见 presenceOfflineGate.ts)。
     presenceOfflineGate.observeReachable(env.src);
     // 控制端:被控端撤销访问权限会发 link-close('revoked')。据此移除该被控端的项目/对话 +
     // 标记「已撤销」(presence 不变 —— 被控端仍在线且全局允许被控,故必须靠这条信号)。
