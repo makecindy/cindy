@@ -2189,13 +2189,15 @@ describe('submit guard catalog wiring (source locks)', () => {
     const startedToCreate = goalSlice.slice(iStarted, iCreate);
     expect(startedToCreate).not.toMatch(/isCurrentOwner\(\)\) return;|abortIfDeviceSwitched/);
     expect(startedToCreate).toMatch(/if \(decision === 'downgraded'\) return;/);
-    // started commit 段唯一的 return 必须是 downgraded 分支(枚举全部 return)
+    // started commit 段的 return 必须是 downgraded 分支(枚举全部 return;
+    // 2 处 = 设备切换降级 + started 写盘后鉴权门禁降级,均降级成功才 return)
     const returns = startedToCreate.match(/return;/g) ?? [];
-    expect(returns).toHaveLength(1);
+    expect(returns).toHaveLength(2);
     expect(startedToCreate).toContain('applyGuard(guardResult);');
     // 降级模式:started 失败与设备切换两处都 re-register phase precreated
-    // (goal 区 phase:'precreated' 共 4 处:precreate 写盘 ×2 + 降级 ×2)
-    expect(goalSlice.match(/phase: 'precreated',/g) ?? []).toHaveLength(4);
+    // (goal 区 phase:'precreated' 共 5 处:precreate 写盘 ×2 + 降级 ×3——
+    // startedRecorded 失败降级 / 设备切换降级 / started 后鉴权门禁降级)
+    expect(goalSlice.match(/phase: 'precreated',/g) ?? []).toHaveLength(5);
     // goal.set 先于 subscribe(session:)(本地同步属 settle 段)
     const iGoal = goalSlice.indexOf('maker.goal.set(');
     expect(iGoal).toBeGreaterThan(iCreate);

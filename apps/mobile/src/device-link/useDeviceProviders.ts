@@ -107,7 +107,14 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       if (reason === 'fresh-invalidate') return;
       setPayload(EMPTY_PAYLOAD);
       void fetchDeviceProviders(deviceId, () => maker.listProviders())
-        .catch(() => undefined); // fire-and-forget;失败保持未就绪(readyFor 已清)
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          // 暴露错误(codex review P2:在在线目录刷新失败后安排重试/暴露错误):
+          // 静默吞掉失败会让模型选择器停在空目录且连接保持在线时 effect 不重跑
+          // ——设置 error,调用方据此回退扁平模型列表;后续 provider 事件/重连/
+          // 重挂载会再次触发刷新。失败保持未就绪(readyFor 已清)。
+          setError(e instanceof Error ? e.message : String(e));
+        });
     });
     const cached = getCachedDeviceProviders(deviceId);
     // 重连(connectionEpoch 变化)后缓存命中也要强制刷新(codex review P1):

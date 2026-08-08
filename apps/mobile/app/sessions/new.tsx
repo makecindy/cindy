@@ -4803,6 +4803,44 @@ export default function NewRemoteSessionScreen() {
             rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
           };
         }
+        // started 写盘后重跑 guard 拿到新目录 → 再次执行鉴权门禁(codex review P2:
+        // 在 started 写盘后的目录重验中同步重跑鉴权)——供应商在前面的最终鉴权
+        // 通过后、registerPendingPrecreatedWorktree(session-create-started) 等待
+        // 期间可能全部断开,代际变化后这里重取到零已连接来源目录,但 4750 行门禁
+        // 已执行过不会重跑。中止按 started 账本语义走 resolveStartedDowngradeOrCommit
+        // (与下方设备切换同路径,不裸 return 留 retain-only)。
+        if (guardResult.catalogKnown) {
+          const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
+          if (rawProviders.length > 0
+            && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
+            const pwt = precreatedWorktree;
+            const decision = await resolveStartedDowngradeOrCommit({
+              downgrade: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+                sessionId: pwt.sessionId,
+                deviceId: selectedDeviceId,
+                path: pwt.path,
+                recoveryKey: pwt.recoveryKey,
+                createdAt: pwt.createdAt ?? Date.now(),
+                phase: 'precreated',
+              }),
+              restoreStarted: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+                sessionId: pwt.sessionId,
+                deviceId: selectedDeviceId,
+                path: pwt.path,
+                recoveryKey: pwt.recoveryKey,
+                createdAt: pwt.createdAt ?? Date.now(),
+                phase: 'session-create-started',
+              }),
+            });
+            if (decision === 'downgraded') {
+              setGoalError(agentAuthGateHint(draft.agentKind));
+              return;
+            }
+            // 降级失败 → 继续 commit(与设备切换降级失败同语义:恢复 volatile 后
+            // 用捕获设备完成创建;目录虽空但创建可能仍成功,由 goal.set/外层
+            // catch 兜底呈现失败)。
+          }
+        }
         // started 可靠落账后设备切换:不裸 return(会留 started retain-only,recovery
         // 对该 phase 拒绝 discard)——走 resolveStartedDowngradeOrCommit:
         // 降级成功 → return(recovery 可回收);降级失败 → 恢复 volatile 回 started
