@@ -4,7 +4,7 @@
  * 规则:
  *  - 只允许 `http:` / `https:`,以及 2KB 以内的小 `data:`。data URI 自包含、
  *    可跨重启,SPA dev server 常用 `data:image/svg+xml` 当 favicon,不能一刀切
- *    拒绝;但过大仍会挤占 16KB 总预算,因此单独设更小的上限。
+ *    拒绝;但过大仍会挤占 16KB 总预算,因此 favicon 字段统一限制为 2KB。
  *  - 一律拒绝 `blob:`(会话内临时对象,重启即失效)、`file:`(宿主 renderer 里
  *    可读本地文件)、`javascript:` / `chrome-extension:` / 自定义 app 协议等
  *    一切非白名单 scheme。白名单比黑名单安全,且不依赖前缀匹配 —— 前缀黑名单

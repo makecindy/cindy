@@ -422,6 +422,24 @@ describe('BrowserTabBody navigation', () => {
     expect(patchState).toHaveBeenCalledWith({ favicon: null });
   });
 
+  it('clears a persisted favicon when a native popup explicitly reports none', () => {
+    registerNativePopupTab('tab-browser', 'session-a', 'surface-oauth');
+    nativePopupHook.mockReturnValue({
+      ...makeBrowserState({ wrapper: null, webview: null, favicon: '' }),
+      closed: false,
+    });
+    const patchState = vi.fn();
+
+    render(renderBrowserTab(
+      'https://www.taptap.cn/',
+      patchState,
+      true,
+      { favicon: 'https://www.taptap.cn/favicon.ico' },
+    ));
+
+    expect(patchState).toHaveBeenCalledWith({ favicon: null });
+  });
+
   it('does not persist a non-persistable favicon reported by a native popup', () => {
     registerNativePopupTab('tab-browser', 'session-a', 'surface-oauth');
     nativePopupHook.mockReturnValue({

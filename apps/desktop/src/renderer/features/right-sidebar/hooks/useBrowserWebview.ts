@@ -29,13 +29,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WebviewTag } from 'electron';
 
+import { selectPersistableFavicon } from '../../../../shared/faviconPersistence';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
 import {
   consumePendingKillCause,
   reportRsbBrowserTab,
   subscribeTabResourceEvent,
 } from '../lib/rsbBrowserBridge';
-import { selectPersistableFavicon } from '../lib/faviconPersistence';
 
 /** 2 秒内最多允许 12 次 renderer 主动导航;网页自身导航不计入。 */
 export const BROWSER_NAVIGATION_FUSE_LIMIT = 12;

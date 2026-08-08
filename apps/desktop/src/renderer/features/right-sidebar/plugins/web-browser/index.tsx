@@ -21,8 +21,8 @@ import { useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
 import { registerTabKind } from '../../registry';
-import { normalizePersistableFavicon } from '../../lib/faviconPersistence';
 import type { TabKindPlugin } from '../../types';
 import { BrowserTabBody } from './BrowserTabBody';
 

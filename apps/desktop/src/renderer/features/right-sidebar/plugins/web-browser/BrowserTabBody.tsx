@@ -31,6 +31,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { createLogger } from '@/lib/logger';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
@@ -39,7 +40,6 @@ import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
-import { normalizePersistableFavicon } from '../../lib/faviconPersistence';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
 import {
   forceKillBrowserTab,
