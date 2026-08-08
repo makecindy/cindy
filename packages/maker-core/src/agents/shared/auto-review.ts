@@ -513,8 +513,10 @@ function argumentWriteTargets(tokens: string[]): string[] {
  * (`cmd > /dev/null`、`2>/dev/null`、`>/dev/null 2>&1`)。必须排除在系统红线外,否则 Auto 档会对
  * 几乎每条带静音重定向的命令弹窗,严重违反"尽量不打扰"(实机语料探针发现:44 条良性命令误拦 9 条)。
  * 块设备/内存设备(`/dev/sda`、`/dev/mem` 等)**不在**此列,仍按系统红线拦。
+ * `/dev/fd/N` **只豁免标准流 0/1/2**:fd 3+ 可能是父进程打开的真实文件,`>/dev/fd/3`
+ * 会覆写它,不能凭命令字符串证明安全(review 报)。
  */
-const SAFE_DEVICE_PATH = /^\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)$/i;
+const SAFE_DEVICE_PATH = /^\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/[012])$/i;
 
 /** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
 export function isProtectedSystemPath(target: string): boolean {
@@ -880,7 +882,7 @@ function splitTopLevelSegments(command: string): string[] {
 function segmentHasSideEffectRedirectOrSubstitution(segment: string): boolean {
   const redirectScan = segment
     .replace(/'[^']*'|"[^"]*"/g, '')
-    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)(?![\w/.-])/gi, '');
+    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/[012])(?![\w/.-])/gi, '');
   return OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment);
 }
 

@@ -191,6 +191,10 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     'echo hi 2> /dev/null.bak',
     'echo hi > /dev/nullx',
     'echo hi > /dev/null/x',
+    // /dev/fd 只豁免标准流 0/1/2;fd 3+ 可能是父进程打开的真实文件
+    'cat payload >/dev/fd/3',
+    'echo x 2>/dev/fd/3',
+    'cat p >/dev/fd/10',
   ],
 
   '工作区外的破坏性操作': [

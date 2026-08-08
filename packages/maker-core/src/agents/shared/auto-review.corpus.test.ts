@@ -710,6 +710,7 @@ describe('语料回归 — 伪设备静音重定向仍照常放行(反向边界)
       'echo x > /dev/null',
       'echo x > /dev/stdout',
       'echo x > /dev/fd/2',
+      'cat p >/dev/fd/1',
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
     }
