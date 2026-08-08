@@ -142,8 +142,7 @@ export class ImSchedulerManager {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.runtimeGaps.clear();
-    this.pendingPeerProbeChannels.clear();
-    this.ignoredPeerProbeNonces.clear();
+    this.clearPeerDiscoveryState();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
     this.resetSnapshotRequestState();
@@ -177,6 +176,7 @@ export class ImSchedulerManager {
       this.lastLocalIdentity = currentIdentity;
       this.localBindingGeneration = this.bindingGenerationFactory();
       this.runtimeGaps.clear();
+      this.clearPeerDiscoveryState();
     } else {
       const currentIdentity = this.getLocalChannel()?.identity ?? null;
       if (this.lastLocalIdentity) this.runtimeGaps.clearIdentity(this.lastLocalIdentity);
@@ -207,8 +207,7 @@ export class ImSchedulerManager {
           this.lastSnapshotObservedAt = null;
           this.resetSnapshotRequestState();
           this.requiresTaggedSnapshot = true;
-          this.peers.clear();
-          this.confirmedPeers.clear();
+          this.clearPeerDiscoveryState();
         } else {
           this.invalidateAuthoritativeSnapshot();
           this.beginDiscoveryRound();
@@ -257,8 +256,7 @@ export class ImSchedulerManager {
           this.snapshot = null;
           this.lastSnapshotObservedAt = null;
           this.requiresTaggedSnapshot = true;
-          this.peers.clear();
-          this.confirmedPeers.clear();
+          this.clearPeerDiscoveryState();
           this.beginDiscoveryRound();
           this.reconcile();
           return;
@@ -273,6 +271,7 @@ export class ImSchedulerManager {
           this.reconcile();
           return;
         }
+        this.prunePeerDiscoveryState(event.snapshot.peers.map((peer) => peer.deviceId));
         this.snapshot = event.snapshot;
         this.lastSnapshotObservedAt = event.snapshot.observedAt;
         // Once a lifecycle freshness boundary has been crossed, keep the
@@ -292,8 +291,7 @@ export class ImSchedulerManager {
         this.resetSnapshotRequestState();
         this.requiresTaggedSnapshot = true;
         if (!event.online) {
-          this.peers.delete(event.deviceId);
-          this.confirmedPeers.delete(event.deviceId);
+          this.clearPeerDiscoveryState(event.deviceId);
         } else {
           this.beginDiscoveryRound();
         }
@@ -553,14 +551,37 @@ export class ImSchedulerManager {
     this.snapshotRefreshPending = false;
   }
 
+  private clearPeerDiscoveryState(deviceId?: string): void {
+    if (deviceId !== undefined) {
+      this.peers.delete(deviceId);
+      this.confirmedPeers.delete(deviceId);
+      this.pendingPeerProbeChannels.delete(deviceId);
+      this.ignoredPeerProbeNonces.delete(deviceId);
+      return;
+    }
+    this.peers.clear();
+    this.confirmedPeers.clear();
+    this.pendingPeerProbeChannels.clear();
+    this.ignoredPeerProbeNonces.clear();
+  }
+
+  private prunePeerDiscoveryState(visiblePeerIds: readonly string[]): void {
+    const visiblePeers = new Set(visiblePeerIds);
+    for (const deviceId of this.pendingPeerProbeChannels.keys()) {
+      if (!visiblePeers.has(deviceId)) this.pendingPeerProbeChannels.delete(deviceId);
+    }
+    for (const deviceId of this.ignoredPeerProbeNonces.keys()) {
+      if (!visiblePeers.has(deviceId)) this.ignoredPeerProbeNonces.delete(deviceId);
+    }
+  }
+
   private invalidateAuthoritativeSnapshot(): void {
     this.cancelDiscoveryRetry();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
     this.resetSnapshotRequestState();
     this.requiresTaggedSnapshot = true;
-    this.peers.clear();
-    this.confirmedPeers.clear();
+    this.clearPeerDiscoveryState();
   }
 
   private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {
