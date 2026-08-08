@@ -18,7 +18,7 @@
  */
 
 import { createElement, Fragment } from 'react';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -86,6 +86,10 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
 
 vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: { ensureInitialMessages: vi.fn() },
 }));
 
 // mock 之后再 import,确保 SessionItem 拿到的是探针版依赖。
@@ -194,7 +198,7 @@ describe('SessionItem — 归档视觉', () => {
 });
 
 describe('SessionItem — 置顶分屏拖拽', () => {
-  it('标题起手区写入分屏 MIME，同时把其余行区域留给 Sortable 排序', () => {
+  it('原生整行拖拽保留普通内容起手，并排除内部操作按钮', () => {
     const pinnedSession = {
       ...makeSession('pinned-session'),
       pinnedAt: '2026-08-08T00:00:00.000Z',
@@ -209,7 +213,10 @@ describe('SessionItem — 置顶分屏拖拽', () => {
         urgentSessionIds: new Set<string>(),
         children: createElement(
           'div',
-          { 'data-sortable-id': pinnedSession.id },
+          {
+            'data-sortable-id': pinnedSession.id,
+            'data-sortable-native-dnd': 'true',
+          },
           createElement(SessionItem, {
             session: pinnedSession,
             isActive: false,
@@ -225,15 +232,31 @@ describe('SessionItem — 置顶分屏拖拽', () => {
     );
 
     const row = container.querySelector<HTMLElement>('[data-session-id="pinned-session"]');
-    const handle = row?.querySelector<HTMLElement>('[data-split-group-drag-handle="true"]');
-    expect(row?.draggable).toBe(false);
-    expect(handle?.draggable).toBe(true);
-    expect(handle?.getAttribute('data-no-drag')).toBe('true');
+    const title = row?.querySelector<HTMLElement>('.sidebar-title-marquee__ellipsis');
+    const actionButton = row?.querySelector<HTMLButtonElement>(
+      'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
+    );
+    expect(row?.draggable).toBe(true);
+    expect(row?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
+    expect(title).not.toBeNull();
+    expect(actionButton).not.toBeNull();
 
-    fireEvent.dragStart(handle!, { dataTransfer });
+    fireEvent.pointerDown(title!, { button: 0, pointerType: 'mouse' });
+    fireEvent.dragStart(row!, { dataTransfer });
 
     expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(pinnedSession.id);
     expect(dataTransfer.effectAllowed).toBe('copyMove');
+
+    values.clear();
+    dataTransfer.effectAllowed = 'none';
+    fireEvent.pointerDown(actionButton!, { button: 0, pointerType: 'mouse' });
+    const blockedDragStart = createEvent.dragStart(row!, { dataTransfer });
+    const preventDefault = vi.spyOn(blockedDragStart, 'preventDefault');
+    fireEvent(row!, blockedDragStart);
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(values.has(SPLIT_GROUP_SESSION_MIME)).toBe(false);
+    expect(dataTransfer.effectAllowed).toBe('none');
   });
 });
 

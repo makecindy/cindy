@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement, type ReactNode } from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionCard } from '../SessionCard';
@@ -228,7 +228,7 @@ describe('SessionCard visual cases', () => {
   });
 
   it.each(['card', 'list'] as const)(
-    'uses the %s title as a split-drag handle while keeping the pinned wrapper sortable',
+    'uses native %s dragging for normal content while excluding action buttons',
     (variant) => {
       const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
       if (!visualCase) throw new Error('Missing idle visual case');
@@ -241,7 +241,10 @@ describe('SessionCard visual cases', () => {
       const { container } = render(
         createElement(
           'div',
-          { 'data-sortable-id': visualCase.session.id },
+          {
+            'data-sortable-id': visualCase.session.id,
+            'data-sortable-native-dnd': 'true',
+          },
           createElement(SessionCard, {
             session: visualCase.session,
             variant,
@@ -260,15 +263,30 @@ describe('SessionCard visual cases', () => {
       );
 
       const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
-      const handle = card?.querySelector<HTMLElement>('[data-split-group-drag-handle="true"]');
-      expect(card?.draggable).toBe(false);
-      expect(handle?.draggable).toBe(true);
-      expect(handle?.getAttribute('data-no-drag')).toBe('true');
+      const title = within(card!).getByText(visualCase.session.title);
+      const actionButton = card?.querySelector<HTMLButtonElement>(
+        'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
+      );
+      expect(card?.draggable).toBe(true);
+      expect(card?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
+      expect(actionButton).not.toBeNull();
 
-      fireEvent.dragStart(handle!, { dataTransfer });
+      fireEvent.pointerDown(title, { button: 0, pointerType: 'mouse' });
+      fireEvent.dragStart(card!, { dataTransfer });
 
       expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(visualCase.session.id);
       expect(dataTransfer.effectAllowed).toBe('copyMove');
+
+      values.clear();
+      dataTransfer.effectAllowed = 'none';
+      fireEvent.pointerDown(actionButton!, { button: 0, pointerType: 'mouse' });
+      const blockedDragStart = createEvent.dragStart(card!, { dataTransfer });
+      const preventDefault = vi.spyOn(blockedDragStart, 'preventDefault');
+      fireEvent(card!, blockedDragStart);
+
+      expect(preventDefault).toHaveBeenCalledOnce();
+      expect(values.has(SPLIT_GROUP_SESSION_MIME)).toBe(false);
+      expect(dataTransfer.effectAllowed).toBe('none');
     },
   );
 

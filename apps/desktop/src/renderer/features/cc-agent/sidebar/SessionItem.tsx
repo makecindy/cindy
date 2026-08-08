@@ -504,6 +504,7 @@ export const SessionItem = memo(function SessionItem({
   //      也不会触发。这种"用户明确想再看一眼"的语义由调用方通过
   //      imperative 路径(querySelector + scrollIntoNearestView)补一刀
   const rowRef = useRef<HTMLDivElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
 
   // ── Double-click rename ──
   const [isEditing, setIsEditing] = useState(false);
@@ -588,7 +589,9 @@ export const SessionItem = memo(function SessionItem({
 
   const handleDragStart = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
-      const target = event.target instanceof Element ? event.target : null;
+      const target =
+        dragStartTargetRef.current ?? (event.target instanceof Element ? event.target : null);
+      dragStartTargetRef.current = null;
       const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
       const startedOnInteractiveElement = Boolean(
         target !== event.currentTarget && target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
@@ -810,8 +813,18 @@ export const SessionItem = memo(function SessionItem({
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerDownCapture={(event) => {
+        dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+      }}
+      onPointerUpCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onPointerCancelCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
       onDragStart={handleDragStart}
       onDragEnd={(event) => {
+        dragStartTargetRef.current = null;
         delete event.currentTarget.dataset.sessionDragging;
       }}
       onPointerDown={(e) => {

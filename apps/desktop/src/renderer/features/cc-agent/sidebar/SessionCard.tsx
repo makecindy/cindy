@@ -224,6 +224,7 @@ export function SessionCard({
   const [shareExportOpen, setShareExportOpen] = useState(false);
   const confirmPillRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
 
   // 归档/删除前那次 dirty-worktree 预检要在 main 侧跑 git status,是"点了归档、
   // 卡片还没消失"里剩下的最大一块等待。亮出 Confirm 胶囊 / 打开菜单到用户点下去
@@ -288,7 +289,9 @@ export function SessionCard({
 
   const handleDragStart = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
-      const target = event.target instanceof Element ? event.target : null;
+      const target =
+        dragStartTargetRef.current ?? (event.target instanceof Element ? event.target : null);
+      dragStartTargetRef.current = null;
       const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
       const startedOnInteractiveElement = Boolean(
         target !== event.currentTarget && target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
@@ -600,8 +603,18 @@ export function SessionCard({
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerDownCapture={(event) => {
+        dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+      }}
+      onPointerUpCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onPointerCancelCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
       onDragStart={handleDragStart}
       onDragEnd={(event) => {
+        dragStartTargetRef.current = null;
         delete event.currentTarget.dataset.sessionDragging;
       }}
       onPointerDown={(e) => {
