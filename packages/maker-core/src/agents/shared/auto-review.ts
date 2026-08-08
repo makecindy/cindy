@@ -581,10 +581,10 @@ export function isProtectedSystemPath(target: string): boolean {
  * 就把执行证据抹没了 —— 而这几个工具又都在只读白名单里,结果是**直接放行**(review 报:
  * `ag --pager "sudo cat /etc/shadow" foo .` 实测由确定性必问降成了 auto-approve)。
  *
- * 尾部那条 `[\w-]*-(?:bin|cmd|command|prog|program)` 覆盖同族的命名惯例,不必等每个新
- * 选项各报一次。
+ * 只登记**真实存在且已实测**的选项。不按臆想的命名惯例预扩(`*-bin`/`*-cmd` 之类)——
+ * 保留字面量是 fail-closed 方向,凭空放宽会把普通 grep/rg 命令误报成红线。
  */
-const RG_EXECUTABLE_OPTIONS = /(?:^|\s)--(?:pre|pager|hostname-bin|[\w-]*-(?:bin|cmd|command|prog|program))$/;
+const RG_EXECUTABLE_OPTIONS = /(?:^|\s)--(?:pre|pager|hostname-bin)$/;
 
 function stripDataLiterals(command: string): string {
   const QUOTED = String.raw`(?:"[^"]*"|'[^']*')`;
