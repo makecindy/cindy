@@ -214,9 +214,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inputStyle).toContain('...COMPOSER_TEXT_STYLE');
     expect(inputStyle).toContain('maxHeight: MOBILE_COMPOSER_INPUT_MAX_HEIGHT');
     expect(inputStyle).toContain('minHeight: MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT');
+    expect(inputStyle).toContain('paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM');
     expect(inputStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
-    expect(inputStyle).toContain('paddingVertical: MOBILE_COMPOSER_INPUT_VERTICAL_PADDING');
+    expect(inputStyle).toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
     expect(inputStyle).toContain("textAlignVertical: 'top'");
+    expect(floatingButtonStyle).toContain("bottom: Platform.OS === 'ios' ? 8 : 11");
     // Composer input is a single stable, always-multiline, always-inline instance (no compact↔expanded
     // swap that remounts the native input) so the first tap reliably opens the keyboard — guards the
     // "two taps to focus" regression. Compact rest look kept via minHeight (no fixed height that clips).
@@ -247,7 +249,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT;');
     expect(source).toContain('const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;');
     expect(source).toContain('const COMPOSER_INPUT_LINE_HEIGHT = MOBILE_COMPOSER_INPUT_LINE_HEIGHT;');
-    expect(source).toContain('const COMPOSER_INPUT_VERTICAL_PADDING = MOBILE_COMPOSER_INPUT_VERTICAL_PADDING;');
     expect(source).toContain('const COMPOSER_INPUT_MAX_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_MAX_HEIGHT;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIGHT * MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES)');
@@ -363,8 +364,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(voiceDraftOverlayStyle).toContain("overflow: 'hidden'");
     expect(voiceDraftOverlayContentStyle).not.toContain('minHeight: COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT');
     expect(voiceDraftOverlayContentStyle).not.toContain("alignItems: 'flex-start'");
+    expect(voiceDraftOverlayContentStyle).toContain('paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM');
     expect(voiceDraftOverlayContentStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
-    expect(voiceDraftOverlayContentStyle).toContain('paddingVertical: COMPOSER_INPUT_VERTICAL_PADDING');
+    expect(voiceDraftOverlayContentStyle).toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
     expect(voiceDraftOverlayContentStyle).not.toContain("width: '100%'");
     expect(voiceDraftMeasuredBlockStyle).not.toContain("alignSelf: 'flex-start'");
     expect(voiceDraftMeasuredBlockStyle).toContain('minHeight: COMPOSER_INPUT_LINE_HEIGHT');
@@ -483,7 +485,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inlineButtonStyle).not.toContain('width: 42');
     expect(floatingButtonStyle).toContain("position: 'absolute'");
     expect(floatingButtonStyle).toContain('right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT');
-    expect(floatingButtonStyle).toContain('bottom: 11');
+    expect(floatingButtonStyle).toContain("bottom: Platform.OS === 'ios' ? 8 : 11");
     expect(floatingButtonStyle).toContain('zIndex: 2');
     expect(sharedSource).toContain('right: spacing.md + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP');
     expect(sendButtonStyle).toContain('height: 34');
