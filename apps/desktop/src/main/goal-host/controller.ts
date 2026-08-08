@@ -29,6 +29,7 @@ import {
   classifyTurnUsageLimit,
 } from './usageLimit';
 import { parseVerdict, type GoalVerdict } from './verdict';
+import type { GoalRunEvent, GoalRunEventType } from './runEvents';
 import {
   TERMINAL_GOAL_STATUSES,
   type GoalControllerDeps,
@@ -418,6 +419,41 @@ export class GoalController {
     this.debounceMs = deps.continuationDebounceMs ?? DEFAULT_DEBOUNCE_MS;
   }
 
+  /**
+   * Goal run 结构化观测(#2105 P0)。deps.recordRunEvent 未注入时 no-op ——
+   * 观测是 best-effort,不背压也不改变状态机语义。
+   */
+  private recordRunEvent(
+    type: GoalRunEventType,
+    goalSessionId: string,
+    state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
+    extra?: Partial<GoalRunEvent>,
+  ): void {
+    if (!this.deps.recordRunEvent) return;
+    const boundary = this.turns.get(goalSessionId);
+    const evt: GoalRunEvent = {
+      type,
+      goalSessionId,
+      generation: boundary?.generation ?? 0,
+      turnIndex: (state?.turnsUsed ?? 0) + (type === 'turn-dispatched' ? 1 : 0),
+      ...(state
+        ? {
+            budget: {
+              tokensUsed: state.tokensUsed,
+              turnsUsed: state.turnsUsed,
+              noProgressStreak: state.noProgressStreak,
+              budgetTokens: state.budgetTokens,
+              maxTurns: state.maxTurns,
+              noProgressLimit: state.noProgressLimit,
+            },
+          }
+        : {}),
+      ...extra,
+      at: this.now(),
+    };
+    this.deps.recordRunEvent(evt);
+  }
+
   // ── 公开 API ───────────────────────────────────────────────────────────────
 
   /** `/goal X` 入口:无既有 goal 直接创建;已有 goal 直接改 objective 并续跑。 */
@@ -630,6 +666,16 @@ export class GoalController {
         );
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         if (limited) {
+          // #2105 P0:编辑路径(降上限)触发预算终态。
+          this.recordRunEvent('budget-consumed', sessionId, limited, {
+            from: 'active',
+            to: 'budgetLimited',
+            reason: limited.lastReason,
+          });
+          this.recordRunEvent('terminal', sessionId, limited, {
+            to: 'budgetLimited',
+            reason: limited.lastReason,
+          });
           this.stopSession(sessionId);
           this.emit(limited);
         }
@@ -1210,6 +1256,8 @@ export class GoalController {
       this.turns.set(state.sessionId, freshTurn());
       this.attachListener(state.sessionId);
       this.emit(state);
+      // #2105 P0:启动/恢复扫描续跑。
+      this.recordRunEvent('resumed', state.sessionId, state, { to: 'active', reason: 'resumeActiveGoals' });
       resumed += 1;
       if (!this.isBusy(state.sessionId)) {
         void this.fireTurn(state.sessionId);
@@ -1552,10 +1600,50 @@ export class GoalController {
       outcome,
     );
 
+    // ── #2105 P0 观测:本轮收口 + 状态迁移 ──────────────────────────────────
+    this.recordRunEvent('turn-finalized', sessionId, state, {
+      from: state.status,
+      to: decision.status,
+      reason: decision.lastReason,
+    });
+    if (decision.status !== state.status) {
+      this.recordRunEvent('state-transition', sessionId, state, {
+        from: state.status,
+        to: decision.status,
+        reason: decision.lastReason,
+      });
+    }
+    // 连续空轮撞 noProgressLimit → paused(decision.lastReason 带 no tool use 标记)
+    if (
+      decision.status === 'paused' &&
+      state.noProgressLimit != null &&
+      state.noProgressStreak + 1 >= state.noProgressLimit &&
+      /no tool use/i.test(decision.lastReason)
+    ) {
+      this.recordRunEvent('stall-detected', sessionId, state, {
+        from: state.status,
+        to: 'paused',
+        reason: decision.lastReason,
+      });
+    }
+    // 预算撞线 → budget-consumed + terminal(与 complete 并列的唯二终态)
+    if (decision.status === 'budgetLimited') {
+      this.recordRunEvent('budget-consumed', sessionId, state, {
+        from: state.status,
+        to: 'budgetLimited',
+        reason: decision.lastReason,
+      });
+      this.recordRunEvent('terminal', sessionId, state, {
+        to: 'budgetLimited',
+        reason: decision.lastReason,
+      });
+    }
+
     // complete 收尾(产品决策):不写 'complete' 行,而是在对话里留一条**持久**达成
     // 记录(role:'assistant' + agentMeta.goalCompletion,重开会话仍在),随后删 goal
     // 行让 chip 消失。视觉由 renderer 渲成"目标已达成 · N 轮 · 耗时 X"分隔条。
     if (decision.status === 'complete') {
+      this.recordRunEvent('terminal', sessionId, state, { to: 'complete', reason: decision.lastReason });
       // completion commit 保持“达成记录 → clear”的耐久顺序，但单独登记：Stop 会同步
       // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
       // 防止旧目标的删除迟到并抹掉新目标。
@@ -1972,6 +2060,8 @@ export class GoalController {
       const outgoing = pendingHandoff
         ? prependHandoffToUserMessage({ type: 'user', content }, pendingHandoff)
         : { type: 'user' as const, content };
+      // #2105 P0:本轮实际派发(在 send 前、预算守卫之后——走到这里即确定会发)。
+      this.recordRunEvent('turn-dispatched', sessionId, state);
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {

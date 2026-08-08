@@ -3253,4 +3253,69 @@ describe('GoalController', () => {
     expect(st?.lastReason).toBe('usage limit reached');
   });
 
+  // ── Goal run observation events (#2105 P0) ───────────────────────────────
+  it('records turn-dispatched when the first turn fires', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await local.controller.setGoal({ sessionId: 's1', objective: 'ship it' });
+    await tick();
+    const dispatched = events.filter((e) => e.type === 'turn-dispatched');
+    expect(dispatched.length).toBeGreaterThanOrEqual(1);
+    expect(dispatched[0]).toMatchObject({
+      goalSessionId: 's1',
+      generation: 1,
+      turnIndex: 1,
+    });
+  });
+
+  it('records turn-finalized on a continue verdict without a state-transition (active→active)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```', tokens: 100 });
+    await tick();
+    const finalized = events.filter((e) => e.type === 'turn-finalized');
+    expect(finalized.length).toBeGreaterThanOrEqual(1);
+    expect(finalized.at(-1)).toMatchObject({ from: 'active', to: 'active' });
+    expect(events.some((e) => e.type === 'state-transition')).toBe(false);
+  });
+
+  it('records turn-finalized + state-transition + terminal on a complete verdict', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"all green"}\n```', tokens: 50 });
+    await tick();
+    const types = events.map((e) => e.type);
+    expect(types).toContain('turn-finalized');
+    expect(types).toContain('state-transition');
+    expect(types).toContain('terminal');
+    const terminal = events.find((e) => e.type === 'terminal');
+    expect(terminal).toMatchObject({ to: 'complete', reason: 'all green' });
+  });
+
+  it('records stall-detected when noProgressLimit is hit (no tool use)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    // noProgressLimit=1:第一轮无 tool_use 即撞线。
+    await local.storage.upsert(seededGoal({ noProgressLimit: 1 }));
+    await local.controller.setGoal({ sessionId: 's1', objective: 'stall me' });
+    await tick();
+    local.session.emitGoalTurn({ toolUse: false, verdictJson: '```json\n{"goal_status":"continue","reason":"thinking"}\n```' });
+    await tick();
+    expect(events.some((e) => e.type === 'stall-detected')).toBe(true);
+    const stall = events.find((e) => e.type === 'stall-detected');
+    expect(stall).toMatchObject({ from: 'active', to: 'paused' });
+  });
+
+  it('records resumed when resumeActiveGoals re-hooks an active goal', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'active', objective: 'resume me' }));
+    await local.controller.resumeActiveGoals();
+    await tick();
+    expect(events.some((e) => e.type === 'resumed')).toBe(true);
+    expect(events.find((e) => e.type === 'resumed')).toMatchObject({ to: 'active' });
+  });
+
 });
