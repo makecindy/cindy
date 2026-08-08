@@ -181,6 +181,10 @@ import {
   startImConnection,
   stopImConnection,
 } from './im';
+import {
+  closeLocalDbAfterDiscordShutdown,
+  stopImAndDeviceLinkBeforeDbClient,
+} from './im/discordQuitOrdering';
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
@@ -337,6 +341,7 @@ import {
   initDeviceLinkService,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
+  stopDeviceLinkServiceForQuit,
 } from './device-link';
 import {
   getUpdateRelaunchControllers,
@@ -6718,15 +6723,30 @@ onQuit(
 //                           shared app-server 子进程 SIGTERM)。**必须 await** —
 //                           kill 是 Layer 2 才发出, fire-and-forget 会让 app.exit
 //                           在 kill 之前就掐掉 Node, Windows 上子进程会变孤儿。
-//   - im.dispose:           wsClient.stop() 内部先发 announce offline (quit path waits 4.5s)
-//                           再 close WS。**整个改造的核心目标——必须 await。**
+//   - IM → Device Link → DbClient:
+//                           wsClient.stop() 内部先发 announce offline (quit path waits 4.5s)
+//                           再 close WS。Device Link presence 必须保留到 Discord Gateway
+//                           已关闭；ownership DELETE 又必须早于 DbClient dispose，三步
+//                           因而注册为同一个串行 disposer，避免双活或 15s stale 接管延迟。
 //   - codex env shutdown:   关 MCP HTTP bridge。语义上要在 maker.shutdown() 杀完
 //                           codex 子进程之后, 这里并发跑最坏是 log noise。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
 onQuit('shutdown-maker', shutdownMaker, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
-onQuit('im', () => stopImConnection('quit'), 'async');
+let imDeviceLinkDbShutdown = Promise.resolve();
+onQuit(
+  'im-device-link-db-client',
+  () => {
+    imDeviceLinkDbShutdown = stopImAndDeviceLinkBeforeDbClient(
+      () => stopImConnection('quit'),
+      () => stopDeviceLinkServiceForQuit(),
+      () => lifecycleDbClientManager.dispose('quit'),
+    );
+    return imDeviceLinkDbShutdown;
+  },
+  'async',
+);
 onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
 onQuit('pi-env', () => shutdownPiEnvironment(), 'async');
 // embedding-host: abort 语义 —— 立刻让出 SQLite 写连接, 不等当前 tick (那批 job 保持
@@ -6750,10 +6770,13 @@ onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'async');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
-
-// Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
-onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
+// Post-async 阶段: 串行跑。即使 async 总预算先到，也不得让 local DB close
+// 越过仍在执行的 Device Link ownership release / DbClient dispose。
+onQuit(
+  'local-db-close',
+  () => closeLocalDbAfterDiscordShutdown(imDeviceLinkDbShutdown, () => localDbCloseDb()),
+  'post-async',
+);
 
 installQuitHandler(6000);
 

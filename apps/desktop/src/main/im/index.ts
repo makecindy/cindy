@@ -92,6 +92,7 @@ import { bindingStore, executeDetach } from './binding';
 import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS } from '../../shared/imDefaultSettings';
 import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
+import { ImSchedulerManager } from './scheduler/manager';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -115,6 +116,7 @@ export {
 const log = createLogger('main:im');
 
 let wired = false;
+const imScheduler = new ImSchedulerManager(discordIm);
 
 export interface DesktopCcPrefs {
   model: string;
@@ -444,6 +446,9 @@ async function initializeImConnection(): Promise<void> {
     log.warn(`feishu sessions title backfill failed (non-fatal): ${msg}`);
   }
   activateImAccountBoundary();
+  // Same-account election requires an authenticated Device Link identity.
+  // Local/skip-login mode keeps the existing single-Desktop Discord behavior.
+  if (getAuthState().isAuthenticated) await imScheduler.start();
   await im.init();
 }
 
@@ -554,7 +559,19 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
     // Transports stop first so no new message can enter while account-scoped
     // orchestrator and binding caches are being discarded.
     try {
-      await im.dispose();
+      // Close scheduler ingress synchronously but keep its fail-closed hooks
+      // installed while Discord performs the normal offline announcement and
+      // runtime-marker cleanup. Clearing/destroying the Gateway before
+      // im.dispose() would turn a clean exit into a false dirty-runtime notice.
+      await imScheduler.stop({ preserveTransportForDispose: true });
+      try {
+        await im.dispose();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`IM aggregate dispose failed: ${msg}`);
+      } finally {
+        await imScheduler.finishStop({ transportDisposed: true });
+      }
     } finally {
       for (const orchestrator of listImOrchestrators()) {
         try {

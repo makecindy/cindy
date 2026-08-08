@@ -49,6 +49,25 @@ describe('discord outbound helpers', () => {
 });
 
 describe('DiscordIM outbound', () => {
+  it('stops a chunked reply after scheduler authority is lost', async () => {
+    const channel = makeChannel('dm-1');
+    let releaseFirst!: (value: { id: string }) => void;
+    channel.send.mockImplementationOnce(
+      () => new Promise((resolve) => { releaseFirst = resolve; }),
+    );
+    let allowed = true;
+    const im = makeIm(channel);
+    im.setSchedulerHooks({ isTransportAllowed: () => allowed });
+
+    const sending = im.sendText('user-1', 'x'.repeat(3_000));
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalledOnce());
+    allowed = false;
+    releaseFirst({ id: 'm1' });
+
+    await expect(sending).rejects.toThrow('DISCORD_SCHEDULER_STANDBY');
+    expect(channel.send).toHaveBeenCalledTimes(1);
+  });
+
   it('sendText sends plain text without rewriting content', async () => {
     const channel = makeChannel('dm-1');
     const im = makeIm(channel);
@@ -178,7 +197,9 @@ function makeIm(
       client: makeClient(channel) as never,
       appId: 'app-1',
       botTag: 'bot#0000',
+      ingressOpen: true,
       connect: vi.fn(async () => {}),
+      closeIngress: vi.fn(async () => {}),
       destroy: vi.fn(async () => {}),
     }),
   });
@@ -221,11 +242,12 @@ function makeChannel(id: string) {
 }
 
 function makeHost(): IMHost {
+  const token = `${Buffer.from('12345678901234567').toString('base64url')}.signature.parts`;
   return {
     paths: { feishuMediaDir: tempDir(), discordMediaDir: tempDir() },
     secrets: {
       write: () => true,
-      read: () => null,
+      read: (key) => key === 'discord-bot-token' ? token : null,
       remove: () => {},
       isAvailable: () => true,
     },
