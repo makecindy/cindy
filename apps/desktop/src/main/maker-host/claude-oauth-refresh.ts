@@ -46,13 +46,26 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+
 import {
-  clearClaudeAiOAuth,
+  clearClaudeAiOAuthWithBindingCommit,
   readClaudeAiOAuth,
-  writeClaudeAiOAuth,
+  replaceClaudeAiOAuthIfMatches,
   type ClaudeAiOAuth,
+  type ClaudeAiOAuthConditionalUpdateKind,
+  type ConditionalClaudeAiOAuthReplaceResult,
 } from './claude-credentials-store.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import {
+  abandonNativeProviderAuthOperation,
+  beginNativeProviderAuthDisconnect,
+  captureNativeProviderAuthOwnerFence,
+  getNativeProviderAuthBindingStateForOperation,
+  markNativeProviderAuthRevocationPending,
+  unbindNativeProviderAuth,
+  validateNativeProviderAuthRevocationPending,
+} from './nativeProviderAuthBinding.js';
 import { outboundFetch } from './outbound-fetch.js';
 
 const log = desktopMakerLogger.child('claude-oauth-refresh');
@@ -152,17 +165,56 @@ export async function fetchSubscriptionProfile(
 
 export interface ClaudeOAuthRefresherDeps {
   readOAuth: () => ClaudeAiOAuth | null;
-  writeOAuth: (oauth: ClaudeAiOAuth) => void;
+  /** Owner generation observed with the credential; async cleanup must stay inside this fence. */
+  readOwnerScope: () => ClaudeOAuthOwnerScope;
+  replaceOAuth: (
+    expected: ClaudeAiOAuth,
+    next: ClaudeAiOAuth,
+    kind?: ClaudeAiOAuthConditionalUpdateKind,
+  ) => ConditionalClaudeAiOAuthReplaceResult;
   fetchFn: typeof fetch;
   now: () => number;
   /** 跨进程锁所在目录(= cc config dir);锁路径 <lockDir>/.oauth_refresh.lock。 */
   lockDir: () => string;
   /** 锁冲突退避 sleep(测试注入 0 延迟)。 */
   sleep?: (ms: number) => Promise<void>;
-  /** refresh token 被服务端作废(invalid_grant)时通知 —— adapter 接 invalidate 广播。 */
-  onInvalidGrant?: () => void;
+  /** refresh token 被服务端作废(invalid_grant)时通知 —— adapter 按 proof 条件清理。 */
+  onInvalidGrant?: (proof: ClaudeOAuthInvalidGrantProof) => void;
   /** 预续期开关(测试关掉避免悬挂 timer)。默认开。 */
   proactiveRenewal?: boolean;
+}
+
+export interface ClaudeOAuthOwnerScope {
+  dataOwnerId: string | null;
+  generation: number;
+  boundaryPending: boolean;
+}
+
+export interface ClaudeOAuthInvalidGrantProof {
+  source: 'invalid_grant';
+  owner: { dataOwnerId: string; generation: number };
+  /** In-memory only. Never log or persist either token. */
+  rejectedCredential: { accessToken: string; refreshToken: string | null };
+}
+
+function sameCommittedOwner(
+  expected: { dataOwnerId: string; generation: number },
+  actual: ClaudeOAuthOwnerScope,
+): boolean {
+  return (
+    !actual.boundaryPending &&
+    actual.dataOwnerId === expected.dataOwnerId &&
+    actual.generation === expected.generation
+  );
+}
+
+function readActiveOwnerScope(): ClaudeOAuthOwnerScope {
+  const session = getActiveAppSession();
+  return {
+    dataOwnerId: session.dataOwnerId,
+    generation: session.generation,
+    boundaryPending: isAppSessionBoundaryPending(),
+  };
 }
 
 export interface GetValidOAuthOptions {
@@ -198,6 +250,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
 } {
   const sleep = deps.sleep ?? defaultSleep;
   let inflight: Promise<ClaudeAiOAuth | null> | null = null;
+  let inflightOwner: { dataOwnerId: string; generation: number } | null = null;
   // generation:invalidate() 递增;在途刷新拿着进入时的 gen,完成时 gen 变了就丢弃结果。
   let generation = 0;
   let proactiveTimer: NodeJS.Timeout | null = null;
@@ -269,8 +322,12 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         } catch {
           try {
             fs.rmSync(tomb, { recursive: true, force: true });
-          } catch { /* 尽力清理 */ }
-          log.error('oauth refresh lock rollback failed (three-way stale takeover race); a healthy holder lost its lock');
+          } catch {
+            /* 尽力清理 */
+          }
+          log.error(
+            'oauth refresh lock rollback failed (three-way stale takeover race); a healthy holder lost its lock',
+          );
         }
         return false;
       }
@@ -316,7 +373,9 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
             if (myIno !== null && st.ino !== myIno) {
               compromised = true;
               clearInterval(touch);
-              log.warn('oauth refresh lock compromised (taken over by another process); abandoning write-back');
+              log.warn(
+                'oauth refresh lock compromised (taken over by another process); abandoning write-back',
+              );
               return;
             }
             const t = new Date(deps.now());
@@ -343,7 +402,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       }
       if (attempt < LOCK_RETRY_MAX) {
         // 对齐 cc Mzr:1000ms + 抖动退避。抖动用 attempt 序号而非随机数即可满足打散目的。
-        await sleep(LOCK_RETRY_BASE_DELAY_MS + (attempt * 250));
+        await sleep(LOCK_RETRY_BASE_DELAY_MS + attempt * 250);
       }
     }
     log.warn('oauth refresh lock acquire timed out; skip refreshing (holder still active)');
@@ -411,8 +470,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       accessToken: data.access_token,
       // 服务端可能旋转 refresh token;未返回时沿用旧值(对齐 cc 行为)。
       refreshToken: data.refresh_token ?? refreshToken,
-      expiresAt:
-        typeof data.expires_in === 'number' ? deps.now() + data.expires_in * 1000 : null,
+      expiresAt: typeof data.expires_in === 'number' ? deps.now() + data.expires_in * 1000 : null,
       scopes: data.scope ? data.scope.split(' ').filter(Boolean) : current.scopes,
     };
     // ⚠️ 此处不做订阅身份回填 —— rotated refresh token 必须最快落盘(写回在调用方
@@ -432,13 +490,21 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
    */
   async function backfillSubscriptionProfile(accessToken: string): Promise<void> {
     const gen = generation;
+    const scopeAtStart = deps.readOwnerScope();
+    if (scopeAtStart.boundaryPending || !scopeAtStart.dataOwnerId) return;
+    const owner = {
+      dataOwnerId: scopeAtStart.dataOwnerId,
+      generation: scopeAtStart.generation,
+    };
     const profile = await fetchSubscriptionProfile(accessToken, deps.fetchFn);
     if (!profile || (profile.subscriptionType == null && profile.rateLimitTier == null)) return;
     if (generation !== gen) return; // 拉取期间登出 → 丢弃
+    if (!sameCommittedOwner(owner, deps.readOwnerScope())) return;
     const lock = await acquireLock();
     if (!lock) return;
     try {
       if (generation !== gen) return;
+      if (!sameCommittedOwner(owner, deps.readOwnerScope())) return;
       if (lock.isCompromised()) return;
       const fresh = deps.readOAuth();
       if (!fresh?.accessToken) return;
@@ -450,11 +516,19 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         return;
       }
       if (fresh.subscriptionType != null && fresh.rateLimitTier != null) return;
-      deps.writeOAuth({
-        ...fresh,
-        subscriptionType: fresh.subscriptionType ?? profile.subscriptionType,
-        rateLimitTier: fresh.rateLimitTier ?? profile.rateLimitTier,
-      });
+      const replacement = deps.replaceOAuth(
+        fresh,
+        {
+          ...fresh,
+          subscriptionType: fresh.subscriptionType ?? profile.subscriptionType,
+          rateLimitTier: fresh.rateLimitTier ?? profile.rateLimitTier,
+        },
+        'profile',
+      );
+      if (replacement !== 'written') {
+        log.info('subscription profile backfill discarded: credential changed before commit');
+        return;
+      }
       log.info('subscription profile backfilled', {
         subscriptionType: fresh.subscriptionType ?? profile.subscriptionType,
       });
@@ -477,8 +551,10 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
   async function refreshWithLock(
     preLockToken: string,
     force: boolean,
+    owner: { dataOwnerId: string; generation: number },
   ): Promise<ClaudeAiOAuth | null> {
     const gen = generation;
+    if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
     const lock = await acquireLock();
     if (!lock) {
       // 拿不到锁:持有者(本机另一实例 / standalone claude)正在刷,其 HTTP 预算(10s)
@@ -486,7 +562,9 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       // 就用,避免「对方 1-2 秒后就写好、我们却已 null 掉整个 turn」。轮询到头仍没有
       // 新值才放弃(调用方按 force 语义降级)。
       for (let i = 0; i <= LOCK_LOSER_POLL_ATTEMPTS; i++) {
+        if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
         const reread = deps.readOAuth();
+        if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
         if (reread?.accessToken && reread.accessToken !== preLockToken) return reread;
         if (generation !== gen) return null; // 等待期间登出
         if (i < LOCK_LOSER_POLL_ATTEMPTS) await sleep(LOCK_LOSER_POLL_INTERVAL_MS);
@@ -494,8 +572,13 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       return null;
     }
     try {
+      if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
       const fresh = deps.readOAuth();
       if (!fresh?.accessToken) return null;
+      if (!sameCommittedOwner(owner, deps.readOwnerScope())) {
+        log.info('claude oauth refresh discarded: owner changed while reading credential');
+        return null;
+      }
       if (fresh.accessToken !== preLockToken) {
         // 别人已经刷过(锁内重读是唯一可信判定)→ 直接用,不再消耗一次轮换。
         log.info('claude oauth refresh skipped: credential already renewed by another writer');
@@ -510,6 +593,10 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       if (generation !== gen) {
         // 刷新期间发生登出:结果作废,绝不写回(否则「已断开」状态凭证复活)。
         log.info('claude oauth refresh discarded: invalidated mid-flight (logout)');
+        return null;
+      }
+      if (!sameCommittedOwner(owner, deps.readOwnerScope())) {
+        log.info('claude oauth refresh discarded: owner changed while request was in flight');
         return null;
       }
       if (!next) {
@@ -529,7 +616,14 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
           // 库仍是失败那套凭证且服务端明确作废 → 刷新无望,通知 UI 重登。
           log.error('claude oauth refresh token revoked by server (invalid_grant)');
           try {
-            deps.onInvalidGrant?.();
+            deps.onInvalidGrant?.({
+              source: 'invalid_grant',
+              owner,
+              rejectedCredential: {
+                accessToken: fresh.accessToken,
+                refreshToken: fresh.refreshToken ?? null,
+              },
+            });
           } catch (e) {
             log.warn('onInvalidGrant handler threw', {
               error: e instanceof Error ? e.message : String(e),
@@ -553,11 +647,18 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         // 刷新 HTTP 在途期间凭证库被外部替换 —— 换账号登录 / standalone claude 登录
         // 都不经本锁、不 bump generation(登出走 disconnect 已被 gen 检查拦住)。
         // 用旧账号的刷新结果写回会静默撤销用户换号 → 丢弃本次结果,采信库中当前凭证。
-        log.warn('claude oauth refresh discarded: credential store replaced mid-refresh (account switch?)');
+        log.warn(
+          'claude oauth refresh discarded: credential store replaced mid-refresh (account switch?)',
+        );
         return postFetch?.accessToken ? postFetch : null;
       }
       try {
-        deps.writeOAuth(next);
+        const replacement = deps.replaceOAuth(fresh, next);
+        if (replacement !== 'written') {
+          log.warn('claude oauth refresh discarded: credential changed before conditional commit');
+          const latest = deps.readOAuth();
+          return latest?.accessToken ? latest : null;
+        }
       } catch (e) {
         // 写回失败也返回内存新凭证让本次能用;若服务端旋转了 refresh token,凭证库里
         // 留的是已作废旧值,下次刷新会 invalid_grant → 被迫重登,必须响亮记错。
@@ -613,8 +714,15 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
 
   // ── 对外 API ─────────────────────────────────────────────────────────────────
   async function getValidOAuth(opts?: GetValidOAuthOptions): Promise<ClaudeAiOAuth | null> {
+    const scopeBeforeRead = deps.readOwnerScope();
+    if (scopeBeforeRead.boundaryPending || !scopeBeforeRead.dataOwnerId) return null;
     const current = deps.readOAuth();
     if (!current?.accessToken) return null;
+    const owner = {
+      dataOwnerId: scopeBeforeRead.dataOwnerId,
+      generation: scopeBeforeRead.generation,
+    };
+    if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
 
     if (opts?.staleToken && current.accessToken !== opts.staleToken) {
       // 库值已比失败的那枚新(后台预续期 / 其它会话换代)→ 直接交出,不消耗轮换。
@@ -634,14 +742,27 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       return opts?.forceRefresh ? null : current;
     }
 
+    if (inflight && inflightOwner && !sameCommittedOwner(inflightOwner, scopeBeforeRead)) {
+      await inflight;
+      if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
+      return getValidOAuth(opts);
+    }
     if (!inflight) {
-      inflight = refreshWithLock(current.accessToken, opts?.forceRefresh ?? false).finally(
-        () => {
+      inflightOwner = owner;
+      const pending = refreshWithLock(
+        current.accessToken,
+        opts?.forceRefresh ?? false,
+        owner,
+      ).finally(() => {
+        if (inflight === pending) {
           inflight = null;
-        },
-      );
+          inflightOwner = null;
+        }
+      });
+      inflight = pending;
     }
     const refreshed = await inflight;
+    if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
     if (refreshed) return refreshed;
     // 刷新失败:非强制场景退回现有 token(临期未必已失效,让请求自然成败);
     // 强制场景绝不复用已确认失效的 token。
@@ -649,8 +770,15 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
   }
 
   function getOAuthForSpawn(): ClaudeAiOAuth | null {
+    const scopeBeforeRead = deps.readOwnerScope();
+    if (scopeBeforeRead.boundaryPending || !scopeBeforeRead.dataOwnerId) return null;
     const current = deps.readOAuth();
     if (!current?.accessToken) return null;
+    const owner = {
+      dataOwnerId: scopeBeforeRead.dataOwnerId,
+      generation: scopeBeforeRead.generation,
+    };
+    if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
     const expiresAt = typeof current.expiresAt === 'number' ? current.expiresAt : null;
     const expiringSoon = expiresAt !== null && expiresAt - deps.now() < EXPIRY_MARGIN_MS;
     if (expiringSoon && current.refreshToken) {
@@ -687,18 +815,19 @@ function defaultLockDir(): string {
 }
 
 let defaultRefresher: ReturnType<typeof createClaudeOAuthRefresher> | null = null;
-let invalidGrantHandler: (() => void) | null = null;
+let invalidGrantHandler: ((proof: ClaudeOAuthInvalidGrantProof) => void) | null = null;
 
 function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
   if (!defaultRefresher) {
     defaultRefresher = createClaudeOAuthRefresher({
       readOAuth: readClaudeAiOAuth,
-      writeOAuth: writeClaudeAiOAuth,
+      readOwnerScope: readActiveOwnerScope,
+      replaceOAuth: replaceClaudeAiOAuthIfMatches,
       // 刷新与 profile 回填都打境外端点,必须吃系统代理(见 outbound-fetch.ts)。
       fetchFn: outboundFetch,
       now: Date.now,
       lockDir: defaultLockDir,
-      onInvalidGrant: () => invalidGrantHandler?.(),
+      onInvalidGrant: (proof) => invalidGrantHandler?.(proof),
     });
   }
   return defaultRefresher;
@@ -708,9 +837,7 @@ function getDefaultRefresher(): ReturnType<typeof createClaudeOAuthRefresher> {
  * 取「当前有效」的 Claude.ai 订阅 OAuth 凭证:未登录 → null;临期 / forceRefresh →
  * 跨进程锁内比对后按需刷新;失败按 forceRefresh 语义降级(见 GetValidOAuthOptions)。
  */
-export function getValidClaudeAiOAuth(
-  opts?: GetValidOAuthOptions,
-): Promise<ClaudeAiOAuth | null> {
+export function getValidClaudeAiOAuth(opts?: GetValidOAuthOptions): Promise<ClaudeAiOAuth | null> {
   return getDefaultRefresher().getValidOAuth(opts);
 }
 
@@ -722,6 +849,13 @@ export function getClaudeAiOAuthForSpawn(): ClaudeAiOAuth | null {
 /** 登出 / 凭证清除时调:放弃在途刷新写回、撤销预续期 timer。 */
 export function invalidateClaudeOAuthRefresh(): void {
   defaultRefresher?.invalidate();
+}
+
+let cancelClaudeOAuthLoginHandler: (() => void) | null = null;
+
+/** Pure in-memory bridge that avoids a refresh↔login module import cycle. */
+export function setClaudeOAuthLoginCancellationHandler(handler: (() => void) | null): void {
+  cancelClaudeOAuthLoginHandler = handler;
 }
 
 /**
@@ -742,12 +876,56 @@ export function backfillClaudeSubscriptionProfile(accessToken: string): Promise<
  * 顺序约束:invalidate 必须先于 clear,防 clear 与在途写回的窗口竞态;clear 抛错
  * (写后校验失败)原样上抛由调用方决定 UI 反馈,多 bump 的 generation 幂等无害。
  */
-export function disconnectClaudeAiOAuth(): void {
+export function disconnectClaudeAiOAuth(): 'revoked' | 'confirmed-unbound' {
+  // Last explicit user intent wins: abort a browser/token exchange before it
+  // can stage a fresh authorization over this logout.
+  cancelClaudeOAuthLoginHandler?.();
+  const owner = captureNativeProviderAuthOwnerFence();
+  if (!owner) {
+    throw new Error('cannot disconnect Claude OAuth outside a stable owner session');
+  }
+  const operation = beginNativeProviderAuthDisconnect('anthropic', owner);
+  if (!operation) {
+    throw new Error('cannot establish a durable Claude OAuth logout operation');
+  }
+  if (operation === 'confirmed-unbound') return 'confirmed-unbound';
+  const bindingState = getNativeProviderAuthBindingStateForOperation('anthropic', operation);
+  if (bindingState === 'unbound') {
+    abandonNativeProviderAuthOperation('anthropic', operation);
+    return 'confirmed-unbound';
+  }
+  // Durable intent is the first write. A crash anywhere after this point leaves
+  // auto-claim and reads fail-closed. Explicit logout may supersede only this
+  // same owner generation's in-flight authorization marker.
+  const staged = markNativeProviderAuthRevocationPending('anthropic', owner, {
+    supersedeMatchingAuthorization: true,
+    operation,
+  });
+  if (!staged) {
+    throw new Error(
+      'native provider auth ownership changed or is unreadable; refusing unsafe OAuth cleanup',
+    );
+  }
+
   invalidateClaudeOAuthRefresh();
-  clearClaudeAiOAuth();
+  const result = clearClaudeAiOAuthWithBindingCommit(
+    () => validateNativeProviderAuthRevocationPending('anthropic', operation),
+    () =>
+      unbindNativeProviderAuth('anthropic', {
+        revoked: true,
+        expectedOperation: operation,
+        requirePendingRevocation: true,
+      }),
+  );
+  if (result === 'binding-changed') {
+    throw new Error('Claude OAuth ownership changed during logout; cleanup did not complete');
+  }
+  return 'revoked';
 }
 
 /** refresh token 被服务端作废时的通知接线(auth-adapters 装配,内存操作零副作用)。 */
-export function setClaudeOAuthInvalidGrantHandler(handler: (() => void) | null): void {
+export function setClaudeOAuthInvalidGrantHandler(
+  handler: ((proof: ClaudeOAuthInvalidGrantProof) => void) | null,
+): void {
   invalidGrantHandler = handler;
 }

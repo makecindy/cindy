@@ -33,7 +33,11 @@ function makeLockDir(): string {
 }
 afterEach(() => {
   for (const d of tmpDirs.splice(0)) {
-    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try {
+      fs.rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
   }
 });
 
@@ -72,8 +76,10 @@ function makeDeps(overrides: Partial<ClaudeOAuthRefresherDeps> = {}): {
   );
   const deps: ClaudeOAuthRefresherDeps = {
     readOAuth: () => fixtureOAuth(),
-    writeOAuth: (o) => {
-      written.push(o);
+    readOwnerScope: () => ({ dataOwnerId: 'owner-a', generation: 7, boundaryPending: false }),
+    replaceOAuth: (_expected, next) => {
+      written.push(next);
+      return 'written';
     },
     fetchFn: fetchMock as unknown as typeof fetch,
     now: () => NOW,
@@ -192,7 +198,7 @@ describe('claude-oauth-refresh — 基础判定', () => {
     const current = fixtureOAuth({ expiresAt: NOW - 1 });
     const { deps } = makeDeps({
       readOAuth: () => current,
-      writeOAuth: () => {
+      replaceOAuth: () => {
         throw new Error('keychain write denied');
       },
     });
@@ -245,8 +251,9 @@ describe('claude-oauth-refresh — 订阅身份回填(review P2)', () => {
     const written: ClaudeAiOAuth[] = [];
     const { deps } = makeDeps({
       readOAuth: () => (written.length > 0 ? written[written.length - 1]! : current),
-      writeOAuth: (o) => {
-        written.push(o);
+      replaceOAuth: (_expected, next) => {
+        written.push(next);
+        return 'written';
       },
       fetchFn: fetchMock as unknown as typeof fetch,
     });
@@ -264,7 +271,11 @@ describe('claude-oauth-refresh — 订阅身份回填(review P2)', () => {
   });
 
   it('profile 拉取失败 → 刷新主流程不受影响,无二次写回,待下次再补', async () => {
-    const current = fixtureOAuth({ expiresAt: NOW - 1, subscriptionType: null, rateLimitTier: null });
+    const current = fixtureOAuth({
+      expiresAt: NOW - 1,
+      subscriptionType: null,
+      rateLimitTier: null,
+    });
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).includes('/oauth/profile')) throw new Error('profile down');
       return jsonResponse(200, { access_token: 'at-new', expires_in: 60 });
@@ -450,9 +461,9 @@ describe('claude-oauth-refresh — 跨进程锁协议', () => {
       expect(fetchMock).not.toHaveBeenCalled(); // 绝不双持锁并发刷新
       expect(fs.existsSync(lockPath)).toBe(true); // 他人的锁被 rollback 还回原位
       // 无 tomb 残留
-      expect(
-        fs.readdirSync(dir).filter((f) => f.startsWith('.oauth_refresh.stale-')),
-      ).toHaveLength(0);
+      expect(fs.readdirSync(dir).filter((f) => f.startsWith('.oauth_refresh.stale-'))).toHaveLength(
+        0,
+      );
     } finally {
       spy.mockRestore();
     }
@@ -479,6 +490,33 @@ describe('claude-oauth-refresh — 跨进程锁协议', () => {
 });
 
 describe('claude-oauth-refresh — 收尾语义', () => {
+  it('等待 refresh lock 期间 owner 切换 → 旧调用绝不返回新 owner 的 token', async () => {
+    const dir = makeLockDir();
+    fs.mkdirSync(path.join(dir, '.oauth_refresh.lock'));
+    let generation = 7;
+    const oldCredential = fixtureOAuth({ expiresAt: NOW - 1 });
+    const newCredential = fixtureOAuth({
+      accessToken: 'at-owner-b',
+      refreshToken: 'rt-owner-b',
+    });
+    const { deps } = makeDeps({
+      lockDir: () => dir,
+      now: () => Date.now(),
+      readOwnerScope: () => ({
+        dataOwnerId: generation === 7 ? 'owner-a' : 'owner-b',
+        generation,
+        boundaryPending: false,
+      }),
+      readOAuth: () => (generation === 7 ? oldCredential : newCredential),
+      sleep: async () => {
+        generation = 8;
+      },
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    await expect(refresher.getValidOAuth({ forceRefresh: true })).resolves.toBeNull();
+  });
+
   it('刷新 HTTP 在途期间凭证库被换账号 → 丢弃刷新结果,采信库中新凭证', async () => {
     // review P2:换账号登录不经锁、不 bump generation,旧账号刷新结果写回会静默撤销换号。
     const stale = fixtureOAuth({ expiresAt: NOW - 1 });
@@ -506,6 +544,29 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     const out = await pending;
     expect(out?.accessToken).toBe('at-new-account'); // 采信新账号凭证
     expect(written).toHaveLength(0); // 旧账号刷新结果绝不写回
+  });
+
+  it('最后一次 replacement 检查后外部进程换 token → 条件写拒绝覆盖并返回新值', async () => {
+    const stale = fixtureOAuth({ expiresAt: NOW - 1 });
+    const switched = fixtureOAuth({
+      accessToken: 'at-external-new-account',
+      refreshToken: 'rt-external-new-account',
+    });
+    let stored = stale;
+    const { deps } = makeDeps({
+      readOAuth: () => stored,
+      replaceOAuth: () => {
+        // 模拟 standalone Claude 恰好在 refresh 的 postFetch read 之后、写锁之前换号。
+        stored = switched;
+        return 'changed';
+      },
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    await expect(refresher.getValidOAuth({ forceRefresh: true })).resolves.toMatchObject({
+      accessToken: 'at-external-new-account',
+    });
+    expect(stored).toBe(switched);
   });
 
   it('invalidate(登出)后在途刷新完成也不写回、不返回', async () => {
@@ -569,6 +630,11 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     const r = createClaudeOAuthRefresher(deps);
     expect(await r.getValidOAuth({ forceRefresh: true })).toBeNull();
     expect(onInvalidGrant).toHaveBeenCalledTimes(1);
+    expect(onInvalidGrant).toHaveBeenCalledWith({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+    });
 
     const onInvalidGrant2 = vi.fn();
     const { deps: deps2 } = makeDeps({
@@ -579,6 +645,30 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     const r2 = createClaudeOAuthRefresher(deps2);
     expect(await r2.getValidOAuth({ forceRefresh: true })).toBeNull();
     expect(onInvalidGrant2).not.toHaveBeenCalled();
+  });
+
+  it('invalid_grant 到达前 owner generation 已切换 → 丢弃旧回调,不清理新会话', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let generation = 7;
+    let resolveFetch!: (response: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const onInvalidGrant = vi.fn();
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      readOwnerScope: () => ({ dataOwnerId: 'owner-a', generation, boundaryPending: false }),
+      onInvalidGrant,
+      fetchFn: (() => gate) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    generation = 8;
+    resolveFetch(jsonResponse(400, { error: 'invalid_grant' }));
+
+    await expect(pending).resolves.toBeNull();
+    expect(onInvalidGrant).not.toHaveBeenCalled();
   });
 });
 

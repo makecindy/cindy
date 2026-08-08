@@ -30,7 +30,10 @@ import {
   decideKeychainWriteMode,
   planClaudeAiOAuthClear,
 } from './claude-credentials-blob.js';
-import { isNativeProviderAuthBound } from './nativeProviderAuthBinding.js';
+import {
+  getNativeProviderAuthBindingState,
+  getNativeProviderAuthBindingStateForCredentialTransaction,
+} from './nativeProviderAuthBinding.js';
 
 const log = desktopMakerLogger.child('claude-credentials-store');
 
@@ -71,6 +74,33 @@ export interface ClaudeAiOAuth {
   [k: string]: unknown;
 }
 
+/**
+ * Opaque in-memory fence for destructive cleanup. It must never be logged or
+ * persisted: its only purpose is to prove that the credential rejected by the
+ * server is still the one in the shared store when the delete lock is held.
+ */
+export interface ClaudeAiOAuthCredentialIdentity {
+  accessToken: string;
+  refreshToken?: string | null;
+}
+
+export type ConditionalClaudeAiOAuthClearResult = 'cleared' | 'absent' | 'changed';
+export type ConditionalClaudeAiOAuthBindingClearResult =
+  ConditionalClaudeAiOAuthClearResult | 'binding-changed';
+export type ConditionalClaudeAiOAuthReplaceResult = 'written' | 'absent' | 'changed';
+export type ClaudeAiOAuthConditionalUpdateKind = 'refresh' | 'profile';
+export type ClaudeAiOAuthBindingCommitClearResult = 'cleared' | 'absent' | 'binding-changed';
+
+function matchesClaudeAiOAuthIdentity(
+  current: ClaudeAiOAuth,
+  expected: ClaudeAiOAuthCredentialIdentity,
+): boolean {
+  return (
+    current.accessToken === expected.accessToken &&
+    (current.refreshToken ?? null) === (expected.refreshToken ?? null)
+  );
+}
+
 // ── 整个 blob 的读写(保留 claudeAiOauth 以外的字段) ───────────────────────────
 
 type RawBlobReadResult =
@@ -83,7 +113,7 @@ type BlobReadResult =
 
 type BlobWriteMode = 'create' | 'update';
 
-export type BoundClaudeAiOAuthState = 'present' | 'absent' | 'unreadable';
+export type BoundClaudeAiOAuthState = 'present' | 'absent' | 'unreadable' | 'binding-unreadable';
 
 function securityEnvironment(): NodeJS.ProcessEnv {
   // `security` 的 exit status 只有 OSStatus 的低 8 位,不能单独证明 errSecItemNotFound。
@@ -168,6 +198,63 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
     }
   }
   if (failure !== noFailure) throw failure;
+  return value;
+}
+
+/**
+ * Read-only counterpart to the mutation lock. Contention and lock/read errors
+ * are a normal fail-closed `null` for status/spawn callers, never a UI or agent
+ * startup exception. The lock target/order still matches writers exactly.
+ */
+function withCredentialSnapshotLock<T>(snapshot: () => T): T | null {
+  const dir = claudeConfigDir();
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    log.warn('claude credential snapshot directory unavailable', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+  let compromised: unknown = null;
+  let release: (() => void) | null = null;
+  try {
+    release = lockSync(path.join(dir, CREDENTIAL_WRITE_LOCK_TARGET), {
+      realpath: false,
+      stale: CREDENTIAL_WRITE_LOCK_STALE_MS,
+      update: CREDENTIAL_WRITE_LOCK_UPDATE_MS,
+      onCompromised: (error) => {
+        compromised = error;
+      },
+    });
+  } catch (error) {
+    if (!isErrno(error, 'ELOCKED')) {
+      log.warn('claude credential snapshot lock unavailable', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return null;
+  }
+
+  let value: T | null = null;
+  try {
+    if (compromised) return null;
+    value = snapshot();
+    if (compromised) return null;
+  } catch (error) {
+    log.warn('claude credential snapshot failed closed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    value = null;
+  } finally {
+    try {
+      release();
+    } catch (error) {
+      log.warn('claude credential snapshot lock release failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   return value;
 }
 
@@ -369,14 +456,25 @@ function writeBlob(blob: Record<string, unknown>, mode: BlobWriteMode): void {
  * getState 自动兼容本地登录 + 登录后状态判定都用它。
  */
 export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
-  if (!isNativeProviderAuthBound('anthropic')) return null;
-  const result = readBlob();
-  if (result.kind !== 'value') return null;
-  const oauth = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
-  if (oauth && typeof oauth.accessToken === 'string' && oauth.accessToken.length > 0) {
+  return withCredentialSnapshotLock(() => {
+    // Writers finalize in storage→binding order. Holding the storage lock while
+    // checking binding prevents owner A from passing a stale binding check and
+    // then reading token B after another process completes login.
+    if (getNativeProviderAuthBindingStateForCredentialTransaction('anthropic') !== 'bound') {
+      return null;
+    }
+    const result = readBlob();
+    if (result.kind !== 'value') return null;
+    const oauth = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+    if (!oauth || typeof oauth.accessToken !== 'string' || oauth.accessToken.length === 0) {
+      return null;
+    }
+    // Protect against the remaining binding-only legacy claim/unbind paths.
+    if (getNativeProviderAuthBindingStateForCredentialTransaction('anthropic') !== 'bound') {
+      return null;
+    }
     return oauth;
-  }
-  return null;
+  });
 }
 
 /** 是否存在可用的 Claude.ai OAuth 登录(有 accessToken)。 */
@@ -390,7 +488,9 @@ export function hasClaudeAiOAuth(): boolean {
  * API above so a transient Keychain failure does not throw across the UI.
  */
 export function getBoundClaudeAiOAuthState(): BoundClaudeAiOAuthState {
-  if (!isNativeProviderAuthBound('anthropic')) return 'absent';
+  const bindingState = getNativeProviderAuthBindingState('anthropic');
+  if (bindingState === 'unreadable') return 'binding-unreadable';
+  if (bindingState === 'unbound') return 'absent';
   const result = readBlob();
   if (result.kind === 'unreadable') return 'unreadable';
   if (result.kind === 'absent') return 'absent';
@@ -412,27 +512,182 @@ export function hasClaudeAiOAuthUnbound(): boolean {
  * 写入 Claude.ai OAuth 凭证 —— 读改写,保留 blob 里 claudeAiOauth 以外的字段
  * (cc 可能存了其它内容)。失败抛错让上层反馈。
  */
+function writeClaudeAiOAuthLocked(
+  oauth: ClaudeAiOAuth,
+): Exclude<BlobReadResult, { kind: 'unreadable' }> {
+  let result = readBlob();
+  if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+  result = stabilizeExistingBlob(result);
+  if (result.kind === 'value') {
+    writeBlob({ ...result.value, claudeAiOauth: oauth }, 'update');
+  } else {
+    try {
+      writeBlob({ claudeAiOauth: oauth }, 'create');
+    } catch (createError) {
+      // create-only 仍防御不遵守 Claude 锁协议的旧进程:抢占时重读新值再合并。
+      const raced = stabilizeExistingBlob(readBlob());
+      if (raced.kind !== 'value') throw createError;
+      result = raced;
+      writeBlob({ ...raced.value, claudeAiOauth: oauth }, 'update');
+    }
+  }
+  return result;
+}
+
+function restoreBlobLocked(previous: Exclude<BlobReadResult, { kind: 'unreadable' }>): void {
+  if (previous.kind === 'value') {
+    writeBlob(previous.value, 'update');
+    return;
+  }
+  if (process.platform === 'darwin') {
+    deleteItemMac();
+    return;
+  }
+  try {
+    fs.unlinkSync(credentialsFilePath());
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+}
+
+function logClaudeAiOAuthWritten(oauth: ClaudeAiOAuth): void {
+  log.info('claude oauth credential written', {
+    storage: process.platform === 'darwin' ? 'keychain' : 'file',
+    hasRefresh: Boolean(oauth.refreshToken),
+  });
+}
+
 export function writeClaudeAiOAuth(oauth: ClaudeAiOAuth): void {
   withCredentialWriteLock(() => {
+    writeClaudeAiOAuthLocked(oauth);
+    logClaudeAiOAuthWritten(oauth);
+  });
+}
+
+/**
+ * Finalize an explicit OAuth login under one fixed lock order:
+ * credential storage → ownership binding. A competing login may replace the
+ * authorization marker before this writer reaches the binding lock; in that
+ * case the token write is rolled back before the storage lock is released.
+ * A thrown binding error deliberately leaves the staged token in place: the
+ * durable authorization marker still makes it unusable, whereas rolling back
+ * after an ambiguous lock-release error could undo a binding that did commit.
+ */
+export function writeClaudeAiOAuthWithBindingCommit(
+  oauth: ClaudeAiOAuth,
+  commitBinding: () => boolean,
+): boolean {
+  return withCredentialWriteLock(() => {
+    const previous = writeClaudeAiOAuthLocked(oauth);
+    const committed = commitBinding();
+    if (!committed) {
+      restoreBlobLocked(previous);
+      return false;
+    }
+    logClaudeAiOAuthWritten(oauth);
+    return true;
+  });
+}
+
+function mergeConditionalClaudeAiOAuthUpdate(
+  current: ClaudeAiOAuth,
+  next: ClaudeAiOAuth,
+  kind: ClaudeAiOAuthConditionalUpdateKind,
+): ClaudeAiOAuth {
+  if (kind === 'profile') {
+    return {
+      ...current,
+      subscriptionType: current.subscriptionType ?? next.subscriptionType,
+      rateLimitTier: current.rateLimitTier ?? next.rateLimitTier,
+    };
+  }
+  return {
+    ...current,
+    accessToken: next.accessToken,
+    refreshToken: next.refreshToken,
+    expiresAt: next.expiresAt,
+    scopes: next.scopes,
+  };
+}
+
+/**
+ * Replace a refreshed credential only if the shared store still contains the
+ * exact credential used for the refresh request. Comparison and write happen
+ * under `.storage-write`, closing the final read→write race with standalone
+ * Claude Code or another Cindy process.
+ */
+export function replaceClaudeAiOAuthIfMatches(
+  expected: ClaudeAiOAuthCredentialIdentity,
+  next: ClaudeAiOAuth,
+  kind: ClaudeAiOAuthConditionalUpdateKind = 'refresh',
+): ConditionalClaudeAiOAuthReplaceResult {
+  return withCredentialWriteLock(() => {
     let result = readBlob();
     if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
     result = stabilizeExistingBlob(result);
-    if (result.kind === 'value') {
-      writeBlob({ ...result.value, claudeAiOauth: oauth }, 'update');
-    } else {
-      try {
-        writeBlob({ claudeAiOauth: oauth }, 'create');
-      } catch (createError) {
-        // create-only 仍防御不遵守 Claude 锁协议的旧进程:抢占时重读新值再合并。
-        const raced = stabilizeExistingBlob(readBlob());
-        if (raced.kind !== 'value') throw createError;
-        writeBlob({ ...raced.value, claudeAiOauth: oauth }, 'update');
-      }
+    if (result.kind === 'absent') return 'absent';
+    const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+    if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
+      return 'absent';
     }
-    log.info('claude oauth credential written', {
+    if (!matchesClaudeAiOAuthIdentity(current, expected)) return 'changed';
+    const merged = mergeConditionalClaudeAiOAuthUpdate(current, next, kind);
+    writeBlob({ ...result.value, claudeAiOauth: merged }, 'update');
+    log.info('claude oauth credential conditionally replaced', {
       storage: process.platform === 'darwin' ? 'keychain' : 'file',
-      hasRefresh: Boolean(oauth.refreshToken),
+      hasRefresh: Boolean(merged.refreshToken),
+      kind,
     });
+    return 'written';
+  });
+}
+
+function clearClaudeAiOAuthFromStableBlob(
+  result: Exclude<BlobReadResult, { kind: 'unreadable' }>,
+): 'cleared' | 'absent' {
+  if (result.kind === 'absent') return 'absent';
+  const plan = planClaudeAiOAuthClear(result.value);
+  switch (plan.action) {
+    case 'noop':
+      return 'absent';
+    case 'delete':
+      if (process.platform === 'darwin') deleteItemMac();
+      else {
+        try {
+          fs.unlinkSync(credentialsFilePath());
+        } catch (error) {
+          if (!isErrno(error, 'ENOENT')) throw error;
+        }
+      }
+      break;
+    case 'write':
+      writeBlob(plan.next, 'update');
+      break;
+  }
+  log.info('claude oauth credential cleared');
+  return 'cleared';
+}
+
+/**
+ * Clear a credential between validation and finalization of one previously
+ * staged ownership revocation, all while holding the shared storage lock. The
+ * first callback proves the exact revoke marker still owns this operation. The
+ * second commits the main revoked binding and removes that marker only after
+ * token deletion succeeds. A crash at either boundary therefore leaves the
+ * marker durable and restart-time reads fail-closed.
+ */
+export function clearClaudeAiOAuthWithBindingCommit(
+  validateBinding: () => boolean,
+  commitBinding: () => boolean,
+): ClaudeAiOAuthBindingCommitClearResult {
+  return withCredentialWriteLock(() => {
+    let result = readBlob();
+    if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+    result = stabilizeExistingBlob(result);
+    if (!validateBinding()) return 'binding-changed';
+    const cleared = clearClaudeAiOAuthFromStableBlob(result);
+    if (!commitBinding()) return 'binding-changed';
+    return cleared;
   });
 }
 
@@ -446,13 +701,35 @@ export function clearClaudeAiOAuth(): void {
     let result = readBlob();
     if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
     result = stabilizeExistingBlob(result);
-    if (result.kind === 'absent') return;
+    clearClaudeAiOAuthFromStableBlob(result);
+  });
+}
+
+/**
+ * Clear only the exact OAuth credential that an invalid_grant response
+ * rejected. The comparison and deletion share the Claude Code storage lock,
+ * so a late callback for account A cannot delete account B's replacement.
+ */
+export function clearClaudeAiOAuthIfMatches(
+  expected: ClaudeAiOAuthCredentialIdentity,
+): ConditionalClaudeAiOAuthClearResult {
+  return withCredentialWriteLock(() => {
+    let result = readBlob();
+    if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+    result = stabilizeExistingBlob(result);
+    if (result.kind === 'absent') return 'absent';
+
+    const current = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+    if (!current || typeof current.accessToken !== 'string' || current.accessToken.length === 0) {
+      return 'absent';
+    }
+    if (!matchesClaudeAiOAuthIdentity(current, expected)) return 'changed';
+
     const plan = planClaudeAiOAuthClear(result.value);
     switch (plan.action) {
       case 'noop':
-        return;
+        return 'absent';
       case 'delete':
-        // 整个 blob 只有 claudeAiOauth → 删掉整条条目 / 文件。
         if (process.platform === 'darwin') deleteItemMac();
         else {
           try {
@@ -463,10 +740,44 @@ export function clearClaudeAiOAuth(): void {
         }
         break;
       case 'write':
-        // 还有 cc 的 mcpOAuth 等其它字段 → 写回裁剪后的整块(保留它们);writeBlob 自带写后校验。
         writeBlob(plan.next, 'update');
         break;
     }
-    log.info('claude oauth credential cleared');
+    log.info('claude oauth credential conditionally cleared');
+    return 'cleared';
+  });
+}
+
+/**
+ * invalid_grant cleanup transaction: compare the rejected token, validate the
+ * exact ownership operation, clear it, then unbind while `.storage-write`
+ * remains held. A newer login can replace the operation intent but cannot
+ * write its token until this transaction releases the storage lock.
+ */
+export function clearClaudeAiOAuthIfMatchesWithBindingCommit(
+  expected: ClaudeAiOAuthCredentialIdentity,
+  validateBinding: () => boolean,
+  commitBinding: () => boolean,
+): ConditionalClaudeAiOAuthBindingClearResult {
+  return withCredentialWriteLock(() => {
+    let result = readBlob();
+    if (result.kind === 'unreadable') throw unreadableStoreError(result.cause);
+    result = stabilizeExistingBlob(result);
+    const current =
+      result.kind === 'value'
+        ? (result.value.claudeAiOauth as ClaudeAiOAuth | undefined)
+        : undefined;
+    if (
+      current &&
+      typeof current.accessToken === 'string' &&
+      current.accessToken.length > 0 &&
+      !matchesClaudeAiOAuthIdentity(current, expected)
+    ) {
+      return 'changed';
+    }
+    if (!validateBinding()) return 'binding-changed';
+    const cleared = clearClaudeAiOAuthFromStableBlob(result);
+    if (!commitBinding()) return 'binding-changed';
+    return cleared;
   });
 }

@@ -12,18 +12,44 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   hasOAuth: true,
-  oauthState: 'present' as 'present' | 'absent' | 'unreadable',
+  oauthState: 'present' as 'present' | 'absent' | 'unreadable' | 'binding-unreadable',
   oauth: null as Record<string, unknown> | null,
   gatewayKey: 'sk-xd-gateway' as string | null,
   cleared: 0,
+  conditionalClearResult: 'cleared' as 'cleared' | 'absent' | 'changed',
+  conditionalClearCalls: [] as Array<{ accessToken: string; refreshToken?: string | null }>,
   clearError: null as Error | null,
   refresherInvalidated: 0,
+  disconnectCalls: 0,
   gatewayRemovals: 0,
   unbindCalls: [] as Array<{
     provider: string;
-    options?: { revoked?: boolean };
+    options?: {
+      revoked?: boolean;
+      ifOwnedByCurrentSession?: boolean;
+      expectedOwner?: { dataOwnerId: string; generation: number };
+      expectedOperation?: {
+        dataOwnerId: string;
+        generation: number;
+        operationId: string;
+        intent: 'invalidate';
+      };
+    };
   }>,
-  invalidGrantHandler: null as (() => void) | null,
+  pendingRevocations: [] as Array<{
+    provider: string;
+    owner: { dataOwnerId: string; generation: number };
+  }>,
+  ownerId: 'owner-a' as string | null,
+  ownerGeneration: 7,
+  boundaryPending: false,
+  invalidGrantHandler: null as
+    | ((proof: {
+        source: 'invalid_grant';
+        owner: { dataOwnerId: string; generation: number };
+        rejectedCredential: { accessToken: string; refreshToken: string | null };
+      }) => void)
+    | null,
   /** getValidClaudeAiOAuth 的可注入延迟(测回调超时用)。 */
   refreshDelayMs: 0,
   lastRefreshOpts: null as { staleToken?: string; forceRefresh?: boolean } | null,
@@ -54,6 +80,17 @@ vi.mock('../claude-credentials-store.js', () => ({
     h.cleared += 1;
     if (h.clearError) throw h.clearError;
   },
+  clearClaudeAiOAuthIfMatchesWithBindingCommit: (
+    expected: { accessToken: string; refreshToken?: string | null },
+    validate: () => boolean,
+    commit: () => boolean,
+  ) => {
+    h.conditionalClearCalls.push(expected);
+    if (h.clearError) throw h.clearError;
+    if (h.conditionalClearResult === 'changed') return 'changed';
+    if (!validate() || !commit()) return 'binding-changed';
+    return h.conditionalClearResult;
+  },
 }));
 
 vi.mock('../claude-oauth-refresh.js', () => ({
@@ -68,13 +105,33 @@ vi.mock('../claude-oauth-refresh.js', () => ({
   },
   // disconnect = invalidate → clear(唯一断开入口,logout/IPC 都必须走它)
   disconnectClaudeAiOAuth: () => {
+    h.disconnectCalls += 1;
+    if (h.oauthState === 'absent') return 'confirmed-unbound';
     h.refresherInvalidated += 1;
+    if (h.oauthState === 'binding-unreadable') {
+      h.pendingRevocations.push({
+        provider: 'anthropic',
+        owner: { dataOwnerId: h.ownerId ?? 'none', generation: h.ownerGeneration },
+      });
+      throw new Error('native provider auth binding is unreadable');
+    }
     h.cleared += 1;
     if (h.clearError) throw h.clearError;
+    return 'revoked';
   },
-  setClaudeOAuthInvalidGrantHandler: (handler: (() => void) | null) => {
+  setClaudeOAuthInvalidGrantHandler: (handler: typeof h.invalidGrantHandler) => {
     h.invalidGrantHandler = handler;
   },
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => `cloud:${h.ownerId ?? 'none'}:${h.ownerGeneration}`,
+  getActiveAppSession: () => ({
+    mode: h.ownerId ? 'cloud' : 'signed-out',
+    dataOwnerId: h.ownerId,
+    generation: h.ownerGeneration,
+  }),
+  isAppSessionBoundaryPending: () => h.boundaryPending,
 }));
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
@@ -88,14 +145,51 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 }));
 
 vi.mock('../nativeProviderAuthBinding.js', () => ({
+  beginNativeProviderAuthInvalidation: (
+    _provider: string,
+    owner: { dataOwnerId: string; generation: number },
+  ) => ({ ...owner, operationId: 'invalid-grant-operation', intent: 'invalidate' }),
+  validateNativeProviderAuthInvalidation: () => true,
+  abandonNativeProviderAuthOperation: () => true,
   bindNativeProviderAuth: vi.fn(),
   claimDetectedNativeProviderAuth: vi.fn(() => false),
   isNativeProviderAuthBound: vi.fn(() => true),
   isNativeProviderAuthRevoked: vi.fn(() => false),
   isNativeProviderAuthSelfAuthorized: vi.fn(() => false),
   restoreNativeProviderAuthForRecovery: vi.fn(() => false),
-  unbindNativeProviderAuth: (provider: string, options?: { revoked?: boolean }) => {
+  captureNativeProviderAuthOwnerFence: () =>
+    h.ownerId && !h.boundaryPending
+      ? { dataOwnerId: h.ownerId, generation: h.ownerGeneration }
+      : null,
+  getNativeProviderAuthBindingState: () =>
+    h.oauthState === 'binding-unreadable'
+      ? 'unreadable'
+      : h.oauthState === 'absent'
+        ? 'unbound'
+        : 'bound',
+  markNativeProviderAuthRevocationPending: (
+    provider: string,
+    owner: { dataOwnerId: string; generation: number },
+  ) => {
+    h.pendingRevocations.push({ provider, owner });
+    return true;
+  },
+  unbindNativeProviderAuth: (
+    provider: string,
+    options?: {
+      revoked?: boolean;
+      ifOwnedByCurrentSession?: boolean;
+      expectedOwner?: { dataOwnerId: string; generation: number };
+      expectedOperation?: {
+        dataOwnerId: string;
+        generation: number;
+        operationId: string;
+        intent: 'invalidate';
+      };
+    },
+  ) => {
     h.unbindCalls.push({ provider, ...(options === undefined ? {} : { options }) });
+    return true;
   },
 }));
 
@@ -123,10 +217,17 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     };
     h.gatewayKey = 'sk-xd-gateway';
     h.cleared = 0;
+    h.conditionalClearResult = 'cleared';
+    h.conditionalClearCalls.length = 0;
     h.clearError = null;
     h.refresherInvalidated = 0;
+    h.disconnectCalls = 0;
     h.gatewayRemovals = 0;
     h.unbindCalls.length = 0;
+    h.pendingRevocations.length = 0;
+    h.ownerId = 'owner-a';
+    h.ownerGeneration = 7;
+    h.boundaryPending = false;
     h.refreshDelayMs = 0;
     h.encryptionAvailable = true;
     h.proxyReady = true;
@@ -233,19 +334,20 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     }
   });
 
-  it('invalidate:清凭证 + 失效刷新器 + 广播重登', async () => {
+  it('invalidate:只失效刷新器并广播,无 proof 时绝不清共享凭证', async () => {
     const mod = await import('../auth-adapters.js');
     const adapter = new mod.DesktopClaudeAuthAdapter();
     const broadcasts: string[] = [];
     adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
     await adapter.invalidate('claude_oauth_refresh_invalid_grant');
-    expect(h.cleared).toBe(1);
+    expect(h.cleared).toBe(0);
     expect(h.refresherInvalidated).toBe(1);
-    expect(h.unbindCalls).toEqual([{ provider: 'anthropic' }]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });
 
-  it('invalidate:凭证库不可读时仍写 revoked,阻止旧凭证恢复后自动认领', async () => {
+  it('invalidate:凭证库不可读时也不猜测删除或写撤销标记', async () => {
     h.hasOAuth = false;
     h.oauthState = 'unreadable';
     h.clearError = new Error('keychain locked');
@@ -253,9 +355,39 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
 
     await expect(adapter.invalidate('claude_oauth_refresh_invalid_grant')).resolves.toBeUndefined();
 
-    expect(h.cleared).toBe(1);
+    expect(h.cleared).toBe(0);
     expect(h.refresherInvalidated).toBe(1);
-    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(h.gatewayRemovals).toBe(0);
+  });
+
+  it('invalidate:只有 reason 没有 proof 时,归属不可读也绝不猜测删除 OAuth', async () => {
+    h.hasOAuth = false;
+    h.oauthState = 'binding-unreadable';
+    const adapter = await makeAdapter();
+
+    await expect(adapter.invalidate('claude_oauth_refresh_invalid_grant')).resolves.toBeUndefined();
+
+    expect(h.cleared).toBe(0);
+    expect(h.conditionalClearCalls).toEqual([]);
+    expect(h.refresherInvalidated).toBe(1);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(h.gatewayRemovals).toBe(0);
+  });
+
+  it('invalidate:归属不可读且没有 token provenance 时不删除任何凭证', async () => {
+    h.hasOAuth = false;
+    h.oauthState = 'binding-unreadable';
+    const adapter = await makeAdapter();
+
+    await expect(adapter.invalidate('unrelated_auth_reset')).resolves.toBeUndefined();
+
+    expect(h.cleared).toBe(0);
+    expect(h.refresherInvalidated).toBe(1);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
     expect(h.gatewayRemovals).toBe(0);
   });
 
@@ -268,7 +400,8 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
 
     expect(h.refresherInvalidated).toBe(1);
     expect(h.cleared).toBe(0);
-    expect(h.unbindCalls).toEqual([{ provider: 'anthropic' }]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
   });
 
   it('构造期接线 invalid_grant handler(刷新模块通知 → invalidate 链路可达)', async () => {
@@ -276,12 +409,80 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     expect(typeof h.invalidGrantHandler).toBe('function');
   });
 
+  it('迟到的 invalid_grant proof 只条件清旧 token,新账号已替换时不解绑也不广播', async () => {
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+    h.conditionalClearResult = 'changed';
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+    });
+    await vi.waitFor(() => expect(h.conditionalClearCalls).toHaveLength(1));
+
+    expect(h.conditionalClearCalls).toEqual([{ accessToken: 'at-old', refreshToken: 'rt-old' }]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(broadcasts).toEqual([]);
+    expect(h.refresherInvalidated).toBe(0);
+  });
+
+  it('有效 invalid_grant proof 只清匹配 token,并按原 owner generation 条件解绑', async () => {
+    const adapter = await makeAdapter();
+    const broadcasts: string[] = [];
+    adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+    });
+    await vi.waitFor(() => expect(broadcasts).toHaveLength(1));
+
+    expect(h.conditionalClearCalls).toEqual([{ accessToken: 'at-old', refreshToken: 'rt-old' }]);
+    expect(h.unbindCalls).toEqual([
+      {
+        provider: 'anthropic',
+        options: {
+          expectedOperation: {
+            dataOwnerId: 'owner-a',
+            generation: 7,
+            operationId: 'invalid-grant-operation',
+            intent: 'invalidate',
+          },
+        },
+      },
+    ]);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('invalid_grant proof 的 owner generation 已过期时不触碰任何新会话状态', async () => {
+    await makeAdapter();
+    h.ownerGeneration = 8;
+
+    h.invalidGrantHandler?.({
+      source: 'invalid_grant',
+      owner: { dataOwnerId: 'owner-a', generation: 7 },
+      rejectedCredential: { accessToken: 'at-old', refreshToken: 'rt-old' },
+    });
+    await Promise.resolve();
+
+    expect(h.conditionalClearCalls).toEqual([]);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toEqual([]);
+    expect(h.refresherInvalidated).toBe(0);
+  });
+
   it('logout(订阅在连):清凭证同时失效刷新器,防在途刷新复活凭证', async () => {
     const adapter = await makeAdapter();
     await adapter.logout();
     expect(h.cleared).toBe(1);
     expect(h.refresherInvalidated).toBe(1);
-    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.disconnectCalls).toBe(1);
+    expect(h.unbindCalls).toEqual([]);
     expect(h.gatewayRemovals).toBe(0);
   });
 
@@ -295,11 +496,27 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
 
     expect(h.refresherInvalidated).toBe(1);
     expect(h.cleared).toBe(1);
-    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.disconnectCalls).toBe(1);
+    expect(h.unbindCalls).toEqual([]);
     expect(h.gatewayRemovals).toBe(0);
   });
 
-  it('logout:明确没有绑定 OAuth 时保留旧行为,只移除 gateway key', async () => {
+  it('logout:归属不可读时失效刷新并拒绝猜测,OAuth 与 gateway 都不删除', async () => {
+    h.hasOAuth = false;
+    h.oauthState = 'binding-unreadable';
+    const adapter = await makeAdapter();
+
+    await expect(adapter.logout()).rejects.toThrow(/binding is unreadable/i);
+
+    expect(h.refresherInvalidated).toBe(1);
+    expect(h.disconnectCalls).toBe(1);
+    expect(h.cleared).toBe(0);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.pendingRevocations).toHaveLength(1);
+    expect(h.gatewayRemovals).toBe(0);
+  });
+
+  it('logout:即使尚未绑定 OAuth 也先串行化登出,确认无绑定后才移除 gateway key', async () => {
     h.hasOAuth = false;
     h.oauthState = 'absent';
     const adapter = await makeAdapter();
@@ -307,6 +524,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     await expect(adapter.logout()).resolves.toBeUndefined();
 
     expect(h.refresherInvalidated).toBe(0);
+    expect(h.disconnectCalls).toBe(1);
     expect(h.cleared).toBe(0);
     expect(h.unbindCalls).toEqual([]);
     expect(h.gatewayRemovals).toBe(1);
@@ -320,8 +538,9 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     await expect(adapter.logout()).rejects.toThrow('credential delete failed');
 
     expect(h.refresherInvalidated).toBe(1);
+    expect(h.disconnectCalls).toBe(1);
     expect(h.cleared).toBe(1);
-    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.unbindCalls).toEqual([]);
     expect(h.gatewayRemovals).toBe(0);
   });
 });

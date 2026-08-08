@@ -1,10 +1,16 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { lockSync } from 'proper-lockfile';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const userDataDir = '/tmp/native-provider-auth-binding-test';
-const session = { dataOwnerId: 'owner-a' as string | null, boundaryPending: false };
+const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'native-provider-auth-binding-test-'));
+const session = {
+  dataOwnerId: 'owner-a' as string | null,
+  generation: 1,
+  boundaryPending: false,
+};
 
 vi.mock('electron', () => ({
   app: { getPath: () => userDataDir },
@@ -14,26 +20,37 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({
     mode: session.dataOwnerId ? 'cloud' : 'signed-out',
     dataOwnerId: session.dataOwnerId,
-    generation: 1,
+    generation: session.generation,
   }),
   isAppSessionBoundaryPending: () => session.boundaryPending,
 }));
 
 import {
+  abandonNativeProviderAuthOperation,
+  beginNativeProviderAuthAuthorization,
+  beginNativeProviderAuthDisconnect,
+  beginNativeProviderAuthRevocation,
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
+  clearNativeProviderAuthAuthorizationPending,
+  getNativeProviderAuthBindingState,
+  getNativeProviderAuthBindingStateForOperation,
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  markNativeProviderAuthRevocationPending,
   migrateLegacyNativeProviderAuthBindings,
   restoreNativeProviderAuthForRecovery,
+  stageNativeProviderAuthAuthorization,
   unbindNativeProviderAuth,
+  validateNativeProviderAuthRevocationPending,
 } from '../nativeProviderAuthBinding.js';
 
 const bindingFile = path.join(userDataDir, 'native-provider-auth.json');
 
 afterEach(() => {
   session.dataOwnerId = 'owner-a';
+  session.generation = 1;
   session.boundaryPending = false;
   fs.rmSync(userDataDir, { recursive: true, force: true });
 });
@@ -191,6 +208,396 @@ describe('claimDetectedNativeProviderAuth', () => {
     expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(true);
   });
 
+  it('归属从不可读恢复后只允许条件解绑当前 owner,不删除别人的绑定', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ anthropic: 'owner-b' }));
+
+    unbindNativeProviderAuth('anthropic', {
+      revoked: true,
+      ifOwnedByCurrentSession: true,
+    });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ anthropic: 'owner-b' });
+
+    fs.writeFileSync(bindingFile, JSON.stringify({ anthropic: 'owner-a' }));
+    unbindNativeProviderAuth('anthropic', {
+      revoked: true,
+      ifOwnedByCurrentSession: true,
+    });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      revoked: { anthropic: 'owner-a' },
+    });
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty('anthropic');
+  });
+
+  it('same owner 的旧 generation 也不能解绑新会话绑定', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ anthropic: 'owner-a' }));
+    const oldFence = { dataOwnerId: 'owner-a', generation: 1 };
+
+    session.generation = 2;
+    expect(unbindNativeProviderAuth('anthropic', { revoked: true, expectedOwner: oldFence })).toBe(
+      false,
+    );
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ anthropic: 'owner-a' });
+
+    expect(
+      unbindNativeProviderAuth('anthropic', {
+        revoked: true,
+        expectedOwner: { dataOwnerId: 'owner-a', generation: 2 },
+      }),
+    ).toBe(true);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      revoked: { anthropic: 'owner-a' },
+    });
+  });
+
+  it('迟到回调不能在另一进程的新 owner binding 上写全局 pending tombstone', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ anthropic: 'owner-b' }));
+
+    expect(
+      markNativeProviderAuthRevocationPending('anthropic', {
+        dataOwnerId: 'owner-a',
+        generation: 1,
+      }),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json')),
+    ).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ anthropic: 'owner-b' });
+  });
+
+  it('另一 owner 的显式授权 staging 可以有意替换旧 binding,且可修复损坏 sidecar', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ anthropic: 'owner-a' }));
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    fs.mkdirSync(path.dirname(pendingFile), { recursive: true });
+    fs.writeFileSync(pendingFile, '{ corrupt pending');
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+
+    const operation = beginNativeProviderAuthAuthorization('anthropic', {
+      dataOwnerId: 'owner-b',
+      generation: 2,
+    })!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', operation)).toBe(true);
+    expect(bindNativeProviderAuth('anthropic', operation)).toBe(true);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      anthropic: 'owner-b',
+    });
+    expect(fs.existsSync(pendingFile)).toBe(false);
+  });
+
+  it('带 owner fence 的 bind 只消费完全匹配的 authorize marker', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const ownerA = { dataOwnerId: 'owner-a', generation: 1 };
+    const ownerB = { dataOwnerId: 'owner-b', generation: 2 };
+
+    const operationA = beginNativeProviderAuthAuthorization('anthropic', ownerA)!;
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    const operationB = beginNativeProviderAuthAuthorization('anthropic', ownerB)!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', operationB)).toBe(true);
+
+    session.dataOwnerId = 'owner-a';
+    session.generation = 1;
+    expect(bindNativeProviderAuth('anthropic', operationA)).toBe(false);
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    expect(JSON.parse(fs.readFileSync(pendingFile, 'utf8'))).toMatchObject({
+      intent: 'authorize',
+      dataOwnerId: 'owner-b',
+      generation: 2,
+    });
+    expect(fs.existsSync(bindingFile)).toBe(false);
+  });
+
+  it('rolled-back login cleanup never removes a newer staged authorization marker', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const operationA = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', operationA)).toBe(true);
+
+    const operationB = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', operationB)).toBe(true);
+    expect(clearNativeProviderAuthAuthorizationPending('anthropic', operationA)).toBe(false);
+
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    expect(JSON.parse(fs.readFileSync(pendingFile, 'utf8'))).toMatchObject({
+      intent: 'authorize',
+      operationId: operationB.operationId,
+    });
+  });
+
+  it('explicit logout may supersede only its own in-flight authorization marker', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const ownerA = { dataOwnerId: 'owner-a', generation: 1 };
+    const ownerB = { dataOwnerId: 'owner-b', generation: 2 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    const authorization = beginNativeProviderAuthAuthorization('anthropic', ownerA)!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', authorization)).toBe(true);
+    const revocation = beginNativeProviderAuthRevocation('anthropic', ownerA)!;
+
+    expect(
+      markNativeProviderAuthRevocationPending('anthropic', ownerA, {
+        supersedeMatchingAuthorization: true,
+        operation: revocation,
+      }),
+    ).toBe(true);
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    expect(JSON.parse(fs.readFileSync(pendingFile, 'utf8'))).toMatchObject({
+      intent: 'revoke',
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    });
+
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    expect(
+      markNativeProviderAuthRevocationPending('anthropic', ownerB, {
+        supersedeMatchingAuthorization: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('a later logout overrides another process login intent and is fail-closed before pending stage', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    const earlierLogin = beginNativeProviderAuthAuthorization('anthropic', {
+      dataOwnerId: 'owner-b',
+      generation: 2,
+    })!;
+
+    // Browser authorization intent alone does not interrupt owner A's existing
+    // credential while the user is still deciding in the browser.
+    session.dataOwnerId = 'owner-a';
+    session.generation = 1;
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
+    const laterLogout = beginNativeProviderAuthRevocation('anthropic', {
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    });
+    expect(laterLogout).not.toBeNull();
+
+    // Simulated crash immediately after begin: revoke intent itself is already
+    // a read/claim tombstone, before the pending sidecar exists.
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+    expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
+
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    expect(stageNativeProviderAuthAuthorization('anthropic', earlierLogin)).toBe(false);
+  });
+
+  it('initial-login logout is ordered even when no main OAuth binding exists yet', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const earlierLogin = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    const laterLogout = beginNativeProviderAuthDisconnect('anthropic', owner);
+    expect(laterLogout).not.toBe('confirmed-unbound');
+    expect(laterLogout).not.toBeNull();
+    if (!laterLogout || laterLogout === 'confirmed-unbound') {
+      throw new Error('expected a logout operation');
+    }
+
+    expect(getNativeProviderAuthBindingStateForOperation('anthropic', laterLogout)).toBe('unbound');
+    expect(abandonNativeProviderAuthOperation('anthropic', laterLogout)).toBe(true);
+    expect(stageNativeProviderAuthAuthorization('anthropic', earlierLogin)).toBe(false);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unbound');
+  });
+
+  it('same-owner logout cancels a different-process generation initial login', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    session.generation = 2;
+    const earlierLogin = beginNativeProviderAuthAuthorization('anthropic', {
+      dataOwnerId: 'owner-a',
+      generation: 2,
+    })!;
+
+    session.generation = 1;
+    const laterLogout = beginNativeProviderAuthDisconnect('anthropic', {
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    });
+    expect(laterLogout).not.toBe('confirmed-unbound');
+    expect(laterLogout).not.toBeNull();
+    if (!laterLogout || laterLogout === 'confirmed-unbound') {
+      throw new Error('expected a logout operation');
+    }
+    expect(getNativeProviderAuthBindingStateForOperation('anthropic', laterLogout)).toBe('unbound');
+    expect(abandonNativeProviderAuthOperation('anthropic', laterLogout)).toBe(true);
+
+    session.generation = 2;
+    expect(stageNativeProviderAuthAuthorization('anthropic', earlierLogin)).toBe(false);
+  });
+
+  it('another owner OAuth binding does not block the current owner gateway logout', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+
+    session.dataOwnerId = 'owner-a';
+    session.generation = 1;
+    expect(
+      beginNativeProviderAuthDisconnect('anthropic', {
+        dataOwnerId: 'owner-a',
+        generation: 1,
+      }),
+    ).toBe('confirmed-unbound');
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      anthropic: 'owner-b',
+    });
+  });
+
+  it('gateway logout cancels this owner in-flight login over a foreign OAuth binding', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+
+    session.dataOwnerId = 'owner-a';
+    session.generation = 1;
+    const ownerA = { dataOwnerId: 'owner-a', generation: 1 };
+    const earlierLogin = beginNativeProviderAuthAuthorization('anthropic', ownerA)!;
+    const laterLogout = beginNativeProviderAuthDisconnect('anthropic', ownerA);
+    expect(laterLogout).not.toBe('confirmed-unbound');
+    expect(laterLogout).not.toBeNull();
+    if (!laterLogout || laterLogout === 'confirmed-unbound') {
+      throw new Error('expected a logout operation');
+    }
+
+    expect(getNativeProviderAuthBindingStateForOperation('anthropic', laterLogout)).toBe('unbound');
+    expect(abandonNativeProviderAuthOperation('anthropic', laterLogout)).toBe(true);
+    expect(stageNativeProviderAuthAuthorization('anthropic', earlierLogin)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      anthropic: 'owner-b',
+    });
+  });
+
+  it('a failed login after a begin-only logout crash cannot resurrect the residual credential', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+
+    const crashedLogout = beginNativeProviderAuthRevocation('anthropic', owner)!;
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+
+    // Simulate restart followed by a browser login that is cancelled before
+    // stage. Beginning it may replace the operation nonce, but must first turn
+    // the crashed logout into a persistent tombstone.
+    const cancelledLogin = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    expect(JSON.parse(fs.readFileSync(pendingFile, 'utf8'))).toMatchObject({
+      intent: 'revoke',
+      dataOwnerId: 'owner-a',
+      generation: 1,
+      operationId: crashedLogout.operationId,
+    });
+    expect(abandonNativeProviderAuthOperation('anthropic', cancelledLogin)).toBe(true);
+
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+    expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      anthropic: 'owner-a',
+    });
+  });
+
+  it('a corrupt operation intent does not rewrite a readable pending owner', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const ownerA = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    const revoke = beginNativeProviderAuthRevocation('anthropic', ownerA)!;
+    expect(
+      markNativeProviderAuthRevocationPending('anthropic', ownerA, { operation: revoke }),
+    ).toBe(true);
+    const operationFile = path.join(userDataDir, 'native-provider-auth.intent', 'anthropic.json');
+    fs.writeFileSync(operationFile, '{ corrupt operation');
+
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    const recoveryLogin = beginNativeProviderAuthAuthorization('anthropic', {
+      dataOwnerId: 'owner-b',
+      generation: 2,
+    })!;
+    expect(abandonNativeProviderAuthOperation('anthropic', recoveryLogin)).toBe(true);
+
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    expect(JSON.parse(fs.readFileSync(pendingFile, 'utf8'))).toMatchObject({
+      intent: 'revoke',
+      dataOwnerId: 'owner-a',
+      generation: 1,
+      operationId: revoke.operationId,
+    });
+  });
+
+  it('retries a revoke committed before crash and clears the leftover sidecar', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+    const operation = beginNativeProviderAuthRevocation('anthropic', owner)!;
+    expect(markNativeProviderAuthRevocationPending('anthropic', owner, { operation })).toBe(true);
+    expect(validateNativeProviderAuthRevocationPending('anthropic', operation)).toBe(true);
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ revoked: { anthropic: 'owner-a' }, selfAuthorized: {} }),
+    );
+    expect(validateNativeProviderAuthRevocationPending('anthropic', operation)).toBe(true);
+
+    expect(
+      unbindNativeProviderAuth('anthropic', {
+        revoked: true,
+        expectedOperation: operation,
+        requirePendingRevocation: true,
+      }),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json')),
+    ).toBe(false);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unbound');
+  });
+
+  it('不可读期间留下 pending revocation,恢复为空和重启式重读后仍禁止自动认领', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, '{ broken ownership');
+
+    markNativeProviderAuthRevocationPending('anthropic', {
+      dataOwnerId: 'owner-a',
+      generation: 1,
+    });
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+
+    // 模拟用户修复/恢复文件后再次启动：主 binding 变成空，但 pending sidecar 仍在。
+    fs.writeFileSync(bindingFile, '{}');
+    session.dataOwnerId = 'owner-b';
+    session.generation = 2;
+    expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+
+    // 另一账号也只有自己完成一次新的显式授权，才能解除 pending。
+    bindNativeProviderAuth('anthropic');
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
+  });
+
+  it('另一进程持有 binding mutation lock 时拒绝并发覆盖归属文件', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const release = lockSync(path.join(userDataDir, '.native-provider-auth.write'), {
+      realpath: false,
+      stale: 15_000,
+    });
+    try {
+      expect(() => claimDetectedNativeProviderAuth('anthropic', () => true)).toThrow();
+      expect(fs.existsSync(bindingFile)).toBe(false);
+    } finally {
+      release();
+    }
+
+    expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(true);
+  });
+
   it('绑定文件读不出来时不认领,也不覆盖它', () => {
     // 「归属信息丢失」不等于「没人绑过」。把损坏当空,等于在最不该下判断的时刻把共享
     // keychain 里的凭证判给当前账号,随后的写入还会把原有归属彻底盖掉(PR #548 review)。
@@ -199,6 +606,7 @@ describe('claimDetectedNativeProviderAuth', () => {
 
     expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
     expect(fs.readFileSync(bindingFile, 'utf8')).toBe('{ this is not json');
 
     // 一次性 legacy 迁移同样不推进 —— 它还会顺手消费掉 legacyClaimOwner 名额。
@@ -208,6 +616,26 @@ describe('claimDetectedNativeProviderAuth', () => {
     // JSON 合法但根不是对象(数组 / 标量)同样按不可读处理。
     fs.writeFileSync(bindingFile, '["owner-a"]');
     expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+  });
+
+  it.each(['EACCES', 'EIO'])('%s 读取失败保持 unreadable,不会当成 ENOENT 空状态', (code) => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ anthropic: 'owner-a' }));
+    const realRead = fs.readFileSync;
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation(((file, ...args: unknown[]) => {
+      if (String(file) === bindingFile) {
+        throw Object.assign(new Error(`simulated ${code}`), { code });
+      }
+      return realRead(file, ...(args as []));
+    }) as typeof fs.readFileSync);
+    try {
+      expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
+      expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ anthropic: 'owner-a' });
   });
 
   it('绑定文件读不出来时,显式登出也不覆盖它', () => {
@@ -232,8 +660,11 @@ describe('claimDetectedNativeProviderAuth', () => {
       fs.writeFileSync(bindingFile, bad);
       expect(() => claimDetectedNativeProviderAuth('anthropic', () => true)).not.toThrow();
       expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
+      expect(getNativeProviderAuthBindingState('anthropic')).toBe('unreadable');
       expect(() => unbindNativeProviderAuth('anthropic', { revoked: true })).not.toThrow();
-      expect(() => migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true })).not.toThrow();
+      expect(() =>
+        migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true }),
+      ).not.toThrow();
       expect(fs.readFileSync(bindingFile, 'utf8')).toBe(bad); // 一律不改写
     }
 

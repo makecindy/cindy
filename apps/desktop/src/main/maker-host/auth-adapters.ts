@@ -63,8 +63,7 @@ import {
 } from './codex-gateway-config.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
 import {
-  clearClaudeAiOAuth,
-  getBoundClaudeAiOAuthState,
+  clearClaudeAiOAuthIfMatchesWithBindingCommit,
   hasClaudeAiOAuth,
 } from './claude-credentials-store.js';
 import {
@@ -73,6 +72,7 @@ import {
   getValidClaudeAiOAuth,
   invalidateClaudeOAuthRefresh,
   setClaudeOAuthInvalidGrantHandler,
+  type ClaudeOAuthInvalidGrantProof,
 } from './claude-oauth-refresh.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
@@ -85,13 +85,17 @@ import {
   type ActiveAppSession,
 } from '../appSessionState.js';
 import {
+  abandonNativeProviderAuthOperation,
+  beginNativeProviderAuthInvalidation,
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   isNativeProviderAuthBound,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
+  markNativeProviderAuthRevocationPending,
   restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
+  validateNativeProviderAuthInvalidation,
 } from './nativeProviderAuthBinding.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 
@@ -438,8 +442,8 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     // 订阅 refresh token 被服务端作废(锁内确认的 invalid_grant)→ 清态 + 广播重登提示,
     // 不让用户停在「显示已连接、会话连环 401」的假状态。纯内存接线,构造期零文件系统
     // 副作用(authAdaptersImportPurity 约定)。
-    setClaudeOAuthInvalidGrantHandler(() => {
-      void this.invalidate('claude_oauth_refresh_invalid_grant');
+    setClaudeOAuthInvalidGrantHandler((proof) => {
+      void this.invalidateRejectedCredential(proof);
     });
   }
 
@@ -448,37 +452,97 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     this.onInvalidatedBroadcast = cb;
   }
 
+  private isInvalidGrantOwnerCurrent(proof: ClaudeOAuthInvalidGrantProof): boolean {
+    const session = getActiveAppSession();
+    return (
+      !isAppSessionBoundaryPending() &&
+      session.dataOwnerId === proof.owner.dataOwnerId &&
+      session.generation === proof.owner.generation
+    );
+  }
+
   /**
-   * 订阅凭证被服务端作废时的收尾:清系统凭证(cc 对 invalid_grant 同样清盘)+ 失效
-   * 刷新器 + 广播 UI 重登。对齐 DesktopCodexAuthAdapter.invalidate 模式。
+   * Cleanup for the exact credential rejected by Anthropic. Every destructive
+   * step is fenced by both owner generation and token identity, so a callback
+   * from an old account cannot remove a replacement login.
+   */
+  private async invalidateRejectedCredential(proof: ClaudeOAuthInvalidGrantProof): Promise<void> {
+    const reason = 'claude_oauth_refresh_invalid_grant';
+    if (!this.isInvalidGrantOwnerCurrent(proof)) return;
+
+    const operation = beginNativeProviderAuthInvalidation('anthropic', proof.owner);
+    if (!operation) {
+      log.info('late claude invalid_grant ignored because a newer auth operation exists');
+      return;
+    }
+
+    let cleanupFailed = false;
+    try {
+      const result = clearClaudeAiOAuthIfMatchesWithBindingCommit(
+        proof.rejectedCredential,
+        () => validateNativeProviderAuthInvalidation('anthropic', operation),
+        () =>
+          unbindNativeProviderAuth('anthropic', {
+            expectedOperation: operation,
+          }),
+      );
+      if (result === 'changed' || result === 'binding-changed') {
+        abandonNativeProviderAuthOperation('anthropic', operation);
+        log.info('late claude invalid_grant ignored because credential or auth intent changed');
+        return;
+      }
+    } catch (error) {
+      cleanupFailed = true;
+      log.warn('transactional claude oauth cleanup after invalid_grant failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (cleanupFailed) {
+      let pendingCommitted = false;
+      try {
+        pendingCommitted = markNativeProviderAuthRevocationPending('anthropic', proof.owner, {
+          operation,
+        });
+      } catch (error) {
+        log.warn('persist pending claude auth revocation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (!pendingCommitted) {
+        log.info('claude invalid_grant cleanup superseded before pending revocation commit');
+        return;
+      }
+    }
+
+    if (!this.isInvalidGrantOwnerCurrent(proof)) return;
+    // Do not invalidate the replacement account/token's proactive timer or
+    // in-flight refresh. Only a completed cleanup or a durable fail-closed
+    // marker may advance the refresher generation.
+    invalidateClaudeOAuthRefresh();
+
+    if (this.isInvalidGrantOwnerCurrent(proof) && this.onInvalidatedBroadcast) {
+      try {
+        this.onInvalidatedBroadcast(reason);
+      } catch (error) {
+        log.warn('onInvalidatedBroadcast threw', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /**
+   * Generic invalidation is only a local/UI signal. It intentionally cannot
+   * mutate the shared Claude credential store or ownership binding: a reason
+   * string carries no owner generation or rejected-token identity, so a late
+   * callback could otherwise delete a replacement login. Destructive cleanup
+   * is reserved for invalidateRejectedCredential(), whose proof is fenced by
+   * both owner generation and credential identity.
    */
   async invalidate(reason: string): Promise<void> {
     log.warn('claude auth invalidated', { reason });
     invalidateClaudeOAuthRefresh();
-    let suppressAutoClaim = false;
-    try {
-      // Use the mutation-safe tri-state instead of the nullable status API:
-      // unreadable must attempt a fail-closed clear, while a genuinely unbound
-      // or absent subscription must not touch Claude CLI credentials.
-      if (getBoundClaudeAiOAuthState() !== 'absent') clearClaudeAiOAuth();
-    } catch (e) {
-      suppressAutoClaim = true;
-      log.warn('clear claude oauth on invalidate failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    try {
-      // A failed/unverifiable clear must leave a revocation marker. Otherwise
-      // the stale credential can be auto-claimed after the store recovers.
-      unbindNativeProviderAuth('anthropic', suppressAutoClaim ? { revoked: true } : undefined);
-    } catch (e) {
-      log.warn('unbind claude auth after invalidate failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    if (suppressAutoClaim) {
-      log.warn('claude credential clear unconfirmed; suppressing auto-claim', { reason });
-    }
     if (this.onInvalidatedBroadcast) {
       try {
         this.onInvalidatedBroadcast(reason);
@@ -555,33 +619,15 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   async logout(): Promise<void> {
     // 连了订阅时,logout 清系统 Claude.ai OAuth 凭证(⚠️ 会同时登出本地 claude),
     // **不动** gateway api_key(它是 XD 托管 key,网关来源 + oneShot 都还要用)。
-    // Mutation 路径必须区分明确 absence 与 unreadable。后者若按 false 处理,
-    // 会误删 gateway key、留下共享 OAuth,还让在途 refresh 把凭证写回来。
-    if (getBoundClaudeAiOAuthState() !== 'absent') {
-      // disconnect = 先失效刷新器再清凭证(唯一正确入口,见 claude-oauth-refresh 文档)
-      // —— 否则「已断开」状态下在途刷新回写会让凭证复活。
-      const noFailure = Symbol('no-failure');
-      let failure: unknown | typeof noFailure = noFailure;
-      try {
-        disconnectClaudeAiOAuth();
-      } catch (error) {
-        failure = error;
-      }
-      try {
-        // 用户显式登出始终留撤销标记。即使共享凭证暂时不可读 / 清除失败,
-        // 恢复可读后也不能被自动认领回来(PR #548 review)。
-        unbindNativeProviderAuth('anthropic', { revoked: true });
-      } catch (error) {
-        if (failure === noFailure) failure = error;
-        else {
-          log.warn('unbind claude auth after logout failure also failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      if (failure !== noFailure) throw failure;
-      return;
-    }
+    // Always establish a serialized logout operation before deciding that no
+    // OAuth is bound. A browser login can be in flight before its first token
+    // write, so a separate read preflight would observe "absent", skip the
+    // cancellation/revoke fence, and let that older login commit after logout.
+    // The shared helper's exact operation makes the ordering atomic: only a
+    // confirmed-unbound result permits this adapter to fall through to gateway
+    // key removal; a bound credential is fully revoked and returns immediately.
+    const disconnectResult = disconnectClaudeAiOAuth();
+    if (disconnectResult === 'revoked') return;
     // 经统一 store 移除本机 XD 网关 key。store.remove 把"文件本不存在"视为成功
     // (幂等,等价旧逻辑忽略 ENOENT);其它真实失败保持上抛语义。
     const removed = getProviderSecretStore().remove('xd');

@@ -28,9 +28,23 @@ import {
 import { describeErrorChain } from '../utils/errorChain.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
-import { writeClaudeAiOAuth } from './claude-credentials-store.js';
-import { bindNativeProviderAuth } from './nativeProviderAuthBinding.js';
-import { backfillClaudeSubscriptionProfile } from './claude-oauth-refresh.js';
+import {
+  writeClaudeAiOAuthWithBindingCommit,
+  type ClaudeAiOAuth,
+} from './claude-credentials-store.js';
+import {
+  abandonNativeProviderAuthOperation,
+  beginNativeProviderAuthAuthorization,
+  bindNativeProviderAuth,
+  clearNativeProviderAuthAuthorizationPending,
+  captureNativeProviderAuthOwnerFence,
+  isNativeProviderAuthOwnerFenceCurrent,
+  stageNativeProviderAuthAuthorization,
+} from './nativeProviderAuthBinding.js';
+import {
+  backfillClaudeSubscriptionProfile,
+  setClaudeOAuthLoginCancellationHandler,
+} from './claude-oauth-refresh.js';
 
 const log = desktopMakerLogger.child('claude-oauth-login');
 
@@ -284,6 +298,10 @@ export async function runClaudeOAuthLogin(opts?: {
   // 同一时刻只允许一个登录流;新登录前先取消旧的。
   cancelClaudeOAuthLogin();
 
+  // 浏览器授权跨多个 await；最终写盘必须仍属于发起时的同一 owner generation。
+  const ownerAtStart = captureNativeProviderAuthOwnerFence();
+  if (!ownerAtStart) return { ok: false, reason: 'owner_session_unavailable' };
+
   const verifier = generateCodeVerifier();
   const challenge = generateCodeChallenge(verifier);
   const state = generateState();
@@ -293,7 +311,18 @@ export async function runClaudeOAuthLogin(opts?: {
   _currentAbort = abort;
 
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let authorizationOperation: ReturnType<typeof beginNativeProviderAuthAuthorization> = null;
+  let authorizationStaged = false;
+  let loginCommitted = false;
   try {
+    // Persist this operation before the browser/server awaits. Another Cindy
+    // process can then record a later logout nonce, which makes this older
+    // login permanently ineligible to finalize even though owner generation is
+    // shared and unchanged.
+    authorizationOperation = beginNativeProviderAuthAuthorization('anthropic', ownerAtStart);
+    if (!authorizationOperation) {
+      return { ok: false, reason: 'account_changed' };
+    }
     const port = await listener.start();
     const authUrl = buildAuthUrl({ codeChallenge: challenge, state, port });
 
@@ -331,21 +360,56 @@ export async function runClaudeOAuthLogin(opts?: {
     // backfillClaudeSubscriptionProfile 后台补:cc >= 2.1.198 在 MANAGED_BY_HOST 下
     // 不读凭证库,旧的「cc 子进程 refresh 时自行补全」路径已失效,这些字段现由 host
     // 注入 env(auth-adapters);回填失败静默,首次刷新时再补。
-    writeClaudeAiOAuth({
+    if (!isNativeProviderAuthOwnerFenceCurrent(ownerAtStart)) {
+      listener.fail('account_changed');
+      return { ok: false, reason: 'account_changed' };
+    }
+    const oauth: ClaudeAiOAuth = {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token ?? null,
       expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
       scopes,
       subscriptionType: null,
       rateLimitTier: null,
-    });
-    bindNativeProviderAuth('anthropic');
+    };
+    // Persist the ownership fence *before* the shared token. If the process
+    // crashes between token write and binding commit, restart-time auto-claim
+    // still sees this tombstone and cannot hand the orphan token to another owner.
+    if (!stageNativeProviderAuthAuthorization('anthropic', authorizationOperation)) {
+      listener.fail('account_changed');
+      return { ok: false, reason: 'account_changed' };
+    }
+    authorizationStaged = true;
+    // Keep the shared credential lock until the exact authorization marker is
+    // consumed by the binding commit. This fixed storage→binding lock order
+    // prevents two Cindy processes from finishing with token B bound to owner A.
+    const bound = writeClaudeAiOAuthWithBindingCommit(oauth, () =>
+      bindNativeProviderAuth('anthropic', authorizationOperation!),
+    );
+    if (!bound) {
+      // The credential transaction has definitely restored its previous blob.
+      // Release only this losing login's exact staged tombstone. If another
+      // process already staged a newer login, the operationId mismatch leaves
+      // that newer marker untouched. Throws from the transaction never reach
+      // this branch and intentionally remain fail-closed as an ambiguous commit.
+      authorizationStaged = false;
+      try {
+        clearNativeProviderAuthAuthorizationPending('anthropic', authorizationOperation);
+      } catch (error) {
+        log.warn('failed to clear rolled-back claude oauth authorization marker', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      listener.fail('account_changed');
+      return { ok: false, reason: 'account_changed' };
+    }
     void backfillClaudeSubscriptionProfile(tokens.access_token).catch((e) =>
       log.warn('post-login subscription profile backfill failed', {
         error: e instanceof Error ? e.message : String(e),
       }),
     );
     listener.redirectToSuccess();
+    loginCommitted = true;
     log.info('claude oauth login success', { scopes });
     return { ok: true };
   } catch (err) {
@@ -354,6 +418,15 @@ export async function runClaudeOAuthLogin(opts?: {
     log.warn('claude oauth login failed', { error: describeErrorChain(err) });
     return { ok: false, reason: abort.signal.aborted ? 'login_cancelled' : msg };
   } finally {
+    if (authorizationOperation && !authorizationStaged && !loginCommitted) {
+      try {
+        abandonNativeProviderAuthOperation('anthropic', authorizationOperation);
+      } catch (error) {
+        log.warn('failed to abandon claude oauth authorization intent', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (timer) clearTimeout(timer);
     listener.close();
     if (_currentListener === listener) _currentListener = null;
@@ -366,3 +439,7 @@ export function cancelClaudeOAuthLogin(): void {
   _currentAbort?.abort();
   _currentListener?.close();
 }
+
+// Pure in-memory wiring: every logout path goes through disconnectClaudeAiOAuth,
+// which can now cancel a browser/token exchange before revoking credentials.
+setClaudeOAuthLoginCancellationHandler(cancelClaudeOAuthLogin);
