@@ -75,6 +75,10 @@ import { describe, expect, it } from 'vitest';
  *    结构性合法用法。收紧方向是静态内联字号默认判红,仅为 SVG/画布/第三方 API
  *    登记精确豁免;本 PR 不处理,后续独立施工需改约 48 处调用点并先界定豁免边界,
  *    再完成设计核对与 Light/Dark 双模式验收;
+ *  - CSS `@apply` 排版类盲区:CSS 分支当前只扫描显式 `font-weight` / `font:`
+ *    声明,不解析 `.x { @apply font-bold; }` 或字号类;Tailwind PostCSS 展开后
+ *    可能产生守卫未见的字重/字号。此类形态本轮不改扫描,后续独立施工需纳入
+ *    CSS 类名检查或明确拒绝排版类 `@apply`,并补对应红 fixture;
  *  - CSS font-weight 的动态值(var(...)、模板插值、calc())与
  *    initial/unset/revert 全局关键字(计算结果不引入梯外静态值)不判红;
  *  - .css 与字符串内嵌 CSS 的直接 font-size 声明值域(紧凑模式 -1px 派生、
