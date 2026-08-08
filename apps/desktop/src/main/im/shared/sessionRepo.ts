@@ -124,7 +124,17 @@ export interface ImSessionRepo {
 export function createImSessionRepo(
   config: ImOrchestratorConfig,
   ns: ImSessionNamespace,
+  /**
+   * 该渠道是否开着 `/project`(见 ImChannelAdapter.projectSwitching)。
+   *
+   * 只有开着它的渠道, 「会话目录不等于渠道托管目录」才等价于「用户把它切进了项目」。
+   * 没开的渠道(微信等)只有一个托管目录, 而那个目录**可以被用户在设置页改掉** ——
+   * 已有会话按产品契约保留旧目录直到 `/new`, 于是新旧目录不等, 按路径推断会把一条
+   * 合法的对话会话误判成项目。这些渠道一律相信列里存的归属。
+   */
+  options: { projectSwitching?: boolean } = {},
 ): ImSessionRepo {
+  const pathImpliesProject = options.projectSwitching === true;
   function defaultEffortFor(modelId: string, agentKind: AgentKind = config.agentKind): Effort {
     return getImDefaultEffortFor(agentKind, modelId, config.effortOverrides);
   }
@@ -144,6 +154,10 @@ export function createImSessionRepo(
    */
   function correctedWorkspaceKind(botContextId: string): Record<string, unknown> {
     if (!ns.workspaceKind) return {};
+    // 不开 `/project` 的渠道: 会话只可能待在渠道自己的托管目录里, 归属就是渠道声明
+    // 的那个, 与路径无关。**不能**按路径判 —— 微信的托管目录是用户可改的, 改完之后
+    // 已有会话仍保留旧目录, 新旧不等会把合法的对话会话判成项目。
+    if (!pathImpliesProject) return { workspaceKind: ns.workspaceKind };
     const managedDir = ns.ensureWorkingDir(botContextId);
     // else 分支写死 'project' 而不是"保留现值": 库里躺着一批老版本刷坏的行
     // (dialogue + 项目目录), 保留现值救不了它们, 那些会话会永远留在错的分组里。
@@ -174,6 +188,9 @@ export function createImSessionRepo(
     storedKind: 'project' | 'dialogue' | null,
     botContextId: string,
   ): 'project' | 'dialogue' | null {
+    // 不开 `/project` 的渠道没有"切出去"这回事, 相信列里存的 —— 它们的托管目录
+    // 用户可以在设置页改, 已有会话保留旧目录, 按路径判必然误判(见构造参数说明)。
+    if (!pathImpliesProject) return storedKind;
     if (ns.workspaceKind !== 'dialogue' || !workingDir) return storedKind;
     return workingDir === ns.ensureWorkingDir(botContextId) ? 'dialogue' : 'project';
   }

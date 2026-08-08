@@ -247,7 +247,17 @@ describe('sessionRepo.createSession upsert 兜竞态(#748)', () => {
 describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
   const dialogueNs = { ...ns, workspaceKind: 'dialogue' } as unknown as ImSessionNamespace;
 
+  /** 开着 `/project` 的渠道(个人 Telegram): 归属可以按路径推断。 */
   function makeDialogueRepo() {
+    return createImSessionRepo(
+      { agentKind: 'claude-code' } as ImOrchestratorConfig,
+      dialogueNs,
+      { projectSwitching: true },
+    );
+  }
+
+  /** 没有 `/project` 的渠道(微信这类): 只有托管目录, 且它用户可改。 */
+  function makePlainDialogueRepo() {
     return createImSessionRepo(
       { agentKind: 'claude-code' } as ImOrchestratorConfig,
       dialogueNs,
@@ -282,6 +292,17 @@ describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
     // else 分支写死 'project': 老版本刷坏的存量行(dialogue + 项目目录)靠"保留现值"
     // 永远修不好。语义与判据见 sessionRepoWorkspaceKind.test.ts。
     expect(setSql).toContain("else 'project'");
+  });
+
+  it('没有 /project 的渠道照旧直写渠道归属, 不按路径判', async () => {
+    // 这些渠道的托管目录用户可以在设置页改, 而已有会话保留旧目录 —— 按路径判会把
+    // 一条合法的对话会话判成项目, 还会写进库里。
+    await makePlainDialogueRepo().createSession('bot', 'user', undefined, preparedDefaults);
+
+    const conflictArg = mocks.insertConflict.mock.calls[0][0] as {
+      set: Record<string, unknown>;
+    };
+    expect(conflictArg.set.workspaceKind).toBe('dialogue');
   });
 
   it('软删行复活时按同一判据校正 workspaceKind', async () => {

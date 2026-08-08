@@ -85,7 +85,18 @@ function createTableSql(): string {
 }
 
 function repo() {
-  return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, ns);
+  return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, ns, {
+    projectSwitching: true,
+  });
+}
+
+/** 不开 `/project` 的渠道(微信这类): 只有一个托管目录, 而它用户可改。 */
+function wechatRepo(managedDir: string) {
+  return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, {
+    ...ns,
+    source: 'wechat',
+    ensureWorkingDir: () => managedDir,
+  } as unknown as ImSessionNamespace);
 }
 
 async function kindOf(id: string): Promise<string> {
@@ -179,6 +190,24 @@ describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
 
     // sidebar 的归组读的是这一列, 不修它会话就一直待在「对话」分组。
     expect(await kindOf(created.id)).toBe('project');
+  });
+
+  it('不开 /project 的渠道: 用户改过托管目录后, 已有对话不被判成项目', async () => {
+    // 微信的「新对话工作目录」用户可以在设置页改或重置, 而已有会话按产品契约保留
+    // 旧目录直到 /new。此时 ensureWorkingDir 返回的是新目录 —— 按「目录不等于托管
+    // 目录 ⟺ 项目」去判, 一条合法的对话会话立刻被判成项目, 还会被写进库里, 下一条
+    // 普通消息就把它挪进项目分组。
+    const OLD_DIR = '/tmp/wechat-working-dir/old';
+    const NEW_DIR = '/tmp/wechat-working-dir/new';
+    const r = wechatRepo(OLD_DIR);
+    const created = await r.createSession('bot1', 'u1');
+    expect(await kindOf(created.id)).toBe('dialogue');
+
+    // 用户在设置页改了目录; 已有会话仍留在旧目录。
+    const moved = wechatRepo(NEW_DIR);
+    expect((await moved.peekSession('bot1', 'u1'))?.workspaceKind).toBe('dialogue');
+    expect((await moved.findActiveSession('bot1', 'u1'))?.workspaceKind).toBe('dialogue');
+    expect(await kindOf(created.id)).toBe('dialogue');
   });
 
   it('createSession 撞上残留行时同样不动用户选的项目归属', async () => {
