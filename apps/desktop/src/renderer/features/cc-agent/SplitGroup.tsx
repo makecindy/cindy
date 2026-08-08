@@ -38,10 +38,13 @@ import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { mergeSessionSources } from './lib/mergeSessionSources';
 import {
+  SPLIT_GROUP_PANE_MIME,
   SPLIT_GROUP_SESSION_MIME,
+  hasSplitGroupPaneType,
   hasSplitGroupSessionType,
   isSplitGroupComposerDropTarget,
   resolveSplitDropSide,
+  writeSplitGroupPaneDragData,
 } from './splitGroupDnd';
 import {
   getSplitPanes,
@@ -837,6 +840,9 @@ const SplitPaneView = memo(function SplitPaneView({
           showSplitAddBlocked(t, splitGroupStore.getAddBlockReason(sessionId, pane.sessionId));
         }
       }}
+      onPaneDropped={(sessionId, side) => {
+        splitGroupStore.moveSession(sessionId, pane.sessionId, side);
+      }}
     >
       <div
         data-split-pane-key={pane.key}
@@ -870,13 +876,21 @@ const SplitPaneView = memo(function SplitPaneView({
         <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/40 px-2">
           <button
             type="button"
+            data-split-pane-drag-handle
+            draggable
+            aria-label={t('splitGroup.dragPaneAria', { title })}
+            onDragStart={(event) => {
+              if (!writeSplitGroupPaneDragData(event.dataTransfer, viewSessionId)) {
+                event.preventDefault();
+              }
+            }}
             onClick={() => focusSession(viewSessionId)}
             className={cn(
               'min-w-0 flex-1 truncate rounded-full px-2 py-1 text-left text-xs transition-colors',
               isOwner
                 ? 'font-medium text-foreground'
                 : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
+              'cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
             )}
             title={title}
           >
@@ -949,6 +963,7 @@ interface SplitDropTargetProps {
   className?: string;
   dataAttribute: 'single' | 'pane';
   onSessionDropped: (sessionId: string, side: DropSide) => void;
+  onPaneDropped?: (sessionId: string, side: DropSide) => void;
 }
 
 function SplitDropTarget({
@@ -957,13 +972,16 @@ function SplitDropTarget({
   className,
   dataAttribute,
   onSessionDropped,
+  onPaneDropped,
 }: SplitDropTargetProps) {
   const { t } = useTranslation();
   const [dropSide, setDropSide] = useState<DropSide | null>(null);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
-    if (isSplitGroupComposerDropTarget(event.target)) {
+    const isPaneDrag = hasSplitGroupPaneType(event.dataTransfer.types);
+    const isSessionDrag = hasSplitGroupSessionType(event.dataTransfer.types);
+    if (!isPaneDrag && !isSessionDrag) return;
+    if (isSessionDrag && isSplitGroupComposerDropTarget(event.target)) {
       setDropSide(null);
       return;
     }
@@ -985,14 +1003,18 @@ function SplitDropTarget({
 
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
-      if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
-      if (isSplitGroupComposerDropTarget(event.target)) {
+      const isPaneDrag = hasSplitGroupPaneType(event.dataTransfer.types);
+      const isSessionDrag = hasSplitGroupSessionType(event.dataTransfer.types);
+      if (!isPaneDrag && !isSessionDrag) return;
+      if (isSessionDrag && isSplitGroupComposerDropTarget(event.target)) {
         setDropSide(null);
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      const sessionId = event.dataTransfer.getData(SPLIT_GROUP_SESSION_MIME).trim();
+      const sessionId = event.dataTransfer
+        .getData(isPaneDrag ? SPLIT_GROUP_PANE_MIME : SPLIT_GROUP_SESSION_MIME)
+        .trim();
       const side =
         dropSide ??
         resolveSplitDropSide(
@@ -1002,9 +1024,10 @@ function SplitDropTarget({
         );
       setDropSide(null);
       if (!sessionId || !side || sessionId === anchorSessionId) return;
-      onSessionDropped(sessionId, side);
+      if (isPaneDrag) onPaneDropped?.(sessionId, side);
+      else onSessionDropped(sessionId, side);
     },
-    [anchorSessionId, dropSide, onSessionDropped],
+    [anchorSessionId, dropSide, onPaneDropped, onSessionDropped],
   );
 
   return (

@@ -164,6 +164,62 @@ describe('splitGroupStore', () => {
     expect(after[0].key).toBe(before[0].key);
   });
 
+  it('移动 pane 时从原位置摘出并插入目标方向，同时保留 pane key', async () => {
+    const { getSplitPanes, getSplitSessionIds, splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    const before = getSplitPanes(splitGroupStore.getSnapshot().root);
+    const sourceKey = before.find((pane) => pane.sessionId === 'session-c')?.key;
+
+    expect(splitGroupStore.moveSession('session-c', 'session-a', 'left')).toBe(true);
+    const next = splitGroupStore.getSnapshot().root;
+    expect(getSplitSessionIds(next)).toEqual(['session-c', 'session-a', 'session-b']);
+    expect(getSplitPanes(next).find((pane) => pane.sessionId === 'session-c')?.key).toBe(sourceKey);
+    expect(next).toMatchObject({
+      type: 'split',
+      direction: 'row',
+      first: {
+        type: 'split',
+        first: { type: 'pane', sessionId: 'session-c' },
+        second: { type: 'pane', sessionId: 'session-a' },
+      },
+      second: { type: 'pane', sessionId: 'session-b' },
+    });
+  });
+
+  it('移动嵌套 pane 后会塌缩原分支，并可再次按上下方向插入', async () => {
+    const { getSplitPanes, getSplitSessionIds, splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+
+    expect(splitGroupStore.moveSession('session-b', 'session-c', 'top')).toBe(true);
+    const next = splitGroupStore.getSnapshot().root;
+    expect(getSplitSessionIds(next)).toEqual(['session-a', 'session-b', 'session-c']);
+    expect(getSplitPanes(next)).toHaveLength(3);
+    expect(next).toMatchObject({
+      type: 'split',
+      direction: 'row',
+      first: { type: 'pane', sessionId: 'session-a' },
+      second: {
+        type: 'split',
+        direction: 'column',
+        first: { type: 'pane', sessionId: 'session-b' },
+        second: { type: 'pane', sessionId: 'session-c' },
+      },
+    });
+  });
+
+  it('非法来源、目标或拖到自身时不改变布局', async () => {
+    const { splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    const initial = splitGroupStore.getSnapshot();
+
+    expect(splitGroupStore.moveSession('missing', 'session-a', 'left')).toBe(false);
+    expect(splitGroupStore.moveSession('session-a', 'missing', 'left')).toBe(false);
+    expect(splitGroupStore.moveSession('session-a', 'session-a', 'left')).toBe(false);
+    expect(splitGroupStore.getSnapshot()).toBe(initial);
+  });
+
   it('分支比例夹到下限，并仅切换根方向', async () => {
     const { MIN_SPLIT_CHILD_FRACTION, splitGroupStore } = await loadStore();
     splitGroupStore.addSession('session-b', 'session-a', 'right');

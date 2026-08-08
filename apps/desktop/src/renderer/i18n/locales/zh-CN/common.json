@@ -8629,6 +8629,7 @@
   },
   "splitGroup": {
     "closeAria": "关闭任务“{{title}}”的分栏",
+    "dragPaneAria": "拖动任务分栏“{{title}}”",
     "closeAll": "关闭分栏",
     "toggleDirection": "切换上下 / 左右分栏",
     "dropHint": "松开以在此分栏打开任务",
