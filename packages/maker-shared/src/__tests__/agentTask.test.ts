@@ -294,6 +294,86 @@ describe('findAgentTaskUpdate', () => {
 });
 
 describe('buildAgentTaskCardModel', () => {
+  it('REPRO: treats a paired final result as terminal when the live update is stale running', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: completed',
+      update: {
+        provider: 'codex',
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('completed');
+  });
+
+  it('REPRO: keeps a V1 spawn running when its paired result is a running state summary', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: running',
+      update: {
+        provider: 'codex',
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it('REPRO: keeps an async Claude Agent running for its launch receipt', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { run_in_background: true, prompt: 'keep working' },
+      result: 'Async agent launched successfully.',
+      update: {
+        provider: 'claude-code',
+        taskId: 'agent-1',
+        parentToolUseId: 'agent-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it.each(['in_progress', 'in-progress', 'started', 'active'])(
+    'keeps a V1 spawn running for the %s state summary',
+    (state) => {
+      const model = buildAgentTaskCardModel({
+        toolName: 'collab:spawnAgent',
+        result: `child-thread: ${state}`,
+        update: {
+          provider: 'codex',
+          taskId: 'collab-1',
+          parentToolUseId: 'collab-1',
+          status: 'running',
+        },
+      });
+
+      expect(model.status).toBe('running');
+    },
+  );
+
+  it('preserves explicit failed and stopped terminal states when a result is present', () => {
+    const input = {
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: terminal',
+      update: {
+        provider: 'codex' as const,
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+      },
+    };
+    expect(buildAgentTaskCardModel({ ...input, update: { ...input.update, status: 'failed' } }).status)
+      .toBe('failed');
+    expect(buildAgentTaskCardModel({ ...input, update: { ...input.update, status: 'stopped' } }).status)
+      .toBe('stopped');
+  });
+
   it('falls back the title through update → tool input description → prompt', () => {
     expect(buildAgentTaskCardModel({ update: { provider: 'codex', taskId: 't', status: 'running', title: 'From update' } }).title)
       .toBe('From update');

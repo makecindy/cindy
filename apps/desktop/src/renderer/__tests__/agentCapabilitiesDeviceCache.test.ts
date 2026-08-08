@@ -45,7 +45,9 @@ function stubLocalCatalog() {
   let providerId = 'provider-old';
   let capabilityRevision = 'old';
   let unavailableAgent: string | null = null;
+  let transientError: { agent: string; message: string } | null = null;
   const getCapabilities = vi.fn(async (agent: string) => {
+    if (transientError?.agent === agent) throw new Error(transientError.message);
     if (agent === unavailableAgent) throw new Error(`Agent '${agent}' is not registered`);
     return caps(`${capabilityRevision}:${agent}`);
   });
@@ -64,6 +66,11 @@ function stubLocalCatalog() {
     },
     setUnavailableAgent(agent: string | null): void {
       unavailableAgent = agent;
+      transientError = null;
+    },
+    setAgentError(agent: string | null, message = 'temporary capability failure'): void {
+      transientError = agent ? { agent, message } : null;
+      unavailableAgent = null;
     },
   };
 }
@@ -101,7 +108,10 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
   it('本机目录快照在可选 Pi 不可用时仍返回 Claude Code 与 Codex 能力', async () => {
     const { getCapabilities } = stubElectron();
     getCapabilities.mockImplementation(async (agent: string) => {
-      if (agent === 'pi') throw new Error("Agent 'pi' is not registered");
+      if (agent === 'pi')
+        throw new Error(
+          "[MAKER_NOT_FOUND] Agent 'pi' is not registered (available: claude-code, codex)",
+        );
       return caps(`local:${agent}`);
     });
     const mod = await import('@/hooks/useAgentCapabilities');
@@ -146,12 +156,13 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(capabilities.getCachedCapabilities('pi')).toBeNull();
   });
 
-  it('Pi 不可用时用新 provider 快照替换 last-valid snapshot', async () => {
+  it('Pi 变为不可用时清除旧能力，并用新 provider 快照替换核心能力', async () => {
     const harness = stubLocalCatalog();
     const catalog = await import('@/lib/localCatalogSnapshot');
     const providers = await import('@/lib/providersSnapshotStore');
     const capabilities = await import('@/hooks/useAgentCapabilities');
     await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe('old:pi');
 
     harness.setSnapshot('provider-new', 'new');
     harness.setUnavailableAgent('pi');
@@ -164,6 +175,28 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
       'new:codex',
     );
+    expect(capabilities.getCachedCapabilities('pi')).toBeNull();
+  });
+
+  it('Pi 临时能力错误时联合刷新保留旧 provider 与三份 agent 快照', async () => {
+    const harness = stubLocalCatalog();
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    harness.setSnapshot('provider-new', 'new');
+    harness.setAgentError('pi', 'Pi capability IPC failed');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(false);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-old' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'old:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'old:codex',
+    );
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe('old:pi');
   });
 
   it('核心 agent 失败时联合刷新保留 last-valid provider 与能力快照', async () => {

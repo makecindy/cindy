@@ -782,6 +782,10 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
   const ownerScope = captureOwnerScope();
   const ts =
     typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
+  // Device-link /clear has no local renderer sessions:update call to populate
+  // the main-process background-event boundary. Advance it before the DB await
+  // so persistence failure still keeps old late events behind the clear.
+  noteSessionClearBoundary(sessionId, ts);
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
@@ -801,6 +805,9 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .limit(1);
   const effectiveClearedAt = updated?.clearedAt ?? ts;
   const effectiveUpdatedAt = updated?.updatedAt ?? effectiveClearedAt;
+  // Concurrent clears can make SQLite return a newer monotonic boundary than
+  // this request supplied. Mirror the effective value into the in-memory gate.
+  noteSessionClearBoundary(sessionId, effectiveClearedAt);
   try {
     await removeTurnChangeSetsForSession(sessionId);
   } catch (error) {
