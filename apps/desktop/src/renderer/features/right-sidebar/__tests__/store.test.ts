@@ -186,6 +186,64 @@ describe('RSB store', () => {
       expect((store.getBucket('ghost-s1').tabs[0].state as { title: string }).title).toBe('Example');
     });
 
+    it('sanitizes non-persistable favicons when hydrating web-browser tabs', async () => {
+      ipc.list.mockResolvedValueOnce({
+        tabs: [
+          {
+            id: 't1',
+            kind: 'web-browser',
+            position: 0,
+            state: { url: 'https://a.com', title: 'A', favicon: 'blob:https://a.com/favicon' },
+          },
+          {
+            id: 't2',
+            kind: 'web-browser',
+            position: 1,
+            state: { url: 'https://b.com', title: 'B', favicon: 'data:image/png;base64,eA==' },
+          },
+          { id: 't3', kind: 'file-browser', position: 2, state: { selectedFilePath: 'x.md' } },
+        ],
+        activeTabId: 't1',
+      });
+      await store.ensureHydrated('s1');
+      const tabs = store.getBucket('s1').tabs;
+      // blob: 不可持久化 → 清成"无图标"。
+      expect((tabs[0].state as { favicon: string | null }).favicon).toBeNull();
+      // 小 data: 保留。
+      expect((tabs[1].state as { favicon: string | null }).favicon).toBe('data:image/png;base64,eA==');
+      // 非 web-browser kind 原样透传。
+      expect(tabs[2].state).toEqual({ selectedFilePath: 'x.md' });
+    });
+
+    it('lets title patches succeed after hydrating a poisoned web-browser tab', async () => {
+      // 发布前已把超大 data: favicon 落库的存量 tab:hydrate 消毒后,后续 patch
+      // 不再因 16KB 预检被拒(否则 title 变更也会把坏 favicon 重新并进预检)。
+      ipc.list.mockResolvedValueOnce({
+        tabs: [
+          {
+            id: 't1',
+            kind: 'web-browser',
+            position: 0,
+            state: {
+              url: 'https://a.com',
+              title: 'A',
+              favicon: `data:image/png;base64,${'x'.repeat(20 * 1024)}`,
+            },
+          },
+        ],
+        activeTabId: 't1',
+      });
+      await store.ensureHydrated('s1');
+      ipc.upsert.mockClear();
+      const tab = store.getBucket('s1').tabs[0];
+      await store.patchTabState('s1', tab.id, (current) => ({
+        ...(current as object),
+        title: 'A2',
+      }));
+      expect((store.getBucket('s1').tabs[0].state as { title: string }).title).toBe('A2');
+      expect(ipc.upsert).toHaveBeenCalledOnce();
+    });
+
     it('keeps the tab count limit for memory-only sessions', async () => {
       ipc.list.mockResolvedValueOnce({ tabs: [], activeTabId: null, persistable: false });
       await store.ensureHydrated('ghost-s1');

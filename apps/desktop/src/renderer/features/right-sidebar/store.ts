@@ -18,9 +18,12 @@
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { createIpcError } from '../../../shared/ipc-errors';
+import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
 import { browserWebviewPool } from './lib/browserWebviewPool';
+import { normalizePersistableFavicon } from './lib/faviconPersistence';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
 import { closeNativePopupForTab } from './lib/nativePopupTabs';
 import type { TabKindId, TabState } from './types';
@@ -39,7 +42,6 @@ type Listener = (sessionId: string) => void;
 export type TabCloseInterceptor = () => Promise<boolean | void> | boolean | void;
 
 const MAX_TABS_PER_SESSION = 20;
-const MAX_STATE_JSON_BYTES = 16 * 1024;
 const cache = new Map<string, TabBucket>();
 const inflight = new Map<string, Promise<void>>();
 const listeners = new Set<Listener>();
@@ -420,14 +422,27 @@ function validateTabStateSize(state: unknown): void {
   }
   const bytes = new TextEncoder().encode(json).byteLength;
   if (bytes > MAX_STATE_JSON_BYTES) {
-    const code = 'RIGHT_SIDEBAR_STATE_TOO_LARGE' as const;
-    const error = new Error(
-      `[${code}] tab state JSON too large: ${bytes} bytes (limit ${MAX_STATE_JSON_BYTES})`,
+    throw createIpcError(
+      'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+      `tab state JSON too large: ${bytes} bytes (limit ${MAX_STATE_JSON_BYTES})`,
     );
-    error.name = 'IpcError';
-    (error as Error & { code: typeof code }).code = code;
-    throw error;
   }
+}
+
+/**
+ * hydrate 路径消毒:发布前已把超大 / blob: / 非白名单 favicon 持久化进 DB 的
+ * 存量 tab,读回缓存时直接清洗。否则任何后续 patchState(哪怕只是 title 变更)
+ * 都会把坏 favicon 重新并进 16KB 预检而持续被拒,复发更新循环。
+ * web-browser 以外的 kind 没有 favicon 字段,原样透传。
+ */
+function sanitizeHydratedTabState(kind: string, raw: unknown): unknown {
+  if (kind !== 'web-browser' || !raw || typeof raw !== 'object') return raw;
+  const state = raw as Record<string, unknown>;
+  if (typeof state.favicon !== 'string') return raw;
+  const normalized = normalizePersistableFavicon(state.favicon);
+  if (normalized === state.favicon) return raw;
+  // normalized 为 null(不可持久化)时清成"无图标";为安全 URL 时做归一化。
+  return { ...state, favicon: normalized };
 }
 
 /**
@@ -480,7 +495,7 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
       const tabs: TabState[] = result.tabs.map((row) => ({
         id: row.id,
         kind: row.kind as TabKindId,
-        state: row.state,
+        state: sanitizeHydratedTabState(row.kind, row.state),
       }));
       setBucket(sessionId, { hydrated: true, tabs, activeTabId: result.activeTabId });
     } finally {
