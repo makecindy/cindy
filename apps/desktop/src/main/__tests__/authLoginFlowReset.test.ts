@@ -192,6 +192,23 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('preservePersistedRefreshToken: true');
   });
 
+  it('does not tear down a same-account runtime during cold-start recovery', () => {
+    const coldStart = source.indexOf('async function runColdStartRefreshFlow(');
+    const coldEnd = source.indexOf('\n}\n\nasync function loadLoginProviders()', coldStart);
+    const coldBody = source.slice(coldStart, coldEnd);
+
+    // Automatic relaunch restores the same cloud account. The startup DB and
+    // device-link runtime must remain alive; teardown is only for a real owner
+    // boundary (signed-out/local mode or a different account).
+    expect(coldBody).toContain('const previousAppSession = getActiveAppSession();');
+    expect(coldBody).toContain(
+      "previousAppSession.mode !== 'cloud' ||\n      previousAppSession.dataOwnerId !== refreshData.membership.id",
+    );
+    expect(coldBody).toContain(
+      'if (accountSwitchTeardown && needsColdStartAccountBoundary) {',
+    );
+  });
+
   it('drops a runtime refresh result after logout or a newer login changes auth generation', () => {
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);

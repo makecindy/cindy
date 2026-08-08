@@ -2219,14 +2219,24 @@ async function runColdStartRefreshFlow(
       commitActiveAppSession('signed-out');
       return snapshotLoggedOutAuthState();
     }
-    if (accountSwitchTeardown) {
+    const previousAppSession = getActiveAppSession();
+    const needsColdStartAccountBoundary =
+      previousAppSession.mode !== 'cloud' ||
+      previousAppSession.dataOwnerId !== refreshData.membership.id;
+    if (accountSwitchTeardown && needsColdStartAccountBoundary) {
       // Cold-start refresh may outlive initialize()'s startup timeout. Keep
       // the owner boundary held for the entire late commit sequence so stale
       // IPC cannot reopen the previous owner's database while teardown,
       // namespace claiming, and session publication are still in flight.
+      //
+      // A normal restart of the same cloud account is not an account switch.
+      // In that case the new process has no old in-memory owner runtime to
+      // tear down; calling this hook after localDb:ensure-ready would dispose
+      // the freshly-created DbClient and stop device-link, leaving the process
+      // permanently stuck at "DbClient not ready" until another restart.
       releaseBoundary = beginAppSessionBoundary();
       await accountSwitchTeardown({
-        previousUserId: getActiveAppSession().dataOwnerId ?? 'signed-out',
+        previousUserId: previousAppSession.dataOwnerId ?? 'signed-out',
         nextUserId: refreshData.membership.id,
       });
       if (epochChanged('after-cold-start-teardown')) {
