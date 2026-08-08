@@ -115,6 +115,8 @@ import {
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
+  pauseCodexGeneration,
+  resumeCodexGeneration,
   translateReasoningSummaryTextDelta,
   translateReasoningSummaryPartAdded,
   translateReasoningTextDelta,
@@ -4930,113 +4932,126 @@ export class CodexAgent extends BaseAgent {
      * 就走用户决策; settled=true 说明 dismissAllPending 已经替它做了决定, 用户后续点了也吞掉。
      */
     async function awaitApprovalDecision(
+      turnId: string | null,
       requestId: string,
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation',
       req: InteractionRequest,
       opts?: { forcePrompt?: boolean; autoReviewAction?: ReviewableAction },
     ): Promise<ApprovalDecision> {
-      let forcePrompt =
-        opts?.forcePrompt === true ||
-        (req.kind === 'permission' &&
-          forceTurnConfirmation(req.toolName, req.input));
-      // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
-      // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
-      // 再由 Cindy reviewer 静默裁决。
-      // forcePrompt 高风险 MCP inner tool
-      // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
-      if (
-        !forcePrompt &&
-        mutablePermissionMode === 'bypassPermissions'
-      ) {
-        return Promise.resolve('accept');
+      const timingPauseId = `approval:${kind}:${requestId}`;
+      if (turnId) {
+        pauseCodexGeneration(translatorRt, turnId, timingPauseId);
+      } else {
+        // Without a turn id the approval cannot be paired with a reliable resume
+        // boundary. Keep the turn usable, but fail closed for TPS publication.
+        translatorRt.generationTimingReliable = false;
       }
-      // Policy turns (unattended: feishu bot / 定时任务) 以 untrusted + read-only 发射,把命令/文件
-      // 升级请求发回 host 后自动接受非强制回调 —— 保留该无人值守语义,但**仍对危险桶 fail-closed**:
-      // 无人值守时没有人能批准一个 destructive / 凭证 / 远程执行动作,应拒绝,而不是让它逃出 read-only
-      // 沙箱静默执行(与交互式 Auto 共用同一张 Cindy core 安全网)。安全 / 仅需升级的动作照常自动
-      // 接受,不影响正常无人值守自动化(真需要跑危险命令的自动化应走 bypassPermissions,不受此影响)。
-      if (
-        !forcePrompt &&
-        activeTurnPermissionPolicy &&
-        mutablePermissionMode === 'auto'
-      ) {
-        if (opts?.autoReviewAction) {
-          const verdict = reviewAction(
-            opts.autoReviewAction,
-            runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
-            { platform: sessionReviewPlatform },
-          );
-          // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
-          // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
-          return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
+      try {
+        let forcePrompt =
+          opts?.forcePrompt === true ||
+          (req.kind === 'permission' &&
+            forceTurnConfirmation(req.toolName, req.input));
+        // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
+        // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
+        // 再由 Cindy reviewer 静默裁决。
+        // forcePrompt 高风险 MCP inner tool
+        // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
+        if (
+          !forcePrompt &&
+          mutablePermissionMode === 'bypassPermissions'
+        ) {
+          return Promise.resolve('accept');
         }
-        // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
-        // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
-        if (kind === 'commandExecution' || kind === 'fileChange') {
-          return Promise.resolve('decline');
+        // Policy turns (unattended: feishu bot / 定时任务) 以 untrusted + read-only 发射,把命令/文件
+        // 升级请求发回 host 后自动接受非强制回调 —— 保留该无人值守语义,但**仍对危险桶 fail-closed**:
+        // 无人值守时没有人能批准一个 destructive / 凭证 / 远程执行动作,应拒绝,而不是让它逃出 read-only
+        // 沙箱静默执行(与交互式 Auto 共用同一张 Cindy core 安全网)。安全 / 仅需升级的动作照常自动
+        // 接受,不影响正常无人值守自动化(真需要跑危险命令的自动化应走 bypassPermissions,不受此影响)。
+        if (
+          !forcePrompt &&
+          activeTurnPermissionPolicy &&
+          mutablePermissionMode === 'auto'
+        ) {
+          if (opts?.autoReviewAction) {
+            const verdict = reviewAction(
+              opts.autoReviewAction,
+              runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+              { platform: sessionReviewPlatform },
+            );
+            // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
+            // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
+            return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
+          }
+          // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
+          // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
+          if (kind === 'commandExecution' || kind === 'fileChange') {
+            return Promise.resolve('decline');
+          }
+          return Promise.resolve('accept');
         }
-        return Promise.resolve('accept');
-      }
-      // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
-      // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
-      // "原生优先、Cindy 兜底")。明显安全由本地规则放行；灰区调用当前会话模型做轻量
-      // allow/block/ask 裁决。allow/block 不依赖 interactionResolver；只有真正红线 ask 才走 UI，
-      // UI 不可用时 dispatchInteraction 自然 fail-closed decline。
-      if (
-        !forcePrompt &&
-        mutablePermissionMode === 'auto' &&
-        opts?.autoReviewAction
-      ) {
-        const decision = await reviewAutoAction(opts.autoReviewAction);
-        // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)或
-        // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
-        // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
-        // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
-        const modeAfterReview = mutablePermissionMode as PermissionMode;
-        if (modeAfterReview === 'bypassPermissions') return 'accept';
-        if (modeAfterReview !== 'auto') {
-          forcePrompt = true;
-        } else if (decision.verdict === 'allow') {
-          return 'accept';
-        } else if (decision.verdict === 'block') {
-          // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
-          // 后者按 Auto 本意保持静默。动作两种都仍然 decline。
-          if (decision.unavailable) autoReviewUnavailableNotice.notify();
-          return 'decline';
-        } else {
-          // Only red-line decisions reach the user and they cannot be remembered.
-          forcePrompt = true;
+        // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
+        // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
+        // "原生优先、Cindy 兜底")。明显安全由本地规则放行；灰区调用当前会话模型做轻量
+        // allow/block/ask 裁决。allow/block 不依赖 interactionResolver；只有真正红线 ask 才走 UI，
+        // UI 不可用时 dispatchInteraction 自然 fail-closed decline。
+        if (
+          !forcePrompt &&
+          mutablePermissionMode === 'auto' &&
+          opts?.autoReviewAction
+        ) {
+          const decision = await reviewAutoAction(opts.autoReviewAction);
+          // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)或
+          // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
+          // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
+          // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
+          const modeAfterReview = mutablePermissionMode as PermissionMode;
+          if (modeAfterReview === 'bypassPermissions') return 'accept';
+          if (modeAfterReview !== 'auto') {
+            forcePrompt = true;
+          } else if (decision.verdict === 'allow') {
+            return 'accept';
+          } else if (decision.verdict === 'block') {
+            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
+            // 后者按 Auto 本意保持静默。动作两种都仍然 decline。
+            if (decision.unavailable) autoReviewUnavailableNotice.notify();
+            return 'decline';
+          } else {
+            // Only red-line decisions reach the user and they cannot be remembered.
+            forcePrompt = true;
+          }
         }
-      }
-      const routedRequest =
-        forcePrompt && req.kind === 'permission'
-          ? { ...req, suggestions: undefined }
-          : req;
-      return new Promise<ApprovalDecision>((resolve) => {
-        const entry: PendingEntry = { resolve, kind, settled: false, forcePrompt };
-        pendingApprovals.set(requestId, entry);
-        const finalize = (d: ApprovalDecision) => {
-          if (entry.settled) return;
-          entry.settled = true;
-          pendingApprovals.delete(requestId);
-          // A stale/custom UI may still return a session grant. Forced policy
-          // confirmation applies to this call only and must never persist.
-          resolve(forcePrompt && d === 'acceptForSession' ? 'accept' : d);
-        };
-        dispatchInteraction(routedRequest)
-          .then((decision) => {
-            if (decision.kind !== 'permission') {
-              log.warn('unexpected non-permission decision → decline', { kind: decision.kind });
+        const routedRequest =
+          forcePrompt && req.kind === 'permission'
+            ? { ...req, suggestions: undefined }
+            : req;
+        return await new Promise<ApprovalDecision>((resolve) => {
+          const entry: PendingEntry = { resolve, kind, settled: false, forcePrompt };
+          pendingApprovals.set(requestId, entry);
+          const finalize = (d: ApprovalDecision) => {
+            if (entry.settled) return;
+            entry.settled = true;
+            pendingApprovals.delete(requestId);
+            // A stale/custom UI may still return a session grant. Forced policy
+            // confirmation applies to this call only and must never persist.
+            resolve(forcePrompt && d === 'acceptForSession' ? 'accept' : d);
+          };
+          dispatchInteraction(routedRequest)
+            .then((decision) => {
+              if (decision.kind !== 'permission') {
+                log.warn('unexpected non-permission decision → decline', { kind: decision.kind });
+                finalize('decline');
+                return;
+              }
+              finalize(mapPermissionDecisionToApproval(decision));
+            })
+            .catch((e) => {
+              log.error('dispatchInteraction threw → decline', { requestId, message: (e as Error).message });
               finalize('decline');
-              return;
-            }
-            finalize(mapPermissionDecisionToApproval(decision));
-          })
-          .catch((e) => {
-            log.error('dispatchInteraction threw → decline', { requestId, message: (e as Error).message });
-            finalize('decline');
-          });
-      });
+            });
+        });
+      } finally {
+        if (turnId) resumeCodexGeneration(translatorRt, turnId, timingPauseId);
+      }
     }
 
     /**
@@ -5704,7 +5719,7 @@ export class CodexAgent extends BaseAgent {
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
       const requestId = params.approvalId ?? params.itemId;
-      const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
+      const decision = await awaitApprovalDecision(params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolName: 'exec',
@@ -5737,7 +5752,7 @@ export class CodexAgent extends BaseAgent {
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       const requestId = params.itemId;
-      const decision = await awaitApprovalDecision(requestId, 'fileChange', {
+      const decision = await awaitApprovalDecision(params.turnId, requestId, 'fileChange', {
         kind: 'permission',
         requestId,
         toolName: 'file_change',
@@ -5961,6 +5976,7 @@ export class CodexAgent extends BaseAgent {
       const innerToolName = mcpInnerToolName(params);
       const requestId = `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
       const decision = await awaitApprovalDecision(
+        params.turnId,
         requestId,
         'mcpServerElicitation',
         {
@@ -6008,7 +6024,7 @@ export class CodexAgent extends BaseAgent {
       const requestId = params.itemId ?? params.turnId;
       // kind 借用 'commandExecution' 仅为复用其 fail-closed 语义(见 awaitApprovalDecision:无 action /
       // 无人值守时 decline)——权限升级请求本就该 fail-closed。此处不是命令执行,只是共用同一条兜底路径。
-      const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
+      const decision = await awaitApprovalDecision(params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolName: 'permissions',
@@ -6416,6 +6432,14 @@ export class CodexAgent extends BaseAgent {
 
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
+      const pendingApproval = pendingApprovals.get(requestId);
+      let approvalCancelled = false;
+      if (pendingApproval && !pendingApproval.settled) {
+        pendingApproval.settled = true;
+        pendingApprovals.delete(requestId);
+        pendingApproval.resolve('decline');
+        approvalCancelled = true;
+      }
       const brokerKey = { connectionId, requestId: params.requestId };
       const userInputPending = userInputBroker.has(brokerKey);
       const dynamicPending = dynamicToolBroker.has(brokerKey);
@@ -6436,7 +6460,7 @@ export class CodexAgent extends BaseAgent {
           success: false,
         },
       );
-      if (userInputCancelled || dynamicCancelled) {
+      if (approvalCancelled || userInputCancelled || dynamicCancelled) {
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },

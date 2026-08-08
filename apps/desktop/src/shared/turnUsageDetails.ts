@@ -151,13 +151,27 @@ export function aggregateTurnUsageDetails(
     }
   }
 
+  // TPS is only meaningful when every segment that contributes output tokens
+  // also contributes a compatible generation duration. Dividing all output by
+  // a partial duration silently inflates the displayed rate.
+  const hasCompleteOutputTiming = details.every(
+    (detail) => detail.outputTokens <= 0 || detail.durationMs !== undefined,
+  );
+  const durationMs = hasCompleteOutputTiming
+    ? details.reduce((sum, item) => sum + (item.durationMs ?? 0), 0) || undefined
+    : undefined;
+  // Each segment can carry the same whole-turn wall clock. Taking the maximum
+  // preserves the outer turn duration without multiplying it by segment count.
+  const turnDurationMs =
+    details.reduce((max, item) => Math.max(max, item.turnDurationMs ?? 0), 0) || undefined;
+
   return buildTurnUsageDetails({
     inputTokens: details.reduce((sum, item) => sum + item.inputTokens, 0),
     outputTokens: details.reduce((sum, item) => sum + item.outputTokens, 0),
     cacheReadTokens: details.reduce((sum, item) => sum + item.cacheReadTokens, 0),
     cacheCreateTokens: details.reduce((sum, item) => sum + item.cacheCreateTokens, 0),
-    durationMs: details.reduce((sum, item) => sum + (item.durationMs ?? 0), 0) || undefined,
-    turnDurationMs: details.reduce((sum, item) => sum + (item.turnDurationMs ?? 0), 0) || undefined,
+    durationMs,
+    turnDurationMs,
     model: modelNames.length === 1 ? modelNames[0] : undefined,
     models: modelNames,
     perModelCost: [...perModel.entries()].map(([model, money]) => ({ model, money })),

@@ -77,7 +77,7 @@ export interface CodexRuntimeState {
   itemTextLen: Map<string, number>;
   /** Current model-active interval start; null while tools/approvals own the turn. */
   generationStartedAt: number | null;
-  /** Tool-like items currently executing. Parallel tools keep generation paused until all finish. */
+  /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
   generationPendingToolIds: Set<string>;
   /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
   generationDurationMs: number;
@@ -185,6 +185,35 @@ export function codexGenerationDurationMs(rt: CodexRuntimeState): number | undef
     : undefined;
 }
 
+export function pauseCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  pausedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) beginCodexGenerationTurn(rt, turnId, pausedAt);
+  if (!pauseId) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.has(pauseId)) return;
+  if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, pausedAt);
+  rt.generationPendingToolIds.add(pauseId);
+}
+
+export function resumeCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  resumedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId || !rt.generationPendingToolIds.delete(pauseId)) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.size === 0) rt.generationStartedAt = resumedAt;
+}
+
 const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
   'commandExecution',
   'mcpToolCall',
@@ -193,7 +222,6 @@ const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
   'webSearch',
   'imageGeneration',
   'imageView',
-  'fileChange',
 ]);
 
 function noteCodexGenerationBoundary(
@@ -210,28 +238,38 @@ function noteCodexGenerationBoundary(
       : Date.now();
     beginCodexGenerationTurn(rt, turnId, fallbackStart);
   }
-  if (typeof item.type !== 'string' || !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)) {
+  if (
+    typeof item.type !== 'string' ||
+    (!CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type) && item.type !== 'fileChange')
+  ) {
     return;
   }
   if (typeof item.id !== 'string' || item.id.length === 0) {
     rt.generationTimingReliable = false;
     return;
   }
+  const pauseId = `item:${item.id}`;
   if (phase === 'started') {
-    if (rt.generationPendingToolIds.has(item.id)) return;
-    const startedAt = timingValue(notification.startedAtMs) ?? Date.now();
-    if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, startedAt);
-    rt.generationPendingToolIds.add(item.id);
+    pauseCodexGeneration(
+      rt,
+      turnId,
+      pauseId,
+      timingValue(notification.startedAtMs) ?? Date.now(),
+    );
     return;
   }
   if (phase !== 'completed') return;
-  if (!rt.generationPendingToolIds.delete(item.id)) {
-    rt.generationTimingReliable = false;
+  // Codex v2 emits fileChange as completion-only. Treat that shape as an
+  // instantaneous boundary; paired variants still pause when a start exists.
+  if (item.type === 'fileChange' && !rt.generationPendingToolIds.has(pauseId)) {
     return;
   }
-  if (rt.generationPendingToolIds.size === 0) {
-    rt.generationStartedAt = timingValue(notification.completedAtMs) ?? Date.now();
-  }
+  resumeCodexGeneration(
+    rt,
+    turnId,
+    pauseId,
+    timingValue(notification.completedAtMs) ?? Date.now(),
+  );
 }
 
 // ── 上下文 ────────────────────────────────────────────────────────────────────

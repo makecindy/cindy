@@ -78,7 +78,8 @@ export interface PiTranslateContext {
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
-  hasReportedDuration: boolean;
+  /** False when any reported output lacks compatible parent generation timing. */
+  generationTimingReliable: boolean;
   /**
    * 每个子代理调用(taskId)最近一次上报的**累计**委派用量。进度帧报累计值,这里存上次值
    * 用来算增量,避免同一批用量被反复加进 turn 记账。与其它 turn 计数器同点(agent_start)清空。
@@ -103,7 +104,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     finalAssistantText: '',
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
-    hasReportedDuration: false,
+    generationTimingReliable: true,
     delegatedUsage: new Map(),
   };
 }
@@ -176,6 +177,10 @@ function applyDelegatedUsage(
   ctx.turnCacheRead += delta.cacheRead;
   ctx.turnCacheWrite += delta.cacheWrite;
   ctx.costUsd += delta.cost;
+  // Child progress exposes wall-clock card duration, not generation-only time.
+  // Once child output joins the numerator, parent-only timing cannot produce a
+  // compatible TPS denominator, so retain usage but omit speed for this turn.
+  if (delta.output > 0) ctx.generationTimingReliable = false;
 }
 
 function assistantTextOf(message: PiAssistantMessage): string {
@@ -242,7 +247,7 @@ export function translatePiEvent(
       ctx.finalAssistantText = '';
       ctx.turnWallClockStartedAt = Date.now();
       ctx.generationDurationMs = 0;
-      ctx.hasReportedDuration = false;
+      ctx.generationTimingReliable = true;
       // 与其它 turn 计数器同点清:新 turn 的委派用量不该跟上一 turn 的累计值作差,
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
@@ -281,7 +286,10 @@ export function translatePiEvent(
             : 0;
       if (messageDurationMs > 0) {
         ctx.generationDurationMs += messageDurationMs;
-        ctx.hasReportedDuration = true;
+      } else if ((message.usage?.output ?? 0) > 0) {
+        // A single untimed output-bearing message makes the whole turn's TPS
+        // denominator partial. Keep token/cost accounting, but do not publish it.
+        ctx.generationTimingReliable = false;
       }
       const fullText = assistantTextOf(message);
       if (fullText.length > 0) {
@@ -377,7 +385,9 @@ export function translatePiEvent(
             // durationMs is deliberately generation-only. If Pi does not report a
             // per-assistant generation duration, omit it instead of charging tool
             // execution / user waits to TPS.
-            ...(ctx.hasReportedDuration ? { durationMs: ctx.generationDurationMs } : {}),
+            ...(ctx.generationTimingReliable && ctx.generationDurationMs > 0
+              ? { durationMs: ctx.generationDurationMs }
+              : {}),
             ...(ctx.turnWallClockStartedAt > 0
               ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
               : {}),

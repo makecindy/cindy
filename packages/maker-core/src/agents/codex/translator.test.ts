@@ -22,6 +22,8 @@ import {
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
+  pauseCodexGeneration,
+  resumeCodexGeneration,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
@@ -154,6 +156,29 @@ describe('Codex generation timing', () => {
     finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
     await collect(q);
     expect(codexGenerationDurationMs(rt)).toBeUndefined();
+  });
+  it('keeps timing reliable for completion-only file changes', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+    translateItemNotification('completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      completedAtMs: 3_500,
+      item: { type: 'fileChange', id: 'patch-1', changes: [], status: 'completed' },
+    }, q, makeCtx(rt));
+    finalizeCodexGenerationTurn(rt, 'turn-1', 4_000);
+    await collect(q);
+    expect(codexGenerationDurationMs(rt)).toBe(3_000);
+  });
+
+  it('excludes approval waits from generation timing', () => {
+    const rt = newCodexRuntimeState();
+    beginCodexGenerationTurn(rt, 'turn-1', 1_000);
+    pauseCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 2_000);
+    resumeCodexGeneration(rt, 'turn-1', 'approval:cmd-1', 10_000);
+    finalizeCodexGenerationTurn(rt, 'turn-1', 12_000);
+    expect(codexGenerationDurationMs(rt)).toBe(3_000);
   });
 });
 

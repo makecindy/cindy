@@ -46,7 +46,7 @@ vi.mock('react-i18next', () => ({
         'quotaCard.tokenBreakdown': '（输入 {{input}} · 输出 {{output}}）',
         'quotaCard.cacheLabel': '缓存',
         'quotaCard.timeLabel': '耗时',
-        'quotaCard.timeAndRateValue': '{{duration}} 速度：{{rate}}',
+        'quotaCard.timeAndRateValue': '{{duration}} 速度：{{rate}} token/秒',
         'quotaCard.modelLabel': '模型',
         'quotaCard.waiting': '等待额度数据',
         'quotaCard.latestMessageTitle': '最近一轮用户请求累计',
@@ -214,7 +214,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText('读 0 · 写 74.0k · 命中 0%')).toBeTruthy();
     const performance = screen.getByTestId('quota-performance');
     expect(within(performance).getByText('耗时')).toBeTruthy();
-    expect(within(performance).getByText('12.3秒 速度：40')).toBeTruthy();
+    expect(within(performance).getByText('12.3秒 速度：40 token/秒')).toBeTruthy();
     expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
     expect(screen.getByText('缓存命中率偏低，本轮较多上下文重新计费')).toBeTruthy();
     expect(document.activeElement).toBe(document.body);

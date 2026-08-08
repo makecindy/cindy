@@ -11,6 +11,7 @@ describe('aggregateTurnUsageDetails', () => {
       cacheReadTokens: 100,
       cacheCreateTokens: 5,
       durationMs: 1_000,
+      turnDurationMs: 2_000,
       model: 'claude-fable-5[1m]',
       perModelCost: [{ model: 'claude-fable-5', money: usdMoney(2.5) }],
     });
@@ -20,6 +21,7 @@ describe('aggregateTurnUsageDetails', () => {
       cacheReadTokens: 50,
       cacheCreateTokens: 2,
       durationMs: 500,
+      turnDurationMs: 2_500,
       models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
       perModelCost: [
         { model: 'claude-fable-5', money: usdMoney(1.25) },
@@ -35,6 +37,7 @@ describe('aggregateTurnUsageDetails', () => {
       cacheCreateTokens: 7,
       totalTokens: 197,
       durationMs: 1_500,
+      turnDurationMs: 2_500,
       models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
     });
     expect(aggregated?.perModelCost).toEqual([
@@ -42,6 +45,20 @@ describe('aggregateTurnUsageDetails', () => {
       { model: 'claude-opus-5', money: usdMoney(4) },
     ]);
     expect(aggregated?.cacheHitRate).toBeCloseTo(150 / 170);
+  });
+
+  it('omits aggregate generation timing when any output segment lacks timing', () => {
+    const timed = buildTurnUsageDetails({ outputTokens: 20, durationMs: 1_000 });
+    const untimed = buildTurnUsageDetails({ outputTokens: 10 });
+
+    expect(aggregateTurnUsageDetails([timed, untimed])).not.toHaveProperty('durationMs');
+  });
+
+  it('does not require timing for segments that contribute no output tokens', () => {
+    const timed = buildTurnUsageDetails({ outputTokens: 20, durationMs: 1_000 });
+    const inputOnly = buildTurnUsageDetails({ inputTokens: 10 });
+
+    expect(aggregateTurnUsageDetails([timed, inputOnly])).toMatchObject({ durationMs: 1_000 });
   });
 
   it('uses the default usage currency when the same model has mixed segment currencies', () => {

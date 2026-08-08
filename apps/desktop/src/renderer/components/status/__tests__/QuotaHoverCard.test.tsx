@@ -24,7 +24,7 @@ vi.mock('react-i18next', () => ({
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
       if (key === 'quotaCard.timeLabel') return '耗时';
-      if (key === 'quotaCard.timeAndRateValue') return `${options.duration} 速度：${options.rate}`;
+      if (key === 'quotaCard.timeAndRateValue') return `${options.duration} 速度：${options.rate} token/秒`;
       if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
       if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
       if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
@@ -367,7 +367,7 @@ describe('QuotaHoverCard', () => {
     const performance = screen.getByTestId('quota-performance');
     expect(within(performance).getByText('耗时')).toBeTruthy();
     const combinedValue = within(performance).getByTestId('quota-performance-value');
-    expect(combinedValue.textContent).toBe('12.3s 速度：40');
+    expect(combinedValue.textContent).toBe('12.3s 速度：40 token/秒');
     expect(combinedValue.classList.contains('ml-auto')).toBe(true);
     expect(combinedValue.classList.contains('text-right')).toBe(true);
 

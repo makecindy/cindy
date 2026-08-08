@@ -121,6 +121,33 @@ describe('pi translator', () => {
     expect(usage.turnDurationMs).toEqual(expect.any(Number));
   });
 
+  it('omits timing when one of multiple output messages lacks duration', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: { role: 'assistant', content: [], usage: { output: 10 }, duration: 500 },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: { role: 'assistant', content: [], usage: { output: 5 } },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+    expect(usage.outputTokens).toBe(15);
+    expect(usage).not.toHaveProperty('durationMs');
+  });
+
   it('done.result carries the last assistant message text (multi-message turn) and resets per turn', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -446,6 +473,29 @@ describe('pi translator', () => {
       expect(
         (done?.data as { usage?: { turnDurationMs?: unknown } }).usage?.turnDurationMs,
       ).toEqual(expect.any(Number));
+      expect((done?.data as { usage?: Record<string, unknown> }).usage).not.toHaveProperty(
+        'durationMs',
+      );
+    });
+
+    it('omits parent-only timing after delegated output joins the turn', () => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(
+        ev({
+          type: 'message_end',
+          message: { role: 'assistant', content: [], usage: { output: 10 }, duration: 1_000 },
+        }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(progressEvent('sa-1', { input: 100, output: 20 }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+      const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+      expect(usage.outputTokens).toBe(30);
+      expect(usage).not.toHaveProperty('durationMs');
     });
 
     it('only counts the increment — progress frames report cumulative totals', () => {

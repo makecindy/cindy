@@ -12421,6 +12421,67 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('excludes a server-resolved approval wait from the completed turn duration', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-approval-generation-timing',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.commandExecutionApproval ||
+        !handlers.serverRequestResolved ||
+        !handlers.turnStarted ||
+        !handlers.turnCompleted
+      ) {
+        throw new Error('expected approval timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+      handle.setInteractionResolver(interactionResolver);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      const approvalPromise = handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        itemId: 'approval-item-1',
+        command: 'pwd',
+        cwd: '/repo',
+      });
+      await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+
+      now = 10_000;
+      handlers.serverRequestResolved({
+        threadId: 'start-thread-id',
+        requestId: 'approval-item-1',
+      });
+      await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
+
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('routes dynamic ask_user_question tool calls through ask_user_question', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
