@@ -83,6 +83,8 @@ type BlobReadResult =
 
 type BlobWriteMode = 'create' | 'update';
 
+export type BoundClaudeAiOAuthState = 'present' | 'absent' | 'unreadable';
+
 function securityEnvironment(): NodeJS.ProcessEnv {
   // `security` 的 exit status 只有 OSStatus 的低 8 位,不能单独证明 errSecItemNotFound。
   // 固定英文 stderr 后才能把 status 44 + 明确的 Keychain not-found 文本作为双重证据。
@@ -138,9 +140,10 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
       },
     });
   } catch (cause) {
-    throw new Error('claude credential store is busy; refusing to modify shared credentials', {
-      cause,
-    });
+    const message = isErrno(cause, 'ELOCKED')
+      ? 'claude credential store is busy; refusing to modify shared credentials'
+      : 'failed to acquire claude credential write lock; refusing to modify shared credentials';
+    throw new Error(message, { cause });
   }
 
   const noFailure = Symbol('no-failure');
@@ -158,7 +161,11 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
   } catch (error) {
     // mutation 的原始错误比随后释放失败更有诊断价值;成功路径则不能把释放失败谎报成成功。
     if (failure === noFailure) failure = error;
-    else log.warn('claude credential write lock release failed after mutation error');
+    else {
+      log.warn('claude credential write lock release failed after mutation error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
   if (failure !== noFailure) throw failure;
   return value;
@@ -375,6 +382,22 @@ export function readClaudeAiOAuth(): ClaudeAiOAuth | null {
 /** 是否存在可用的 Claude.ai OAuth 登录(有 accessToken)。 */
 export function hasClaudeAiOAuth(): boolean {
   return readClaudeAiOAuth() != null;
+}
+
+/**
+ * Mutation callers must distinguish a confirmed absence from an unreadable
+ * shared store. Read-only status paths intentionally keep using the nullable
+ * API above so a transient Keychain failure does not throw across the UI.
+ */
+export function getBoundClaudeAiOAuthState(): BoundClaudeAiOAuthState {
+  if (!isNativeProviderAuthBound('anthropic')) return 'absent';
+  const result = readBlob();
+  if (result.kind === 'unreadable') return 'unreadable';
+  if (result.kind === 'absent') return 'absent';
+  const oauth = result.value.claudeAiOauth as ClaudeAiOAuth | undefined;
+  return typeof oauth?.accessToken === 'string' && oauth.accessToken.length > 0
+    ? 'present'
+    : 'absent';
 }
 
 /** Legacy upgrade probe; intentionally bypasses owner binding once at migration time. */

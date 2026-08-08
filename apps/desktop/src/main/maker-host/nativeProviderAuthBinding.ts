@@ -5,7 +5,11 @@ import path from 'node:path';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 type NativeProviderId = 'anthropic' | 'openai' | 'xai';
-const NATIVE_PROVIDER_IDS = ['anthropic', 'openai', 'xai'] as const satisfies readonly NativeProviderId[];
+const NATIVE_PROVIDER_IDS = [
+  'anthropic',
+  'openai',
+  'xai',
+] as const satisfies readonly NativeProviderId[];
 type BindingFile = Partial<Record<NativeProviderId, string>> & {
   legacyClaimOwner?: string;
   /**
@@ -78,8 +82,12 @@ function readBindingsOrFail(): BindingRead {
     // 只修 revoked、保住其余归属 —— 否则一次「修复」会把别人的 owner 抹掉,反倒开出新的
     // 误认领口子(PR #548 review)。
     const revoked = (value as { revoked?: unknown }).revoked;
-    if (revoked !== undefined && (typeof revoked !== 'object' || revoked === null || Array.isArray(revoked))) {
-      const { revoked: _bad, ...rest } = value as BindingFile;
+    if (
+      revoked !== undefined &&
+      (typeof revoked !== 'object' || revoked === null || Array.isArray(revoked))
+    ) {
+      const rest = { ...(value as BindingFile) };
+      delete rest.revoked;
       return { ok: false, reason: 'badRevoked', bindings: rest };
     }
     return { ok: true, bindings: value as BindingFile };
@@ -179,9 +187,9 @@ export function isNativeProviderAuthSelfAuthorized(provider: NativeProviderId): 
 /**
  * Remove the current owner binding after logout/invalidation.
  *
- * `revoked: true` 只用于**用户显式登出**：它会留下一个持久标记，挡住后续的自动认领。
- * 服务端作废凭证（401 invalidate）不传——那不是用户意图，凭证也已被清掉，用户之后在本机
- * CLI 重新登录时仍应享有设计内的自动继承。
+ * `revoked: true` 会留下持久标记，挡住后续自动认领。用户显式登出始终传；服务端作废凭证
+ * （401 invalidate）在凭证确认清除后不传，让用户之后从本机 CLI 重登时仍可自动继承，
+ * 但清除失败或共享凭证不可读时必须传，避免旧凭证恢复可读后被重新认领。
  */
 export function unbindNativeProviderAuth(
   provider: NativeProviderId,

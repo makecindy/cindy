@@ -54,6 +54,7 @@ async function importStore(options: {
   lockSync?: LockSyncMock;
   realLock?: boolean;
   configDir?: string;
+  bound?: boolean;
 }) {
   vi.resetModules();
   setPlatform(options.platform);
@@ -63,7 +64,7 @@ async function importStore(options: {
     desktopMakerLogger: { child: () => logger },
   }));
   vi.doMock('../nativeProviderAuthBinding.js', () => ({
-    isNativeProviderAuthBound: () => true,
+    isNativeProviderAuthBound: () => options.bound ?? true,
   }));
   vi.doMock('node:child_process', () => ({
     execFileSync: options.execFileSync ?? vi.fn(),
@@ -90,6 +91,7 @@ afterEach(() => {
   else process.env.USER = originalUser;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   logger.info.mockReset();
+  logger.warn.mockReset();
 });
 
 describe('Claude credential shared write lock', () => {
@@ -152,6 +154,29 @@ describe('Claude credential shared write lock', () => {
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
+  it('reports non-contention lock acquisition failures without calling them busy', async () => {
+    const execFileSync = vi.fn();
+    const lockSync = vi.fn(() => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+    const { writeClaudeAiOAuth } = await importStore({
+      platform: 'darwin',
+      execFileSync,
+      lockSync,
+    });
+
+    let thrown: unknown;
+    try {
+      writeClaudeAiOAuth(oauth);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/failed to acquire.*write lock/i);
+    expect((thrown as Error).message).not.toMatch(/store is busy/i);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
   it('interoperates with the real proper-lockfile directory used by Claude Code', async () => {
     const root = makeRoot();
     const target = path.join(root, '.storage-write');
@@ -191,9 +216,57 @@ describe('Claude credential shared write lock', () => {
     expect(() => clearClaudeAiOAuth()).toThrow(/credential store.*read/i);
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it('keeps the mutation error and logs details when lock release also fails', async () => {
+    const release = vi.fn(() => {
+      throw new Error('release failed');
+    });
+    const lockSync = vi.fn(() => release);
+    const execFileSync = vi.fn(() => {
+      throw macError(1, 'security: User interaction is not allowed.\n');
+    });
+    const { writeClaudeAiOAuth } = await importStore({
+      platform: 'darwin',
+      execFileSync,
+      lockSync,
+    });
+
+    expect(() => writeClaudeAiOAuth(oauth)).toThrow(/credential store.*read/i);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'claude credential write lock release failed after mutation error',
+      { error: 'release failed' },
+    );
+  });
 });
 
 describe('macOS Claude credential store fail-closed reads', () => {
+  it('exposes present, absent, and unreadable states to mutation callers', async () => {
+    const presentExec = vi.fn(() => JSON.stringify({ claudeAiOauth: oauth }));
+    const present = await importStore({ platform: 'darwin', execFileSync: presentExec });
+    expect(present.getBoundClaudeAiOAuthState()).toBe('present');
+
+    const absentExec = vi.fn(() => {
+      throw macNotFoundError();
+    });
+    const absent = await importStore({ platform: 'darwin', execFileSync: absentExec });
+    expect(absent.getBoundClaudeAiOAuthState()).toBe('absent');
+
+    const unreadableExec = vi.fn(() => {
+      throw macError(1, 'security: User interaction is not allowed.\n');
+    });
+    const unreadable = await importStore({ platform: 'darwin', execFileSync: unreadableExec });
+    expect(unreadable.getBoundClaudeAiOAuthState()).toBe('unreadable');
+
+    const unboundExec = vi.fn();
+    const unbound = await importStore({
+      platform: 'darwin',
+      execFileSync: unboundExec,
+      bound: false,
+    });
+    expect(unbound.getBoundClaudeAiOAuthState()).toBe('absent');
+    expect(unboundExec).not.toHaveBeenCalled();
+  });
+
   it('does not write when Keychain is locked or permission is denied', async () => {
     const execFileSync = vi.fn(() => {
       throw macError(1, 'security: SecKeychainSearchCopyNext: User interaction is not allowed.\n');
@@ -419,7 +492,10 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     writeClaudeAiOAuth(oauth);
 
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    // Windows does not preserve POSIX permission bits even when mode is supplied.
+    if (originalPlatform !== 'win32') {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('never overwrites malformed JSON and leaves no temporary file behind', async () => {

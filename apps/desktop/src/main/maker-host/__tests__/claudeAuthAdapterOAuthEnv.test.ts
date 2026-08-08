@@ -12,10 +12,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   hasOAuth: true,
+  oauthState: 'present' as 'present' | 'absent' | 'unreadable',
   oauth: null as Record<string, unknown> | null,
   gatewayKey: 'sk-xd-gateway' as string | null,
   cleared: 0,
+  clearError: null as Error | null,
   refresherInvalidated: 0,
+  gatewayRemovals: 0,
+  unbindCalls: [] as Array<{
+    provider: string;
+    options?: { revoked?: boolean };
+  }>,
   invalidGrantHandler: null as (() => void) | null,
   /** getValidClaudeAiOAuth 的可注入延迟(测回调超时用)。 */
   refreshDelayMs: 0,
@@ -42,8 +49,10 @@ vi.mock('../../appCapabilities.js', () => ({
 
 vi.mock('../claude-credentials-store.js', () => ({
   hasClaudeAiOAuth: () => h.hasOAuth,
+  getBoundClaudeAiOAuthState: () => h.oauthState,
   clearClaudeAiOAuth: () => {
     h.cleared += 1;
+    if (h.clearError) throw h.clearError;
   },
 }));
 
@@ -61,6 +70,7 @@ vi.mock('../claude-oauth-refresh.js', () => ({
   disconnectClaudeAiOAuth: () => {
     h.refresherInvalidated += 1;
     h.cleared += 1;
+    if (h.clearError) throw h.clearError;
   },
   setClaudeOAuthInvalidGrantHandler: (handler: (() => void) | null) => {
     h.invalidGrantHandler = handler;
@@ -70,8 +80,23 @@ vi.mock('../claude-oauth-refresh.js', () => ({
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   getProviderSecretStore: () => ({
     get: () => h.gatewayKey,
-    remove: () => ({ success: true }),
+    remove: () => {
+      h.gatewayRemovals += 1;
+      return { success: true };
+    },
   }),
+}));
+
+vi.mock('../nativeProviderAuthBinding.js', () => ({
+  bindNativeProviderAuth: vi.fn(),
+  claimDetectedNativeProviderAuth: vi.fn(() => false),
+  isNativeProviderAuthBound: vi.fn(() => true),
+  isNativeProviderAuthRevoked: vi.fn(() => false),
+  isNativeProviderAuthSelfAuthorized: vi.fn(() => false),
+  restoreNativeProviderAuthForRecovery: vi.fn(() => false),
+  unbindNativeProviderAuth: (provider: string, options?: { revoked?: boolean }) => {
+    h.unbindCalls.push({ provider, ...(options === undefined ? {} : { options }) });
+  },
 }));
 
 // getAuthEnv 前置的共享 skills 预热会碰真实文件系统 —— 剪断(与本测试无关)。
@@ -87,6 +112,7 @@ vi.mock('../anthropic-compat-proxy-host.js', () => ({
 describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () => {
   beforeEach(() => {
     h.hasOAuth = true;
+    h.oauthState = 'present';
     h.oauth = {
       accessToken: 'at-live',
       refreshToken: 'rt-live',
@@ -97,7 +123,10 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     };
     h.gatewayKey = 'sk-xd-gateway';
     h.cleared = 0;
+    h.clearError = null;
     h.refresherInvalidated = 0;
+    h.gatewayRemovals = 0;
+    h.unbindCalls.length = 0;
     h.refreshDelayMs = 0;
     h.encryptionAvailable = true;
     h.proxyReady = true;
@@ -212,7 +241,34 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     await adapter.invalidate('claude_oauth_refresh_invalid_grant');
     expect(h.cleared).toBe(1);
     expect(h.refresherInvalidated).toBe(1);
+    expect(h.unbindCalls).toEqual([{ provider: 'anthropic' }]);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('invalidate:凭证库不可读时仍写 revoked,阻止旧凭证恢复后自动认领', async () => {
+    h.hasOAuth = false;
+    h.oauthState = 'unreadable';
+    h.clearError = new Error('keychain locked');
+    const adapter = await makeAdapter();
+
+    await expect(adapter.invalidate('claude_oauth_refresh_invalid_grant')).resolves.toBeUndefined();
+
+    expect(h.cleared).toBe(1);
+    expect(h.refresherInvalidated).toBe(1);
+    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.gatewayRemovals).toBe(0);
+  });
+
+  it('invalidate:明确未绑定 OAuth 时不触碰 Claude CLI 的共享凭证', async () => {
+    h.hasOAuth = false;
+    h.oauthState = 'absent';
+    const adapter = await makeAdapter();
+
+    await expect(adapter.invalidate('unrelated_auth_reset')).resolves.toBeUndefined();
+
+    expect(h.refresherInvalidated).toBe(1);
+    expect(h.cleared).toBe(0);
+    expect(h.unbindCalls).toEqual([{ provider: 'anthropic' }]);
   });
 
   it('构造期接线 invalid_grant handler(刷新模块通知 → invalidate 链路可达)', async () => {
@@ -225,5 +281,47 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     await adapter.logout();
     expect(h.cleared).toBe(1);
     expect(h.refresherInvalidated).toBe(1);
+    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.gatewayRemovals).toBe(0);
+  });
+
+  it('logout:凭证库不可读时失效刷新并失败,不误删 gateway key', async () => {
+    h.hasOAuth = false;
+    h.oauthState = 'unreadable';
+    h.clearError = new Error('keychain locked');
+    const adapter = await makeAdapter();
+
+    await expect(adapter.logout()).rejects.toThrow('keychain locked');
+
+    expect(h.refresherInvalidated).toBe(1);
+    expect(h.cleared).toBe(1);
+    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.gatewayRemovals).toBe(0);
+  });
+
+  it('logout:明确没有绑定 OAuth 时保留旧行为,只移除 gateway key', async () => {
+    h.hasOAuth = false;
+    h.oauthState = 'absent';
+    const adapter = await makeAdapter();
+
+    await expect(adapter.logout()).resolves.toBeUndefined();
+
+    expect(h.refresherInvalidated).toBe(0);
+    expect(h.cleared).toBe(0);
+    expect(h.unbindCalls).toEqual([]);
+    expect(h.gatewayRemovals).toBe(1);
+  });
+
+  it('logout:已绑定 OAuth 清除失败时仍写 revoked 并向调用方报错', async () => {
+    h.oauthState = 'present';
+    h.clearError = new Error('credential delete failed');
+    const adapter = await makeAdapter();
+
+    await expect(adapter.logout()).rejects.toThrow('credential delete failed');
+
+    expect(h.refresherInvalidated).toBe(1);
+    expect(h.cleared).toBe(1);
+    expect(h.unbindCalls).toEqual([{ provider: 'anthropic', options: { revoked: true } }]);
+    expect(h.gatewayRemovals).toBe(0);
   });
 });

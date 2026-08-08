@@ -64,8 +64,8 @@ import {
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
 import {
   clearClaudeAiOAuth,
+  getBoundClaudeAiOAuthState,
   hasClaudeAiOAuth,
-  hasClaudeAiOAuthUnbound,
 } from './claude-credentials-store.js';
 import {
   disconnectClaudeAiOAuth,
@@ -455,25 +455,29 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   async invalidate(reason: string): Promise<void> {
     log.warn('claude auth invalidated', { reason });
     invalidateClaudeOAuthRefresh();
+    let suppressAutoClaim = false;
     try {
-      if (hasClaudeAiOAuth()) clearClaudeAiOAuth();
-      // clearClaudeAiOAuth 仅把「条目已经不存在」当幂等成功;不可读 / 其它删除失败会抛到
-      // 本层 catch。删干净了就
-      // **不**留抑制标记 —— 服务端作废不是用户意图,本机 CLI 重新登录后仍应享有设计内的自动
-      // 继承;可一旦没删掉,slot 空 + 凭证还在,下一次可信读取就会把这份刚被作废的凭证认领
-      // 回来、拿它重启发现,再 401、再 invalidate,在「已连接 / 失效」之间打转
-      // (PR #548 review)。所以按残留与否分流。
-      const residual = hasClaudeAiOAuthUnbound();
-      unbindNativeProviderAuth('anthropic', residual ? { revoked: true } : undefined);
-      if (residual) {
-        log.warn('claude credential still present after invalidate; suppressing auto-claim', {
-          reason,
-        });
-      }
+      // Use the mutation-safe tri-state instead of the nullable status API:
+      // unreadable must attempt a fail-closed clear, while a genuinely unbound
+      // or absent subscription must not touch Claude CLI credentials.
+      if (getBoundClaudeAiOAuthState() !== 'absent') clearClaudeAiOAuth();
     } catch (e) {
+      suppressAutoClaim = true;
       log.warn('clear claude oauth on invalidate failed', {
         error: e instanceof Error ? e.message : String(e),
       });
+    }
+    try {
+      // A failed/unverifiable clear must leave a revocation marker. Otherwise
+      // the stale credential can be auto-claimed after the store recovers.
+      unbindNativeProviderAuth('anthropic', suppressAutoClaim ? { revoked: true } : undefined);
+    } catch (e) {
+      log.warn('unbind claude auth after invalidate failed', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    if (suppressAutoClaim) {
+      log.warn('claude credential clear unconfirmed; suppressing auto-claim', { reason });
     }
     if (this.onInvalidatedBroadcast) {
       try {
@@ -551,13 +555,31 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   async logout(): Promise<void> {
     // 连了订阅时,logout 清系统 Claude.ai OAuth 凭证(⚠️ 会同时登出本地 claude),
     // **不动** gateway api_key(它是 XD 托管 key,网关来源 + oneShot 都还要用)。
-    if (hasClaudeAiOAuth()) {
+    // Mutation 路径必须区分明确 absence 与 unreadable。后者若按 false 处理,
+    // 会误删 gateway key、留下共享 OAuth,还让在途 refresh 把凭证写回来。
+    if (getBoundClaudeAiOAuthState() !== 'absent') {
       // disconnect = 先失效刷新器再清凭证(唯一正确入口,见 claude-oauth-refresh 文档)
       // —— 否则「已断开」状态下在途刷新回写会让凭证复活。
-      disconnectClaudeAiOAuth();
-      // 用户显式登出:留撤销标记。清除失败会原样上抛;残留凭证不该在下一次读连接态时被
-      // 自动认领回来(PR #548 review)。
-      unbindNativeProviderAuth('anthropic', { revoked: true });
+      const noFailure = Symbol('no-failure');
+      let failure: unknown | typeof noFailure = noFailure;
+      try {
+        disconnectClaudeAiOAuth();
+      } catch (error) {
+        failure = error;
+      }
+      try {
+        // 用户显式登出始终留撤销标记。即使共享凭证暂时不可读 / 清除失败,
+        // 恢复可读后也不能被自动认领回来(PR #548 review)。
+        unbindNativeProviderAuth('anthropic', { revoked: true });
+      } catch (error) {
+        if (failure === noFailure) failure = error;
+        else {
+          log.warn('unbind claude auth after logout failure also failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (failure !== noFailure) throw failure;
       return;
     }
     // 经统一 store 移除本机 XD 网关 key。store.remove 把"文件本不存在"视为成功
