@@ -41,9 +41,11 @@ import type {
 import {
   customMarketPluginId,
   customMarketReleaseId,
-  isPluginMarketCustomIconKey,
   marketSourceKey,
   parseCustomMarketPluginId,
+  PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH,
+  PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH,
+  pluginMarketCustomIconProjectionToken,
 } from '../../shared/pluginMarket.js';
 import { getCurrentUserId } from '../authManager.js';
 import {
@@ -108,7 +110,6 @@ class SilentUpgradeStaleBaselineError extends Error {}
  * 放宽正确性的理由。
  */
 const SOURCE_MUTATION_KEY = 'market-sources';
-const CUSTOM_ICON_PROJECTION_TOKEN_LENGTH = 16;
 const CUSTOM_ICON_PROJECTION_TOKEN_RE = /^[a-f0-9]{16}$/;
 
 /**
@@ -318,6 +319,28 @@ function customMarketIconPath(plugin: DiscoveredMarketPlugin): string | null {
   return path.join(plugin.dir, ...icon.split('/'));
 }
 
+/**
+ * 自定义市场的不透明传输身份。不包含 revision 或 projection，因此同一
+ * 来源在当前会话内的刷新仍共享一个槽；来源命名空间、会话或重加的同名来源
+ * 不会被旧来源的挂起 IPC 误阻塞。Renderer 只能看到摘要 token。
+ */
+function customMarketIconSourceToken(owner: ActiveAppSession, config: MarketSourceConfig): string {
+  return crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify([
+        owner.mode,
+        owner.dataOwnerId,
+        owner.generation,
+        config.name,
+        marketSourceKey(config.source),
+        config.addedAt,
+      ]),
+    )
+    .digest('hex')
+    .slice(0, PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH);
+}
+
 async function customMarketIconKey(
   owner: ActiveAppSession,
   config: MarketSourceConfig,
@@ -374,12 +397,7 @@ async function customMarketIconKey(
     : digestHead === '0' || digestHead === '1'
       ? '2'
       : digestHead;
-  return `${stableHead}${projectionToken}${digest.slice(0, 47)}`;
-}
-
-function customMarketIconProjectionToken(expectedIconKey: string): string | null {
-  if (!isPluginMarketCustomIconKey(expectedIconKey)) return null;
-  return expectedIconKey.slice(1, 1 + CUSTOM_ICON_PROJECTION_TOKEN_LENGTH);
+  return `${stableHead}${customMarketIconSourceToken(owner, config)}${projectionToken}${digest.slice(0, 31)}`;
 }
 
 function localIconMissing(request: PluginMarketLocalIconRequest): PluginMarketLocalIconResult {
@@ -477,7 +495,7 @@ export class PluginMarketService {
    * 使低精度文件系统上的同长度、同 stat 原地改写也会在刷新后重新按需读取。
    */
   private customIconProjectionGeneration = crypto
-    .randomBytes(CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
+    .randomBytes(PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
     .toString('hex');
 
   constructor(
@@ -691,7 +709,7 @@ export class PluginMarketService {
                     : localIconMissing(entry.request);
                 continue;
               }
-              const expectedProjectionToken = customMarketIconProjectionToken(
+              const expectedProjectionToken = pluginMarketCustomIconProjectionToken(
                 entry.request.expectedIconKey,
               );
               if (expectedProjectionToken === null) {
@@ -1207,7 +1225,7 @@ export class PluginMarketService {
   /** 快照聚合用：发现全部自定义市场条目。任何失败都降级为空，不拖垮快照。 */
   private nextCustomIconProjectionGeneration(): string {
     return (this.customIconProjectionGeneration = crypto
-      .randomBytes(CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
+      .randomBytes(PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
       .toString('hex'));
   }
 

@@ -76,9 +76,24 @@ export interface PluginMarketDetail extends PluginMarketItem {
 
 /** Main 生成并接受的自定义市场图标身份键形状；首位 0 为保留值。 */
 export const PLUGIN_MARKET_CUSTOM_ICON_KEY_RE = /^[1-9a-f][a-f0-9]{63}$/;
+export const PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH = 16;
+export const PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH = 16;
 
 export function isPluginMarketCustomIconKey(value: string): boolean {
   return PLUGIN_MARKET_CUSTOM_ICON_KEY_RE.test(value);
+}
+
+/** Renderer 只用这个不透明 token 做同来源传输限流，不解析 Main 侧身份事实。 */
+export function pluginMarketCustomIconSourceToken(value: string): string | null {
+  if (!isPluginMarketCustomIconKey(value)) return null;
+  return value.slice(1, 1 + PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH);
+}
+
+/** Main 从图标键恢复快照投影代际，用于读取时重算并核对完整键。 */
+export function pluginMarketCustomIconProjectionToken(value: string): string | null {
+  if (!isPluginMarketCustomIconKey(value)) return null;
+  const start = 1 + PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH;
+  return value.slice(start, start + PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH);
 }
 
 /** Renderer 请求 Main 按当前自定义市场事实读取一个本地图标。 */

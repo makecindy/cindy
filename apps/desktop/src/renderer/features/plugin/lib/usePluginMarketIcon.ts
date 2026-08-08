@@ -14,7 +14,7 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
 } from '../../../../shared/pluginMarket';
-import { parseCustomMarketPluginId } from '../../../../shared/pluginMarket';
+import { pluginMarketCustomIconSourceToken } from '../../../../shared/pluginMarket';
 
 type LocalIconStatus = 'idle' | 'queued' | 'loading' | 'loaded' | 'missing' | 'retryable';
 
@@ -60,13 +60,13 @@ function requestKey(request: PluginMarketLocalIconRequest): string {
   return `${request.pluginId}:${request.expectedIconKey}`;
 }
 
-function requestMarketKey(request: PluginMarketLocalIconRequest): string {
-  return parseCustomMarketPluginId(request.pluginId)?.marketName ?? request.pluginId;
+function requestSourceKey(request: PluginMarketLocalIconRequest): string {
+  return pluginMarketCustomIconSourceToken(request.expectedIconKey) ?? request.pluginId;
 }
 
-function hasUnsettledRequestForMarket(marketKey: string): boolean {
-  for (const unsettledMarketKey of unsettledLocalIconRequests.values()) {
-    if (unsettledMarketKey === marketKey) return true;
+function hasUnsettledRequestForSource(sourceKey: string): boolean {
+  for (const unsettledSourceKey of unsettledLocalIconRequests.values()) {
+    if (unsettledSourceKey === sourceKey) return true;
   }
   return false;
 }
@@ -282,7 +282,7 @@ async function flushQueue(): Promise<void> {
     .find(
       (record): record is LocalIconRecord =>
         record?.snapshot.status === 'queued' &&
-        !hasUnsettledRequestForMarket(requestMarketKey(record.request)),
+        !hasUnsettledRequestForSource(requestSourceKey(record.request)),
     );
   if (!firstPendingRecord) {
     for (const key of pendingKeys) {
@@ -293,12 +293,12 @@ async function flushQueue(): Promise<void> {
     pruneRecords();
     return;
   }
-  const batchMarket = requestMarketKey(firstPendingRecord.request);
+  const batchSource = requestSourceKey(firstPendingRecord.request);
   for (const key of pendingKeys) {
     queuedKeys.delete(key);
     const record = records.get(key);
     if (!record || record.snapshot.status !== 'queued') continue;
-    if (requestMarketKey(record.request) !== batchMarket) {
+    if (requestSourceKey(record.request) !== batchSource) {
       queuedKeys.add(key);
       continue;
     }
@@ -321,9 +321,9 @@ async function flushQueue(): Promise<void> {
     return;
   }
 
-  // Raw Electron invoke 是不可取消的 transport 资源：全局最多 2 个，且同一市场最多
-  // 占 1 个槽，避免一个持续挂起的来源把健康来源也永久饿死。
-  trackUnsettledLocalIconRequest(ipcRequest, batchMarket);
+  // Raw Electron invoke 是不可取消的 transport 资源：全局最多 2 个，且同一不透明
+  // 来源身份最多占 1 个槽；同名但不同来源不会被旧请求误阻塞。
+  trackUnsettledLocalIconRequest(ipcRequest, batchSource);
   flushInFlight = true;
   try {
     const results = await localIconsWithinTimeoutFromPromise(ipcRequest);

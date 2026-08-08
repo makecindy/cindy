@@ -75,6 +75,8 @@ import {
   customMarketPluginId,
   customMarketReleaseId,
   marketSourceKey,
+  pluginMarketCustomIconProjectionToken,
+  pluginMarketCustomIconSourceToken,
 } from '../../../shared/pluginMarket';
 import { GHOST_ICON_MAX_BYTES, type GhostManifest } from '../../../shared/ghost';
 import { PluginMarketLedger, ghostManifestDigest } from '../ledger';
@@ -464,6 +466,12 @@ describe('PluginMarketService 自定义市场图标', () => {
     expect(alpha?.icon).toBeNull();
     expect(alpha?.customIconKey).toMatch(/^[a-f0-9]{64}$/);
     expect(beta?.customIconKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(pluginMarketCustomIconSourceToken(alpha!.customIconKey!)).toBe(
+      pluginMarketCustomIconSourceToken(beta!.customIconKey!),
+    );
+    expect(pluginMarketCustomIconProjectionToken(alpha!.customIconKey!)).toBe(
+      pluginMarketCustomIconProjectionToken(beta!.customIconKey!),
+    );
     const detail = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
     expect(detail.customIconKey).toBe(alpha?.customIconKey);
     const repeatedDetail = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
@@ -495,7 +503,7 @@ describe('PluginMarketService 自定义市场图标', () => {
     }
   });
 
-  it('changes the key for same-version icon replacement and for a new owner generation', async () => {
+  it('keeps the source token across refreshes and changes it for a new owner generation', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [
@@ -513,6 +521,12 @@ describe('PluginMarketService 自定义市场图标', () => {
     const second = (await h.service.snapshot()).items[0]!;
     expect(second.version).toBe(first.version);
     expect(second.customIconKey).not.toBe(first.customIconKey);
+    expect(pluginMarketCustomIconSourceToken(second.customIconKey!)).toBe(
+      pluginMarketCustomIconSourceToken(first.customIconKey!),
+    );
+    expect(pluginMarketCustomIconProjectionToken(second.customIconKey!)).not.toBe(
+      pluginMarketCustomIconProjectionToken(first.customIconKey!),
+    );
     await expect(
       h.service.localIcons([{ pluginId: first.pluginId, expectedIconKey: first.customIconKey! }]),
     ).resolves.toEqual([
@@ -522,6 +536,9 @@ describe('PluginMarketService 自定义市场图标', () => {
     runtime.session = { ...runtime.session, generation: 2 };
     const nextOwner = (await h.service.snapshot()).items[0]!;
     expect(nextOwner.customIconKey).not.toBe(second.customIconKey);
+    expect(pluginMarketCustomIconSourceToken(nextOwner.customIconKey!)).not.toBe(
+      pluginMarketCustomIconSourceToken(second.customIconKey!),
+    );
   });
 
   it('changes the projection key when same-length icon bytes change but stats collide', async () => {

@@ -17,8 +17,24 @@ import {
   usePluginMarketIcon,
 } from '../usePluginMarketIcon';
 
-function customItem(id: string, key?: string, market = 'team-lib'): PluginMarketItem {
-  const iconKey = key ?? id.padEnd(64, 'a').slice(0, 64);
+function testHex(value: string, length: number): string {
+  const encoded = [...value]
+    .map((character) => character.codePointAt(0)!.toString(16).padStart(2, '0'))
+    .join('');
+  return (encoded || 'a').repeat(Math.ceil(length / Math.max(encoded.length, 1))).slice(0, length);
+}
+
+function testCustomIconKey(source: string, projection: string, digest: string): string {
+  return `2${testHex(source, 16)}${testHex(projection, 16)}${testHex(digest, 31)}`;
+}
+
+function customItem(
+  id: string,
+  key?: string,
+  market = 'team-lib',
+  source = market,
+): PluginMarketItem {
+  const iconKey = key ?? testCustomIconKey(source, 'snapshot', id);
   return {
     pluginId: `custom:${market}/${id}`,
     ghostId: id,
@@ -36,7 +52,7 @@ function customItem(id: string, key?: string, market = 'team-lib'): PluginMarket
     installState: 'not-installed',
     enabled: null,
     sourceType: 'local-market',
-    sourceMarketName: 'team-lib',
+    sourceMarketName: market,
   };
 }
 
@@ -94,8 +110,8 @@ describe('usePluginMarketIcon', () => {
   });
 
   it('reloads cached bytes when Main publishes a new icon projection generation', async () => {
-    const first = customItem('alpha', `${'2'}${'a'.repeat(16)}${'1'.repeat(47)}`);
-    const next = customItem('alpha', `${'3'}${'b'.repeat(16)}${'2'.repeat(47)}`);
+    const first = customItem('alpha', testCustomIconKey('team-source', 'projection-a', 'old'));
+    const next = customItem('alpha', testCustomIconKey('team-source', 'projection-b', 'new'));
     localIcons
       .mockResolvedValueOnce([
         {
@@ -410,6 +426,69 @@ describe('usePluginMarketIcon', () => {
     expect(localIcons).toHaveBeenCalledTimes(2);
     first.unmount();
     second.unmount();
+  });
+
+  it('keeps one transport slot per opaque source across projection generations', async () => {
+    vi.useFakeTimers();
+    localIcons.mockImplementation(
+      () => new Promise<PluginMarketLocalIconResult[]>(() => undefined),
+    );
+    const first = renderHook(() =>
+      usePluginMarketIcon(
+        customItem('same-source-a', testCustomIconKey('source-a', 'projection-a', 'a')),
+        { deferUntilVisible: false },
+      ),
+    );
+    await act(async () => Promise.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+    const second = renderHook(() =>
+      usePluginMarketIcon(
+        customItem('same-source-b', testCustomIconKey('source-a', 'projection-b', 'b')),
+        { deferUntilVisible: false },
+      ),
+    );
+    await act(async () => Promise.resolve());
+
+    expect(localIcons).toHaveBeenCalledTimes(1);
+    expect(__pluginMarketIconStoreStatsForTest().unsettledRequests).toBe(1);
+    first.unmount();
+    second.unmount();
+  });
+
+  it('does not let a hung same-name source block a replacement source', async () => {
+    vi.useFakeTimers();
+    localIcons.mockImplementation(
+      () => new Promise<PluginMarketLocalIconResult[]>(() => undefined),
+    );
+    const oldSource = renderHook(() =>
+      usePluginMarketIcon(
+        customItem('old-source', testCustomIconKey('source-old', 'projection-a', 'a')),
+        { deferUntilVisible: false },
+      ),
+    );
+    await act(async () => Promise.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+    const replacement = customItem(
+      'replacement-source',
+      testCustomIconKey('source-new', 'projection-b', 'b'),
+    );
+    const nextSource = renderHook(() =>
+      usePluginMarketIcon(replacement, { deferUntilVisible: false }),
+    );
+    await act(async () => Promise.resolve());
+
+    expect(localIcons).toHaveBeenCalledTimes(2);
+    expect(localIcons.mock.calls[1]?.[0]).toEqual([
+      {
+        pluginId: replacement.pluginId,
+        expectedIconKey: replacement.customIconKey,
+      },
+    ]);
+    expect(__pluginMarketIconStoreStatsForTest().unsettledRequests).toBe(2);
+    oldSource.unmount();
+    nextSource.unmount();
   });
 
   it('does not let one hung marketplace consume both transport slots', async () => {
