@@ -120,7 +120,10 @@ export async function fetchDeviceProvidersFresh(
   if (ip) {
     inflight.delete(deviceId);
     deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
-    notifyDeviceProvidersGen(deviceId);
+    // 内部作废(greptile/codex review P1/P2):hook 不得因此启动替代普通请求——
+    // fresh 自身会写缓存并经 payload 订阅恢复;若 hook 重拉普通请求会与 fresh
+    // 竞争(同代际、较晚返回仍通过 isCurrent() 把 fresh 结果覆盖回旧目录)。
+    notifyDeviceProvidersGen(deviceId, 'fresh-invalidate');
   }
 
   const startGen = deviceGen.get(deviceId) ?? 0;
@@ -175,7 +178,7 @@ export function evictDeviceProviders(deviceId: string): void {
   inflight.delete(deviceId);
   freshInflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
-  notifyDeviceProvidersGen(deviceId);
+  notifyDeviceProvidersGen(deviceId, 'evict');
 }
 
 /**
@@ -191,11 +194,22 @@ export function getDeviceProvidersGen(deviceId: string): number {
 // evict/clearAll 只改模块级 Map,不通知 payload 订阅者,React 不会重渲染 ——
 // 单靠渲染期的代际比对,ready 的失效要等下一次碰巧渲染(codex review P2)。
 // 这里给代际变化一条主动推送通道,hook 收到即立即使 ready 失效。
-const genListeners = new Map<string, Set<() => void>>();
+/**
+ * 代际失效原因(codex review P2):evict/clearAll 是**外部驱逐**——hook 应清空展示
+ * 并主动重拉;fetchDeviceProvidersFresh 作废普通在途是**内部作废**——fresh 自身会
+ * 写缓存并经 payload 订阅恢复,若 hook 再启动普通请求会与 fresh 竞争(普通请求
+ * 捕获同一代际、较晚返回仍通过 isCurrent() 把 fresh 结果覆盖回旧目录)。
+ */
+export type DeviceProvidersGenInvalidationReason = 'evict' | 'fresh-invalidate';
 
-/** 订阅某设备的缓存代际变更(evict/clearAll 时触发);返回退订函数。 */
-export function subscribeDeviceProvidersGen(deviceId: string, listener: () => void): () => void {
-  const bucket = genListeners.get(deviceId) ?? new Set<() => void>();
+const genListeners = new Map<string, Set<(reason: DeviceProvidersGenInvalidationReason) => void>>();
+
+/** 订阅某设备的缓存代际变更(evict/clearAll/fresh 作废时触发);返回退订函数。 */
+export function subscribeDeviceProvidersGen(
+  deviceId: string,
+  listener: (reason: DeviceProvidersGenInvalidationReason) => void,
+): () => void {
+  const bucket = genListeners.get(deviceId) ?? new Set<(reason: DeviceProvidersGenInvalidationReason) => void>();
   bucket.add(listener);
   genListeners.set(deviceId, bucket);
   return () => {
@@ -204,8 +218,11 @@ export function subscribeDeviceProvidersGen(deviceId: string, listener: () => vo
   };
 }
 
-function notifyDeviceProvidersGen(deviceId: string): void {
-  for (const listener of genListeners.get(deviceId) ?? []) listener();
+function notifyDeviceProvidersGen(
+  deviceId: string,
+  reason: DeviceProvidersGenInvalidationReason,
+): void {
+  for (const listener of genListeners.get(deviceId) ?? []) listener(reason);
 }
 
 /**
@@ -226,9 +243,16 @@ export function clearAllDeviceProviders(): void {
     ...freshInflight.keys(),
     ...deviceGen.keys(),
   ]);
+  // 先清空三张 Map,再通知(codex review P2:清空缓存后再通知订阅者)——hook 的
+  // gen 订阅收到 'evict' 会立即 fetchDeviceProviders 重拉,若通知发生在清空之前,
+  // 重拉只会命中旧账号缓存或加入旧请求,随后 Map 被清掉,既没真正访问新账号,
+  // 也没有 payload 通知恢复 hook,目录长期停在 ready=false。
+  cache.clear();
+  inflight.clear();
+  freshInflight.clear();
   for (const id of ids) {
     deviceGen.set(id, (deviceGen.get(id) ?? 0) + 1);
-    notifyDeviceProvidersGen(id);
+    notifyDeviceProvidersGen(id, 'evict');
     // 注意:不再推送空 payload(codex review P2:清空账号缓存时不要把空载荷标为
     // 就绪)——payload 订阅回调把任何 payload 视为已确认快照,会重新置位
     // readyFor/readyGen,最终暴露为 ready:true 的 loaded-empty 目录;且
@@ -236,7 +260,4 @@ export function clearAllDeviceProviders(): void {
     // 与未就绪由 hook 的 gen 失效订阅承担(清 payload + 保持未就绪 + 主动重拉),
     // 见 useDeviceProviders。登出后短窗口残留由该订阅的清空兜底(copilot P2 意图)。
   }
-  cache.clear();
-  inflight.clear();
-  freshInflight.clear();
 }

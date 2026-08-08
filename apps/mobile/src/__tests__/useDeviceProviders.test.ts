@@ -303,24 +303,52 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
     expect(dev1).not.toHaveBeenCalled();
 
-    // evict 触发对应设备的代际通知,不影响其他设备
+    // evict 触发对应设备的代际通知(原因 evict),不影响其他设备
     mod.evictDeviceProviders('dev-1');
-    expect(dev1).toHaveBeenCalledTimes(1);
+    expect(dev1).toHaveBeenCalledWith('evict');
     expect(dev2).not.toHaveBeenCalled();
 
-    // clearAll 通知代际表内所有设备
+    // clearAll 通知代际表内所有设备(原因 evict),且发生在缓存清空之后
     mod.evictDeviceProviders('dev-2');
     dev1.mockClear();
     dev2.mockClear();
+    const cacheAtNotify: unknown[] = [];
+    const offProbe = mod.subscribeDeviceProvidersGen('dev-1', () => {
+      cacheAtNotify.push(mod.getCachedDeviceProviders('dev-1'));
+    });
     mod.clearAllDeviceProviders();
-    expect(dev1).toHaveBeenCalledTimes(1);
-    expect(dev2).toHaveBeenCalledTimes(1);
+    expect(dev1).toHaveBeenCalledWith('evict');
+    expect(dev2).toHaveBeenCalledWith('evict');
+    // 通知时缓存已清空(hook 收到后重拉不会命中旧账号缓存——codex review P2)
+    expect(cacheAtNotify).toContain(undefined);
+    offProbe();
 
     // 退订后不再通知
     off1();
     off2();
     mod.evictDeviceProviders('dev-1');
     expect(dev1).toHaveBeenCalledTimes(1);
+  });
+
+  it('fresh 作废普通在途:代际通知原因 fresh-invalidate(fresh 自身恢复,hook 不得重拉)', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    const listener = vi.fn();
+    const off = mod.subscribeDeviceProvidersGen('dev-1', listener);
+    // 普通请求在途时启动 fresh → 作废普通在途,通知原因 fresh-invalidate
+    const resolvers: Array<(v: Providers) => void> = [];
+    const fetcher = vi.fn(() => new Promise<Providers>((r) => resolvers.push(r)));
+    const freshResolvers: Array<(v: Providers) => void> = [];
+    const freshFetcher = vi.fn(() => new Promise<Providers>((r) => freshResolvers.push(r)));
+    void mod.fetchDeviceProviders('dev-1', fetcher); // 普通在途
+    void mod.fetchDeviceProvidersFresh('dev-1', freshFetcher); // fresh 作废普通
+    expect(listener).toHaveBeenCalledWith('fresh-invalidate');
+    // 完成两条请求后,缓存最终为 fresh 结果(普通被作废不回写)
+    freshResolvers.forEach((r) => r(result('dev-1-fresh')));
+    await new Promise((r) => setTimeout(r, 0));
+    resolvers.forEach((r) => r(result('dev-1-stale')));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mod.getCachedDeviceProviders('dev-1')?.providers[0]?.id).toBe('dev-1-fresh-xd');
+    off();
   });
 });
 

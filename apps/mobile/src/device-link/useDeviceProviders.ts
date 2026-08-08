@@ -80,15 +80,20 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setReadyFor(deviceId);
       setReadyGen(getDeviceProvidersGen(deviceId));
     });
-    // 代际变更(evict/clearAll)主动推送:模块级 Map 变化不触发渲染,光靠渲染期
-    // 代际比对,ready 失效要等下一次碰巧渲染(codex review P2)——收到通知立即失效,
-    // 重拉完成经上面的 payload 订阅恢复。
-    // codex review P2:清理事件(clearAll 登出/切号)必须**清空展示但保持未就绪**——
-    // 否则 payload 残留旧账号 + readyFor 被误置,暴露为 ready:true 的 loaded-empty;
-    // 且 [deviceId, maker] effect 不因重新登录重跑,需显式重拉新账号目录。
-    const unsubscribeGen = subscribeDeviceProvidersGen(deviceId, () => {
+    // 代际变更(evict/clearAll/fresh 作废)主动推送:模块级 Map 变化不触发渲染,
+    // 光靠渲染期代际比对,ready 失效要等下一次碰巧渲染(codex review P2)——收到
+    // 通知立即失效,重拉完成经上面的 payload 订阅恢复。
+    // 区分失效原因(greptile/codex review P1/P2):
+    // - 'evict'(evict/clearAll 外部驱逐/登出切号):必须**清空展示但保持未就绪**——
+    //   否则 payload 残留旧账号 + readyFor 被误置,暴露为 ready:true 的 loaded-empty;
+    //   且 [deviceId, maker] effect 不因重新登录重跑,需显式重拉新账号目录;
+    // - 'fresh-invalidate'(fresh 内部作废普通在途):**不得**启动替代普通请求——
+    //   fresh 自身会写缓存并经 payload 订阅恢复;hook 重拉会与 fresh 竞争,普通
+    //   响应较晚返回仍通过 isCurrent() 把 fresh 的新目录覆盖回旧目录。
+    const unsubscribeGen = subscribeDeviceProvidersGen(deviceId, (reason) => {
       if (cancelled) return;
       setReadyFor(null);
+      if (reason === 'fresh-invalidate') return;
       setPayload(EMPTY_PAYLOAD);
       void fetchDeviceProviders(deviceId, () => maker.listProviders())
         .catch(() => undefined); // fire-and-forget;失败保持未就绪(readyFor 已清)
