@@ -31,6 +31,9 @@ type CreateWorkerErrorCode =
 interface CreateWorkerSuccessData {
   workerId: string;
   workerSessionId: string;
+  resolvedModel?: string;
+  providerId?: string | null;
+  routeProviderId?: string | null;
   softLimitExceeded?: boolean;
   dispatched?: boolean;
   dispatchOutcome?: ControlDispatchOutcome;
@@ -53,6 +56,7 @@ export interface CreateWorkerDeps {
     role: string;
     agent: ControlWorkerAgent;
     model?: string;
+    providerId?: string | null;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     fast?: boolean;
     label: string;
@@ -74,6 +78,12 @@ export const createWorkerSpecSchema = z.object({
     .string()
     .optional()
     .describe('可选, worker 使用的模型 id; 不传走 host 端默认 fallback'),
+  provider_id: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe('可选, 显式模型供应商 id; 与 model 一起传入后 host 会精确校验该路由'),
   effort: z
     .enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     .optional()
@@ -118,10 +128,12 @@ const DESCRIPTION = [
   '- role: worker 角色 (developer / reviewer / tester / merger 或自定义 string)',
   '- agent: worker agent 类型 (codex / claude-code / pi)',
   '- model: 可选, worker 使用的模型 id; 不传走 host 端默认 fallback',
+  '- provider_id: 可选, 显式模型供应商 id; 可单独传入或与 model 一起传入, 严格选择该 provider, 不可用时不会静默回退',
   '- effort: 可选, reasoning/thinking 强度 (low / medium / high / xhigh / max / ultra)。Codex: 映射 OpenAI reasoning effort(max/ultra 仅部分模型如 GPT-5.6 Sol 支持); Claude Code: 映射 extended thinking token 预算(无 ultra,自动降级为 max)。显式传入时必须匹配所选 model 能力；当前 worker 模型都不把 minimal 作为可选思考档。',
   '- fast: 可选 boolean, 是否给 worker 开启 Fast 模式 (更快输出)。用户明确说「fast / 快速 / 开/关 fast」时显式传。对 codex 与 pi worker 生效 (且需所选模型声明 supportsFastMode; 否则自动降级为关); claude-code worker 忽略此参数 (其 fast mode 在 agent 层为 no-op)。不传则继承默认 (New Maker 面板默认或 lead session 的 fastMode)。',
   '- label: worker 短标识, 1-32 chars, 只能含字母、数字、-、_, 同 workflow 内唯一, 用于 switch_focus 定位',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 list_worker_queue / update_queued_message / cancel_queued_message 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
+  '- 成功返回: resolved_model 是最终使用的模型; provider_id 是显式保存的供应商选择; route_provider_id 是 host 最终解析的供应商路由。',
   '',
   '【硬边界】',
   '- worker 数量达软上限 → 创建仍成功, payload.warning = WORKER_LIMIT_SOFT_EXCEEDED',
@@ -144,7 +156,7 @@ export function registerCreateWorkerTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: createWorkerSpecSchema.shape,
-    handler: async ({ role, agent, model, effort, fast, label, initial_task }) => {
+    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task }) => {
       const ctx = deps.getSessionContext?.() ?? deps;
       if (!ctx.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');
@@ -160,6 +172,7 @@ export function registerCreateWorkerTool(
         role,
         agent,
         model,
+        providerId: provider_id,
         effort,
         fast,
         label,
@@ -179,6 +192,9 @@ export function registerCreateWorkerTool(
         role,
         agent,
         label,
+        ...(result.resolvedModel !== undefined ? { resolved_model: result.resolvedModel } : {}),
+        ...(result.providerId !== undefined ? { provider_id: result.providerId } : {}),
+        ...(result.routeProviderId !== undefined ? { route_provider_id: result.routeProviderId } : {}),
         ...(result.dispatched !== undefined ? { dispatched: result.dispatched } : {}),
         ...(result.dispatchOutcome ? { dispatch_outcome: result.dispatchOutcome } : {}),
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),

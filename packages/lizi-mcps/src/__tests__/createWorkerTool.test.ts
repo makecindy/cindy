@@ -60,6 +60,12 @@ describe('create_worker tool', () => {
     expect(registry.get('create_worker')?.description).toContain(
       '用户一次要求创建 2 个及以上 Worker 时必须改用 create_workers；不要并行或连续多次调用 create_worker。',
     );
+    expect(registry.get('create_worker')?.description).toContain(
+      'provider_id: 可选, 显式模型供应商 id; 可单独传入或与 model 一起传入',
+    );
+    expect(registry.get('create_worker')?.description).toContain(
+      'route_provider_id 是 host 最终解析的供应商路由',
+    );
   });
 
   it('surfaces structured hard-limit details to the lead', async () => {
@@ -142,10 +148,56 @@ describe('create_worker tool', () => {
       agent: 'codex',
       label: 'reviewer_1',
       model: undefined,
+      providerId: undefined,
       effort: undefined,
       fast: undefined,
       initialTask: undefined,
     });
+  });
+
+  it('passes an explicit provider route through and reports the resolved route', async () => {
+    const createWorker = vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+      resolvedModel: 'gpt-5.5',
+      providerId: 'openai',
+      routeProviderId: 'openai',
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerCreateWorkerTool(registry, { sessionId: 'lead-1', createWorker });
+
+    const result = parse(await registry.call('create_worker', {
+      role: 'reviewer',
+      agent: 'codex',
+      model: 'gpt-5.5',
+      provider_id: ' openai ',
+      label: 'reviewer_1',
+    }));
+
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    }));
+    expect(result).toMatchObject({
+      resolved_model: 'gpt-5.5',
+      provider_id: 'openai',
+      route_provider_id: 'openai',
+    });
+  });
+
+  it('rejects an empty provider id before calling host', async () => {
+    const { registry, createWorker } = setup();
+
+    const result = await registry.call('create_worker', {
+      role: 'reviewer',
+      agent: 'codex',
+      provider_id: '   ',
+      label: 'reviewer_1',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(createWorker).not.toHaveBeenCalled();
   });
 
   it('accepts pi as a first-class worker agent and passes it through to host', async () => {

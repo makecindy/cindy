@@ -41,7 +41,7 @@ const DESCRIPTION = [
   '在当前 workflow 内批量创建 2-32 个 Orca worker session。',
   '用户一次要求创建多个 Worker 时必须使用本工具，不要并行或连续多次调用 create_worker。',
   '本工具按 workers 顺序创建并返回真实逐项终态；首次命中 WORKER_LIMIT_HARD_EXCEEDED 后立即停止，剩余项标记 skipped，不再调用 host。',
-  '结果包含 request_count / attempted_count / success_count / failure_count / skipped_count / not_created_count、hard limit 快照、确定生成的 user_report，以及每个 label 对应的 worker/session 或失败原因。success/failure/skipped 是互斥分区。',
+  '结果包含 request_count / attempted_count / success_count / failure_count / skipped_count / not_created_count、hard limit 快照、确定生成的 user_report，以及每个 label 对应的 worker/session 或失败原因。成功项的 resolved_model 是最终使用的模型, provider_id 是显式保存的供应商选择, route_provider_id 是 host 最终解析的供应商路由。success/failure/skipped 是互斥分区。',
   '工具返回后必须向用户逐字转告 user_report 并补充逐项结果；达到 hard limit 时同时转告 suggestions 中的调整设置、复用 Worker 或分批执行方案。',
   'create_workers 建的是持久、UI 可见的 Orca workers，不是一次性 subagent。',
 ].join('\n');
@@ -53,6 +53,9 @@ interface CreatedWorkerResult {
   status: 'created';
   worker_id: string;
   worker_session_id: string;
+  resolved_model?: string;
+  provider_id?: string | null;
+  route_provider_id?: string | null;
   dispatched?: boolean;
   dispatch_outcome?: unknown;
   queued_message_id?: string;
@@ -148,6 +151,7 @@ export function registerCreateWorkersTool(
           role: worker.role,
           agent: worker.agent,
           model: worker.model,
+          providerId: worker.provider_id,
           effort: worker.effort,
           fast: worker.fast,
           label: worker.label,
@@ -162,6 +166,9 @@ export function registerCreateWorkersTool(
             status: 'created',
             worker_id: result.workerId,
             worker_session_id: result.workerSessionId,
+            ...(result.resolvedModel !== undefined ? { resolved_model: result.resolvedModel } : {}),
+            ...(result.providerId !== undefined ? { provider_id: result.providerId } : {}),
+            ...(result.routeProviderId !== undefined ? { route_provider_id: result.routeProviderId } : {}),
             ...(result.dispatched !== undefined ? { dispatched: result.dispatched } : {}),
             ...(result.dispatchOutcome ? { dispatch_outcome: result.dispatchOutcome } : {}),
             ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),

@@ -1912,7 +1912,7 @@ describe('buildNoProviderMessage', () => {
       providerId: 'openai',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: 'openai', model: 'gpt-5.5' },
+      resolved: { providerId: 'openai', routeProviderId: 'openai', model: 'gpt-5.5' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
@@ -1934,7 +1934,7 @@ describe('buildNoProviderMessage', () => {
     })).resolves.toMatchObject({
       ok: true,
       // 与「显式 model 未显式来源」同语义:providerId 强制默认路由,不进显式 preflight。
-      resolved: { providerId: null, model: 'gpt-5.5' },
+      resolved: { providerId: null, routeProviderId: 'xd', model: 'gpt-5.5' },
     });
   });
 

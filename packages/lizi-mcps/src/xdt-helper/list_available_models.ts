@@ -1,6 +1,6 @@
 /**
  * xdt-helper/list_available_models.ts —— 列出每个 agent 当前 host 支持的 model。
- * 用于 create_worker 前确认 model 名拼写, Codex 和 Claude Code 模型不可跨用。
+ * 用于 create_worker 前确认 model 名拼写, 不同 agent 的模型不可跨用。
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -15,11 +15,30 @@ export interface ModelDescriptor {
   label: string;
 }
 
+export interface ModelRouteDescriptor {
+  modelId: string;
+  label: string;
+  providerId: string;
+  providerName: string;
+  isDefault: boolean;
+}
+
 /** tier: 'budget' = codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
 type ModelTier = 'budget' | 'standard';
 
 interface TaggedModel extends ModelDescriptor {
   tier: ModelTier;
+}
+
+function tagRoutes(routes: ModelRouteDescriptor[] | undefined) {
+  return routes?.map((route) => ({
+    model_id: route.modelId,
+    label: route.label,
+    tier: route.modelId.startsWith('codex/') ? 'budget' as const : 'standard' as const,
+    provider_id: route.providerId,
+    provider_name: route.providerName,
+    is_default: route.isDefault,
+  }));
 }
 
 /**
@@ -46,19 +65,27 @@ export interface ListAvailableModelsDeps {
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
     pi?: ModelDescriptor[];
+    routes?: {
+      codex?: ModelRouteDescriptor[];
+      claude_code?: ModelRouteDescriptor[];
+      pi?: ModelRouteDescriptor[];
+    };
   }>>;
 }
 
 const DESCRIPTION = [
   '列出每个 agent 当前 host 支持的 model id 清单, 用于 create_worker 前确认 model 名拼写。',
-  'Codex 和 Claude Code 支持的 model 完全不同, 不可跨用。',
+  'Codex、Claude Code 和 Pi 支持的 model 不同, 不可跨用。',
   '',
   '参数:',
-  '- agent: 可选, codex 或 claude-code; 不传返两者',
+  '- agent: 可选, codex、claude-code 或 pi; 不传返三者',
   '',
   '返回值:',
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier}]',
+  '- pi: Pi agent 的可用 model 列表 [{id, label, tier}]',
+  '- routes: host 支持 provider 路由元数据时, 按 agent 返回 [{model_id, label, tier, provider_id, provider_name, is_default}]; 旧 host 可能不返回此字段',
+  '- 同一 model_id 可有多条 route; create_worker 可传 provider_id 精确选择, is_default 表示省略 provider_id 时的当前默认来源',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
   "- tier='budget': codex/ 前缀的 gateway 折扣路由 (如 codex/gpt-5.5)",
@@ -95,6 +122,15 @@ export function registerListAvailableModelsTool(
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
         pi: tagTier(result.pi),
+        ...(result.routes
+          ? {
+              routes: {
+                codex: tagRoutes(result.routes.codex),
+                claude_code: tagRoutes(result.routes.claude_code),
+                pi: tagRoutes(result.routes.pi),
+              },
+            }
+          : {}),
       });
     },
   });

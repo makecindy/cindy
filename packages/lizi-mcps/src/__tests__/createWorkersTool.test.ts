@@ -62,6 +62,9 @@ describe('create_workers tool', () => {
     expect(registry.get('create_workers')?.description).toContain(
       '用户一次要求创建多个 Worker 时必须使用本工具，不要并行或连续多次调用 create_worker。',
     );
+    expect(registry.get('create_workers')?.description).toContain(
+      'route_provider_id 是 host 最终解析的供应商路由',
+    );
   });
 
   it('rejects duplicate labels before creating any worker', async () => {
@@ -176,6 +179,28 @@ describe('create_workers tool', () => {
       expect.objectContaining({ label: 'worker_2', status: 'failed', error_code: 'DUPLICATE_LABEL' }),
       expect.objectContaining({ label: 'worker_3', status: 'created', worker_id: 'worker-id-2' }),
     ]);
+  });
+
+  it('passes and reports provider routes for each worker', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => ({
+      ...created(1, 8),
+      resolvedModel: 'gpt-5.5',
+      providerId: 'openai',
+      routeProviderId: 'openai',
+    }));
+    const registry = setup(createWorker);
+
+    const first = { ...worker(1), model: 'gpt-5.5', provider_id: 'openai' };
+    const second = { ...worker(2), model: 'gpt-5.5', provider_id: 'xd' };
+    const result = parse(await registry.call('create_workers', { workers: [first, second] }));
+
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({ providerId: 'openai' }));
+    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({ providerId: 'xd' }));
+    expect(result.results[0]).toMatchObject({
+      resolved_model: 'gpt-5.5',
+      provider_id: 'openai',
+      route_provider_id: 'openai',
+    });
   });
 
   it('reports consecutive non-limit failures without inventing created workers', async () => {
