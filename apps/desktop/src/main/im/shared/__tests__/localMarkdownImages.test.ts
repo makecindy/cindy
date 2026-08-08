@@ -145,6 +145,24 @@ describe('materializeLocalMarkdownImages', () => {
     expect(deps.ingest).not.toHaveBeenCalled();
   });
 
+  it('materializes a local image in a four-space list continuation', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'chart.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `- 输出：\n    ![chart](${sourcePath})`,
+          workingDir,
+          sessionId: 'session-list-continuation',
+        },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: '- 输出：\n    chart' });
+  });
+
   it('materializes SSH Markdown images through the remote file service', async () => {
     const cacheRoot = await makeTempRoot();
     const cachePath = path.join(cacheRoot, 'remote-image.png');

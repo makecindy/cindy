@@ -563,6 +563,7 @@ export function createTurnRunner(
             fastMode: row.fastMode,
             sdkSessionId: row.sdkSessionId,
             providerId: row.providerId ?? null,
+            remoteHostId: row.remoteHostId ?? null,
           },
           attached: true,
           scopeKey,

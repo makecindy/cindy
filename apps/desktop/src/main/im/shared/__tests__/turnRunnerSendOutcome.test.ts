@@ -374,6 +374,7 @@ function setupSession(sendImpl: Parameters<typeof createSessionHarness>[0]): Ses
 
 function setupAttachedSession(
   sendImpl: Parameters<typeof createSessionHarness>[0],
+  remoteHostId: string | null = null,
 ): SessionHarness {
   const sessionId = 'desktop-attached-session';
   const h = createSessionHarness(sendImpl, sessionId);
@@ -389,6 +390,7 @@ function setupAttachedSession(
       fastMode: false,
       sdkSessionId: null,
       providerId: null,
+      remoteHostId,
     },
   ]);
   mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
@@ -692,6 +694,28 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       threadTs: undefined,
     });
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an attached SSH session host through rich-card fallback materialization', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({
+      absPaths: ['/tmp/remote-inline.png'],
+      text: 'remote image',
+    });
+    const h = setupAttachedSession(async () => ({ accepted: true }), 'ssh-host-attached');
+
+    await runDefaultTurn();
+    h.emit({
+      type: 'text',
+      data: { text: '![remote image](/srv/project/out.png)', isFinal: true },
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith(
+        expect.objectContaining({ remoteHostId: 'ssh-host-attached' }),
+      );
+    });
   });
 
   it('does not expose inline managed image URLs when fallback materialization fails', async () => {

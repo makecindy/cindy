@@ -209,6 +209,17 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(collectXdtFileRefs(text)).toEqual([]);
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
   });
+
+  it('keeps a four-space list continuation eligible for attachment delivery', () => {
+    const text = '- 输出：\n    [报告](xdt-file:///tmp/list-report.pdf)';
+    const afterBlank = '- 输出：\n\n    [报告](xdt-file:///tmp/list-report.pdf)';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/list-report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('- 输出：\n    报告');
+    expect(collectXdtFileRefs(afterBlank)).toHaveLength(1);
+  });
 });
 
 describe('transformXdtRefs(收口正文改写共享原语)', () => {

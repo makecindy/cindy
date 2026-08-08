@@ -41,19 +41,62 @@ function lineEndAfterNewline(text: string, start: number): number {
   return newline === -1 ? text.length : newline + 1;
 }
 
-function isIndentedCodeLine(text: string, start: number, end: number): boolean {
+function lineIndentColumns(text: string, start: number, end: number): number {
   let columns = 0;
   for (let cursor = start; cursor < end; cursor += 1) {
     if (text[cursor] === ' ') columns += 1;
     else if (text[cursor] === '\t') columns += 4 - (columns % 4);
     else break;
-    if (columns >= 4) return true;
   }
-  return false;
+  return columns;
 }
 
 function isBlankLine(text: string, start: number, end: number): boolean {
   return text.slice(start, end).trim() === '';
+}
+
+function previousLine(text: string, lineStart: number): { start: number; end: number } | null {
+  if (lineStart === 0) return null;
+  const end = text[lineStart - 1] === '\n' ? lineStart - 1 : lineStart;
+  const start = text.lastIndexOf('\n', Math.max(0, end - 1)) + 1;
+  return { start, end };
+}
+
+function listItemContentIndent(text: string, start: number, end: number): number | null {
+  const line = text.slice(start, end);
+  const match = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/);
+  if (!match) return null;
+  let columns = match[0].length - match[2].length;
+  for (const char of match[2]) {
+    columns += char === '\t' ? 4 - (columns % 4) : 1;
+  }
+  return columns;
+}
+
+function hasContainingListItem(text: string, lineStart: number, indent: number): boolean {
+  let cursor = lineStart;
+  while (true) {
+    const previous = previousLine(text, cursor);
+    if (!previous) return false;
+    cursor = previous.start;
+    if (isBlankLine(text, previous.start, previous.end)) continue;
+    const contentIndent = listItemContentIndent(text, previous.start, previous.end);
+    if (contentIndent !== null) {
+      return indent >= contentIndent && indent < contentIndent + 4;
+    }
+    if (lineIndentColumns(text, previous.start, previous.end) === 0) return false;
+  }
+}
+
+function isIndentedCodeStart(text: string, start: number, end: number): boolean {
+  const indent = lineIndentColumns(text, start, end);
+  if (indent < 4 || hasContainingListItem(text, start, indent)) return false;
+  const previous = previousLine(text, start);
+  return previous === null || isBlankLine(text, previous.start, previous.end);
+}
+
+function isIndentedCodeContinuation(text: string, start: number, end: number): boolean {
+  return lineIndentColumns(text, start, end) >= 4 || isBlankLine(text, start, end);
 }
 
 /** Locate fenced, indented, and inline Markdown code without copying large model output. */
@@ -104,7 +147,7 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
       continue;
     }
     const lineEnd = lineEndAfterNewline(text, lineStart);
-    if (!isIndentedCodeLine(text, lineStart, lineEnd)) {
+    if (!isIndentedCodeStart(text, lineStart, lineEnd)) {
       lineStart = lineEnd;
       continue;
     }
@@ -116,8 +159,7 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
       if (nextFence) break;
       const nextLineEnd = lineEndAfterNewline(text, lineStart);
       if (
-        !isIndentedCodeLine(text, lineStart, nextLineEnd) &&
-        !isBlankLine(text, lineStart, nextLineEnd)
+        !isIndentedCodeContinuation(text, lineStart, nextLineEnd)
       ) {
         break;
       }
