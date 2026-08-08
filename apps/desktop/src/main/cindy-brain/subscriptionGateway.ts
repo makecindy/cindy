@@ -66,12 +66,14 @@ function boundMessageHookContext(
   context: Promise<MessageHookContext>,
   timeoutMs: number,
 ): Promise<MessageHookContext> {
-  let timer: ReturnType<typeof setTimeout>;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const fallback = new Promise<MessageHookContext>((resolve) => {
     timer = setTimeout(() => resolve({}), timeoutMs);
     timer.unref?.();
   });
-  return Promise.race([context.catch(() => ({})), fallback]).finally(() => clearTimeout(timer));
+  return Promise.race([context.catch(() => ({})), fallback]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /** Carry the turn-start model through the asynchronous assistant-hook continuation. */
@@ -446,7 +448,13 @@ export class GhostSubscriptionGateway {
     let deliverFailure: string | null = null;
     void (async () => {
       // 常驻意识正常在跑;崩溃恢复窗口内兜底拉一次。
-      if (!this.deps.isRunning(ghostId)) await this.deps.wake(ghost);
+      if (!this.deps.isRunning(ghostId)) {
+        const wokeBeforeDeadline = await Promise.race([
+          this.deps.wake(ghost).then(() => true),
+          verdictPromise.then(() => false),
+        ]);
+        if (!wokeBeforeDeadline) return;
+      }
       const resolvedContext = context instanceof Promise ? await context : context;
       if (!this.pendingHooks.has(hookId)) return;
       const data: GhostMessageHookData = {

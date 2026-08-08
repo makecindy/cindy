@@ -452,8 +452,8 @@ describe('will- 拦截', () => {
     gw.handleVerdict('h1', { type: 'event-verdict', hookId, action: 'block' }); // 迟到
   });
 
-  it('wake 挂死(load 永不完成):3s 整体上界照样放行,不卡发送', async () => {
-    const { gw } = makeGateway({
+  it('wake 挂死(load 永不完成):超时后终止投递续体,不卡发送', async () => {
+    const { gw, sent } = makeGateway({
       listGhosts: () => [HOOK_GHOSTS[0]],
       isRunning: () => false,
       wake: vi.fn(() => new Promise<never>(() => {})), // 永不 settle
@@ -461,6 +461,7 @@ describe('will- 拦截', () => {
     const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
     await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS + 10);
     expect(await p).toEqual({ action: 'allow' });
+    expect(sent).toEqual([]);
   });
 
   it('入口钩子的唤醒与裁决共享同一个整体超时', async () => {
