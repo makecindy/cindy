@@ -108,7 +108,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   if (isCollapsed) {
     return (
       <>
-        <div className="mt-auto flex h-[72px] flex-col items-center justify-center gap-1 px-3">
+        <div className="mt-auto flex h-[76px] flex-col items-center justify-center gap-1 px-3">
           <button
             onClick={handleClick}
             role="link"

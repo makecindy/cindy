@@ -143,7 +143,7 @@ describe('UserInfoSection — mobile download entry', () => {
 
   it('keeps the same entry and dialog available in the collapsed sidebar', () => {
     expect(source).toContain(
-      'className="mt-auto flex h-[72px] flex-col items-center justify-center gap-1 px-3"',
+      'className="mt-auto flex h-[76px] flex-col items-center justify-center gap-1 px-3"',
     );
     expect(source).toContain('{mobileDownloadEntry}');
   });
