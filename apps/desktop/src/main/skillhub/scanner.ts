@@ -414,7 +414,8 @@ export async function readSkillContent(params: { mdPath: string }): Promise<{
     return { success: false, error: 'only .md files may be read via this channel' };
   }
 
-  if (!isAllowedSkillPath(mdPath)) {
+  const resolvedMdPath = resolveAllowedExistingSkillPath(mdPath);
+  if (!resolvedMdPath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (isIgnoredSkillFilePath(mdPath)) {
@@ -422,7 +423,7 @@ export async function readSkillContent(params: { mdPath: string }): Promise<{
   }
 
   try {
-    const raw = fs.readFileSync(mdPath, 'utf-8');
+    const raw = fs.readFileSync(resolvedMdPath, 'utf-8');
     const parsed = matter(raw);
     return { success: true, content: parsed.content };
   } catch (err) {
@@ -454,7 +455,8 @@ export async function readSkillSiblingFile(params: { filePath: string }): Promis
     return { success: false, error: 'filePath must be an absolute path' };
   }
 
-  if (!isAllowedSkillPath(filePath)) {
+  const resolvedFilePath = resolveAllowedExistingSkillPath(filePath);
+  if (!resolvedFilePath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
 
@@ -463,14 +465,14 @@ export async function readSkillSiblingFile(params: { filePath: string }): Promis
       return { success: false, error: 'path is excluded from SkillHub packages' };
     }
 
-    const stat = fs.statSync(filePath);
+    const stat = fs.statSync(resolvedFilePath);
     if (!stat.isFile()) {
       return { success: false, error: 'path is not a file' };
     }
     if (stat.size > PREVIEW_SIZE_CAP) {
       return { success: false, error: `文件超过 ${Math.round(PREVIEW_SIZE_CAP / 1024)} KB,无法在面板中预览` };
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = fs.readFileSync(resolvedFilePath, 'utf-8');
     return { success: true, content };
   } catch (err) {
     return {
@@ -497,18 +499,19 @@ export async function listSkillFolderChildren(params: { dirPath: string }): Prom
     return { success: false, error: 'dirPath must be an absolute path' };
   }
 
-  if (!isAllowedSkillPath(dirPath)) {
+  const resolvedDirPath = resolveAllowedExistingSkillPath(dirPath);
+  if (!resolvedDirPath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
 
   try {
-    const stat = fs.statSync(dirPath);
+    const stat = fs.statSync(resolvedDirPath);
     if (!stat.isDirectory()) {
       return { success: false, error: 'path is not a directory' };
     }
     const skillRoot = findSkillRootForPath(dirPath);
     const entries: SkillFileEntry[] = fs
-      .readdirSync(dirPath, { withFileTypes: true })
+      .readdirSync(resolvedDirPath, { withFileTypes: true })
       .filter((s) => {
         const childPath = path.join(dirPath, s.name);
         return !isIgnoredSkillPackagePath(skillPackageRelPath(skillRoot, childPath, s.name));
@@ -542,10 +545,55 @@ const EDIT_SIZE_CAP_WRITE = 1024 * 1024; // 1 MB write cap (defensive against pa
 // 新增引擎时只需在此 regex 加一个分支。
 const SKILL_PATH_WHITELIST = /\/(\.(claude\/(skills|commands|agents)|agents\/skills|codex\/skills|pi\/skills)|codex-home\/skills)\//;
 
-function isAllowedSkillPath(absolutePath: string): boolean {
+function isLexicallyAllowedSkillPath(absolutePath: string): boolean {
   // path.resolve 解析 .. 和 . 段，防止遍历绕过白名单
   const norm = path.resolve(absolutePath).replace(/\\/g, '/');
   return SKILL_PATH_WHITELIST.test(norm);
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+/**
+ * Resolve the final existing target before Main performs IO. Project-owned
+ * `.pi/skills` paths get an extra physical boundary: neither the source root
+ * nor a child symlink may escape the project. Other roots keep supporting the
+ * existing global compatibility symlinks used by shared skill installs.
+ */
+function resolveAllowedExistingSkillPath(absolutePath: string): string | null {
+  if (!isLexicallyAllowedSkillPath(absolutePath)) return null;
+  const lexicalPath = path.resolve(absolutePath);
+  let realTarget: string;
+  try {
+    realTarget = fs.realpathSync.native(lexicalPath);
+  } catch {
+    return null;
+  }
+
+  const normalized = lexicalPath.replace(/\\/g, '/');
+  const marker = '/.pi/skills/';
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex < 0) return realTarget;
+
+  const lexicalSkillRoot = path.normalize(normalized.slice(0, markerIndex + marker.length - 1));
+  const lexicalProjectRoot = path.dirname(path.dirname(lexicalSkillRoot));
+  try {
+    const realProjectRoot = fs.realpathSync.native(lexicalProjectRoot);
+    const realSkillRoot = fs.realpathSync.native(lexicalSkillRoot);
+    if (
+      !isPathWithin(realProjectRoot, realSkillRoot)
+      || !isPathWithin(realSkillRoot, realTarget)
+    ) return null;
+  } catch {
+    return null;
+  }
+  return realTarget;
 }
 
 function findSkillRootForPath(absolutePath: string): string | null {
@@ -584,19 +632,20 @@ export async function readSkillRawFile(params: { filePath: string }): Promise<{
   if (path.normalize(filePath).split(path.sep).includes('..')) {
     return { success: false, error: 'filePath contains traversal segments' };
   }
-  if (!isAllowedSkillPath(filePath)) {
+  const resolvedFilePath = resolveAllowedExistingSkillPath(filePath);
+  if (!resolvedFilePath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (isIgnoredSkillFilePath(filePath)) {
     return { success: false, error: 'path is excluded from SkillHub packages' };
   }
   try {
-    const stat = fs.statSync(filePath);
+    const stat = fs.statSync(resolvedFilePath);
     if (!stat.isFile()) return { success: false, error: 'path is not a file' };
     if (stat.size > EDIT_SIZE_CAP_READ) {
       return { success: false, error: `文件超过 ${Math.round(EDIT_SIZE_CAP_READ / 1024)} KB,请用外部编辑器` };
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = fs.readFileSync(resolvedFilePath, 'utf-8');
     return { success: true, content };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -614,7 +663,8 @@ export async function writeSkillFile(params: { filePath: string; content: string
   if (path.normalize(filePath).split(path.sep).includes('..')) {
     return { success: false, error: 'filePath contains traversal segments' };
   }
-  if (!isAllowedSkillPath(filePath)) {
+  const resolvedFilePath = resolveAllowedExistingSkillPath(filePath);
+  if (!resolvedFilePath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (isIgnoredSkillFilePath(filePath)) {
@@ -623,7 +673,7 @@ export async function writeSkillFile(params: { filePath: string; content: string
   // Existence requirement — v0.2.2 disallows creating new files.
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(filePath);
+    stat = fs.statSync(resolvedFilePath);
   } catch {
     return { success: false, error: '文件不存在,本期不允许创建新文件' };
   }
@@ -636,7 +686,7 @@ export async function writeSkillFile(params: { filePath: string; content: string
   }
   // Atomic write: tmp + rename. fsync the tmp file before rename so a crash
   // mid-write doesn't leave a half-written file at the target path.
-  const tmpPath = `${filePath}.xdt-tmp`;
+  const tmpPath = `${resolvedFilePath}.xdt-tmp`;
   try {
     const fd = fs.openSync(tmpPath, 'w');
     try {
@@ -645,7 +695,7 @@ export async function writeSkillFile(params: { filePath: string; content: string
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(tmpPath, filePath);
+    fs.renameSync(tmpPath, resolvedFilePath);
     return { success: true };
   } catch (err) {
     // Best-effort tmp cleanup — ignore failures.
@@ -674,7 +724,7 @@ export async function renameLocalSkill(params: {
   if (path.normalize(absolutePath).split(path.sep).includes('..')) {
     return { success: false, error: 'absolutePath contains traversal segments' };
   }
-  if (!isAllowedSkillPath(absolutePath)) {
+  if (!resolveAllowedExistingSkillPath(absolutePath)) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (!/^[a-z0-9-]+$/.test(newName)) {

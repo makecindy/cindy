@@ -303,6 +303,11 @@ describe('scanAllSkills', () => {
       success: true,
       entries: [{ name: 'SKILL.md', kind: 'file' }],
     });
+    await expect(readSkillRawFile({ filePath: skillMd })).resolves.toMatchObject({ success: true });
+    await expect(writeSkillFile({ filePath: skillMd, content: '# Updated Pi Demo\n' })).resolves.toEqual({
+      success: true,
+    });
+    expect(fs.readFileSync(skillMd, 'utf-8')).toBe('# Updated Pi Demo\n');
   });
 
   it('filters sensitive entries from the initial skill files snapshot', async () => {
@@ -347,6 +352,28 @@ describe('scanAllSkills', () => {
 });
 
 describe('skill file access', () => {
+  it('rejects project .pi skill symlinks that escape the physical skill root', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-escape-'));
+    tempRoots.push(root);
+    const projectRoot = path.join(root, 'project');
+    const outsideSkill = path.join(root, 'outside-skill');
+    const exposedSkill = path.join(projectRoot, '.pi', 'skills', 'escape');
+    fs.mkdirSync(outsideSkill, { recursive: true });
+    fs.mkdirSync(path.dirname(exposedSkill), { recursive: true });
+    fs.writeFileSync(path.join(outsideSkill, 'SKILL.md'), '# Outside\n', 'utf-8');
+    fs.writeFileSync(path.join(outsideSkill, 'notes.txt'), 'private\n', 'utf-8');
+    fs.symlinkSync(outsideSkill, exposedSkill, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const exposedSkillMd = path.join(exposedSkill, 'SKILL.md');
+    const exposedNotes = path.join(exposedSkill, 'notes.txt');
+    await expect(readSkillContent({ mdPath: exposedSkillMd })).resolves.toMatchObject({ success: false });
+    await expect(listSkillFolderChildren({ dirPath: exposedSkill })).resolves.toMatchObject({ success: false });
+    await expect(readSkillSiblingFile({ filePath: exposedNotes })).resolves.toMatchObject({ success: false });
+    await expect(readSkillRawFile({ filePath: exposedSkillMd })).resolves.toMatchObject({ success: false });
+    await expect(writeSkillFile({ filePath: exposedSkillMd, content: '# Changed\n' })).resolves.toMatchObject({ success: false });
+    expect(fs.readFileSync(path.join(outsideSkill, 'SKILL.md'), 'utf-8')).toBe('# Outside\n');
+  });
+
   it('follows a supported skill path symlink across detail, files panel, and editor access', async () => {
     const { actualSkillMd, exposedDir, exposedPricingJson, exposedSkillMd } = createSymlinkedSkill();
 

@@ -187,7 +187,7 @@ function mergePiRuntimeSkillStatuses(
         && skill.path
         && loadedProjectSkills.has([
           skill.name,
-          canonicalPiRuntimePath(path.resolve(skill.path, '..', '..')),
+          canonicalPiRuntimePath(path.dirname(path.dirname(skill.path))),
         ].join('\0'))
         ? { ...skill, runtimeStatus: 'loaded' as const }
         : skill

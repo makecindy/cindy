@@ -333,6 +333,7 @@ const ComposerHardBreak = HardBreak.extend({
 // 自然宽度（permission + model + voice + send 等）估，实测可微调。
 const TOOLBAR_DENSE_MAX_WIDTH = 520;
 const TOOLBAR_COMPACT_MAX_WIDTH = 448;
+const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000] as const;
 
 function isVoiceInputIdleLike(state: VoiceInputState): boolean {
   return state === 'idle' || state === 'done' || state === 'error';
@@ -3387,6 +3388,7 @@ export function ChatInput({
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
   const slashCommandLoadSeqRef = useRef(0);
+  const piRuntimeRetryRef = useRef(0);
   useEffect(
     () => () => {
       slashCommandLoadSeqRef.current += 1;
@@ -3419,7 +3421,8 @@ export function ChatInput({
   // biome-ignore lint/correctness/useExhaustiveDependencies: 这里用依赖数组表达上下文切换触发清空，effect 内不直接读取这些值。
   useEffect(() => {
     setMergedCommands([]);
-  }, [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId]);
+    piRuntimeRetryRef.current = 0;
+  }, [workingDir, paletteAgentKind, isRemoteSession, sessionId, deviceLinkDeviceId]);
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
@@ -3794,6 +3797,28 @@ export function ChatInput({
     if (!slashOpen) return;
     reloadSlashCommands({ forceReload: true });
   }, [slashOpen, reloadSlashCommands]);
+  useEffect(() => {
+    if (!slashOpen) {
+      piRuntimeRetryRef.current = 0;
+      return;
+    }
+    if (paletteAgentKind !== 'pi' || !sessionId) return;
+    const projectSkills = mergedCommands.filter((command) => (
+      command.kind === 'agent-skill' && command.scope === 'repo'
+    ));
+    if (
+      projectSkills.length === 0
+      || projectSkills.some((command) => command.runtimeStatus === 'loaded')
+      || !projectSkills.some(isSlashCommandUnavailable)
+    ) return;
+    const attempt = piRuntimeRetryRef.current;
+    if (attempt >= PI_RUNTIME_SKILL_RETRY_DELAYS_MS.length) return;
+    piRuntimeRetryRef.current = attempt + 1;
+    const timer = window.setTimeout(() => {
+      reloadSlashCommands({ forceReload: true });
+    }, PI_RUNTIME_SKILL_RETRY_DELAYS_MS[attempt]);
+    return () => window.clearTimeout(timer);
+  }, [mergedCommands, paletteAgentKind, reloadSlashCommands, sessionId, slashOpen]);
 
   // ── Panel → editor bridge for keyboard nav ─────────────────────────
   // The editor's `handleKeyDown` fires before React re-renders, so we need
