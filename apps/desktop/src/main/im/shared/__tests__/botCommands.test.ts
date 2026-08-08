@@ -13,10 +13,16 @@ import {
 } from '../botCommands';
 
 /**
- * 服务端 `telegram-hook-server/src/telegram/i18n.ts` 的 `TELEGRAM_COMMANDS` 全集。
+ * 服务端 `telegram-hook-server/src/telegram/i18n.ts` 的 `TELEGRAM_COMMANDS` 全集,
+ * 抄写于本 PR 提交时。
  *
- * 官方 bot 的命令目前仍由服务端下发, 客户端表对它只是**声明性镜像**; 这份内联
- * 清单是两仓之间唯一的对账凭证 —— 服务端加减命令而客户端没跟上, 这条断言先红。
+ * 它挡的是**同仓内**的漂移: 有人改了注册表却没同步这份清单, 断言先红, 于是
+ * 「客户端镜像与服务端对齐」这件事至少有一个显式的落点。
+ *
+ * 它**挡不住服务端单方面加减命令** —— 那边一改, 这边两份都不动, 测试照样绿。
+ * 真要防住跨仓漂移得有一份可消费的共享契约(把 `TELEGRAM_COMMANDS` 放进
+ * `cindy-protocol`, 两侧都从它生成), 或者在服务端加反向校验; 两条路都要跨仓
+ * 改动与一次协议版本推进, 另立 PR。这里不宣称自己做到了那件事。
  */
 const OFFICIAL_SERVER_COMMANDS = [
   'project',
