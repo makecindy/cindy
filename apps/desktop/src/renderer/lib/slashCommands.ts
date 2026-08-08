@@ -273,6 +273,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   commandName: string;
   commands: UnifiedCommand[];
   reload: () => Promise<UnifiedCommand[]>;
+  prepareRuntime?: () => Promise<void>;
   retryDelaysMs?: readonly number[];
   sleep?: (delayMs: number) => Promise<void>;
 }): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
@@ -280,6 +281,20 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>(
     (resolve) => window.setTimeout(resolve, delayMs),
   ));
+  const current = params.commands.find(
+    (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
+  );
+  const shouldPrepareRuntime = !current
+    || current.kind === 'desktop'
+    || isSlashCommandUnavailable(current);
+  if (
+    params.agentKind === 'pi'
+    && params.sessionId
+    && params.prepareRuntime
+    && shouldPrepareRuntime
+  ) {
+    await params.prepareRuntime();
+  }
   let result = await reconcilePiRuntimeCommandForDispatch(params);
   for (const delayMs of retryDelaysMs) {
     if (!result.command || !isSlashCommandUnavailable(result.command)) return result;

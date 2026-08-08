@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildLocalSkillRoute, findLocalSkillRouteEntry } from '../localRoutes';
+import {
+  buildLocalSkillRoute,
+  findLocalSkillByPath,
+  findLocalSkillRouteEntry,
+} from '../localRoutes';
 
 type Entry = Parameters<typeof buildLocalSkillRoute>[0];
 
@@ -18,6 +22,18 @@ function entry(overrides: Partial<Entry> = {}): Entry {
 }
 
 describe('local SkillHub routes', () => {
+  it('finds a renamed skill by its lexical discovered path when absolutePath is realpathed', () => {
+    const renamed = entry({
+      absolutePath: '/shared/skills/renamed',
+      discoveredPath: '/home/user/.claude/skills/renamed',
+    });
+
+    expect(findLocalSkillByPath(
+      [renamed],
+      '/home/user/.claude/skills/renamed',
+    )).toBe(renamed);
+  });
+
   it('keeps the existing URL shape for an unambiguous skill', () => {
     expect(buildLocalSkillRoute(entry())).toBe(
       '/skillhub/local/skill/project/abcd1234/demo?engine=pi',

@@ -148,6 +148,7 @@ import { emitRefresh } from '@/lib/sessionsBus';
 import type { Session } from '@/lib/ccAgent.types';
 import { toast } from '@/lib/toast';
 import {
+  buildCreateOptsForCurrentSession,
   decodeRemoteErrorMessage,
   makerChatStore,
   type AgentTaskUpdate,
@@ -2353,6 +2354,7 @@ export function CCAgentSessionView({
         allowDesktopDispatch?: boolean;
         piRuntimeRetryDelaysMs?: readonly number[];
         workingDirOverride?: string;
+        preparePiRuntime?: () => Promise<void>;
       },
     ): Promise<{ handled: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
@@ -2389,6 +2391,7 @@ export function CCAgentSessionView({
       const reconciled = options?.piRuntimeRetryDelaysMs
         ? await reconcilePiRuntimeCommandForDispatchWithRetry({
             ...reconcileParams,
+            prepareRuntime: options.preparePiRuntime,
             retryDelaysMs: options.piRuntimeRetryDelaysMs,
           })
         : await reconcilePiRuntimeCommandForDispatch(reconcileParams);
@@ -2454,6 +2457,32 @@ export function CCAgentSessionView({
               allowDesktopDispatch: pending.deliveryMode !== 'steer',
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
               workingDirOverride: newDir,
+              preparePiRuntime: async () => {
+                if (!sessionId || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
+                const createOpts = {
+                  id: sessionId,
+                  ...buildCreateOptsForCurrentSession(
+                    sessionId,
+                    pending.model,
+                    pending.effort,
+                    pending.permissionMode,
+                    newDir,
+                    pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : undefined,
+                  ),
+                  agentKind: 'pi' as const,
+                  workingDir: newDir,
+                  orcaRole: session?.orcaRole ?? null,
+                };
+                if (remoteDeviceId) {
+                  await window.electronAPI.deviceLink.invoke(
+                    remoteDeviceId,
+                    'maker:create-session',
+                    [createOpts],
+                  );
+                } else {
+                  await window.electronAPI.maker.createSession(createOpts);
+                }
+              },
             },
           );
           if (slashDispatch.handled) {
@@ -2531,6 +2560,10 @@ export function CCAgentSessionView({
     [
       maybeDispatchDesktopSlashCommand,
       refreshServerSession,
+      remoteDeviceId,
+      session?.agentKind,
+      session?.orcaRole,
+      sessionId,
       sendMessage,
       steerMessage,
     ],

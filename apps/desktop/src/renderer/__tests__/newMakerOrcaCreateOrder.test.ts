@@ -172,6 +172,9 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(workingDirHandler).toContain(
       'piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS',
     );
+    expect(workingDirHandler).toContain('preparePiRuntime: async () =>');
+    expect(workingDirHandler).toContain("'maker:create-session'");
+    expect(workingDirHandler).toContain('window.electronAPI.maker.createSession(createOpts)');
     expect(workingDirHandler).toContain(
       'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.agentReferences,',
     );

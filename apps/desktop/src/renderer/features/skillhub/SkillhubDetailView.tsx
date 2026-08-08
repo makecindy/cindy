@@ -45,7 +45,11 @@ import {
 } from './hooks/useSkillhub';
 import { triggerIncrementalSync } from './hooks/useSkillSync';
 import { type DetailState, deriveDetailActionState, deriveDetailState } from './lib/detailButtons';
-import { buildLocalSkillRoute, findLocalSkillRouteEntry } from './lib/localRoutes';
+import {
+  buildLocalSkillRoute,
+  findLocalSkillByPath,
+  findLocalSkillRouteEntry,
+} from './lib/localRoutes';
 import { isMarketDeleted as checkMarketDeleted, getCachedInfo, invalidate as invalidateInfo, refreshInfo } from './lib/infoDedupe';
 import {
   activePublishedReviewFromVersions,
@@ -2564,7 +2568,7 @@ export function SkillhubDetailView() {
             invalidateInfo(entry.name);
             invalidateHash(newAbsolutePath);
             void refreshSkillhub().then((scannedSkills) => {
-              const renamed = scannedSkills.find((skill) => skill.absolutePath === newAbsolutePath);
+              const renamed = findLocalSkillByPath(scannedSkills, newAbsolutePath);
               if (!renamed) return;
               setLastEntryId(renamed.id);
               navigate(buildLocalSkillRoute(renamed), { replace: true });

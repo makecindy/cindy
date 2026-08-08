@@ -246,6 +246,59 @@ describe('Pi project skill availability', () => {
     expect(reloads).toBe(3);
   });
 
+  it('starts the selected project runtime before resolving its first Pi skill command', async () => {
+    const discovered = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+    const events: string[] = [];
+    let runtimeReady = false;
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [],
+      retryDelaysMs: [],
+      prepareRuntime: async () => {
+        events.push('runtime');
+        runtimeReady = true;
+      },
+      reload: async () => {
+        events.push('catalog');
+        return runtimeReady ? [loaded] : [discovered];
+      },
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(events).toEqual(['runtime', 'catalog']);
+  });
+
+  it('does not restart the runtime for an already loaded Pi skill', async () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+    let prepared = false;
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [loaded],
+      prepareRuntime: async () => { prepared = true; },
+      reload: async () => [],
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(prepared).toBe(false);
+  });
+
   it('refreshes an unknown Pi alias in case the runtime catalog arrived late', async () => {
     const loaded = skill({
       name: 'demo',

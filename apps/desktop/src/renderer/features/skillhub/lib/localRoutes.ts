@@ -5,9 +5,19 @@ interface LocalSkillRouteEntry {
   scope: SkillhubScope;
   name: string;
   absolutePath: string;
+  discoveredPath?: string;
   projectHash?: string;
   sourceKey?: string;
   requiresSourceKey?: boolean;
+}
+
+export function findLocalSkillByPath<T extends LocalSkillRouteEntry>(
+  skills: readonly T[],
+  targetPath: string,
+): T | null {
+  return skills.find(
+    (skill) => skill.absolutePath === targetPath || skill.discoveredPath === targetPath,
+  ) ?? null;
 }
 
 interface LocalSkillRouteParams {
