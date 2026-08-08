@@ -656,7 +656,7 @@ export function AskUserQuestionPrompt({
                   }}
                   placeholder="Type your answer..."
                   className={cn(
-                    'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[22px] outline-none',
+                    'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[1.571] outline-none',
                     'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                     'select-text',
                   )}
@@ -723,7 +723,7 @@ export function AskUserQuestionPrompt({
               placeholder="Type your answer..."
               autoFocus
               className={cn(
-                'min-h-10 min-w-0 flex-1 rounded-[8px] border px-3 py-[8px] text-14 leading-[22px] outline-none',
+                'min-h-10 min-w-0 flex-1 rounded-[8px] border px-3 py-[8px] text-14 leading-[1.571] outline-none',
                 'border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}

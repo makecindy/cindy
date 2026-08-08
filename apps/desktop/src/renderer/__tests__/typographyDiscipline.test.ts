@@ -45,6 +45,11 @@ import { describe, expect, it } from 'vitest';
  *     配置中仍保留 xl..5xl 语义映射(源码零使用),不可简单删除:它们挂在
  *     theme.extend 下,删除会静默回退到不跟随用户缩放的 Tailwind 默认值;
  *     守卫在源码侧拒绝 xl..9xl,配置清理留待后续改成显式 numeric 档位。
+ *  8. 会缩放的字号 token(`text-<n>` / `text-xs|sm|base|lg`)不得与固定 px 行高
+ *     `leading-[Mpx]` 同处一个 class 值区域:字号跟随「外观 → UI 字号」缩放而
+ *     固定行框不跟随,放大字号即裁切 / 重叠。判定按 className / cn(...) 的
+ *     **整块区域**(跨行)而非同一行 —— 单行比对会漏掉 `cn()` 分行写法。
+ *     修法是改成无单位比例(比例 = 原 px ÷ 字号),默认字号下渲染不变。
  *
  * ## 豁免(精确绑定:文件 + 规则 + 理由 + 具体合法命中/上下文及期望次数)
  *  每条豁免按具体 match 与上下文签名计数;新增 font-black 或 800 即使总数不变也红。
@@ -512,6 +517,68 @@ export function findFontShorthands(text: string): Hit[] {
   return hits;
 }
 
+/**
+ * 固定 px 行高 + 会缩放的字号 token = 功能缺陷(不是行高风格漂移)。
+ *
+ * `text-<n>` / `text-xs|sm|base|lg` 经 `--text-*` 响应「外观 → UI 字号」设置,
+ * `leading-[Mpx]` 的行框不跟随;用户把字号调大时文字在固定行框里裁切 / 重叠。
+ * 一律改成无单位比例(比例 = 原 px ÷ 字号),默认字号下渲染不变。
+ * 规范见 DESIGN.md §3 non-goals 的行高例外条款。
+ *
+ * 判定按「同一个 class 值区域」而不是同一行:`cn(...)` 会把字号与行高分散到
+ * 不同行,只比对单行会漏 —— #1553 就是这样漏掉过 PlanActionCard 一处,
+ * 因此这里做括号 / 引号配对取整块区域再比对。
+ */
+const SIZE_TOKEN_IN_CLASS = /\btext-(?:\d+|xs|sm|base|lg)\b/;
+
+function matchBalanced(text: string, openIndex: number, open: string, close: string): number {
+  let depth = 0;
+  for (let i = openIndex; i < text.length; i += 1) {
+    if (text[i] === open) depth += 1;
+    else if (text[i] === close) {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return text.length;
+}
+
+/** className={...} / className="..." 与独立的 cn/clsx/twMerge(...) 区域。 */
+function classValueRegions(text: string): Array<{ start: number; end: number }> {
+  const regions: Array<{ start: number; end: number }> = [];
+  for (const m of text.matchAll(/className\s*=\s*/g)) {
+    const at = (m.index ?? 0) + m[0].length;
+    const ch = text[at];
+    if (ch === '{') {
+      regions.push({ start: at, end: matchBalanced(text, at, '{', '}') });
+    } else if (ch === '"' || ch === "'" || ch === '`') {
+      const end = text.indexOf(ch, at + 1);
+      regions.push({ start: at, end: end === -1 ? text.length : end + 1 });
+    }
+  }
+  // class 常量未必直接挂在 className 上(变量、helper 返回值)。
+  for (const m of text.matchAll(/\b(?:cn|clsx|twMerge)\s*\(/g)) {
+    const open = (m.index ?? 0) + m[0].length - 1;
+    regions.push({ start: open, end: matchBalanced(text, open, '(', ')') });
+  }
+  return regions;
+}
+
+function findFixedLeadingWithScalingToken(text: string): Hit[] {
+  const byIndex = new Map<number, Hit>();
+  for (const region of classValueRegions(text)) {
+    const slice = text.slice(region.start, region.end);
+    const token = SIZE_TOKEN_IN_CLASS.exec(slice);
+    if (!token) continue;
+    for (const m of slice.matchAll(/leading-\[(\d+(?:\.\d+)?)px\]/g)) {
+      // className 区域与其内层 cn(...) 区域会重叠,按绝对下标去重免得重复计数。
+      const index = region.start + (m.index ?? 0);
+      if (!byIndex.has(index)) byIndex.set(index, { match: m[0], index, context: token[0] });
+    }
+  }
+  return [...byIndex.values()].sort((a, b) => a.index - b.index);
+}
+
 // ── 文件遍历 ────────────────────────────────────────────────────────
 
 function collectFiles(exts: RegExp): string[] {
@@ -570,6 +637,7 @@ function scan(): Violation[] {
     push(rel, text, 'inline-size', findInlineSizeViolations(text));
     push(rel, text, 'string-weight', findStringWeightViolations(text));
     push(rel, text, 'font-shorthand', findFontShorthands(text));
+    push(rel, text, 'fixed-leading', findFixedLeadingWithScalingToken(text));
   }
   for (const rel of collectFiles(/\.css$/)) {
     const text = stripCssComments(readFileSync(join(ROOT, rel), 'utf8'));
@@ -759,6 +827,23 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       // 同行双违规逐个计数(评审轮:第一个命中不再吞掉第二个)
       expect(findTwWeightViolations('cn("font-bold font-black")')).toHaveLength(2);
       expect(matches(findArbitrarySizes('className="text-[12.5px]"'))).toEqual(['text-[12.5px]']);
+      // 固定 px 行高 + 会缩放的字号:同行、语义档位都要红。
+      expect(matches(findFixedLeadingWithScalingToken('className="text-14 leading-[18px]"'))).toEqual(
+        ['leading-[18px]'],
+      );
+      expect(
+        findFixedLeadingWithScalingToken('className="text-sm leading-[18px]"'),
+      ).toHaveLength(1);
+      // 关键回归:cn(...) 把字号与行高分散到不同行时不得漏(#1553 实测漏过一处)。
+      expect(
+        findFixedLeadingWithScalingToken(
+          ['className={cn(', "  'text-14 flex-1',", "  'leading-[22px]',", ')}'].join('\n'),
+        ),
+      ).toHaveLength(1);
+      // className 区域与内层 cn(...) 区域重叠,同一处只能计一次。
+      expect(
+        findFixedLeadingWithScalingToken('className={cn("text-13", "leading-[16px]")}'),
+      ).toHaveLength(1);
       expect(findArbitrarySizes('text-[9px] text-[8px]')).toHaveLength(2);
       // 全单位 / 大小写 / 无整数部分小数(三轮加固)
       expect(findArbitrarySizes('text-[0.75rem]')).toHaveLength(1);
@@ -901,6 +986,14 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
         [],
       );
       expect(findArbitrarySizes('text-[var(--md-h1-fg)]')).toEqual([]);
+      // 无单位比例本身就是修法,不能反过来判红。
+      expect(findFixedLeadingWithScalingToken('className="text-14 leading-[1.571]"')).toEqual([]);
+      // 没有会缩放的字号 token 时,固定行高不属于本规则(行高档位统一是 non-goal)。
+      expect(findFixedLeadingWithScalingToken('className="leading-[22px] text-[var(--x)]"')).toEqual(
+        [],
+      );
+      // 语义 leading 档位与行高变量同样放行。
+      expect(findFixedLeadingWithScalingToken('className="text-14 leading-snug"')).toEqual([]);
       expect(findArbitrarySizes('text-[var(--app-code-font-size)]')).toEqual([]);
       expect(
         findOffLadderTokenSizes('className="text-xs text-sm text-base text-lg text-12 text-28"'),

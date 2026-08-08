@@ -4725,7 +4725,7 @@ export function NewMakerDraftRoute() {
                           </span>
                           {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。
                               竖排下占满卡片宽度、左对齐 icon,靠父列 justify-between 贴底。 */}
-                          <span className="w-full min-w-0 text-13 font-semibold leading-[16px]">
+                          <span className="w-full min-w-0 text-13 font-semibold leading-[1.231]">
                             {t(labelKey)}
                           </span>
                         </button>

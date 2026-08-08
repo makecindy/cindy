@@ -170,7 +170,8 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 以下漂移**已知且本轮明确不治理**,后人见到不要当「漏网」顺手修,治理需另立 issue:
 
-- line-height:桌面存在 `leading-[1.45]` / `leading-[1.55]` 等微调档与无单位 / px 混轨。
+- line-height **档位统一**:桌面存在 `leading-[1.45]` / `leading-[1.55]` 等微调档与无单位 / px 混轨,本轮不收敛成统一阶梯。
+  - **但有一条例外,已在 #1553 治理完毕**:`text-<n>` 与**固定 px 行高**(`leading-[Mpx]`)并存属于**功能缺陷**,不是风格漂移 —— `text-<n>` 经 `--text-<n>` 响应「外观 → UI 字号」设置,固定 px 行框不跟随,用户放大字号时文字会裁切/重叠。原设计未考虑用户可自行调整字号,故留下这个洞。**该组合一律改为无单位比例**(比例 = 原 px ÷ 字号),渲染在默认字号下不变而放大时正确。#1553 已把当时全部 38 处清零(其中 14 处为字号归一新引入、24 处先于其存在);后续新增 `text-<n>` 时**不得再配固定 px 行高**,该约束由 `typographyDiscipline.test.ts` 的 `fixed-leading` 规则做机器门禁,**按 `className` / `cn(...)` 整块区域跨行判定**(只比对同一行会漏掉 `cn()` 分行写法,#1553 实际漏过一处)。行高被 JS 布局计算写死引用时(如按行高算 auto-grow 上限),须同时改成读计算值,否则上限不跟随缩放。
 - 语义类 `text-xs/sm/base/lg` → `text-<n>` 的机械统一:等值改写零收益,收编即可。
 - letter-spacing 与 font-family 治理。
 - 原生层排版:macOS agent-island helper 等 Swift / 原生 UI 的字号字重不在本白名单域(Web 白名单与守卫均不覆盖,治理需另立 issue)。
