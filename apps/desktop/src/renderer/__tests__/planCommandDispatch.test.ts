@@ -18,8 +18,10 @@
  *      nextEnabled 由 getSnapshot 取「当下」planModeEnabled 计算,监听器不依赖闭包旧值;
  *      且失败 rejection 被显式吞掉(不升级为未捕获的 Promise rejection);
  *   5) 草稿路由:handleSend 在创建会话前拦截纯文本 /plan,切换草稿 planMode;
- *      命令列表缓存按 (agentKind, workingDir, remoteHostId) 失效,SSH 远程
- *      skipAgentSkills(与 ChatInput palette 语义一致,避免误判 /plan 归属)。
+ *      命令列表每次 forceReload(缓存 key 感知不到同一上下文里 skill 增删),SSH 远程
+ *      skipAgentSkills,device-link 远程草稿按 effectiveDeviceLinkDeviceId 从被控端读
+ *      skill(与 ChatInput palette 语义一致);命中同名 agent skill 时放行发送,
+ *      仅确认归属 desktop 命令后才 toast「远程草稿不可用」/ toggle 草稿 planMode。
  */
 
 import { readFileSync } from 'node:fs';
@@ -116,19 +118,24 @@ describe('/plan slash command contract', () => {
     // 本地草稿分支(forceReload 命令列表 + toggle);远程草稿分支 toast 提示不 toggle。
     const idx = draftSource.lastIndexOf('handlePlanModeChange(!effectivePlanMode)');
     expect(idx).toBeGreaterThanOrEqual(0);
-    const region = draftSource.slice(Math.max(0, idx - 900), idx + 200);
-    // 源码是 `/^\/plan\s*$/i.test(message.trim())` —— 用 includes 锁关键片段,
-    // 避免正则字面量里反斜杠转义层级出错(CI 上实测过 toMatch 转义会挂)。
-    // 正则匹配与 device-link 分支在拦截块开头。
+    // region 从 /plan 拦截块开头(正则匹配处)切到 handlePlanModeChange 之后 ——
+    // 不用固定宽度 slice 往回切:注释加长会把断言推离窗口(Codex P1 / Copilot 均提过)。
     const headIdx = draftSource.indexOf("/^\\/plan\\s*$/i.test(message.trim())");
     expect(headIdx).toBeGreaterThanOrEqual(0);
-    const head = draftSource.slice(headIdx - 100, headIdx + 400);
-    expect(head).toContain('/^\\/plan');
-    expect(head).toContain("test(message.trim())");
-    // device-link 远程草稿:命中 /plan 时 toast 提示 + return,不静默消费也不放行
-    // 创建会话(Codex P1:避免 /plan 变成首条消息发给远程 agent)。
+    const region = draftSource.slice(headIdx, idx + 200);
+    // 源码是 `/^\/plan\s*$/i.test(message.trim())` —— 用 includes 锁关键片段,
+    // 避免正则字面量里反斜杠转义层级出错(CI 上实测过 toMatch 转义会挂)。
+    expect(region).toContain('/^\\/plan');
+    expect(region).toContain("test(message.trim())");
+    // device-link 远程草稿:确认 /plan 归属 desktop 命令(无同名命令)后才 toast 提示
+    // 不可用 + return,不静默消费也不放行创建会话(Codex P1:避免 /plan 变成首条消息
+    // 发给远程 agent)。Codex P2 修复:远程分支必须在归属判断**之后**,不能先于
+    // loadAllCommands 提前 return —— 否则被控端安装的同名 plan skill 会被吞掉。
     expect(draftSource).toContain("t('newChat.collaboration.planModeUnavailableRemoteDraft')");
     expect(draftSource).toContain('isDeviceLinkDraft) {');
+    const toastIdx = draftSource.indexOf("t('newChat.collaboration.planModeUnavailableRemoteDraft')");
+    const ownershipIdx = draftSource.indexOf("hit.kind === 'desktop'");
+    expect(toastIdx).toBeGreaterThan(ownershipIdx);
     // 尊重 palette 优先级:每次 forceReload 拉取 merged 命令列表(不缓存 —— 缓存 key
     // 感知不到同一上下文里 skill 增删,Copilot),仅当无同名命令或命中 desktop 才 toggle
     // (用户装了名为 plan 的 skill 时不拦截,让 /plan 发给 agent —— 与会话路径一致)。
@@ -137,6 +144,9 @@ describe('/plan slash command contract', () => {
     expect(region).toContain("hit.kind === 'desktop'");
     // SSH 远程与 ChatInput palette 一致 skipAgentSkills,避免误判本地 skill 归属。
     expect(region).toContain('skipAgentSkills');
+    // device-link 远程草稿与 palette 一致传 effectiveDeviceLinkDeviceId,从被控端读
+    // agent-builtin / agent-skill(Codex P2:命中被控端同名 plan skill 时放行发送)。
+    expect(region).toContain('effectiveDeviceLinkDeviceId');
     // await loadAllCommands 是 handleSend 第一个 await,必须先上在途锁(Copilot):
     // 拉取期间用户切设备/工作区会串台,markSendInFlight 让 pill 立即拒绝。
     expect(region).toContain('markSendInFlight(true)');
