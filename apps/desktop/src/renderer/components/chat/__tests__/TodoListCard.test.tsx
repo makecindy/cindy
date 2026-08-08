@@ -50,6 +50,20 @@ describe('TodoListCard flyout interaction', () => {
     expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
+  it('keeps the active row static when the session is idle', () => {
+    // 计划因停止/失败/中断留在屏幕上时会话已空闲:继续呼吸等于谎报"这步还在跑"。
+    const { container } = render(<TodoListCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.mouseEnter(trigger.parentElement as HTMLElement);
+
+    const wrapper = container.querySelector('span[data-plan-step-active="true"]');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.classList.contains('session-status-breathing')).toBe(false);
+    expect(wrapper?.getAttribute('data-plan-step-breathing')).toBe('false');
+    expect(wrapper?.querySelector('svg')).not.toBeNull();
+  });
+
   it('breathes the active row on an HTML wrapper when the flyout is open', () => {
     const { container } = render(<TodoListCard todos={TODOS} animated />);
 

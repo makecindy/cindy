@@ -100,12 +100,14 @@ function ProgressRing({
 
 export function TodoListCard({
   todos,
+  animated = false,
   maxWidth,
 }: {
   todos: TodoItem[];
   /**
-   * Kept for source compatibility with older callers. Plan progress is intentionally
-   * static now, so this flag no longer enables an infinite animation.
+   * 会话是否真的在跑(调用方传 isStreaming)。只有它为真时,in_progress 行才挂
+   * 呼吸动画——计划因停止/失败/中断留在屏幕上时会话已空闲,继续呼吸等于谎报
+   * "这步还在执行"。胶囊上的进度环与其它形态始终静态,不受此参数影响。
    */
   animated?: boolean;
   /** Composer/chat column width. Keeps the flyout inside clipped compact panes. */
@@ -264,9 +266,15 @@ export function TodoListCard({
                       {todo.status === 'in_progress' && (
                         // 呼吸表达"正在干活":挂侧栏运行态同款动画。按 SVG 常驻
                         // 动画红线,动画在 span wrapper 上,SVG 本体保持静态。
+                        // 会话空闲(停止/失败/中断后计划仍留屏)时静止:动画只在
+                        // 确有 running 语义时挂载,否则等于谎报该步骤仍在执行。
                         <span
                           data-plan-step-active="true"
-                          className="session-status-breathing inline-flex shrink-0"
+                          data-plan-step-breathing={animated ? 'true' : 'false'}
+                          className={cn(
+                            'inline-flex shrink-0',
+                            animated && 'session-status-breathing',
+                          )}
                         >
                           <CircleDot
                             size={18}
