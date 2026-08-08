@@ -755,9 +755,14 @@ export default function NewRemoteSessionScreen() {
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
   // fail-open 返回 unauthenticated=false 放行(review P2:不把空回包升级成硬拦截)。
   // fresh = 本次现拉的工作站目录(管线鉴权后联合校验用,codex review P2)。
-  const confirmAgentUnauthenticated = useCallback(async (agentKind: NewSessionAgentKind) => {
+  const confirmAgentUnauthenticated = useCallback(async (agentKind: NewSessionAgentKind, deviceId: string) => {
     try {
-      const fresh = await maker.listProviders();
+      // 经 fetchDeviceProvidersFresh 拉取(codex review P2:将最终鉴权目录同步回
+      // 供应商缓存)——直接 listProviders 只把响应交给管线,不更新/驱逐缓存:提交
+      // guard 已缓存来源 A、建链后鉴权终检看到 B 并用 B 创建时,跳转后
+      // useDeviceProviders 命中仍为 A 的缓存并标记 ready:true,UI 与后续选择与
+      // 实际创建脱节。fresh 拉取会按设备与代际写回同一缓存并通知订阅者。
+      const fresh = await fetchDeviceProvidersFresh(deviceId, () => maker.listProviders());
       return {
         unauthenticated: fresh.providers.length > 0
           && connectedProvidersForAgent(fresh.providers, agentKind).length === 0,
@@ -3870,7 +3875,7 @@ export default function NewRemoteSessionScreen() {
       // 目录缓存可能过期(用户刚在电脑端配好 key):拦截前现拉一遍确认;确认不了
       // (已连接 / 空目录 / 拉失败)时缓存判死已不可信,清掉重取并放行。
       if (agentAuthVerdict === 'unauthenticated') {
-        if ((await confirmAgentUnauthenticated(effectiveDraft.agentKind)).unauthenticated) {
+        if ((await confirmAgentUnauthenticated(effectiveDraft.agentKind, selectedDeviceId)).unauthenticated) {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           setError(agentAuthGateHint(effectiveDraft.agentKind));
@@ -4219,7 +4224,7 @@ export default function NewRemoteSessionScreen() {
         // 表单内预检放行(新来源已连接/空响应/瞬断)后还要经历 worktree、目录
         // guard、建链、订阅多个 await,期间来源可能再变——verdict 分支若把管线
         // fresh 替换成 null 会绕过最后的联合终检。
-        confirmUnauthenticated: () => confirmAgentUnauthenticated(agentKindSnapshot),
+        confirmUnauthenticated: () => confirmAgentUnauthenticated(agentKindSnapshot, deviceIdSnapshot),
         // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):建链/鉴权
         // 期间工作站可能已替换 provider——patch 覆盖本次创建,不再向已删除来源发。
         revalidateDraftAfterAuth: async (fresh) => {
@@ -4448,7 +4453,7 @@ export default function NewRemoteSessionScreen() {
       // fireTurn 的鉴权失败,用户会被带进一个永远跑不起来的目标会话——比普通路径更需要
       // 提前拦截。判定与 create() 完全同款:缓存判死先现拉确认;ready/unknown 与建链并行重验。
       if (agentAuthVerdict === 'unauthenticated') {
-        if ((await confirmAgentUnauthenticated(draft.agentKind)).unauthenticated) {
+        if ((await confirmAgentUnauthenticated(draft.agentKind, selectedDeviceId)).unauthenticated) {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           setGoalError(agentAuthGateHint(draft.agentKind));
@@ -4461,7 +4466,7 @@ export default function NewRemoteSessionScreen() {
       const freshAuth: Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null }> =
         agentAuthVerdict === 'unauthenticated'
           ? Promise.resolve({ unauthenticated: false, fresh: null })
-          : confirmAgentUnauthenticated(draft.agentKind);
+          : confirmAgentUnauthenticated(draft.agentKind, selectedDeviceId);
       if (!isCurrentOwner()) return;
       // Resolve the fresh auth check before any worktree副作用. A Goal auth
       // rejection must not leave a managed directory behind just because its
