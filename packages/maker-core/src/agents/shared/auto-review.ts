@@ -1427,7 +1427,12 @@ const INTERPRETER_VALUELESS_OPTIONS: readonly { match: RegExp; opts: ReadonlySet
 function analyzeInterpreterArgs(
   bin: string,
   args: readonly string[],
-): { scriptOperands: string[]; usesModuleSelector: boolean; usesInlineCode?: boolean } {
+): {
+  scriptOperands: string[];
+  usesModuleSelector: boolean;
+  usesInlineCode?: boolean;
+  usesInteractive?: boolean;
+} {
   // 表里没有这个解释器 ≠ 它的选项都不吃参数。**同一套解析对所有会执行 stdin 的解释器生效**:
   // 未建模的族(php 的 `-d display_errors=1`、lua、pwsh、julia…)一样按「表外选项 → fail-closed」
   // 处理,否则 `printf '<?php …' | php -d display_errors=1` 会把 `display_errors=1` 当脚本文件,
@@ -1441,9 +1446,20 @@ function analyzeInterpreterArgs(
   // 这里只需要名字(用来判**位置**),载荷本身仍由那个函数取。
   const inlineCodeFlags = new Set(INTERPRETER_INLINE_CODE_FLAGS(bin).map((f) => f.toLowerCase()));
   const operands: string[] = [];
+  let usesInteractive = false;
   for (const token of args) {
     if (token === '--') continue;
     if (token.startsWith('-')) {
+      // 交互模式 = 把 stdin 当 REPL 输入逐行执行,**无论有没有脚本或内联代码**
+      // (`node -i -e 'x'`、`node -i run.js` 都仍然会跑 stdin 送进来的代码)。
+      // 只对 node 家族判:这一族把 `-i` / `--interactive` 登记成了普通无值开关,于是
+      // 「有内联代码 / 有脚本文件 → 程序不来自 stdin」的结论被错误地套了上去(review 报)。
+      // python 的 `-i` 走的是表外 fail-closed、ruby/perl 的 `-i` 是**就地改文件**而非
+      // 交互,语义不同不能共用一套判据。
+      if (/^(?:node|nodejs|bun|deno)$/.test(bin) && (token === '-i' || token === '--interactive')) {
+        usesInteractive = true;
+        continue;
+      }
       // `-m` / `--module`:程序来自具名模块,不读 stdin。两重限定缺一不可:
       //  - **只对真正支持模块启动的解释器生效**(python / pypy)。`bash -m` 是 job control
       //    开关、`node -m` / `ruby -m` 根本没有模块启动语义 —— 一律按模块选择器处理会让
@@ -1452,24 +1468,26 @@ function analyzeInterpreterArgs(
       //  - **必须在这次按位扫描里判**,不能在外面对整串 args 做 `some(t => t === '-m')`:
       //    `python3 -X -m` 里的 `-m` 是 `-X` 的值而不是选项位(review 五轮 P1)。
       if (supportsModuleStartup && (token === '-m' || token === '--module')) {
-        return { scriptOperands: operands, usesModuleSelector: true };
+        return { scriptOperands: operands, usesModuleSelector: true, usesInteractive };
       }
       // 内联代码 flag(`-c` / `-e` / `--eval` …)同样只有落在**真实选项位**才代表「程序是
       // 字面量」。`python3 -X -c` 里的 `-c` 是 `-X` 的值 —— 按整串 argv 搜索会误判成源码
       // 选项、把 stdin 即程序降进灰区(review 报,与 `-m` 是同一类错误的另一半)。
       if (inlineCodeFlags.has(token.toLowerCase())) {
-        return { scriptOperands: operands, usesModuleSelector: false, usesInlineCode: true };
+        return {
+          scriptOperands: operands, usesModuleSelector: false, usesInlineCode: true, usesInteractive,
+        };
       }
       // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
       if (valueless.has(token) || token.includes('=')) continue;
       // 表外选项:可能吃掉下一个参数 → 无法证明后面还有真正的脚本文件,fail-closed。
       // 这一步同时吃掉「`-m` 是某个未知选项的值」那种形态:扫描在此终止,`-m` 永远走不到
       // 上面的模块分支。
-      return { scriptOperands: [], usesModuleSelector: false };
+      return { scriptOperands: [], usesModuleSelector: false, usesInteractive };
     }
     operands.push(token);
   }
-  return { scriptOperands: operands, usesModuleSelector: false };
+  return { scriptOperands: operands, usesModuleSelector: false, usesInteractive };
 }
 
 /**
@@ -1498,16 +1516,19 @@ const STRING_REPARSING_WRAPPER_OPTIONS = /^(?:-S|--split-string(?:=.*)?)$/;
  * (shell 的 `-c`)。它们本就是 `interpreterReadsProgramFromStdin` 判「程序是不是字面量」
  * 用的同一份知识,复用即同族一次覆盖,将来加解释器也不会再漏这一侧。
  */
-function xargsPlaceholderFeedsInterpreterSource(argv: string[], placeholder: string): boolean {
+function replacementFeedsInterpreterSource(
+  argv: string[],
+  matches: (token: string) => boolean,
+): boolean {
   const inlineCode = interpreterInlineCodePayload(argv);
-  if (inlineCode !== null && inlineCode.includes(placeholder)) return true;
+  if (inlineCode !== null && matches(inlineCode)) return true;
   const shellPayload = shellCommandPayload(argv);
-  if (shellPayload !== null && shellPayload.includes(placeholder)) return true;
+  if (shellPayload !== null && matches(shellPayload)) return true;
   // `python3 -m {}`:模块名由 stdin 决定 = stdin 选择跑哪个程序,与源码注入同级。
   const bin = executableName(argv[0] ?? '');
   if (/^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin)) {
     const moduleIndex = argv.findIndex((t) => t === '-m' || t === '--module');
-    if (moduleIndex >= 0 && argv[moduleIndex + 1]?.includes(placeholder) === true) return true;
+    if (moduleIndex >= 0 && matches(argv[moduleIndex + 1] ?? '')) return true;
   }
   return false;
 }
@@ -1545,6 +1566,69 @@ function xargsStdinFillsProgramSlot(tokens: string[]): boolean {
   return false;
 }
 
+/**
+ * GNU parallel 的替换串:`{}` `{.}` `{/}` `{//}` `{/.}` `{#}` `{%}` `{1}` `{2.}` …
+ * 与 xargs 的 `-I` 占位符是同一件事 —— 值由 stdin 的输入行填,只是 parallel 缺省就带。
+ */
+const PARALLEL_REPLACEMENT = /\{[^{}\s]*\}/;
+
+/**
+ * 占位符是否落在**程序位**(命令名 / 模块名 / 内联源码 / 第一个脚本操作数)。
+ *
+ * xargs 的 `-I` 与 parallel 的 `{}` 共用这一个入口 —— 两者的语义完全一样:替换值来自
+ * stdin,落在程序位就等于「跑什么由 stdin 决定」。`matches` 由调用方给:xargs 传具体
+ * 占位符的包含判定,parallel 传替换串正则。
+ */
+function replacementDrivesProgramSlot(
+  nested: string[],
+  matches: (token: string) => boolean,
+): boolean {
+  // 形态 2:占位符虽在**参数位**,却仍是程序来源。两类都要判(带包装器与不带各查一遍,
+  // `xargs -I{} env node -e '{}'` 只有剥掉 `env` 之后才看得见 node 的 `-e`):
+  //   a) 会把字符串重新解析成命令的包装器选项(`env -S "{}"`);
+  //   b) 解释器的源码 / 模块参数(`node -e '{}'`、`php -r '{}'`、`python3 -m {}` …)。
+  // 包装链形态很多(`env node -e`、`env FOO=1 node -e`、`nohup node -e`、`timeout 5 node -e`),
+  // `unwrapWrappers` 只认得其中一部分 —— 实测 `xargs -I{} env node -e '{}'` 剥不出来。
+  // 与其依赖它,不如**从每个解释器起点扫后缀**:任意前缀是什么包装器都不影响判定。
+  const argvVariants = [nested, unwrapWrappers(nested)];
+  for (let i = 0; i < nested.length; i++) {
+    if (isPipeExecutor(executableName(nested[i] ?? ''))) argvVariants.push(nested.slice(i));
+  }
+  for (const argv of argvVariants) {
+    if (argv.some((t, k) => STRING_REPARSING_WRAPPER_OPTIONS.test(t)
+      && (matches(argv[k + 1] ?? '') || matches(t)))) return true;
+    if (replacementFeedsInterpreterSource(argv, matches)) return true;
+    // c) 占位符落在解释器的**脚本操作数位**(`xargs -I{} python3 {}`、`parallel python3 {}`):
+    //    跑哪个脚本由 stdin 决定,与「程序位空着等 stdin 补」是同一件事的显式写法。
+    //    只看**第一个**操作数 —— 它才是程序;后面的操作数是传给脚本的 argv,
+    //    `xargs -I{} node run.js {}` 跑的始终是 run.js,占位符在那里只是数据。
+    const abin = executableName(argv[0] ?? '');
+    const firstOperand = analyzeInterpreterArgs(abin, argv.slice(1)).scriptOperands[0];
+    if (isPipeExecutor(abin) && firstOperand !== undefined && matches(firstOperand)) return true;
+  }
+  // 形态 1:占位符就是命令名(包装器剥离前后的首个 token)。
+  // 比对**原 token 与归一化后的 bin 两者**:`executableName` 会做小写/取基名等归一化,
+  // 只比归一化结果时 `-I PH … PH`(大小写)与 `-I{} … {}`(特殊字符)会漏判 —— 实测
+  // 只有 `-I % … %` 这种恰好归一化不变的形态能命中,等于判据大半失效。
+  // `unwrapWrappers` 还会改写某些形态的首 token,所以剥与不剥都要比。
+  return [nested[0] ?? '', unwrapWrappers(nested)[0] ?? '']
+    .some((t) => matches(t) || matches(executableName(t)));
+}
+
+/**
+ * parallel 的替换串是否落在程序位。与 xargs 的区别只在:占位符是缺省的、而且 parallel
+ * 的选项集合没有建模 —— 所以命令位从 `positionalOperands` 取,解释器位仍靠后缀扫描,
+ * 两条路都不依赖完整的选项表。
+ */
+function parallelReplacementDrivesCommand(tokens: string[]): boolean {
+  const rest = tokens.slice(1);
+  if (!rest.some((t) => PARALLEL_REPLACEMENT.test(t))) return false;
+  const matches = (t: string) => PARALLEL_REPLACEMENT.test(t);
+  const operands = positionalOperands(rest);
+  if (operands.length > 0 && replacementDrivesProgramSlot(operands, matches)) return true;
+  return replacementDrivesProgramSlot(rest, matches);
+}
+
 function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   // 占位符解析必须区分「吃下一个参数」和「用缺省 {}」两类,否则会把命令名当成占位符:
   //   -I R / -I{}         GNU xargs 的 -I **必须**带参数(分离或紧贴);
@@ -1565,41 +1649,7 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   if (!placeholder) return false;
   const nested = xargsCommandTokens(tokens);
   if (nested === null) return false;                              // 选项形态未知,交既有分支处理
-  // 形态 2:占位符虽在**参数位**,却仍是程序来源。两类都要判(带包装器与不带各查一遍,
-  // `xargs -I{} env node -e '{}'` 只有剥掉 `env` 之后才看得见 node 的 `-e`):
-  //   a) 会把字符串重新解析成命令的包装器选项(`env -S "{}"`);
-  //   b) 解释器的源码 / 模块参数(`node -e '{}'`、`php -r '{}'`、`python3 -m {}` …)。
-  // 包装链形态很多(`env node -e`、`env FOO=1 node -e`、`nohup node -e`、`timeout 5 node -e`),
-  // `unwrapWrappers` 只认得其中一部分 —— 实测 `xargs -I{} env node -e '{}'` 剥不出来。
-  // 与其依赖它,不如**从每个解释器起点扫后缀**:任意前缀是什么包装器都不影响判定。
-  const argvVariants = [nested, unwrapWrappers(nested)];
-  for (let i = 0; i < nested.length; i++) {
-    if (isPipeExecutor(executableName(nested[i] ?? ''))) argvVariants.push(nested.slice(i));
-  }
-  for (const argv of argvVariants) {
-    if (argv.some((t, k) => STRING_REPARSING_WRAPPER_OPTIONS.test(t)
-      && (argv[k + 1]?.includes(placeholder) === true || t.includes(placeholder)))) return true;
-    if (xargsPlaceholderFeedsInterpreterSource(argv, placeholder)) return true;
-    // c) 占位符落在解释器的**脚本操作数位**(`xargs -I{} python3 {}`):跑哪个脚本由 stdin
-    //    决定,与「程序位空着等 stdin 补」是同一件事的显式写法。
-    //    只看**第一个**操作数 —— 它才是程序;后面的操作数是传给脚本的 argv,
-    //    `xargs -I{} node run.js {}` 跑的始终是 run.js,占位符在那里只是数据。
-    const abin = executableName(argv[0] ?? '');
-    if (isPipeExecutor(abin)
-      && analyzeInterpreterArgs(abin, argv.slice(1)).scriptOperands[0]
-        ?.includes(placeholder) === true) return true;
-  }
-  // 形态 1:占位符就是命令名(包装器剥离后的首个 token)。
-  // 比对**原 token 与归一化后的 bin 两者**:`executableName` 会做小写/取基名等归一化,
-  // 只比归一化结果时 `-I PH … PH`(大小写)与 `-I{} … {}`(特殊字符)会漏判 —— 实测
-  // 只有 `-I % … %` 这种恰好归一化不变的形态能命中,等于判据大半失效。
-  // 三种口径都比:未剥包装器的首 token、剥掉包装器后的首 token、以及归一化后的 bin。
-  // 少任何一种都有实测漏判 —— `executableName` 做小写/取基名归一化(`-I PH` 漏),
-  // `unwrapWrappers` 还会改写某些形态的首 token(`-I{}` 漏),只有 `-I %` 这种恰好三者
-  // 一致的形态能命中,等于判据大半失效。
-  const candidates = [nested[0] ?? '', unwrapWrappers(nested)[0] ?? ''];
-  return candidates.some((t) => t === placeholder || t.includes(placeholder)
-    || executableName(t) === placeholder || executableName(t).includes(placeholder));
+  return replacementDrivesProgramSlot(nested, (t) => t.includes(placeholder as string));
 }
 
 function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
@@ -1623,6 +1673,9 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
     const nested = bin === 'xargs' ? xargsCommandTokens(tokens) : tokens.slice(1);
     if (nested !== null && nested.length > 0
       && interpreterReadsProgramFromStdin(unwrapWrappers(nested))) return true;
+    // 注:parallel 的 `{}` 占位符判定同样**不在这里** —— 与 xargs 一样,本分支拿到的
+    // tokens 已被 `unwrapCommand` 剥掉 parallel 自己,挂在这里就是死代码。真正的调用点
+    // 在 `highImpactExecutionNeedsConsent`,按未剥离的 literalTokens 判。
     // 注:`-I` 占位符落在命令位的判定**不在这里** —— 本分支拿到的 tokens 已被
     // `unwrapCommand` 剥掉 xargs 本身,挂在这里是死代码。真正的调用点在
     // `highImpactExecutionNeedsConsent` 的 xargs 块(按 rawTokens 判)。
@@ -1652,8 +1705,9 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // 两者必须同源,否则 `python3 -X -m` 里作为 `-X` 值的 `-m` 会被误当模块选择器,绕过
   // fail-closed(review 五轮 P1)。裸 `-` 是 stdin 占位符,不算脚本文件
   // (`curl … | python3 -` 仍必须是红线)。
-  const { scriptOperands, usesModuleSelector, usesInlineCode } =
+  const { scriptOperands, usesModuleSelector, usesInlineCode, usesInteractive } =
     analyzeInterpreterArgs(bin, tokens.slice(1));
+  if (usesInteractive) return true;                     // `node -i …`:stdin 进 REPL 直接执行
   if (usesModuleSelector) return false;                 // `python3 -m json.tool`:具名模块
   if (usesInlineCode) return false;                     // `python3 -c '…'`:程序是字面量
   if (scriptOperands.filter((t) => t !== '-').length > 0) return false;
@@ -1982,6 +2036,11 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     if (executableName(literalTokens[0] ?? '') === 'xargs'
       && (xargsReplacementDrivesCommand(literalTokens)
         || xargsStdinFillsProgramSlot(literalTokens))) return true;
+    // parallel 的 `{}` 与 xargs 的 `-I` 占位符是同一件事(值由 stdin 的输入行填),只是
+    // parallel 缺省就带 —— 落在程序位同样是「跑什么由 stdin 决定」(review 报)。
+    // 与上面同理:必须用未剥离的 literalTokens,parallel 自己已经被 unwrapCommand 剥掉了。
+    if (executableName(literalTokens[0] ?? '') === 'parallel'
+      && parallelReplacementDrivesCommand(literalTokens)) return true;
     // 去引号+去反斜杠的 normalized 会抹掉 Windows 盘符路径的 `\` 分隔符,令 `"C:\…\pwsh.exe"` 这类
     // 完整路径解释器识别不出(copilot 报)→ 额外用保留反斜杠的 rawTokens 求一次 bin,任一命中即算执行器。
     const rawBin = executableName(rawTokens[0] ?? '');

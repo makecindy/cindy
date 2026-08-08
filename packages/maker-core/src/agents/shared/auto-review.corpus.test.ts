@@ -660,6 +660,46 @@ describe('review 第十轮 — stdin 补程序位 / 分页器环境变量', () =
   });
 });
 
+/**
+ * 第十一轮 review 的 2 条:交互模式让 stdin 进 REPL,以及 parallel 的缺省占位符。
+ * 两条同属「实际执行内容由 stdin 决定」,占位符那条与 xargs 的 `-I` 收进同一个入口。
+ */
+describe('review 第十一轮 — 交互模式 / parallel 缺省占位符', () => {
+  it('node 交互模式:即使给了脚本或内联代码,stdin 仍会被当 REPL 输入执行', () => {
+    for (const c of [
+      `printf 'x' | node -i -e 'console.log(1)'`,
+      `printf 'x' | node -i run.js`,
+      `printf 'x' | node --interactive run.js`,
+      `printf 'x' | node -i`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('parallel 的 `{}` 落在程序位 = stdin 决定跑什么', () => {
+    for (const c of [
+      `printf 'rm -rf /outside' | parallel {}`,            // 命令位
+      `printf 'evilmod' | parallel python3 -m {}`,          // 模块位
+      `printf 'x' | parallel node -e {}`,                   // 内联源码位
+      `printf '/tmp/evil.py' | parallel python3 {}`,        // 首个脚本操作数
+      `printf '/tmp/e.py' | parallel -j2 python3 {}`,       // 带 parallel 自己的选项
+      `printf 'x' | parallel python3 {.}`,                  // 替换串变体
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('占位符落在**数据位**时不升级', () => {
+    // 与 `xargs -I{} node run.js {}` 同一条判据:只有第一个操作数才是程序。
+    for (const c of [
+      `printf 'x' | parallel echo {}`,
+      `printf 'x' | parallel wc -l {}`,
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt');
+    }
+  });
+});
+
 describe('语料回归 — gh 只读子命令', () => {
   it('gh 查询类 → auto-approve(纯读,实机高频)', () => {
     for (const c of [
