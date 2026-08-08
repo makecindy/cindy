@@ -156,6 +156,21 @@ test("client CI builds model-access protocol before consumer checks", () => {
 	}
 });
 
+test("Linux unit shards reject unsafe protocol gitlinks before installing dependencies", () => {
+	const workflow = fs.readFileSync(
+		path.join(ROOT, ".github", "workflows", "ci.yml"),
+		"utf8",
+	).replace(/\r\n/g, "\n");
+	const body = workflow.match(/\n  linux-unit-shards:\n([\s\S]*?)\n  verify:/)?.[1];
+	assert.ok(body, "client CI must define Linux unit shards");
+	const fetchIndex = body.indexOf("git submodule update --init --force --recursive -- cindy-protocol");
+	const guardIndex = body.indexOf("run: node scripts/check-submodule-forward.mjs");
+	const installIndex = body.indexOf("run: pnpm install --frozen-lockfile");
+	assert.ok(fetchIndex >= 0, "Linux unit shards must fetch cindy-protocol");
+	assert.ok(guardIndex > fetchIndex, "Linux unit shards must validate the fetched protocol gitlink");
+	assert.ok(installIndex > guardIndex, "Linux unit shards must reject unsafe gitlinks before install");
+});
+
 test("help groups copyable desktop, binary, and Mobile workflows", async () => {
 	const { printHelp } = await import("../help.mjs");
 	const lines = [];
