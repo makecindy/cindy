@@ -8,13 +8,14 @@
  * React 接线。优雅回退:被控端为旧版(allowlist 无 `maker:provider:list`)→ listProviders
  * reject → 暴露 error,调用方回退到基于 capabilities 的扁平模型列表。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
 
 import { useDeviceLink } from './DeviceLinkContext';
 import {
   fetchDeviceProviders,
+  fetchDeviceProvidersFresh,
   getCachedDeviceProviders,
   getDeviceProvidersGen,
   subscribeDeviceProviders,
@@ -68,6 +69,10 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
   const [readyGen, setReadyGen] = useState<number>(() =>
     deviceId ? getDeviceProvidersGen(deviceId) : 0,
   );
+  // 上一次 effect 运行时的连接代际:重连(epoch 变化)后缓存命中分支必须强制刷新
+  // (codex review P1)——relay 断线期间被控端可能已改供应商且无 provider push,
+  // 缓存命中短路会让模型选择器无限期展示旧来源。null = 首次挂载(正常缓存命中)。
+  const prevEpochRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!deviceId) {
@@ -105,7 +110,12 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
         .catch(() => undefined); // fire-and-forget;失败保持未就绪(readyFor 已清)
     });
     const cached = getCachedDeviceProviders(deviceId);
-    if (cached) {
+    // 重连(connectionEpoch 变化)后缓存命中也要强制刷新(codex review P1):
+    // relay 断线期间被控端可能已改供应商且无 provider push,直接短路会无限期
+    // 展示旧来源。首次挂载(prevEpochRef null)走正常缓存命中快路径。
+    const reconnected = prevEpochRef.current !== null && prevEpochRef.current !== connectionEpoch;
+    prevEpochRef.current = connectionEpoch;
+    if (cached && !reconnected) {
       setPayload(cached);
       setError(null);
       // Reset loading on the cache-hit path too: if a prior device's fetch is still in flight
@@ -116,6 +126,26 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setReadyGen(getDeviceProvidersGen(deviceId));
       // 缓存命中分支也必须返回统一 cleanup(codex review P2):只退 payload 订阅会让
       // 代际订阅漏订存活——切走后旧设备的 evict 通知仍会 setReadyFor(null),误伤新设备。
+      return () => {
+        cancelled = true;
+        unsubscribe();
+        unsubscribeGen();
+      };
+    }
+    if (cached && reconnected) {
+      // 重连 + 缓存命中:旧目录先展示,但保持未就绪并强制 fresh 刷新拿工作站
+      // 当前真相;成功经 payload 订阅恢复 ready(与 cache-miss 分支同恢复路径)。
+      setPayload(cached);
+      setLoading(true);
+      setReadyFor(null);
+      fetchDeviceProvidersFresh(deviceId, () => maker.listProviders())
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          setError(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
       return () => {
         cancelled = true;
         unsubscribe();
