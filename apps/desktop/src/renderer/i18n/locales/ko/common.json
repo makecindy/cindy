@@ -5374,7 +5374,7 @@
       "handoffRecoveredGoal": "지난번 협업 시작이 중단되었습니다. 목표가 시작되지 않아 내용을 입력창에 복원했습니다.",
       "loadingHint": "협업 설정을 확인하는 중입니다. 잠시 후 다시 시도하세요.",
       "planModeUnavailableRemoteDraft": "원격 초안에서는 계획 모드를 사용할 수 없습니다.",
-      "planModeUnsupportedRemote": "이 세션에서는 계획 모드를 사용할 수 없습니다.",
+      "planModeUnsupportedSession": "이 세션에서는 계획 모드를 사용할 수 없습니다.",
       "planModeToggleWithAttachments": "초안 첨부 파일을 유지하면서 계획 모드를 전환하려면 + 메뉴를 사용하세요.",
       "planModeCapabilitiesLoading": "이 세션에서 계획 모드를 사용할 수 있는지 확인하는 중입니다…",
       "stopHint": "협업 중지",

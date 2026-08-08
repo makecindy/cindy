@@ -55,7 +55,7 @@ function planBranchSource(): string {
   // 用分支内具体调用链锚定(而非宽泛的 .catch( —— 分支外残留 .catch( 会造成假阳性,
   // Copilot):setPlanMode(nextEnabled).catch / 不支持 toast。
   const catchIdx = sessionViewSource.indexOf('setPlanMode(nextEnabled).catch', idx);
-  const toastIdx = sessionViewSource.indexOf('planModeUnsupportedRemote', idx);
+  const toastIdx = sessionViewSource.indexOf('planModeUnsupportedSession', idx);
   const markers = [catchIdx, toastIdx].filter((v) => v >= 0);
   if (markers.length === 0) throw new Error('no branch end marker after plan branch');
   return sessionViewSource.slice(idx, Math.max(...markers) + 200);
@@ -104,7 +104,7 @@ describe('/plan slash command contract', () => {
     expect(branch).toContain('sessionCaps == null');
     expect(branch).toContain('planModeCapabilitiesLoading');
     expect(branch).toContain('sessionCaps.planMode?.supported === true');
-    expect(branch).toContain('planModeUnsupportedRemote');
+    expect(branch).toContain('planModeUnsupportedSession');
     expect(branch).toContain('toast.warning(');
   });
 

@@ -1874,7 +1874,7 @@ export function CCAgentSessionView({
               log.warn('plan command: failed to toggle plan mode', err);
             });
           } else {
-            toast.warning(t('newChat.collaboration.planModeUnsupportedRemote'));
+            toast.warning(t('newChat.collaboration.planModeUnsupportedSession'));
           }
         }
         return;
@@ -2441,7 +2441,9 @@ export function CCAgentSessionView({
   const pendingIssueFilesRef = useRef<AttachedFile[] | undefined>(undefined);
 
   const maybeDispatchDesktopSlashCommand = useCallback(
-    async (message: string, files?: AttachedFile[]): Promise<boolean> => {
+    // 'preserve' = desktop 命令已确认但不应清空 composer(desktop /plan + 附件):
+    // 调用方(ChatInput accepted 路径)应保留草稿(Codex P2)。
+    async (message: string, files?: AttachedFile[]): Promise<boolean | 'preserve'> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
       if (!slashMatch) return false;
       const cmdName = slashMatch[1].toLowerCase();
@@ -2468,6 +2470,14 @@ export function CCAgentSessionView({
           if (freshHit && freshHit.kind !== 'desktop') return false;
         } catch {
           // 复核失败沿用旧判断,不阻断发送。
+        }
+        // 归属确认后才应用附件保护(Codex P2):装了名为 plan 的 agent skill 且带附件时,
+        // palette 会解析为 skill —— 上面已放行(freshHit 非 desktop),skill + 附件正常
+        // 发送给 agent;只有**明确命中 desktop** /plan 且 composer 已带附件时才不消费:
+        // 接受命令会走 ChatInput accepted 清理清掉附件,而「+」菜单 toggle 不动草稿。
+        if (files?.length) {
+          toast.info(t('newChat.collaboration.planModeToggleWithAttachments'));
+          return 'preserve';
         }
       }
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
@@ -2594,19 +2604,15 @@ export function CCAgentSessionView({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      // 纯 /plan + 已带附件:接受命令会走 ChatInput 的 accepted 清理(clearSentComposer
-      // → clearFiles),把正在编辑的附件静默删掉,而「+」菜单 toggle 完全不动草稿
-      // (Codex)。附件存在时**不消费** /plan —— toast 引导用 + 菜单切换,返回 false
-      // 让 ChatInput 保留 composer(文本 + 附件原样)。
-      if (
-        deliveryMode !== 'steer' &&
-        files?.length &&
-        /^\/plan\s*$/i.test(message.trim())
-      ) {
-        toast.info(t('newChat.collaboration.planModeToggleWithAttachments'));
+      // desktop /plan + 附件保护在 maybeDispatchDesktopSlashCommand 内部、归属确认
+      // 之后处理(Codex P2):返回 'preserve' 表示「已处理但保留草稿」—— ChatInput
+      // accepted 清理会静默删附件,这里 return false 让 composer(文本 + 附件)原样保留。
+      const desktopDispatch =
+        deliveryMode !== 'steer' ? await maybeDispatchDesktopSlashCommand(message, files) : false;
+      if (desktopDispatch === 'preserve') {
         return false;
       }
-      if (deliveryMode !== 'steer' && (await maybeDispatchDesktopSlashCommand(message, files))) {
+      if (desktopDispatch) {
         return;
       }
 
@@ -3069,8 +3075,9 @@ export function CCAgentSessionView({
         }
         // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
         // resolve false / 抛错都保留(见该函数注释)。
+        // 'preserve'(desktop /plan + 附件)视为已处理:附件保护已 toast,不重发。
         const dispatched = await deliverRecoverableHandoff(sessionId, () =>
-          maybeDispatchDesktopSlashCommand(pending.text, pending.files),
+          maybeDispatchDesktopSlashCommand(pending.text, pending.files).then((r) => r !== false),
         );
         if (dispatched) return;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
