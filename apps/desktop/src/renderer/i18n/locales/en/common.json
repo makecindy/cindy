@@ -2677,6 +2677,77 @@
         "toggleFailed": "Failed to switch silent encrypted-content retry"
       }
     },
+    "localProxy": {
+      "title": "Model Proxy",
+      "subtitle": "Open the local service to command-line tools on your own machine: set a few environment variables to reuse the providers and credentials configured here. Compatible with both Anthropic API clients (such as Claude Code) and OpenAI API clients (such as Codex and other OpenAI-compatible tools).",
+      "address": "Address",
+      "notReady": "Service not ready",
+      "copy": "Copy",
+      "port": "Port",
+      "portPlaceholder": "Auto",
+      "applyPort": "Apply",
+      "portHint": "Enabling the service pins the current port. Changing it restarts the local service and may interrupt in-flight requests.",
+      "token": "Access token",
+      "regenerate": {
+        "button": "Reset",
+        "title": "Reset access token?",
+        "description": "The old token stops working immediately. Any external client you configured must switch to the new token.",
+        "confirm": "Reset"
+      },
+      "defaultProvider": "Default provider",
+      "defaultProviderNone": "None (route by model name)",
+      "noProviders": "No routable providers yet. Add and configure one above first.",
+      "defaultProviderHint": "Used as a fallback when a model name doesn't map to a single provider.",
+      "copyEnv": "Copy environment variables",
+      "writeConfig": {
+        "button": "Write Claude Code config",
+        "title": "Write Claude Code config?",
+        "descExisting": "Connection details will be merged into your existing config file ({{path}}), keeping other fields.",
+        "descNew": "A config file will be created with the connection details ({{path}}).",
+        "confirm": "Write",
+        "overwriteWarning": "These existing entries will be overwritten: {{keys}}"
+      },
+      "toast": {
+        "updateFailed": "Update failed",
+        "invalidPort": "Port must be between 1 and 65535",
+        "portApplied": "Port updated",
+        "tokenReset": "Access token reset",
+        "copied": "Copied",
+        "copyFailed": "Copy failed",
+        "envCopied": "Environment variables copied",
+        "tokenCopied": "Access token copied",
+        "notReady": "Service not ready",
+        "configWritten": "Config written",
+        "configWriteFailed": "Failed to write config",
+        "codexPortApplied": "Port updated",
+        "codexEnvCopied": "Environment variables copied",
+        "codexNotReady": "Codex service not ready",
+        "codexConfigWritten": "Codex config written",
+        "codexConfigWriteFailed": "Failed to write Codex config"
+      },
+      "anthropic": {
+        "title": "Claude Code / Anthropic",
+        "subtitle": "For tools that speak the Anthropic format, such as Claude Code: point ANTHROPIC_BASE_URL at the local port."
+      },
+      "openai": {
+        "title": "Codex / OpenAI",
+        "subtitle": "For tools that speak the OpenAI format: Codex uses Responses, other tools use Chat Completions, on a separate local port.",
+        "address": "Service address",
+        "port": "Port",
+        "portHint": "Enabling the service pins the current port; changing it restarts the local Codex service and may interrupt in-flight requests.",
+        "defaultProvider": "Default provider",
+        "defaultProviderHint": "Falls back to this provider when the model name doesn't map to a single provider.",
+        "copyEnv": "Copy environment variables",
+        "writeConfig": {
+          "button": "Write Codex config",
+          "title": "Write Codex config?",
+          "descExisting": "Merges the connection details into the existing config file ({{path}}), keeping other fields.",
+          "descNew": "Creates the config file and writes the connection details ({{path}}).",
+          "confirm": "Write",
+          "tokenExportHint": "The access token is never written to the file. Set the following environment variable yourself in the terminal where you run Codex:"
+        }
+      }
+    },
     "remoteControl": {
       "title": "Remote Connection",
       "description": "Control your other signed-in devices remotely, or connect to a remote host over SSH.",

@@ -20,6 +20,7 @@ import {
   createImageGenerationIdRecoveryRule,
   createInstructionsInjectionTransform,
   createInstructionsRegistry,
+  isFetchBlockedPort,
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
@@ -33,7 +34,10 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 import {
   createResponsesChatHandler,
+  translateChatToResponsesRequest,
+  ResponsesSseToChatTranslator,
   type ChatBridgeCapabilities,
+  type ChatCompletionsRequest,
 } from '@cindy/responses-chat-bridge';
 import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
 import { createHash, randomUUID } from 'node:crypto';
@@ -60,7 +64,19 @@ import {
   resolveProviderOAuthControlRouteDecision,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
+  listExternalRoutableProviders,
+  resolveExternalCodexRoute,
+  buildRouteDecision,
 } from './provider-route.js';
+import {
+  isCindyLocalToken,
+  isCodexExternalAccessEnabled,
+  matchesCodexExternalToken,
+} from './local-proxy-external-auth.js';
+import {
+  loadLocalProxySettings,
+  setLocalProxyCodexPort,
+} from './local-proxy-settings-store.js';
 import { getSessionProvider } from './session-provider-store.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
@@ -96,6 +112,13 @@ const _controlPlaneHandles = new Map<CodexProxyAuthInjection, ProxyHandle>();
 const _controlPlaneStartPromises = new Map<CodexProxyAuthInjection, Promise<void>>();
 let _disposeGeneration = 0;
 let dumpSeq = 0;
+
+// 对外(B 族 = Codex/OpenAI)loopback 代理:与内部 _handle 分处**不同端口**(#1666 Finding 2 端口
+// 拆分)。绑用户在设置里固定的 codexPort,只挂 createExternalCodexRoutingTransform(无条件要求命中
+// 不可伪造的 B 族对外 token)。_externalStartPromise 做并发去重,避免 boot 与 set-codex-enabled 同时
+// 拉起两个。内部 _handle 回到加对外功能前的行为(随机端口、不承担任何对外判定)。
+let _externalHandle: ProxyHandle | null = null;
+let _externalStartPromise: Promise<void> | null = null;
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -1735,10 +1758,14 @@ function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
   };
 }
 
-function createXaiResponsesCompatTransform(): RequestTransform {
+function createXaiResponsesCompatTransform(external = false): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
-    const sessionId = sessionIdFromTransformCtx(ctx);
+    // 对外端口无 session 语义:external 时绝不读(外部客户端可伪造的)session header 去
+    // getSessionProvider,只按请求自身的 body.model 推断供应商——与 resolveExternalCodexRoute
+    // 的模型推断同源。否则伪造 session 可让 xAI schema 改写错误地施加到非 xAI 外部路由,或反过来
+    // 被跳过(#1666 review:external-safe chain)。
+    const sessionId = external ? undefined : sessionIdFromTransformCtx(ctx);
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const inferredProviderId =
       explicitProviderId ?? (typeof body.model === 'string' ? inferProviderIdForModel(body.model, 'codex') : null);
@@ -1763,7 +1790,9 @@ function createXaiResponsesCompatTransform(): RequestTransform {
     // 保证注入项不会被同一轮的裁剪逻辑改形或丢掉。
     // Guardian must retain xAI's schema/input compatibility, but it must not
     // gain provider-hosted search tools while reviewing another action.
-    if (!guardianParentThreadIdFromHeaders(ctx.headers)) {
+    // 对外端口同样不注入服务端 search 工具:与不注入 gateway web_search 对称,外部客户端没主动
+    // 要就不改其请求语义/计费(#1666 review)——仍保留 xAI 的 schema/input 归一化,请求照样可用。
+    if (!external && !guardianParentThreadIdFromHeaders(ctx.headers)) {
       const withServerSideTools = ensureXaiServerSideTools(current);
       if (withServerSideTools) {
         current = withServerSideTools;
@@ -1899,6 +1928,19 @@ function createProviderModelRewriteTransform(): RequestTransform {
     if (sessionId && explicitProviderId) return rewriteSessionModelIdForRoute(sessionId, 'codex', body);
     return rewriteImplicitModelIdForRoute('codex', body);
   };
+}
+
+/**
+ * 对外端口专用 model 改写:只做**隐式**(按请求自身 model 命名空间前缀)改写,绝不读 session。
+ *
+ * 内部端口的 createProviderModelRewriteTransform 在有 session + 显式供应商时会走
+ * rewriteSessionModelIdForRoute,按内部会话选定的供应商改写 model。对外端口若沿用它,外部客户端
+ * 只要伪造 x-codex-session-id 之类的 header 就能触发「按 Cindy 内部会话」的 model 改写,把内部
+ * 会话状态带进外部请求(#1666 review)。对外只按请求自身的 model 前缀改写,与
+ * resolveExternalCodexRoute 的模型推断同源,不受任何 client 提供的 session/thread header 影响。
+ */
+function createExternalCodexModelRewriteTransform(): RequestTransform {
+  return (body) => rewriteImplicitModelIdForRoute('codex', body);
 }
 
 function createDumpTransform(): RequestTransform {
@@ -2131,10 +2173,399 @@ export function decideCodexRoute(opts: {
   return { upstreamOverride: CODEX_OAUTH_UPSTREAM };
 }
 
+// ───────── 对外模型代理:Codex / 通用 OpenAI 客户端(external client)─────────
+// 用户自己的 Codex CLI(说 OpenAI Responses,打 `POST /responses`)或通用 OpenAI 工具(说 Chat
+// Completions,打 `POST /v1/chat/completions`)把 base_url 指向本 codex loopback、`Authorization:
+// Bearer` 设为 Cindy 生成的对外 token 时,这些请求没有 Cindy session。它们靠 Bearer 命中已存对外
+// token(matchesCodexExternalToken 只比值,B 族独立 token)被识别为「外部客户端」,走一条独立、无会话、按模型名/对外默认
+// 供应商的路由分支。
+//
+// 红线:codex 外部分支**只返回显式决策或错误 localHandler,绝不返回 null** —— 返回 null 会掉进
+// codex 默认网关转发、带着外部 token 透传上游 = 凭证泄漏/误计费。
+
+/** 从 ctx.url(可能带 query)取纯 path,小写化便于匹配。 */
+function requestPathname(url: string): string {
+  const q = url.indexOf('?');
+  return (q === -1 ? url : url.slice(0, q)).toLowerCase();
+}
+
+/**
+ * 从 `Authorization` 头取 Bearer token(大小写不敏感,去 "Bearer " 前缀);缺失 → ''。
+ * ⚠ 非 Bearer 方案(如 `Basic xxx`)一律视为「未提供 token」返回 '' —— 绝不回落原值:否则
+ *   `!externalToken` 有界拒绝判定会被一个随手伪造的 `Authorization: Basic xxx` 骗过(原值非空
+ *   → 判为「带了 token」→ 跳过 external_token_required 闸)(#1666 review)。
+ */
+function bearerToken(headers: Readonly<Record<string, string>>): string {
+  const raw = headerValue(headers, 'authorization');
+  if (!raw) return '';
+  const m = /^bearer\s+(.+)$/i.exec(raw);
+  return m ? m[1].trim() : '';
+}
+
+/** 外部分支统一的 OpenAI 错误信封(localHandler 完全接管,不转发上游)。 */
+function externalOpenAIError(status: number, code: string, message: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        error: {
+          message,
+          type: status === 401 || status === 403 ? 'authentication_error' : 'invalid_request_error',
+          code,
+        },
+      });
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+/** localHandler 内直接写 OpenAI 错误(响应头未发出时用)。 */
+function writeExternalOpenAIError(
+  res: import('node:http').ServerResponse,
+  status: number,
+  code: string,
+  message: string,
+): void {
+  const payload = JSON.stringify({
+    error: {
+      message,
+      type: status === 401 || status === 403 ? 'authentication_error' : 'invalid_request_error',
+      code,
+    },
+  });
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  res.end(payload);
+}
+
+/**
+ * 转发上游前从外部请求剥掉它自带的 `Authorization` 外部 token 头,防止透传上游。
+ * headerDelete 在 headerOverride **之后**应用 —— 决策已 override authorization(注入真实凭证)
+ * 时不能再 delete(否则净删真凭证);仅对决策没覆盖 authorization 的情况追加 delete →
+ * fail-closed(上游 401),不泄漏。
+ */
+function stripExternalTokenHeadersCodex(decision: RoutingDecision | null): RoutingDecision | null {
+  if (!decision || decision.localHandler) return decision;
+  const overridden = new Set(
+    Object.keys(decision.headerOverride ?? {}).map((k) => k.toLowerCase()),
+  );
+  if (overridden.has('authorization')) return decision;
+  return {
+    ...decision,
+    headerDelete: [...new Set([...(decision.headerDelete ?? []), 'authorization'])],
+  };
+}
+
+/**
+ * 构造 `GET /models` / `/v1/models` 的 OpenAI 形状清单:外部 CLI 用它发现可用模型。
+ * 取「codex agent 可路由」供应商并集里的模型,按 id 去重。不含任何凭证 / 上游地址。
+ *
+ * 只宣告 `listExternalRoutableProviders('codex')` 认可的供应商:与实际路由判据
+ * (`isExternalRoutableProvider`,排除 oauth-passthrough 订阅直连等)同源。否则会把外部
+ * 客户端根本路由不通的模型也列进 discovery,诱导其选中后必然上游 401。
+ */
+function buildExternalOpenAIModelsPayload(): string {
+  const routableIds = new Set(
+    listExternalRoutableProviders('codex').map((provider) => provider.id),
+  );
+  const seen = new Set<string>();
+  const data: { id: string; object: 'model'; created: number; owned_by: string }[] = [];
+  for (const provider of getActiveCatalog().providers) {
+    if (!routableIds.has(provider.id)) continue;
+    for (const model of provider.models.codex ?? []) {
+      if (!model.id || seen.has(model.id)) continue;
+      seen.add(model.id);
+      data.push({ id: model.id, object: 'model', created: 0, owned_by: provider.id });
+    }
+  }
+  return JSON.stringify({ object: 'list', data });
+}
+
+/**
+ * 外部 Codex 客户端 `POST /responses` 的路由决策。按模型名解析供应商('codex' agent) → 依
+ * `routing.wireProtocol` 分派:
+ *   - openai-chat / anthropic-messages → 复用 `createLocalBridgeDecision`(无会话:instructions
+ *     省略、synthetic threadId 'external');
+ *   - openai-responses / 其它 → `buildRouteDecision` 注入真实凭证 + strip 外部 token 头。
+ * 解析不出供应商 → 400(不回落默认网关)。**任何分支都不返回 null。**
+ */
+async function resolveExternalCodexResponsesDecision(body: unknown): Promise<RoutingDecision> {
+  if (!isPlainObject(body)) {
+    return externalOpenAIError(400, 'unsupported_request', '不支持的外部请求。');
+  }
+  const wireModel = typeof body.model === 'string' ? body.model : '';
+  const defaultProviderId = loadLocalProxySettings().codexDefaultProviderId;
+  const route = await resolveExternalCodexRoute(wireModel, defaultProviderId);
+  if (!route) {
+    return externalOpenAIError(
+      400,
+      'no_provider_for_model',
+      `没有可路由「${wireModel || '(未指定)'}」的供应商;请在 Cindy 设置里选择对外默认供应商(Codex),或换用某供应商的模型 id。`,
+    );
+  }
+  const wire = route.routing.wireProtocol;
+  if (wire === 'openai-chat' || wire === 'anthropic-messages') {
+    const decision = createLocalBridgeDecision(route, undefined, wireModel, undefined, 'external');
+    if (decision) return decision;
+    return externalOpenAIError(502, 'bridge_unavailable', `「${wireModel}」的本地桥接不可用。`);
+  }
+  // openai-responses / 其它:透明转发到供应商真上游,注入真实凭证,再 strip 外部 token 头。
+  const gatewayKey = _readGatewayKey();
+  const base = buildRouteDecision(route.routing, gatewayKey, 'codex', route.apiKey, route.oauthToken);
+  // 供应商 runtime 若定义了 requestPath(如 /tenant/acme/infer),外部转发也要带上 pathOverride,
+  // 与 session 路由(resolveSessionRouteDecision)一致;否则会被转到客户端原始入向路径(/responses),
+  // 固定 endpoint 的供应商会失败,尽管它可作为对外默认供应商被选中。
+  const decision = route.routing.requestPath
+    ? { ...base, pathOverride: route.routing.requestPath }
+    : base;
+  const stripped = stripExternalTokenHeadersCodex(decision);
+  if (stripped) return stripped;
+  return externalOpenAIError(502, 'provider_unavailable', `「${wireModel}」的供应商暂不可用。`);
+}
+
+/**
+ * 通用 OpenAI Chat Completions 端点(自环设计):把外部 chat 请求译成 Responses,POST 到本 codex
+ * loopback 自己的 `/responses`(复用端点 1 的全部路由/分派/头 strip 单一事实源),再把回来的
+ * Responses SSE 经 `ResponsesSseToChatTranslator` 译回 Chat 写给客户端。多一跳 localhost 可忽略。
+ */
+function externalChatCompletionsDecision(externalToken: string): RoutingDecision {
+  return {
+    localHandler: async ({ parsedBody, res }) => {
+      const chatRequest = isPlainObject(parsedBody)
+        ? (parsedBody as unknown as ChatCompletionsRequest)
+        : null;
+      if (!chatRequest || !Array.isArray(chatRequest.messages)) {
+        writeExternalOpenAIError(res, 400, 'invalid_request', 'chat completions 请求缺少 messages。');
+        return;
+      }
+      // 自环 re-POST 必须打**对外**端口自己的 `/responses`:那条路由挂 createExternalCodexRoutingTransform,
+      // 会用 B 族 token 命中 → routeExternalCodexClient 的 responses 分派(单一事实源)。内部端口(_handle)
+      // 端口拆分后已不再认对外 token,打它会落到内部路由 → 误路由/凭证误用。
+      const proxyUrl = getCodexExternalProxyUrl();
+      if (!proxyUrl) {
+        writeExternalOpenAIError(res, 503, 'proxy_unavailable', 'Cindy Codex proxy 尚未就绪。');
+        return;
+      }
+      // OpenAI Chat Completions 语义:省略 stream 视为**非流式**(仅 stream===true 才流式)。
+      // 之前把「未指定」当流式,会让不设 stream 的客户端拿到 SSE 而非期望的单个 JSON。
+      const wantStream = chatRequest.stream === true;
+      const includeUsage =
+        isPlainObject(chatRequest.stream_options)
+        && (chatRequest.stream_options as Record<string, unknown>).include_usage === true;
+      const responsesRequest = translateChatToResponsesRequest(chatRequest, {
+        onDowngrade: (feature) => log.debug('external chat→responses downgrade', { feature }),
+      });
+      // 自环上游总是请求流式(Responses SSE),再按客户端 stream 决定聚合还是逐帧转发。
+      responsesRequest.stream = true;
+      const abort = new AbortController();
+      const abortUpstream = (): void => abort.abort();
+      res.once('close', abortUpstream);
+
+      let upstream: Response;
+      try {
+        upstream = await outboundFetch(`${proxyUrl.replace(/\/$/, '')}/responses`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'text/event-stream',
+            authorization: `Bearer ${externalToken}`,
+          },
+          body: JSON.stringify(responsesRequest),
+          signal: abort.signal,
+        });
+      } catch (err) {
+        res.off('close', abortUpstream);
+        if (abort.signal.aborted) return;
+        writeExternalOpenAIError(res, 502, 'upstream_unreachable', 'Cindy Responses 端点不可达。');
+        return;
+      }
+
+      const translator = new ResponsesSseToChatTranslator({ model: chatRequest.model, includeUsage });
+      if (!upstream.ok || !upstream.body) {
+        res.off('close', abortUpstream);
+        let detail = `上游返回 HTTP ${upstream.status}`;
+        try {
+          const text = await upstream.text();
+          if (text) detail = text.slice(0, 2000);
+        } catch {
+          /* ignore */
+        }
+        writeExternalOpenAIError(res, upstream.status || 502, 'upstream_error', detail);
+        return;
+      }
+
+      const MAX_SSE_BUFFER_CHARS = 8 * 1024 * 1024;
+      // 上游失败(response.failed)时,translator 会产出一个带 `error` 字段的 chunk。流式路径会把它
+      // 写给客户端;非流式路径下 writeChunk 直接丢弃 → 若不另行捕获,finally 会照常 aggregate 出一个
+      // 200 的空 completion,把失败伪装成成功。这里捕获首个 error chunk,让非流式路径改吐 OpenAI 错误。
+      let failureMessage: string | null = null;
+      const writeChunk = (chunk: Record<string, unknown>): void => {
+        if (isPlainObject(chunk.error) && failureMessage === null) {
+          const msg = (chunk.error as Record<string, unknown>).message;
+          failureMessage = typeof msg === 'string' && msg ? msg : '上游返回错误。';
+        }
+        if (wantStream) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      };
+      const parsePayload = (payload: string): void => {
+        if (!payload || payload === '[DONE]') return;
+        let event: unknown;
+        try {
+          event = JSON.parse(payload);
+        } catch {
+          return;
+        }
+        if (isPlainObject(event)) {
+          for (const chunk of translator.push(event)) writeChunk(chunk);
+        }
+      };
+
+      if (wantStream) {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+      }
+
+      const reader = upstream.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let streamFailed = false;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          if (buffer.length > MAX_SSE_BUFFER_CHARS) {
+            throw new Error('responses SSE buffer overflow');
+          }
+          let nl: number;
+          while ((nl = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, nl).replace(/\r$/, '');
+            buffer = buffer.slice(nl + 1);
+            if (line.startsWith('data:')) parsePayload(line.slice(5).trim());
+          }
+        }
+        buffer += decoder.decode();
+        for (const line of buffer.split(/\r?\n/)) {
+          if (line.startsWith('data:')) parsePayload(line.slice(5).trim());
+        }
+      } catch (err) {
+        if (!abort.signal.aborted) {
+          streamFailed = true;
+          const message = err instanceof Error ? err.message : String(err);
+          for (const chunk of translator.fail(message)) writeChunk(chunk);
+        }
+      } finally {
+        res.off('close', abortUpstream);
+        if (abort.signal.aborted) {
+          if (!res.writableEnded) res.end();
+        } else if (wantStream) {
+          if (!streamFailed) {
+            for (const chunk of translator.finish()) writeChunk(chunk);
+          }
+          res.write('data: [DONE]\n\n');
+          res.end();
+        } else if (streamFailed || failureMessage) {
+          writeExternalOpenAIError(
+            res,
+            502,
+            'upstream_error',
+            failureMessage ?? 'Cindy Responses 流式中断。',
+          );
+        } else {
+          res.writeHead(200, {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store',
+          });
+          res.end(JSON.stringify(translator.aggregate()));
+        }
+      }
+    },
+  };
+}
+
+/**
+ * 外部客户端(Bearer 命中对外 token)的路由分发。**先判 enabled**:未开启 → 401(即使 token 还在
+ * 也拒绝,防关了开关旧 token 还能用)。`GET /models`|`/v1/models` → 本地吐清单;`POST /responses`
+ * → 按模型解析供应商;`POST /v1/chat/completions` → 自环 chat 端点;其余 → 400。**永不返回 null。**
+ */
+function routeExternalCodexClient(
+  body: unknown,
+  ctx: RequestTransformCtx,
+  externalToken: string,
+): RoutingDecision | Promise<RoutingDecision> {
+  if (!isCodexExternalAccessEnabled()) {
+    return externalOpenAIError(401, 'external_access_disabled', 'Cindy 对外模型代理未开启。');
+  }
+  const pathname = requestPathname(ctx.url);
+  const method = ctx.method.toUpperCase();
+  // ⚠ 三条端点正则都必须 `^` 锚在**开头**(#1666 三轮 P2):只锚尾部时这是「后缀」判定,
+  //   `POST /foo/responses`、`/foo/v1/chat/completions` 同样能进外部路由分支;而 responses 这条是
+  //   透明转发(无 pathOverride → 原样转发 ctx.url),供应商侧就会收到这个未支持路径,却带着
+  //   buildRouteDecision 注入的真实凭证。锚定后对外端口只接受对外公布的那三个端点
+  //   (/responses、/v1/responses、/v1/chat/completions,及 /models 发现),并顺带挡掉
+  //   absolute-form 请求(`POST http://evil.example/responses`,此时 req.url 不以 `/` 开头)。
+  if (method === 'GET' && /^\/(v1\/)?models\/?$/.test(pathname)) {
+    return {
+      localHandler: async ({ res }) => {
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(buildExternalOpenAIModelsPayload());
+      },
+    };
+  }
+  if (method === 'POST' && /^\/(v1\/)?chat\/completions\/?$/.test(pathname)) {
+    return externalChatCompletionsDecision(externalToken);
+  }
+  if (method === 'POST' && /^\/(v1\/)?responses\/?$/.test(pathname)) {
+    return resolveExternalCodexResponsesDecision(body);
+  }
+  return externalOpenAIError(400, 'unsupported_request', '不支持的外部请求。');
+}
+
+/**
+ * 对外端口专用路由 transform(端口拆分,#1666 Finding 2)。绑在**独立的对外 loopback 端口**上
+ * (见 ensureCodexExternalProxyReady),只服务用户自己的 Codex / OpenAI CLI:
+ *   - `Authorization: Bearer` 命中 B 族对外 token → routeExternalCodexClient(GET /models 发现、
+ *     POST /responses 按模型解析、POST /v1/chat/completions 自环)。命中判定与 codexEnabled 无关;
+ *     enabled 与否由 routeExternalCodexClient 内决定放行 / 401。
+ *   - 带 `cindy-local-` 前缀但不命中(已重置 / 跨族拿 A 族 token 打 B 族 loopback / 已失效)→ 401
+ *     invalid_external_token,绝不把它当 Authorization 透传上游。
+ *   - 其余(无 token / 伪造任意 header)→ 401 external_token_required。
+ * **无 thread-id / session 启发式、无内部默认路由回落**——放行的唯一条件是命中不可伪造的对外 token,
+ * 因此在此端口上伪造 thread-id / x-client-request-id 毫无作用(彻底消除 Finding 2 的可伪造绕过面)。
+ * export 供单测。
+ */
+export function createExternalCodexRoutingTransform(): RoutingTransform {
+  return (body, ctx) => {
+    const externalToken = bearerToken(ctx.headers);
+    if (externalToken && matchesCodexExternalToken(externalToken)) {
+      return routeExternalCodexClient(body, ctx, externalToken);
+    }
+    if (externalToken && isCindyLocalToken(externalToken)) {
+      return externalOpenAIError(401, 'invalid_external_token', 'Cindy 对外访问 token 无效或已失效。');
+    }
+    return externalOpenAIError(401, 'external_token_required', 'Cindy 对外模型代理需要有效的访问 token。');
+  };
+}
+
 export function createModelRoutingTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
 ): RoutingTransform {
   return (body, ctx) => {
+    // 本 transform 只服务 Cindy 自家内部流量(codex 子进程 / collab spawn / 控制面)。对外客户端
+    //(用户自己的 Codex / OpenAI CLI)走**独立的对外 loopback 端口**,由 createExternalCodexRoutingTransform
+    // 处理——那条路径无条件要求命中不可伪造的 B 族对外 token,绝不落到这里。端口拆分见
+    // ensureCodexExternalProxyReady(#1666 Finding 2:同端口上的 thread-id / session 启发式可被本机进程
+    // 伪造绕过 → 白嫖网关 key;拆端口后此 transform 不再承担任何对外判定)。
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
     const gatewayKey = _readGatewayKey();
@@ -2254,6 +2685,7 @@ export function createModelRoutingTransform(
 
 function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  external = false,
 ): RequestTransform[] {
   const transforms: RequestTransform[] = [
     createActiveStripTransform({
@@ -2266,20 +2698,32 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
-    createCodexTransform(),
-    // Guardian uses an isolated child thread. Resolve its parent business
-    // session and select that session's real provider model before provider
-    // compatibility transforms inspect the request.
-    createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
-    createGatewayNativeWebSearchTransform(),
+    // instructions 注入 / Guardian / gateway-native web_search 三条都耦合 Cindy 内部 session、
+    // 内部 thread registry 或 spawn 形态,对外端口一律不挂(#1666 review:external-safe chain):
+    //   - createCodexTransform 按**客户端提供的** thread-id header 查内部 instructions registry。
+    //     该 registry 只由内部 codex 会话的 registerComposed 写入,外部客户端不可能合法命中;挂着
+    //     只意味着伪造/猜中 thread-id 就能把 Cindy 的内部产品提示词拼进外部请求发往上游。
+    //   - Guardian(createProviderAwareGuardianReviewerTransform)是内部子线程概念,靠 thread→
+    //     session 反解 + authInjection 选内部会话的真实供应商模型;外部客户端没有 guardian 父会话,
+    //     只会让伪造的 thread header 触发按内部会话的 prompt/model 改写。
+    //   - createGatewayNativeWebSearchTransform 会在内部 authInjection==='env-key' 时给 gpt-5.6*
+    //     注入 web_search,哪怕外部路由选的是不支持它的自定义/非网关供应商 → 不支持工具报错。
+    ...(external
+      ? []
+      : [
+          createCodexTransform(),
+          createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
+          createGatewayNativeWebSearchTransform(),
+        ]),
     // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),
     createStrictGatewayHistoryCompatTransform(),
-    createXaiResponsesCompatTransform(),
+    createXaiResponsesCompatTransform(external),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
-    createProviderModelRewriteTransform(),
+    // 对外端口用隐式(按 body.model 前缀)model 改写,绝不读 session;内部端口保持会话感知改写。
+    external ? createExternalCodexModelRewriteTransform() : createProviderModelRewriteTransform(),
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -2382,15 +2826,21 @@ export function withCodexUpstreamRecording(
 
 function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  port?: number,
+  external = false,
 ): Promise<ProxyHandle> {
   return createAnthropicCompatProxy({
+    // 对外模型代理:给定固定端口(仅 loopback)时绑它,让外部 CLI 的 OPENAI_BASE_URL 稳定;
+    // 省略 = 随机端口(内部 codex 用法,行为不变)。control-plane proxy 永不传 port。
+    ...(port && port > 0 ? { port } : {}),
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection),
-    // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
-    // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
+    transformRequest: createTransformRequestChain(frozenAuthInjection, external),
+    // external=true:对外端口,只认 B 族对外 token 的独立路由(createExternalCodexRoutingTransform),
+    // 绝不回落内部默认路由/网关 key。external=false:常规 session proxy 读当前全局 spawn 形态;
+    // control-plane proxy 在创建时冻结自己的形态,两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      createModelRoutingTransform(frozenAuthInjection),
+      external ? createExternalCodexRoutingTransform() : createModelRoutingTransform(frozenAuthInjection),
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
@@ -2430,6 +2880,15 @@ function createCodexProxyHandle(
      * thread 不预扫描、不降级，继续保留原生 WS 容量体验。
      */
     resolveWebSocketUpstream: ({ headers }) => {
+      // 对外端口(端口拆分,#1666 review):**绝不**提供 WS 上游。WS upgrade 走的是 proxy 的
+      // upgrade 处理,既不过 createExternalCodexRoutingTransform(对外 token 判定),也不 strip
+      // 入站 Authorization。一旦内部 codex spawn 处于 oauth-bearer 态,手工客户端 / 陈旧配置只要
+      // 向这个已公布的对外端口发 Upgrade,下面就会把连接连同 `Authorization: Bearer cindy-local-*`
+      // 直送 ChatGPT 订阅后端 = 凭证透传上游 + 绕过对外鉴权。生成配置的 supports_websockets=false
+      // 只挡「自家 codex 发起 upgrade」,这里是对「任意客户端向对外端口发 upgrade」的结构性兜底:
+      // 返回 null → proxy 回 426 → 客户端(含 codex 原生 transport)降级到 HTTP,HTTP 路径才有
+      // 对外 token 判定与 strip。
+      if (external) return null;
       if ((frozenAuthInjection ?? getCodexProxyAuthInjection()) !== 'oauth-bearer') return null;
       const threadId = selectedThreadIdFromHeaders(headers);
       const recoveryReason = httpRecoveryReasonByThread.get(threadId);
@@ -2446,7 +2905,10 @@ function createCodexProxyHandle(
 }
 
 /**
- * 启动本地 Codex prompt proxy。幂等 —— 重复调用直接返回已缓存状态。
+ * 启动**内部** Codex prompt proxy(codex 子进程 / collab spawn / 控制面用)。幂等 —— 重复调用直接
+ * 返回已缓存状态。绑**随机端口**(不对用户公布;端口在 spawn 时经 env 注入给子进程)。对外访问是
+ * **独立** handle,绑固定 codexPort,见 ensureCodexExternalProxyReady —— 端口拆分(#1666 Finding 2)后
+ * 内部端口不再承担任何对外判定。
  *
  * `_startPromise` 去重并发启动;`_handle` 为空时 getCodexProxyEndpoint()
  * 直接 fallback 到真上游 URL。
@@ -2561,6 +3023,124 @@ export function getCodexProxyEndpoint(): string {
   const fallbackEndpoint = buildCodexGatewayBaseUrl();
   log.warn('codex proxy not ready, falling back to direct gateway', { fallbackEndpoint });
   return fallbackEndpoint;
+}
+
+/** 从 loopback proxy url(`http://127.0.0.1:<port>`)取端口;解析失败返回 null。 */
+export function codexPortFromProxyUrl(url: string): number | null {
+  try {
+    const port = Number.parseInt(new URL(url).port, 10);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * **内部** codex loopback proxy 当前的实际 url —— **不回落远程网关**(与 getCodexProxyEndpoint
+ * 相反)。供内部重启 / 诊断用。未就绪返回 null。对外展示 / 自环请用 getCodexExternalProxyUrl。
+ */
+export function getCodexProxyUrl(): string | null {
+  return _handle?.url ?? null;
+}
+
+/**
+ * 重建**内部** codex proxy 以让新配置生效。会中断当前经代理的内部 codex in-flight 请求 —— 仅在
+ * 显式需要时用,不做常态调用。返回重建后的实际 url。
+ */
+export async function restartCodexProxy(): Promise<string | null> {
+  await disposeCodexProxy();
+  await ensureCodexProxyReady();
+  return getCodexProxyUrl();
+}
+
+/**
+ * 启动**对外**(B 族 = Codex/OpenAI)loopback 代理(给用户自己电脑上的 Codex / OpenAI CLI 用)。
+ * 只在用户开启 B 族对外访问时由 IPC / boot 拉起。端口策略:绑持久化的固定 codexPort
+ * (loadLocalProxySettings().codexPort),让外部 CLI 的 OPENAI_BASE_URL 稳定;端口被占用
+ * (EADDRINUSE / EACCES / 落在 Fetch 屏蔽端口)则 fallback 随机并回写新端口(UI 始终显示实际 url)。
+ * 并发去重(_externalStartPromise),启动失败不抛 —— getCodexExternalProxyUrl() 保持 null。
+ */
+export async function ensureCodexExternalProxyReady(): Promise<void> {
+  if (_externalHandle) return;
+  if (_externalStartPromise) return _externalStartPromise;
+  _externalStartPromise = (async () => {
+    const pinnedPort = loadLocalProxySettings().codexPort;
+    try {
+      try {
+        _externalHandle = await createCodexProxyHandle(
+          undefined,
+          pinnedPort > 0 ? pinnedPort : undefined,
+          true,
+        );
+      } catch (bindErr) {
+        // 固定端口不可用时 fallback 随机端口重试,并把持久化端口回写成实际绑定值,避免下次启动
+        // 又撞同一个坏端口。三类可 fallback:被占用(EADDRINUSE)/ 无权限(EACCES)/ 落在 Fetch
+        // 屏蔽端口(包内直接抛,SDK 连不上)。其它错误照抛给外层兜底。
+        const code = (bindErr as NodeJS.ErrnoException | undefined)?.code;
+        const fetchBlocked = isFetchBlockedPort(pinnedPort);
+        if (pinnedPort > 0 && (code === 'EADDRINUSE' || code === 'EACCES' || fetchBlocked)) {
+          log.error('固定的 codex 对外代理端口不可用,fallback 随机端口', { pinnedPort, code, fetchBlocked });
+          _externalHandle = await createCodexProxyHandle(undefined, undefined, true);
+          const actual = codexPortFromProxyUrl(_externalHandle.url);
+          if (actual) setLocalProxyCodexPort(actual);
+        } else {
+          throw bindErr;
+        }
+      }
+      log.info('codex external proxy ready', { url: _externalHandle.url });
+    } catch (err) {
+      _externalHandle = null;
+      log.error('codex external proxy failed to start', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      _externalStartPromise = null;
+    }
+  })();
+  return _externalStartPromise;
+}
+
+/**
+ * **对外** codex 代理当前 url;供 IPC get-state / copy / preview / write 展示给外部 CLI 的
+ * 127.0.0.1 地址与端口,以及 chat-completions 自环 re-POST 用。只有开启了 B 族对外访问并
+ * ensureCodexExternalProxyReady 成功后才非 null;未就绪返回 null。
+ */
+export function getCodexExternalProxyUrl(): string | null {
+  return _externalHandle?.url ?? null;
+}
+
+/**
+ * 重建**对外** codex 代理以让新的固定端口生效(用户在设置里改端口后调用)。返回重建后的实际 url。
+ * 会中断当前经对外代理的 in-flight 请求 —— 仅在用户显式改端口时用。
+ */
+export async function restartCodexExternalProxy(): Promise<string | null> {
+  await disposeCodexExternalProxy();
+  await ensureCodexExternalProxyReady();
+  return getCodexExternalProxyUrl();
+}
+
+/**
+ * 优雅关闭**对外** codex 代理(关闭 B 族对外访问 / 改端口 / 退出时)。先等待 in-flight 的启动去重
+ * Promise 结算,避免与并发的 ensure 抢 _externalHandle。
+ */
+export async function disposeCodexExternalProxy(): Promise<void> {
+  if (_externalStartPromise) {
+    try {
+      await _externalStartPromise;
+    } catch {
+      // 启动失败已在 ensure 内部记日志;这里只是确保不在启动中途 dispose。
+    }
+  }
+  if (!_externalHandle) return;
+  const h = _externalHandle;
+  _externalHandle = null;
+  try {
+    await h.dispose();
+  } catch (err) {
+    log.warn('codex external proxy dispose failed', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

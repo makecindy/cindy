@@ -2676,6 +2676,77 @@
         "toggleFailed": "암호화 콘텐츠 자동 재시도 전환에 실패했습니다"
       }
     },
+    "localProxy": {
+      "title": "모델 프록시",
+      "subtitle": "로컬 서비스를 사용자 컴퓨터의 명령줄 도구에 개방합니다. 환경 변수를 설정하면 여기서 구성한 제공자와 자격 증명을 재사용할 수 있습니다. Anthropic API 형식(Claude Code 등)과 OpenAI API 형식(Codex 및 기타 OpenAI 호환 도구)을 모두 지원합니다.",
+      "address": "주소",
+      "notReady": "서비스가 준비되지 않았습니다",
+      "copy": "복사",
+      "port": "포트",
+      "portPlaceholder": "자동",
+      "applyPort": "적용",
+      "portHint": "서비스를 켜면 현재 포트가 고정됩니다. 포트를 변경하면 로컬 서비스가 다시 시작되어 진행 중인 요청이 중단될 수 있습니다.",
+      "token": "액세스 토큰",
+      "regenerate": {
+        "button": "재설정",
+        "title": "액세스 토큰을 재설정할까요?",
+        "description": "이전 토큰은 즉시 무효화됩니다. 구성한 외부 클라이언트는 새 토큰으로 교체해야 합니다.",
+        "confirm": "재설정"
+      },
+      "defaultProvider": "기본 제공자",
+      "defaultProviderNone": "지정 안 함(모델 이름으로 라우팅)",
+      "noProviders": "아직 라우팅할 수 있는 제공자가 없습니다. 먼저 위에서 추가하고 구성하세요.",
+      "defaultProviderHint": "모델 이름이 단일 제공자에 매핑되지 않을 때 대체로 사용됩니다.",
+      "copyEnv": "환경 변수 복사",
+      "writeConfig": {
+        "button": "Claude Code 설정에 쓰기",
+        "title": "Claude Code 설정에 쓸까요?",
+        "descExisting": "연결 정보를 기존 설정 파일({{path}})에 병합하고 다른 필드는 유지합니다.",
+        "descNew": "연결 정보가 포함된 설정 파일({{path}})을 만듭니다.",
+        "confirm": "쓰기",
+        "overwriteWarning": "다음 기존 항목이 덮어써집니다: {{keys}}"
+      },
+      "toast": {
+        "updateFailed": "업데이트 실패",
+        "invalidPort": "포트는 1~65535 사이여야 합니다",
+        "portApplied": "포트가 업데이트되었습니다",
+        "tokenReset": "액세스 토큰이 재설정되었습니다",
+        "copied": "복사됨",
+        "copyFailed": "복사 실패",
+        "envCopied": "환경 변수가 복사되었습니다",
+        "tokenCopied": "액세스 토큰이 복사되었습니다",
+        "notReady": "서비스가 준비되지 않았습니다",
+        "configWritten": "설정이 기록되었습니다",
+        "configWriteFailed": "설정 쓰기 실패",
+        "codexPortApplied": "포트가 업데이트되었습니다",
+        "codexEnvCopied": "환경 변수를 복사했습니다",
+        "codexNotReady": "Codex 서비스가 준비되지 않았습니다",
+        "codexConfigWritten": "Codex 구성을 저장했습니다",
+        "codexConfigWriteFailed": "Codex 구성 쓰기에 실패했습니다"
+      },
+      "anthropic": {
+        "title": "Claude Code / Anthropic",
+        "subtitle": "Anthropic 형식을 사용하는 도구용(Claude Code 등): ANTHROPIC_BASE_URL을 로컬 포트로 지정하면 됩니다."
+      },
+      "openai": {
+        "title": "Codex / OpenAI",
+        "subtitle": "OpenAI 형식을 사용하는 도구용: Codex는 Responses를, 다른 도구는 Chat Completions를 사용하며 별도의 로컬 포트에서 동작합니다.",
+        "address": "서비스 주소",
+        "port": "포트",
+        "portHint": "서비스를 켜면 현재 포트가 고정됩니다. 포트를 변경하면 로컬 Codex 서비스가 다시 시작되어 진행 중인 요청이 중단될 수 있습니다.",
+        "defaultProvider": "기본 제공자",
+        "defaultProviderHint": "모델 이름으로 단일 제공자를 확정할 수 없을 때 이 제공자로 대체합니다.",
+        "copyEnv": "환경 변수 복사",
+        "writeConfig": {
+          "button": "Codex 구성 쓰기",
+          "title": "Codex 구성을 쓸까요?",
+          "descExisting": "연결 정보를 기존 구성 파일({{path}})에 병합하고 다른 필드는 유지합니다.",
+          "descNew": "구성 파일을 만들고 연결 정보를 씁니다({{path}}).",
+          "confirm": "쓰기",
+          "tokenExportHint": "액세스 토큰은 파일에 기록되지 않습니다. Codex를 실행하는 터미널에서 다음 환경 변수를 직접 설정하세요:"
+        }
+      }
+    },
     "remoteControl": {
       "title": "원격 연결",
       "description": "같은 계정의 기기를 서로 원격으로 제어하거나 SSH로 원격 호스트에 연결합니다.",

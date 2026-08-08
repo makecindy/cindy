@@ -2676,6 +2676,77 @@
         "toggleFailed": "切换静默加密内容重试失败"
       }
     },
+    "localProxy": {
+      "title": "模型 Proxy",
+      "subtitle": "把本地服务开放给你自己电脑上的命令行工具：设好环境变量，即可复用这里配置的供应商与凭证。同时兼容 Anthropic API 格式（如 Claude Code）与 OpenAI API 格式（如 Codex 及其它 OpenAI 兼容工具）。",
+      "address": "服务地址",
+      "notReady": "服务未就绪",
+      "copy": "复制",
+      "port": "端口",
+      "portPlaceholder": "自动",
+      "applyPort": "应用",
+      "portHint": "开启服务时会固定当前端口；改端口会重启本地服务，可能中断进行中的请求。",
+      "token": "访问令牌",
+      "regenerate": {
+        "button": "重置",
+        "title": "重置访问令牌？",
+        "description": "重置后旧令牌立即失效，已配置的外部客户端需要换用新令牌。",
+        "confirm": "重置"
+      },
+      "defaultProvider": "默认供应商",
+      "defaultProviderNone": "不指定(按模型名路由)",
+      "noProviders": "暂无可路由的供应商，请先在上方添加并配置。",
+      "defaultProviderHint": "当模型名无法唯一对应某个供应商时，回落到这个供应商。",
+      "copyEnv": "复制环境变量",
+      "writeConfig": {
+        "button": "写入 Claude Code 配置",
+        "title": "写入 Claude Code 配置？",
+        "descExisting": "将把连接信息合并进现有配置文件（{{path}}），保留其它字段。",
+        "descNew": "将创建配置文件并写入连接信息（{{path}}）。",
+        "confirm": "写入",
+        "overwriteWarning": "以下已有配置项将被覆盖：{{keys}}"
+      },
+      "toast": {
+        "updateFailed": "更新失败",
+        "invalidPort": "端口需在 1–65535 之间",
+        "portApplied": "端口已更新",
+        "tokenReset": "访问令牌已重置",
+        "copied": "已复制",
+        "copyFailed": "复制失败",
+        "envCopied": "环境变量已复制",
+        "tokenCopied": "访问令牌已复制",
+        "notReady": "服务未就绪",
+        "configWritten": "已写入配置",
+        "configWriteFailed": "写入配置失败",
+        "codexPortApplied": "端口已更新",
+        "codexEnvCopied": "环境变量已复制",
+        "codexNotReady": "Codex 服务未就绪",
+        "codexConfigWritten": "已写入 Codex 配置",
+        "codexConfigWriteFailed": "写入 Codex 配置失败"
+      },
+      "anthropic": {
+        "title": "Claude Code / Anthropic",
+        "subtitle": "供说 Anthropic 格式的工具使用：如 Claude Code，把 ANTHROPIC_BASE_URL 指向本地端口即可。"
+      },
+      "openai": {
+        "title": "Codex / OpenAI",
+        "subtitle": "供说 OpenAI 格式的工具使用：Codex 走 Responses，其它工具走 Chat Completions，使用独立的本地端口。",
+        "address": "服务地址",
+        "port": "端口",
+        "portHint": "开启服务时会固定当前端口；改端口会重启本地 Codex 服务，可能中断进行中的请求。",
+        "defaultProvider": "默认供应商",
+        "defaultProviderHint": "当模型名无法唯一对应某个供应商时，回落到这个供应商。",
+        "copyEnv": "复制环境变量",
+        "writeConfig": {
+          "button": "写入 Codex 配置",
+          "title": "写入 Codex 配置？",
+          "descExisting": "将把连接信息合并进现有配置文件（{{path}}），保留其它字段。",
+          "descNew": "将创建配置文件并写入连接信息（{{path}}）。",
+          "confirm": "写入",
+          "tokenExportHint": "访问令牌不会写入文件。请在运行 Codex 的终端里自行设置下面这行环境变量："
+        }
+      }
+    },
     "remoteControl": {
       "title": "远程连接",
       "description": "在同账号的设备之间互相远程操控，或通过 SSH 连接远端主机。",

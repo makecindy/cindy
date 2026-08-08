@@ -1,6 +1,14 @@
 export { ChatSseTranslator, type ChatSseTranslatorOptions } from './chat-sse-translator.js';
 export { createResponsesChatHandler, type ResponsesChatHandlerOptions } from './handler.js';
 export {
+  translateChatToResponsesRequest,
+  type TranslateChatToResponsesOptions,
+} from './translate-chat-request.js';
+export {
+  ResponsesSseToChatTranslator,
+  type ResponsesSseToChatTranslatorOptions,
+} from './responses-sse-to-chat-translator.js';
+export {
   translateResponsesRequest,
   translateResponsesRequestWithContext,
   type TranslatedResponsesChatRequest,

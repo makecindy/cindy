@@ -71,6 +71,7 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { CustomProviderDialog } from './CustomProviderDialog';
+import { ModelProxySubsection } from './ModelProxySubsection';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
@@ -2443,6 +2444,9 @@ export function ProvidersSection() {
           </div>
         </div>
       )}
+
+      {/* 模型代理:把本地代理对外开放给用户自己的 Claude Code CLI(cc-switch 的服务端版)。 */}
+      {!loading && <ModelProxySubsection />}
 
       {wizard && (
         <AddProviderWizard

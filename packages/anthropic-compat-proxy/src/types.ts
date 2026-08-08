@@ -230,6 +230,13 @@ export interface ProxyOptions {
   /** 监听 host,默认 127.0.0.1 (loopback only;不要改成 0.0.0.0) */
   host?: string;
   /**
+   * 可选: 固定监听端口。给定时**只尝试绑这一个端口**,被占用(EADDRINUSE)或无权限
+   * (EACCES)直接抛错,不做随机重试 —— 调用方(host)据此 fallback 到随机端口并回写
+   * 新值。省略 = 在 Fetch-safe 高位区间随机选空闲端口(默认行为,字节级不变)。
+   * 仅 loopback 用途;端口值不校验范围,交给 OS(非法值 listen 会抛错)。
+   */
+  port?: number;
+  /**
    * 可选: 单条请求 body 上限(字节),超限回 413。默认 32MB(Claude Code 场景足够)。
    * Codex 走 Responses API 每轮全量重发 thread 历史,长会话(贴图 base64 / 加密
    * reasoning blob)会越过默认值,desktop 侧对 codex proxy 显式调大。
