@@ -79,8 +79,7 @@ export function createMessageHandler(
     const pureTextCommandInput =
       event.text.length > 0 && event.attachments.length === 0 && event.unsupported.length === 0;
     const commandLike =
-      pureTextCommandInput &&
-      (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
+      pureTextCommandInput && (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
     if (commandLike && !isCommandAuthorized(event)) {
       log.info(
         `dropped non-owner command sender=...${event.senderId.slice(-8)} ` +
@@ -205,6 +204,7 @@ export function createMessageHandler(
     }
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
+    const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
     try {
       await turnRunner.runAgentTurn({
         botContextId: event.contextId,
@@ -215,6 +215,7 @@ export function createMessageHandler(
         // 这里挡住第二条路径)。
         ...(event.protectedContent === true ? { protectedContent: true } : {}),
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
+        ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
         ...(prepared?.commit
           ? {

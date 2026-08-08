@@ -3240,6 +3240,14 @@
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "upgradeNotice": {
+          "single": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다.",
+          "multiple_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "multiple_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "singleWithPermissions": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다. 새 권한: {{permissions}}",
+          "multipleWithPermissions_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 새 권한이 추가되었습니다.",
+          "multipleWithPermissions_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 일부 플러그인에 새 권한이 추가되었습니다."
+        },
         "removalNotice": {
           "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
           "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",

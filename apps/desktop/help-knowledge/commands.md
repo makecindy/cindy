@@ -13,7 +13,7 @@ Type `/` at the start of the composer to open the command palette.
 
 **Using the palette:**
 
-- Start typing to filter. Matching is **prefix-only** (case-insensitive `startsWith` on the command name) — not fuzzy.
+- Start typing to filter. Matching is **contains-based** (case-insensitive substring matching on the command name) — not fuzzy.
 - Up to 25 matches shown at a time.
 - **↑ / ↓** move focus, **Enter** runs the focused command, **Esc** closes the palette.
 

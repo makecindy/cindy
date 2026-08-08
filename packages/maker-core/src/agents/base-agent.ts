@@ -612,6 +612,9 @@ export interface AgentDeps {
    */
   getContactsPromptState?: (ctx: { workingDir?: string }) => ContactsPromptState;
 
+  /** Session 装配时求值一次的插件花名册 system/developer 段；空清单返回空串。 */
+  getGhostRosterPrompt?: (ctx: { workingDir?: string }) => string;
+
   /**
    * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
    * skips the permission prompt; `prompt` preserves the normal approval UI and

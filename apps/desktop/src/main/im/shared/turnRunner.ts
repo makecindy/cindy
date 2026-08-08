@@ -100,6 +100,7 @@ import {
   beginInteractionRoute,
   type InteractionRouteLease,
 } from '../../maker-ipc/interactionRouter';
+import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff';
 import {
@@ -215,6 +216,7 @@ interface TurnState {
    * cleanup path via releaseTurnInteractionRoute. Null when the turn has no policy.
    */
   hostTurnLeaseRelease: (() => void) | null;
+  groupHistoryAccessRelease: (() => void) | null;
   /** Terminal classification consumed by chunked-text commitFinal. */
   terminalKind: 'done' | 'aborted' | 'error';
   terminalErrorCode: string | null;
@@ -245,6 +247,7 @@ interface QueuedSend {
   turnPermissionPolicy?: TurnPermissionPolicy;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
+  groupHistoryAccess?: GroupHistoryAccessScope;
 }
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
@@ -357,6 +360,7 @@ export interface ImRunAgentTurnArgs {
    * 第二条路径。缺省 = 未受保护(只有 Telegram 群会置它)。
    */
   protectedContent?: boolean;
+  groupHistoryAccess?: GroupHistoryAccessScope;
 }
 
 export interface ImTurnTerminal {
@@ -684,6 +688,7 @@ export function createTurnRunner(
       releaseHeadlessSetupTurn: null,
       interactionRouteLease: null,
       hostTurnLeaseRelease: null,
+      groupHistoryAccessRelease: null,
       terminalKind: 'done',
       terminalErrorCode: null,
       chunkedReplyBegun: false,
@@ -761,6 +766,7 @@ export function createTurnRunner(
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
+      ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -875,6 +881,13 @@ export function createTurnRunner(
           // 两个 surface 都需要:channel 与 desktop 的策略同样必须扛住热切。
           if (item.turnPermissionPolicy) {
             item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
+          }
+          if (item.groupHistoryAccess) {
+            item.turn.groupHistoryAccessRelease = beginGroupHistoryAccess({
+              sessionId: rowId,
+              sessionInstanceId: state.makerSession.instanceId,
+              scope: item.groupHistoryAccess,
+            });
           }
           item.turn.interactionRouteLease =
             item.turnPermissionPolicy?.confirmationSurface === 'desktop'
@@ -2107,6 +2120,9 @@ export function createTurnRunner(
   }
 
   function releaseTurnInteractionRoute(turn: TurnState, reason: string): void {
+    const releaseGroupHistoryAccess = turn.groupHistoryAccessRelease;
+    turn.groupHistoryAccessRelease = null;
+    releaseGroupHistoryAccess?.();
     const lease = turn.interactionRouteLease;
     turn.interactionRouteLease = null;
     lease?.release(reason);
