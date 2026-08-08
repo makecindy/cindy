@@ -30,13 +30,25 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 ## 一、已同源
 
+> **这一节只放两侧真的跑同一份代码/同一份数据的东西。** 一旦列进来，维护者就会跳过
+> 双路核对——所以「个人侧独有」「官方侧独有」的能力不能放这里，哪怕它在共享目录下。
+
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
-| 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`：过程区在上、正文在下）、进度帧去重的三槽基线（`shouldEmitProgressFrame`）、节流间隔与长度上限的**取值**（`PresenterPolicy`）——这些是同一份代码/同一个常量。**发射本身不是**：官方发射器与个人 `patchMarkdownCard` 各自实现尾沿节流语义，只从 `PresenterPolicy` 取同一间隔 |
-| 命令面登记 | `im/shared/botCommands.ts` | `surfaces` 标注谁有谁没有；单侧独有必须写 `parityNote`，缺了 CI 红 |
-| 群历史检索核心 | `im/shared/groupHistoryAccess.ts` | 官方侧由 `hook-control/groupHistoryScope.ts` 把官方 externalKey 解析成同一套 access scope；检索核心不认识协议 key |
-| 群轮次破坏性操作的判据 | `im/shared/channelToolPolicy.ts` 的 `channelForceConfirmToolCall` | 个人 Telegram / 微信 / 钉钉共用（**官方 bot 不挂这条策略，见第二节**） |
-| 呈现能力契约 | `packages/lizi-im/src/telegram/presentationCapabilities.ts` | typing 续命间隔/上限、link preview、NO_REPLY 生效范围等由 driver 直接消费；车道差异在同一处声明 |
+| 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）、正文累积引擎——两侧都经 `createTurnPresenter` 走这一份 |
+| 节流间隔与长度上限的**取值** | `PresenterPolicy` | 只有**取值**同源。个人侧仅复用 1.5s 这个常量，自己维护 `ACTIVITY_TICK_MS` 与卡片 patch 定时器；官方侧走 `createProgressEmitter`。**两套发射逻辑各自维护**，改一边必须核对另一边 |
+| 命令面登记 | `im/shared/botCommands.ts` | 一张表覆盖两侧；`surfaces` 标注谁有谁没有，单侧独有必须写 `parityNote`，缺了 CI 红 |
+| 群历史检索核心 | `im/shared/groupHistoryAccess.ts` | 官方侧由 `hook-control/groupHistoryScope.ts` 把官方 externalKey 解析成同一套 access scope，两侧检索走同一实现 |
+
+### 放在共享目录、但**只有一侧消费**的
+
+| 东西 | 实际情况 |
+|---|---|
+| `im/shared/channelToolPolicy.ts` 的 `channelForceConfirmToolCall` | 只被个人 Telegram / 微信 / 钉钉的权限策略引用。**官方 bot 不挂**——见第三节的裁决。放在 `shared/` 下是因为个人侧三个渠道共用，不代表两个 bot 共用 |
+| `packages/lizi-im/src/telegram/presentationCapabilities.ts` | 只导出并由**个人 driver** 消费 `TELEGRAM_PERSONAL_CAPABILITIES`，没有官方 bot 共用的契约数据。它的作用是把车道差异写在一处，不是让两侧取同一份值 |
+
+进度帧去重的三槽基线（`shouldEmitProgressFrame` / `createProgressEmitter`）同理：只在注入
+`onProgress` 时启用，也就是**只有官方那条路在用**，个人侧不消费。
 
 ## 二、消息生命周期——按阶段逐格对照
 
@@ -87,7 +99,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 1. **动任一 bot 的用户可见行为前**，先看这里有没有对应行。
 2. 发现新的差异：先判它属于哪一档。是「有意不同」就补进第三节并写清裁决来源；是缺口
    就进第四节并给出归属，**不要在当前 PR 里顺手补**——同族缺口一次覆盖比逐轮补边界
-   便宜得多。
+   便宜得多（`xindong/cindy-server#348` 十九轮 review 的教训）。
 3. 第四节里标「待核」的行，核完就把结论写回来，不要让它一直挂着。
 4. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
 5. 命令的分类以 `botCommands.ts` 的 `parityNote` 为准——那里是唯一真相源，本表只是
