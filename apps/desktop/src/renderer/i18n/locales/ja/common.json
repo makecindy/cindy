@@ -5365,6 +5365,7 @@
       "handoffRecoveredMessage": "前回は協同の開始が中断されました。送信されなかったメッセージを入力欄に復元しました。",
       "handoffRecoveredGoal": "前回は協同の開始が中断されました。ゴールは開始されておらず、その内容を入力欄に復元しました。",
       "loadingHint": "協同設定を確認中です。しばらくしてから再試行してください。",
+      "planModeUnavailableRemoteDraft": "リモート下書きではプランモードを利用できません。",
       "stopHint": "協同を停止",
       "stopAria": "協同を停止",
       "toggleOnAria": "協同モード中、クリックで停止",

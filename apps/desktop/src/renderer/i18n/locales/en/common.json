@@ -5367,6 +5367,7 @@
       "handoffRecoveredMessage": "Collaboration startup was interrupted last time. Your unsent message has been restored to the composer.",
       "handoffRecoveredGoal": "Collaboration startup was interrupted last time. The goal was not started; its text has been restored to the composer.",
       "loadingHint": "Still checking the collaboration setting. Try again shortly.",
+      "planModeUnavailableRemoteDraft": "Plan mode is not available in remote drafts.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",
       "toggleOnAria": "Collaboration on — click to stop",

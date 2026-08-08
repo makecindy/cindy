@@ -159,6 +159,7 @@ import {
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
+import { loadAllCommands } from '@/lib/slashCommands';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import {
   createRemoteSessionWithPrecreatedWorktree,
@@ -2838,6 +2839,46 @@ export function NewMakerDraftRoute() {
       },
     ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current) return false;
+      // 草稿态 /plan：创建会话前拦截(与「+」菜单共用 handlePlanModeChange 链路)。
+      // 选 slash 命令只会往 composer 插入 "/plan" 文本,真实触发发生在发送路径;
+      // 这里同步匹配完整命令,命中则 toggle 草稿 planMode 且不创建会话。
+      // 返回 undefined(非 false):ChatInput 对 result === false 会跳过 clearSentComposer,
+      // 而 undefined 走正常路径清空 composer —— 命令文本不留残影。
+      // 尊重 palette 优先级:用户装了名为 plan 的 skill 时(agent-skill 优先于内置
+      // desktop 命令,与会话路径 maybeDispatchDesktopSlashCommand 一致),不拦截,
+      // 让 /plan 作为首条消息发给 agent;仅当无同名命令或命中 desktop 命令才 toggle。
+      if (/^\/plan\s*$/i.test(message.trim())) {
+        // device-link 远程草稿:计划模式切换在远程不可用(onPlanModeChange 不下发)。
+        // 不静默消费也不放行创建会话 —— 命中即提示并 return,避免 /plan 变成首条
+        // 消息发给远程 agent 或走远程 create-session 路径(Codex P1)。返回 undefined
+        // 让 ChatInput 清空 composer(命令文本不留残影)。
+        if (isDeviceLinkDraft) {
+          toast.warning(t('newChat.collaboration.planModeUnavailableRemoteDraft'));
+          return;
+        }
+        // 本地草稿:尊重 palette 优先级 —— 每次 forceReload 拉取 merged 命令列表,
+        // 与 ChatInput palette 的 skill 安装/卸载即时同步(不缓存:缓存 key 无法感知
+        // 同一上下文里 skill 增删,Copilot);SSH 远程与 palette 一致跳过 agent skill
+        // 扫描(skipAgentSkills),避免把远端没有的本地 plan skill 误判为 desktop 命令。
+        // 这是 handleSend 里**第一个 await**,必须先上在途锁(Copilot):拉取 IPC 期间
+        // 用户可能切换设备/工作区/agent,闭包会持有旧上下文做判断与 toggle,串台误判。
+        // 上锁让 pill 立即拒绝,拉完立即释放 —— 因为 /plan 命中会 return,后续主流程
+        // 还有自己的 markSendInFlight(true),不能「用完即释放」。
+        markSendInFlight(true);
+        try {
+          const cmds = await loadAllCommands(capabilityAgentKind, draft.workingDir, {
+            forceReload: true,
+            skipAgentSkills: effectiveRemoteHostId != null,
+          });
+          const hit = cmds.find((c) => c.name.toLowerCase() === 'plan');
+          if (!hit || hit.kind === 'desktop') {
+            handlePlanModeChange(!effectivePlanMode);
+            return;
+          }
+        } finally {
+          markSendInFlight(false);
+        }
+      }
       if (effectiveCollab.enabled && collabPolicy.loading) {
         toast.warning(t('newChat.collaboration.loadingHint'));
         return false;
@@ -2847,9 +2888,10 @@ export function NewMakerDraftRoute() {
       // 被控端版本过旧 → 确定性不支持,重取毫无意义(下面的 refresh 只对 unavailable 触发)。
       let policyUnsupported = collabPolicy.unsupported;
       if (effectiveCollab.enabled && policyUnavailable) {
-        // 这是 handleSend 里**第一个** await,必须先上在途锁(Codex review P1):不上锁的话,协同策略
-        // 重取期间设备 pill / 工作区 pill 仍可点,而本次调用的闭包持有的是旧设备与旧工作区 ——
-        // 会话建在旧目标上,随后 resetDraftWorkspaceAfterSend 又把用户刚选的新目标清掉。
+        // 这是「协同策略 refresh 分支」里**第一个** await,必须先上在途锁(Codex review P1):
+        // 不上锁的话,协同策略重取期间设备 pill / 工作区 pill 仍可点,而本次调用的闭包
+        // 持有的是旧设备与旧工作区 —— 会话建在旧目标上,随后 resetDraftWorkspaceAfterSend
+        // 又把用户刚选的新目标清掉。
         // markSendInFlight 同步写 ref(两个 pill 的 handler 据此立即拒绝)并驱动 disabled 渲染。
         //
         // 用完即释放是安全的:从这里到下方真正的 markSendInFlight(true) 之间**没有任何 await**,

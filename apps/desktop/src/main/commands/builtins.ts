@@ -31,7 +31,16 @@ const log = createLogger('desktop-commands');
  * 执行结果(stdout / stderr / exitCode / elapsedMs / cmdLine / cwd / timedOut)。
  */
 export interface DesktopCommandTriggeredPayload {
-  command: 'help' | 'clear' | 'cmd' | 'issue' | 'jump-session' | 'goal' | 'workflows' | 'learn';
+  command:
+    | 'help'
+    | 'clear'
+    | 'cmd'
+    | 'issue'
+    | 'jump-session'
+    | 'goal'
+    | 'workflows'
+    | 'learn'
+    | 'plan';
   sessionId?: string;
   workingDir?: string;
   args?: string;
@@ -572,6 +581,25 @@ export function registerBuiltinDesktopCommands(
     // (SDK 返回 "isn't available in this environment"),故由 desktop 命令抢在派发给 SDK
     // 之前接管(maybeDispatchDesktopSlashCommand)。
     execute: (ctx) => broadcastDesktopCommand(buildPayload('workflows', ctx)),
+  });
+
+  registry.register({
+    name: 'plan',
+    description:
+      'Toggle plan mode for this session — the agent plans first and asks for your approval before making changes. Type /plan again to turn it back off.',
+    // 与 /workflows 同款「main 注册 + renderer 落实 UI」:主进程只负责让命令出现在
+    // `/` palette 并广播触发;计划模式切换(setPlanMode)是 renderer 会话状态,由
+    // DESKTOP_COMMAND_TRIGGERED 订阅按 sessionId 调用与 ChatInput「+」菜单同一条链路。
+    // draft 态(无 sessionId)只回发起窗口,不 broadcast —— 避免其它窗口正挂载某个
+    // 支持 planMode 的 session 时被误当成全局命令 toggle(sendDesktopCommandToSender
+    // 的注释正是这类「draft 命令不应广播」的约束)。
+    execute: (ctx) => {
+      if (ctx.sessionId) {
+        broadcastDesktopCommand(buildPayload('plan', ctx));
+      } else {
+        sendDesktopCommandToSender(ctx, buildPayload('plan', ctx));
+      }
+    },
   });
 
   registry.register({

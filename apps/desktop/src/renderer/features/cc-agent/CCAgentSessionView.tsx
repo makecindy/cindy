@@ -1840,10 +1840,37 @@ export function CCAgentSessionView({
         void openBackgroundTasksTab(sessionId, latest ? { focusTaskId: latest.taskId } : {});
         return;
       }
+      if (payload.command === 'plan') {
+        // /plan —— 会话级计划模式 toggle,复用 ChatInput「+」菜单同一条
+        // setPlanMode 链路(server-first 落库 → store → maker runtime),不发给 agent。
+        // 以 payload.sessionId 为 guard:无 sessionId 的命令(draft 分支只回发起窗口,
+        // 或 sender 缺失回退 broadcast)不会落到任何已挂载会话,避免误切当前会话;
+        // 顶部已有 `payload.sessionId !== sessionId` 的跨窗口早退,能走到这里的
+        // payload.sessionId 必等于当前会话。
+        // 能力门控:整个 capabilities 未加载(sessionCaps == null,冷启动/远程拉取较慢)
+        // 时不吞命令,直接 setPlanMode(对支持 planMode 的 agent 本就生效);
+        // capabilities 已加载但 planMode 缺失/不支持时忽略 —— device-link 老被控端
+        // 序列化无 planMode 字段,useAgentCapabilities 文档明确 undefined = 不支持。
+        if (payload.sessionId && (sessionCaps == null || sessionCaps.planMode?.supported === true)) {
+          // 用 getSnapshot 取「当下」的 planModeEnabled 计算 next(而非闭包里的旧值):
+          // 监听器不依赖 planModeEnabled,切换计划模式不会 teardown+re-subscribe,
+          // 避免 main 恰好在空窗期推送其它 desktop 命令回流(如 /cmd result)被漏掉
+          // (Copilot)。
+          const nextEnabled = !makerChatStore.getSnapshot(payload.sessionId).planModeEnabled;
+          // setPlanMode 持久化 / remote invoke 失败会 reject(store 内 throw),显式吞掉
+          // 并记日志,避免把可恢复的失败升级成未捕获的 Promise rejection。
+          void setPlanMode(nextEnabled).catch((err: unknown) => {
+            log.warn('plan command: failed to toggle plan mode', err);
+          });
+        }
+        return;
+      }
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
     });
     return unsub;
-  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t]);
+    // planModeEnabled 不再进 deps:plan 分支改用 getSnapshot 取当下值,监听器保持稳定,
+    // 切换计划模式不会 teardown+re-subscribe(避免漏掉空窗期推送的命令回流,Copilot)。
+  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t, setPlanMode, sessionCaps]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。

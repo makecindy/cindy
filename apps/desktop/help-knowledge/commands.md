@@ -8,7 +8,7 @@ Type `/` at the start of the composer to open the command palette.
 **What's in the palette (priority order on collisions):**
 
 1. **Your installed skills** (highest priority) — anything in your global or project skills directory (see the Skills topic).
-2. **Built-in app commands** — `/help` (show available commands), `/clear` (clear the current session context — resets the conversation in place without creating a new session), `/cmd` (run a shell command in the working directory), `/issue` (file an issue), `/goal` (start a goal-driven run), `/learn`, `/workflows`, and `/jump-session`.
+2. **Built-in app commands** — `/help` (show available commands), `/clear` (clear the current session context — resets the conversation in place without creating a new session), `/cmd` (run a shell command in the working directory), `/issue` (file an issue), `/goal` (start a goal-driven run), `/learn`, `/workflows`, `/plan` (toggle plan mode — the agent plans first and asks for your approval before making changes), and `/jump-session`.
 3. **The agent's own commands** — e.g. `/compact`, `/agents`, `/memory` (the exact list depends on the agent; Claude Code and Codex each contribute their own).
 
 **Using the palette:**
@@ -20,4 +20,4 @@ Type `/` at the start of the composer to open the command palette.
 **Notes:**
 
 - If a name collides across sources (same command in a skill and in a built-in), the higher-priority source wins; the lower-priority one is silently skipped (logged as a warning).
-- Most built-in app commands run inside the desktop app (a few, like `/workflows` and `/jump-session`, are handled directly in the UI); agent commands are sent as prompt prefixes to the agent.
+- Most built-in app commands run inside the desktop app (a few, like `/workflows`, `/plan`, and `/jump-session`, are handled directly in the UI); agent commands are sent as prompt prefixes to the agent.
