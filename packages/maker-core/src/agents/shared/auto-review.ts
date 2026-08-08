@@ -575,6 +575,9 @@ export function isProtectedSystemPath(target: string): boolean {
  * `highImpactExecutionNeedsConsent` 判定(它按引号外的真实执行结构分析,不读本函数
  * 的产物)。这里剥掉的只是纯字符串实参。
  */
+/** rg 家族里「值是要启动的外部程序」的选项(`--pre COMMAND`、`--hostname-bin PROG`)。 */
+const RG_EXECUTABLE_OPTIONS = /(?:^|\s)--(?:pre|hostname-bin)$/;
+
 function stripDataLiterals(command: string): string {
   const QUOTED = String.raw`(?:"[^"]*"|'[^']*')`;
   /**
@@ -589,7 +592,9 @@ function stripDataLiterals(command: string): string {
    *    单引号里这些不生效,但这里不区分引号种类:多留几个字面量进扫描面是 fail-closed
    *    方向,代价只是极少数误报(含 `$` 的散文不再被剥离)。
    */
-  const EXECUTABLE_INSIDE_QUOTES = /\$|`|<\(/;
+  // `>(…)`(输出进程替换)与 `<(…)` 同样在双引号内**执行**,漏了它等于给一个换方向就
+  // 绕过的口子(review 报)。
+  const EXECUTABLE_INSIDE_QUOTES = /\$|`|<\(|>\(/;
   const maskUnlessCredential = (prefix: string, literal: string): string => (
     isSensitiveCredentialPath(literal) || EXECUTABLE_INSIDE_QUOTES.test(literal)
       ? `${prefix}${literal}`
@@ -605,6 +610,9 @@ function stripDataLiterals(command: string): string {
         // 被引用就整段保留给红线扫描(review 报:字面 `sudo` 原本逐次确认,遮蔽后降灰区)。
         const referenced = new RegExp(String.raw`\$\{?${name}\b`).test(command);
         if (referenced) return `${sep}${name}=${literal}`;
+        // 通过**环境隐式**交给子进程执行的赋值同样不是数据:`GIT_PAGER="sudo …" git log`
+        // 里没有任何 `$GIT_PAGER` 展开,git 却会真的把它当程序启动(review 报)。
+        if (ENV_EXECUTION_NAME.test(name)) return `${sep}${name}=${literal}`;
         return maskUnlessCredential(`${sep}${name}=`, literal);
       },
     )
@@ -636,6 +644,9 @@ function stripDataLiterals(command: string): string {
         // 不逐个登记(review 五轮 P1:`grep --exclude-from "~/.ssh/id_rsa" foo src`
         // 原来整条是 auto-approve)。
         /(?:^|\s)(?:-[a-zA-Z]*f|--[\w-]*(?:file|from))$/.test(prefix.trimEnd())
+          // rg 的 `--pre` / `--hostname-bin`:值是**要启动的外部程序**,不是搜索模式。
+          // 与文件型选项同理,抹成 DATA 就把执行证据抹没了(review 报)。
+          || RG_EXECUTABLE_OPTIONS.test(prefix.trimEnd())
           || EXECUTABLE_INSIDE_QUOTES.test(literal)
           ? `${prefix}${literal}`
           : `${prefix}DATA`
@@ -686,16 +697,31 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
  * 直接打断用户：reviewer 可 allow（明确、范围受控）、block（让 Agent 重试）或只在确实
  * 跨越高影响边界时 ask。
  */
+/**
+ * 值会被下游命令**当程序执行 / 解释**的环境变量名。两个消费者共用这一份口径:
+ *  - `REVIEW_REQUIRED_PATTERNS`:出现这类赋值即不得直接放行;
+ *  - `stripDataLiterals`:这类赋值的值**不能被遮蔽成 DATA** —— 它就是要执行的命令,
+ *    抹掉后红线什么也看不到(`GIT_PAGER="sudo cat /etc/shadow" git --paginate log`
+ *    实测由确定性必问降进灰区,review 报)。
+ *
+ * 两处必须同源:一处认得、另一处认不得,正是「遮蔽把证据抹掉」这类漏判的成因。
+ * 分页器按**整族**登记(`(?:[A-Z][A-Z0-9_]*_)?PAGER`):每个 CLI 都有自己的 `<TOOL>_PAGER`,
+ * 只列 `PAGER` / `GIT_PAGER` 等于给一个换前缀就绕过的口子。
+ */
+const ENV_VARS_EXECUTING_THEIR_VALUE = 'LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+'
+  + '|(?:[A-Z][A-Z0-9_]*_)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL'
+  + '|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV'
+  + '|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS'
+  + '|RUBYOPT|PATH';
+const ENV_EXECUTION_ASSIGNMENT = new RegExp(`(?:^|\\s)(?:${ENV_VARS_EXECUTING_THEIR_VALUE})=`);
+const ENV_EXECUTION_NAME = new RegExp(`^(?:${ENV_VARS_EXECUTING_THEIR_VALUE})$`);
+
 const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
   /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除
   /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除
 
   // 执行影响型环境变量赋值：让“看似只读”的命令运行其它程序，应由 reviewer 静默拦截或判定。
-  // 分页器按**整族**登记(`(?:[A-Z][A-Z0-9]*_)?PAGER`):每个 CLI 都有自己的 `<TOOL>_PAGER`,
-  // 只列 `PAGER` / `GIT_PAGER` 等于给一个换前缀就绕过的口子 —— `GH_PAGER='touch /tmp/pwn'
-  // gh pr view 1` 里 gh 照样会启动那个外部程序,却因为 `gh pr view` 在只读白名单里被直接
-  // 放行(review 报)。
-  /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|(?:[A-Z][A-Z0-9_]*_)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
+  ENV_EXECUTION_ASSIGNMENT,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
   /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
@@ -1447,9 +1473,14 @@ function analyzeInterpreterArgs(
   const inlineCodeFlags = new Set(INTERPRETER_INLINE_CODE_FLAGS(bin).map((f) => f.toLowerCase()));
   const operands: string[] = [];
   let usesInteractive = false;
+  let optionsEnded = false;
   for (const token of args) {
-    if (token === '--') continue;
-    if (token.startsWith('-')) {
+    // `--` 是**选项结束**标记,不是可以跳过的噪声:之后即使以 `-` 开头也是真实操作数
+    // (`python3 -- -weird.py` 跑的就是名为 `-weird.py` 的脚本)。原来只 `continue`,
+    // 于是它后面的操作数继续走选项分支、撞上 fail-closed,把脚本文件误判成不存在
+    // (copilot 报;与本文件 `positionalOperands` 的处理也不一致)。
+    if (!optionsEnded && token === '--') { optionsEnded = true; continue; }
+    if (!optionsEnded && token.startsWith('-')) {
       // 交互模式 = 把 stdin 当 REPL 输入逐行执行,**无论有没有脚本或内联代码**
       // (`node -i -e 'x'`、`node -i run.js` 都仍然会跑 stdin 送进来的代码)。
       // 只对 node 家族判:这一族把 `-i` / `--interactive` 登记成了普通无值开关,于是
@@ -1567,10 +1598,11 @@ function xargsStdinFillsProgramSlot(tokens: string[]): boolean {
 }
 
 /**
- * GNU parallel 的替换串:`{}` `{.}` `{/}` `{//}` `{/.}` `{#}` `{%}` `{1}` `{2.}` …
+ * GNU parallel 的替换串:`{}` `{.}` `{/}` `{//}` `{/.}` `{#}` `{%}` `{1}` `{2.}`,以及含空白的
+ * **Perl 表达式替换串** `{= $_ =}`(review 报:只认无空白形态会让它完全不可见)。
  * 与 xargs 的 `-I` 占位符是同一件事 —— 值由 stdin 的输入行填,只是 parallel 缺省就带。
  */
-const PARALLEL_REPLACEMENT = /\{[^{}\s]*\}/;
+const PARALLEL_REPLACEMENT = /\{=[^{}]*=\}|\{[^{}\s]*\}/;
 
 /**
  * 占位符是否落在**程序位**(命令名 / 模块名 / 内联源码 / 第一个脚本操作数)。
@@ -1641,6 +1673,10 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
     const t = tokens[i] as string;
     if (t === '-I') placeholder = tokens[i + 1] ?? '{}';
     else if (/^-I./.test(t)) placeholder = t.slice(2);
+    // macOS / BSD xargs 的 `-J replstr` 是同一件事(替换参数里首次出现的 replstr),
+    // `xargsCommandTokens` 早已把它登记成带值选项,却没接进动态程序位判定(review 报)。
+    else if (t === '-J') placeholder = tokens[i + 1] ?? '';
+    else if (/^-J./.test(t)) placeholder = t.slice(2);
     else if (t === '-i' || t === '--replace') placeholder = '{}';
     else if (/^-i./.test(t)) placeholder = t.slice(2);
     else if (t.startsWith('--replace=')) placeholder = t.slice('--replace='.length) || '{}';
@@ -1650,6 +1686,33 @@ function xargsReplacementDrivesCommand(tokens: string[]): boolean {
   const nested = xargsCommandTokens(tokens);
   if (nested === null) return false;                              // 选项形态未知,交既有分支处理
   return replacementDrivesProgramSlot(nested, (t) => t.includes(placeholder as string));
+}
+
+/**
+ * 字面量程序(`-e` / `-c` 的载荷)自己**去读 stdin**。
+ *
+ * 这类写法的字面源码只是个引导器,真正执行的是输入内容:
+ *
+ *     printf '…' | node -e "eval(require('fs').readFileSync(0,'utf8'))"
+ *     printf '…' | python3 -c "exec(open(0).read())"
+ *
+ * 判据必须**两个条件同时成立**:载荷既引用 stdin,又对它做动态求值。
+ *
+ * 先试过只判「碰没碰 stdin」(理由是「能证明不读输入」才该降级),实测把语料里 7 条
+ * `… | python3 -c "data=json.load(sys.stdin) …"` 打成了红线 —— 那是**把 stdin 当数据
+ * 读**,是 agent 处理 JSON 的日常写法,正是本 PR 要消除的那类误报。「读输入」和
+ * 「把输入当代码跑」必须分开。
+ *
+ * 求值那半是尽力而为的黑名单(写法太多,列不全),所以只在**已经引用了 stdin** 的载荷上
+ * 生效 —— 两个条件叠加后误报面很小,漏判也仍有灰区 AI 审阅器兜底。
+ */
+const PROGRAM_READS_STDIN = /\bstdin\b|\bSTDIN\b|<STDIN>|\/dev\/stdin|\breadFileSync\s*\(\s*0\b|\bopen\s*\(\s*0\b|\bgets\b/;
+const PROGRAM_EVALUATES_INPUT = /\b(?:eval|exec|execfile|compile|instance_eval|class_eval|module_eval|assert)\s*\(|\b(?:new\s+)?Function\s*\(|\bvm\.runIn|\bos\.system\s*\(|\bsubprocess\.(?:run|call|check_output|Popen)\s*\(|\beval\s+|\bsource\s+/;
+
+function interpreterProgramConsumesStdin(tokens: string[]): boolean {
+  const payload = interpreterInlineCodePayload(tokens) ?? shellSourceSelectorPayload(tokens);
+  if (payload === null) return false;
+  return PROGRAM_READS_STDIN.test(payload) && PROGRAM_EVALUATES_INPUT.test(payload);
 }
 
 function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
@@ -1698,6 +1761,9 @@ function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
   // `arg` 会被当脚本文件、把「stdin 即程序」降进灰区(review 报)。
   if (SHELL_EXECUTORS.has(bin)
     && tokens.slice(1).some((t) => /^-[a-zA-Z]*s[a-zA-Z]*$/.test(t))) return true;
+  // 「有字面量程序 → 程序独立于 stdin」只在那段字面源码**不碰 stdin** 时成立。必须排在
+  // 下面所有「有源码 / 有脚本 → 返回 false」的分支之前,否则永远走不到(review 报)。
+  if (interpreterProgramConsumesStdin(tokens)) return true;
   // 源码选择器必须按位解析:`bash --rcfile -c` 里的 `-c` 是 `--rcfile` 的值,shell 仍读 stdin。
   const shellPayload = shellSourceSelectorPayload(tokens);
   if (shellPayload !== null && shellPayload.trim() !== '-') return false;
@@ -2671,7 +2737,8 @@ function isSafeReadonlyGh(tokens: string[]): boolean {
   if (!safeSubs || !safeSubs.has(sub.toLowerCase())) return false;
   return tokens.slice(3).every((t) => {
     // --web 把结果转到浏览器打开,行为出静态审查面。
-    if (t === '--web') return false;
+    // 等号形态 `--web=true` 是同一个 flag,gh 照常接受(review 报)。
+    if (/^--web(?:$|=)/.test(t)) return false;
     // `gh auth status --show-token` 会把**可复用的 GitHub 令牌**打进工具输出、进而进模型
     // 上下文 —— 这是凭证读取,必须逐次确认,不能因为 `auth status` 在只读表里就放行
     // (review P1)。等号形态 `--show-token=true` 是同一个 flag,必须一并拦(review 二轮)。
