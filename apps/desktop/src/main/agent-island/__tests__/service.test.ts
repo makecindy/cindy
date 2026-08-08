@@ -197,11 +197,16 @@ function latestNativeStatesByDisplayId(publish: {
     : undefined;
 }
 
-function terminalErrorEvent(message: string, reason?: string): AgentEvent {
+function terminalErrorEvent(message: string, reason?: string, turnId?: string): AgentEvent {
   return {
     type: 'error',
     source: 'claude-code',
-    data: { message, isTerminal: true, ...(reason ? { reason } : {}) },
+    data: {
+      message,
+      isTerminal: true,
+      ...(reason ? { reason } : {}),
+      ...(turnId ? { turnId } : {}),
+    },
   };
 }
 
@@ -221,11 +226,14 @@ function authenticationErrorEvent(message = 'authentication failed'): AgentEvent
   };
 }
 
-function doneEvent(): AgentEvent {
+function doneEvent(turnId?: string): AgentEvent {
   return {
     type: 'done',
     source: 'codex',
-    data: { result: 'done' },
+    data: {
+      result: 'done',
+      ...(turnId ? { raw: { id: turnId } } : {}),
+    },
   };
 }
 
@@ -2971,6 +2979,73 @@ describe('AgentIslandService native publishing', () => {
       phase: 'completed',
       attention: true,
     });
+  });
+
+    it('preserves retained error/running state through interleaved old-turn tail events', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+
+    const meta = { sessionId: 's1', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'first task');
+    service.handleAgentEvent(meta, terminalErrorEvent('boom'));
+    service.handleUserPrompt(meta, 'retry task');
+
+    // Old-turn tail events must not destroy the retained error or running state.
+    const state = publish.mock.calls.at(-1)?.[0];
+    expect(state.sessions[0]).toMatchObject({ sessionId: 's1', phase: 'error', detail: 'boom' });
+
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: false, status: 'Done' } });
+    service.handleAgentEvent(meta, doneEvent());
+
+    // Still retained — no completion sound, no phase change.
+    const afterTail = publish.mock.calls.at(-1)?.[0];
+    expect(afterTail.sessions[0]).toMatchObject({ sessionId: 's1', phase: 'error', detail: 'boom' });
+    expect(playSound).not.toHaveBeenCalled();
+
+    // New-turn activity opens completion and eventually finishes.
+    service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true, status: 'Generating...' } });
+    service.handleAgentEvent(meta, doneEvent());
+
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.phase).toBe('completed');
+  });
+
+  it('does not revive a dismissed error card when a deferred completion tail drains', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let deferCompletion = true;
+    const publish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    service.setCompletionDeferResolver(() => deferCompletion);
+    syncEnabledForTest(service, publish);
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, terminalErrorEvent('boom'));
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+    service.handleSessionDismissed('s1');
+
+    expect(publish.mock.calls.at(-1)?.[0].totalCount).toBe(0);
+    playSound.mockClear();
+
+    deferCompletion = false;
+    service.notifyQueueEmptied('s1');
+
+    expect(publish.mock.calls.at(-1)?.[0].totalCount).toBe(0);
+    expect(playSound).not.toHaveBeenCalled();
   });
 
   it('does not play a completion sound or reveal card for a silenced scheduler completion', async () => {

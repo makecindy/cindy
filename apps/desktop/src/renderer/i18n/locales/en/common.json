@@ -77,7 +77,8 @@
       "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
       "alwaysAllowForSession": "Always allow for this session",
-      "deny": "Deny"
+      "deny": "Deny",
+      "removeFromIsland": "Remove from Agent Island"
     }
   },
   "settings": {

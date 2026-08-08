@@ -1435,9 +1435,14 @@ struct AgentIslandStrings: Codable, Equatable {
   let allowOnce: String
   let alwaysAllowForSession: String
   let deny: String
+  let removeFromIsland: String?
 
   // Older main-process payloads do not contain appName; keep their idle view brand-current.
   var displayAppName: String { appName ?? "Cindy" }
+
+  // Older main-process payloads do not contain removeFromIsland; fall back so
+  // decoding a legacy strings object does not reject the entire state update.
+  var displayRemoveFromIsland: String { removeFromIsland ?? "Remove from Agent Island" }
 
   static let fallback = AgentIslandStrings(
     appName: "Cindy",
@@ -1460,7 +1465,8 @@ struct AgentIslandStrings: Codable, Equatable {
     permissionPromptTitle: "Confirm permission",
     allowOnce: "Allow once",
     alwaysAllowForSession: "Always allow",
-    deny: "Deny"
+    deny: "Deny",
+    removeFromIsland: "Remove from Agent Island" as String?
   )
 }
 
@@ -3314,6 +3320,9 @@ struct ExpandedSessionsView: View {
         onFocus: {
           eventSink(["type": "focus-session", "sessionId": current.sessionId])
         },
+        onDismiss: {
+          eventSink(["type": "dismiss-session", "sessionId": current.sessionId])
+        },
         onPermissionAction: emitPermissionAction
       )
       .equatable()
@@ -3354,6 +3363,9 @@ struct ExpandedSessionsView: View {
           onFocus: {
             eventSink(["type": "focus-session", "sessionId": session.sessionId])
           },
+          onDismiss: {
+            eventSink(["type": "dismiss-session", "sessionId": session.sessionId])
+          },
           onPermissionAction: emitPermissionAction
         )
         .equatable()
@@ -3378,6 +3390,7 @@ struct ExpandedSessionRow: View, Equatable {
   let strings: AgentIslandStrings
   let mascotSkin: String
   let onFocus: () -> Void
+  let onDismiss: () -> Void
   let onPermissionAction: (AgentIslandPermissionAction, String) -> Void
   @State private var isHovered = false
 
@@ -3447,7 +3460,9 @@ struct ExpandedSessionRow: View, Equatable {
         strings: strings,
         titleFontSize: 12,
         mascotSkin: mascotSkin,
-        onFocus: onFocus
+        onFocus: onFocus,
+        isHovered: isHovered,
+        onDismiss: onDismiss
       )
       ExpandedRowSummaryLine(session: session, strings: strings)
       ExpandedSessionMetaLine(session: session, updatedAt: updatedAt, fontSize: 9.5)
@@ -3472,6 +3487,8 @@ struct ExpandedSessionHeaderLine: View {
   let titleFontSize: CGFloat
   let mascotSkin: String
   let onFocus: () -> Void
+  let isHovered: Bool
+  let onDismiss: () -> Void
 
   private var showsMascot: Bool {
     switch session.phase {
@@ -3503,7 +3520,23 @@ struct ExpandedSessionHeaderLine: View {
       if session.phase == "needs-interaction", session.permissionAction == nil {
         InteractionInlineButton(label: strings.review, action: onFocus)
       } else {
-        SessionStatusCapsule(session: session, strings: strings)
+          HStack(spacing: 6) {
+            if isHovered, session.phase == "error" || session.phase == "completed" {
+              Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                  .font(.system(size: 9, weight: .semibold))
+                  .foregroundColor(Color.white.opacity(0.55))
+                  .frame(width: 20, height: 20)
+                  .background(Color.white.opacity(0.08))
+                  .clipShape(Circle())
+              }
+              .buttonStyle(.plain)
+              .help(strings.displayRemoveFromIsland)
+              .accessibilityLabel(strings.displayRemoveFromIsland)
+              .transition(.opacity)
+            }
+            SessionStatusCapsule(session: session, strings: strings)
+          }
       }
     }
   }

@@ -337,6 +337,26 @@ describe('MacAgentIslandNativeHost', () => {
       action: 'allowForSession',
     });
   });
+  it('forwards dismiss session events from the helper', async () => {
+    const child = createFakeChild();
+    h.spawn.mockReturnValue(child);
+    const options = createOptions();
+    const { MacAgentIslandNativeHost } = await import('../MacAgentIslandNativeHost.js');
+    const host = new MacAgentIslandNativeHost(options);
+
+    expect(host.publish(createDisplayState(), createFrame())).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    (child.stdout as PassThrough).write(`${JSON.stringify({ type: 'ready' })}\n`);
+    (child.stdout as PassThrough).write(`${JSON.stringify({
+      type: 'dismiss-session',
+      sessionId: 'session-error-1',
+    })}\n`);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(options.onDismissSession).toHaveBeenCalledWith('session-error-1');
+  });
+
 
   it('copies builtin sounds when building the dev helper', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-island-dev-assets-'));
@@ -566,6 +586,7 @@ function createOptions(): ConstructorParameters<typeof import('../MacAgentIsland
     onPointerZones: vi.fn(),
     onExpand: vi.fn(),
     onFocusSession: vi.fn(),
+    onDismissSession: vi.fn(),
     onOpenSettings: vi.fn(),
     onNewMessage: vi.fn(),
     onToggleSound: vi.fn(),

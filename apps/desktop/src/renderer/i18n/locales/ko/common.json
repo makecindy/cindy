@@ -77,7 +77,8 @@
       "permissionPromptTitleWithTool": "{{toolName}} 사용을 허용할까요?",
       "allowOnce": "한 번 허용",
       "alwaysAllowForSession": "이 세션에서 항상 허용",
-      "deny": "거부"
+      "deny": "거부",
+      "removeFromIsland": "Agent Island에서 제거"
     }
   },
   "settings": {

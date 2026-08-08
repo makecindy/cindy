@@ -77,7 +77,8 @@
       "permissionPromptTitleWithTool": "允许 {{toolName}}？",
       "allowOnce": "允许一次",
       "alwaysAllowForSession": "本任务总是允许",
-      "deny": "拒绝"
+      "deny": "拒绝",
+      "removeFromIsland": "从灵动岛移除"
     }
   },
   "settings": {

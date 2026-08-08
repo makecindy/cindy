@@ -77,7 +77,8 @@
       "permissionPromptTitleWithTool": "{{toolName}} を許可しますか?",
       "allowOnce": "一度だけ許可",
       "alwaysAllowForSession": "このセッションで常に許可",
-      "deny": "拒否"
+      "deny": "拒否",
+      "removeFromIsland": "Agent Island から削除"
     }
   },
   "settings": {

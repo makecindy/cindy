@@ -124,6 +124,7 @@ interface AgentIslandSessionState {
   running: boolean;
   completedUntil: number | null;
   errorUntil: number | null;
+  retainErrorUntilNextTerminal: boolean;
   /** Whether this terminal error belongs to a flow that deliberately emits a paired done. */
   completionAllowedAfterTerminalError: boolean;
   revealUntil: number | null;
@@ -156,6 +157,7 @@ interface AgentIslandSessionState {
 export interface AgentIslandUserPromptRollbackToken {
   sessionId: string;
   session: AgentIslandSessionState | null;
+  dismissedTerminal: boolean;
   activeTransientSessionId: string | null;
   transientRevealQueue: string[];
 }
@@ -166,6 +168,8 @@ export interface AgentIslandUserPromptRollbackToken {
  */
 export interface AgentIslandState {
   sessions: Map<string, AgentIslandSessionState>;
+  /** 显式移除后的终态墓碑,用于吞掉新 user prompt 前的当前轮事件。 */
+  dismissedTerminalSessionIds: Set<string>;
   isMouseInMenuBarZone: boolean;
   isMouseInExpandedPanel: boolean;
   hoverDisplayId: number | null;
@@ -199,6 +203,7 @@ export interface AgentIslandState {
 export function createAgentIslandState(): AgentIslandState {
   return {
     sessions: new Map(),
+    dismissedTerminalSessionIds: new Set(),
     isMouseInMenuBarZone: false,
     isMouseInExpandedPanel: false,
     hoverDisplayId: null,
@@ -232,6 +237,7 @@ export function createAgentIslandState(): AgentIslandState {
 export function resetAgentIslandState(state: AgentIslandState): void {
   const fresh = createAgentIslandState();
   state.sessions = fresh.sessions;
+  state.dismissedTerminalSessionIds = fresh.dismissedTerminalSessionIds;
   state.isMouseInMenuBarZone = fresh.isMouseInMenuBarZone;
   state.isMouseInExpandedPanel = fresh.isMouseInExpandedPanel;
   state.hoverDisplayId = fresh.hoverDisplayId;
@@ -433,15 +439,35 @@ export function applyAgentIslandUserPrompt(
   prompt: string,
   now: number,
 ): boolean {
+  // 新 user prompt 是明确的新轮边界:此前显式移除留下的终态墓碑
+  // 在文字为空(纯附件)时也要清除,否则灵动岛和活动栏永不恢复。
+  state.dismissedTerminalSessionIds.delete(meta.sessionId);
   const text = normalizeActivityText(prompt);
   if (!text) return false;
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
+  const retainError = session.phase === 'error'
+    && session.errorUntil !== null
+    && session.errorUntil > now;
+  session.retainErrorUntilNextTerminal = retainError;
   markSessionRunning(state, session);
-  session.phase = 'running';
+  // 不在有未过期的旧错误时立即设置 phase = 'running'，让旧错误继续显示
+  // 直到新消息完成（成功或失败）。一旦进入保留轮次，原 errorUntil
+  // 只控制自动展开时长，不再决定旧错误是否继续可见。
+  if (retainError) {
+    // 新 prompt 可能先于上一轮延迟的 status Done / done 到达。先拒绝完成尾事件,
+    // 等新轮 running / text / tool_use 活动到达后再开放完成。
+    session.completionAllowedAfterTerminalError = false;
+  } else {
+    session.phase = 'running';
+  }
   session.interactionKind = undefined;
-  session.detail = '';
-  session.detailSource = null;
+  // 保留旧错误时不清 detail/detailSource:旧错误卡片需要继续展示错误文案,
+  // 清空会让用户看到空白错误态。
+  if (!retainError) {
+    session.detail = '';
+    session.detailSource = null;
+  }
   session.reconnectStatus = null;
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
@@ -461,6 +487,7 @@ export function createAgentIslandUserPromptRollbackToken(
   return {
     sessionId,
     session: session ? cloneSession(session) : null,
+    dismissedTerminal: state.dismissedTerminalSessionIds.has(sessionId),
     activeTransientSessionId: state.activeTransientSessionId,
     transientRevealQueue: [...state.transientRevealQueue],
   };
@@ -475,6 +502,11 @@ export function rollbackAgentIslandUserPrompt(
   } else {
     state.sessions.delete(token.sessionId);
   }
+  if (token.dismissedTerminal) {
+    state.dismissedTerminalSessionIds.add(token.sessionId);
+  } else {
+    state.dismissedTerminalSessionIds.delete(token.sessionId);
+  }
   state.activeTransientSessionId = token.activeTransientSessionId;
   state.transientRevealQueue = [...token.transientRevealQueue];
 }
@@ -487,9 +519,8 @@ export function applyAgentIslandEvent(
   options: ApplyAgentIslandEventOptions = {},
 ): boolean {
   if (!isIslandRelevantEvent(event)) return false;
+  if (state.dismissedTerminalSessionIds.has(meta.sessionId)) return false;
   // A claimed done/status pair only seals one SDK turn. The product turn is
-  // still running, so do not create/update an island entry or trigger any
-  // completion transition here; the unclaimed terminal tail will do that.
   if (isTurnContinuationBoundaryEvent(event)) return false;
   const assistantText = event.type === 'text' ? assistantTextFromEvent(event) : null;
   if (event.type === 'text' && !assistantText) return false;
@@ -502,6 +533,9 @@ export function applyAgentIslandEvent(
   session.lastActivityAt = now;
 
   if (event.type === 'text') {
+    if (hasRetainedError(session)) {
+      session.completionAllowedAfterTerminalError = true;
+    }
     clearToolDetail(session);
     const isFinal = asRecord(event.data)?.isFinal === true;
     const line = applyAssistantTextLine(session, assistantText ?? '', isFinal);
@@ -518,17 +552,26 @@ export function applyAgentIslandEvent(
     const status = typeof data?.status === 'string' ? data.status : null;
     if (isRunning === true) {
       markSessionRunning(state, session);
-      if (session.pendingInteractionIds.size === 0) {
+      const retainedError = hasRetainedError(session);
+      if (retainedError) {
+        session.completionAllowedAfterTerminalError = true;
+      }
+      if (session.pendingInteractionIds.size === 0 && !retainedError) {
         session.phase = 'running';
         session.interactionKind = undefined;
       }
-      if (status && !session.currentToolUseId && !session.toolDetailUntil) {
+      if (status && !retainedError && !session.currentToolUseId && !session.toolDetailUntil) {
         session.detail = status;
         session.detailSource = 'status';
       }
       return true;
     }
     if (isRunning === false) {
+      const isDone = session.pendingInteractionIds.size === 0 && status === 'Done';
+      // 旧错误保留窗口内,完成许可未开放时拒绝旧轮 Done:不能让它清掉保留态。
+      if (isDone && hasRetainedError(session) && !session.completionAllowedAfterTerminalError) {
+        return true;
+      }
       session.running = false;
       session.currentToolUseId = null;
       session.toolDetailUntil = null;
@@ -536,7 +579,7 @@ export function applyAgentIslandEvent(
         session.detail = '';
         session.detailSource = null;
       }
-      if (session.pendingInteractionIds.size === 0 && status === 'Done') {
+      if (isDone) {
         completeAgentIslandSession(state, session, now, {
           suppressAttention: options.suppressCompletionAttention === true,
           preserveAttention: options.preserveCompletionAttention === true,
@@ -564,11 +607,17 @@ export function applyAgentIslandEvent(
       session.toolDetailUntil = null;
       return true;
     }
-    session.phase = 'running';
-    session.interactionKind = undefined;
+    const retainedError = hasRetainedError(session);
+    if (retainedError) {
+      session.completionAllowedAfterTerminalError = true;
+    }
+    if (!retainedError) {
+      session.phase = 'running';
+      session.interactionKind = undefined;
+    }
     session.currentToolUseId = toolUseId;
     session.toolDetailUntil = null;
-    if (toolDescription || toolName) {
+    if (!retainedError && (toolDescription || toolName)) {
       session.detail = toolDescription || toolName || '';
       session.detailSource = 'tool';
     }
@@ -591,6 +640,11 @@ export function applyAgentIslandEvent(
   }
 
   if (event.type === 'done') {
+    // 旧错误保留窗口内,完成许可未开放时拒绝旧轮 done:
+    // 不能让它清掉保留的 error 态和运行标记。
+    if (hasRetainedError(session) && !session.completionAllowedAfterTerminalError) {
+      return true;
+    }
     clearAssistantStream(session);
     session.running = false;
     session.pendingInteractionIds.clear();
@@ -644,6 +698,7 @@ export function applyAgentIslandEvent(
     session.detailSource = session.detail ? 'status' : null;
     if (session.detail) appendActivityLine(session, 'status', session.detail);
     session.errorUntil = now + AGENT_ISLAND_ERROR_DWELL_MS;
+    session.retainErrorUntilNextTerminal = false;
     session.completionAllowedAfterTerminalError = options.allowCompletionAfterTerminalError === true;
     session.completedUntil = null;
     // 报错必须挂未读:smart suppress(用户正停在该会话)只抑制自动展开,不代表
@@ -669,6 +724,7 @@ export function applyAgentIslandInteractionRequest(
   session.pendingInteractionKinds.set(request.requestId, request.kind);
   session.pendingInteractionDetails.set(request.requestId, detailForInteraction(request, state.toolWording));
   session.running = true;
+  session.retainErrorUntilNextTerminal = false;
   session.completionAllowedAfterTerminalError = false;
   const activateRequest = request.kind !== 'permission' || session.permissionRequestId === null;
   if (request.kind === 'permission') {
@@ -874,6 +930,7 @@ export function hasAgentIslandSessionAttention(
 
 export function removeAgentIslandSession(state: AgentIslandState, sessionId: string): void {
   state.sessions.delete(sessionId);
+  state.dismissedTerminalSessionIds.delete(sessionId);
   if (state.visibleSessionIds.delete(sessionId) && state.visibleSessionId === sessionId) {
     state.visibleSessionId = state.visibleSessionIds.values().next().value ?? null;
   }
@@ -882,6 +939,39 @@ export function removeAgentIslandSession(state: AgentIslandState, sessionId: str
     state.pendingFocusSessionId = null;
     state.pendingFocusUntil = null;
   }
+}
+
+/**
+ * 用户显式从灵动岛移除一条任务卡片(× 按钮)。
+ *
+ * 与 acknowledgeAgentIslandSessionRead 不同:read-ack 只清未读/dwell,会话仍在运行
+ * (running=true)时 isSessionVisible 仍为 true,条目不会被删,phase 也不变 -- 对
+ * "旧错误保留窗口"中正在重试的错误卡片(running=true, phase='error')来说,read-ack
+ * 无法把它从岛上拿掉。
+ *
+ * dismiss 是"这条记录不该再占据灵动岛"的语义:无论 running / dwell / unread 状态,
+ * 直接清除 attention 状态并硬删条目。正在运行的会话本身(侧栏、agent 进程)不受影响,
+ * 只是灵动岛不再展示它;下一轮事件到来时 getOrCreateSession 会重建条目。
+ *
+ * 返回值与 acknowledgeAgentIslandSessionRead 对齐,供 service 层判断是否需要发收尾包。
+ */
+export function dismissAgentIslandSession(
+  state: AgentIslandState,
+  sessionId: string,
+  now: number,
+): 'cleared' | 'not-found' {
+  const session = state.sessions.get(sessionId);
+  if (!session) return 'not-found';
+  // 先清 attention/dwell 再硬删,保证 relay 收尾包语义与 read-ack 一致。
+  session.unread = false;
+  session.deferredReveal = false;
+  session.deferredRevealReason = null;
+  session.revealUntil = null;
+  session.completedUntil = null;
+  session.errorUntil = null;
+  removeAgentIslandSession(state, sessionId);
+  state.dismissedTerminalSessionIds.add(sessionId);
+  return 'cleared';
 }
 
 /**
@@ -906,11 +996,13 @@ export function closeAgentIslandSessionPreservingUnread(
 ): void {
   const session = state.sessions.get(sessionId);
   if (!session) {
+    if (state.dismissedTerminalSessionIds.has(sessionId)) return;
     removeAgentIslandSession(state, sessionId);
     return;
   }
   // 进程已经没了,运行态必须落下来,否则 pill 会一直转着 working 动画。
   session.running = false;
+  session.retainErrorUntilNextTerminal = false;
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
   // pending 交互随进程一起失效(service 侧同时会 deletePermissionRequestsForSession)。
@@ -1237,8 +1329,13 @@ function updateFocusVerificationLifecycle(state: AgentIslandState, now: number):
 function markSessionRunning(state: AgentIslandState, session: AgentIslandSessionState): void {
   session.running = true;
   session.completedUntil = null;
-  session.errorUntil = null;
-  session.completionAllowedAfterTerminalError = false;
+  // 不清除 errorUntil：旧错误应保留直到新消息完成（成功或失败）
+  // 保留旧错误时也不重置 completionAllowedAfterTerminalError:新轮活动开放
+  // 完成后,后续 running 事件不应又把该许可清掉。
+  const retainErrorCompletionAllowance = session.phase === 'error' && session.retainErrorUntilNextTerminal;
+  if (!retainErrorCompletionAllowance) {
+    session.completionAllowedAfterTerminalError = false;
+  }
   session.revealUntil = null;
   if (session.pendingInteractionIds.size === 0) {
     session.interactionRevealDismissed = false;
@@ -1271,6 +1368,7 @@ function completeAgentIslandSession(
   session.detailSource = null;
   appendCompletionPlaceholderIfNeeded(session, state.strings);
   session.errorUntil = null;
+  session.retainErrorUntilNextTerminal = false;
   session.completionAllowedAfterTerminalError = false;
 
   if (options.suppressAttention) {
@@ -2006,6 +2104,7 @@ function getOrCreateSession(
     running: false,
     completedUntil: null,
     errorUntil: null,
+    retainErrorUntilNextTerminal: false,
     completionAllowedAfterTerminalError: false,
     revealUntil: null,
     visibleInteractionSuppressedUntil: null,
@@ -2114,6 +2213,20 @@ function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapsho
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
   };
+}
+
+/**
+ * 旧错误是否正处于"保留窗口":上一轮终态报错在新一轮消息完成前应继续可见。
+ *
+ * applyAgentIslandUserPrompt 在 errorUntil 有效时不把 phase 切回 running,
+ * 并记录这个新轮次正在保留旧错误。原 errorUntil 后续只控制展开 dwell,
+ * 但随后 status(isRunning:true) / tool_use 事件也会无条件写 phase = 'running',
+ * 令旧错误在首个运行事件到来时就消失。本 helper 让这些运行事件识别正在保留的
+ * 上一轮错误,跳过 phase 覆盖;旧错误只在新一轮成功(completeAgentIslandSession
+ * 会清 errorUntil)或再次失败(重设 error)时才结束。
+ */
+function hasRetainedError(session: AgentIslandSessionState): boolean {
+  return session.phase === 'error' && session.retainErrorUntilNextTerminal;
 }
 
 function isAttentionSession(session: AgentIslandSessionState): boolean {

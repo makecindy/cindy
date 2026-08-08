@@ -422,6 +422,7 @@ export interface AgentIslandStrings {
   allowOnce: string;
   alwaysAllowForSession: string;
   deny: string;
+  removeFromIsland: string;
 }
 
 export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
@@ -448,6 +449,7 @@ export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   allowOnce: 'Allow once',
   alwaysAllowForSession: 'Always allow',
   deny: 'Deny',
+  removeFromIsland: 'Remove from Agent Island',
 };
 
 export const AGENT_ISLAND_MAX_EXPANDED_WIDTH = 640;

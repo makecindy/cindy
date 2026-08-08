@@ -11,6 +11,7 @@ import {
   applyAgentIslandMetadata,
   applyAgentIslandUserPrompt,
   AGENT_ISLAND_COMPLETION_DWELL_MS,
+  AGENT_ISLAND_ERROR_DWELL_MS,
   AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS,
   AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS,
   AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
@@ -18,6 +19,7 @@ import {
   closeAgentIslandSessionPreservingUnread,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
+  dismissAgentIslandSession,
   getNextAgentIslandTimerAt,
   markAgentIslandSessionAttention,
   requestAgentIslandManualExpand,
@@ -2102,6 +2104,214 @@ describe('Agent Island error read semantics (已读以 App 内真实展示为准
     expect(after.totalCount).toBe(1);
   });
 });
+
+describe('Agent Island error 保留窗口(重试时旧错误在新消息完成前不消失)', () => {
+  it('旧错误在 errorUntil 有效期内:新 user prompt 保留 error phase,后续 running / tool_use 事件也不覆盖', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    // 第一轮:运行 -> 终态报错
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Thinking'), 1_100);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('boom'), 2_000);
+
+    let display = buildAgentIslandDisplayState(state, 2_050);
+    expect(display.sessions[0]).toMatchObject({ sessionId: 's1', phase: 'error' });
+    expect(state.sessions.get('s1')?.running).toBe(false);
+
+    // 第二轮:在 errorUntil(12s)有效期内发送新消息
+    applyAgentIslandUserPrompt(state, meta, 'retry task', 3_000);
+
+    // 旧错误应继续显示:phase 仍为 error(running=true 但 phase 不被切回 running)
+    display = buildAgentIslandDisplayState(state, 3_050);
+    expect(display.sessions[0]).toMatchObject({ sessionId: 's1', phase: 'error' });
+    expect(state.sessions.get('s1')?.running).toBe(true);
+    // 旧错误的文案也应保留(detail 不被清空)
+    expect(display.sessions[0]?.detail).toBe('boom');
+
+    // 后续 status(isRunning:true) 事件也不应覆盖保留的 error phase
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 3_100);
+    display = buildAgentIslandDisplayState(state, 3_150);
+    expect(display.sessions[0]?.phase).toBe('error');
+    expect(display.sessions[0]?.detail).toBe('boom');
+
+    // 后续 tool_use 事件也不应覆盖保留的 error phase
+    applyAgentIslandEvent(state, meta, toolUseEvent('tool-1'), 3_200);
+    display = buildAgentIslandDisplayState(state, 3_250);
+    expect(display.sessions[0]?.phase).toBe('error');
+    expect(display.sessions[0]?.detail).toBe('boom');
+
+    // 新一轮成功完成:done 事件清掉 errorUntil 并切回 completed
+    applyAgentIslandEvent(state, meta, doneEvent(), 4_000);
+    display = buildAgentIslandDisplayState(state, 4_050);
+    expect(display.sessions[0]?.phase).toBe('completed');
+  });
+
+  it('保留中的旧错误跨过原 errorUntil 后仍不被 running / tool_use 覆盖', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('boom'), 2_000);
+
+    const originalErrorUntil = 2_000 + AGENT_ISLAND_ERROR_DWELL_MS;
+    applyAgentIslandUserPrompt(state, meta, 'retry task', originalErrorUntil - 100);
+
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), originalErrorUntil + 100);
+    let display = buildAgentIslandDisplayState(state, originalErrorUntil + 150);
+    expect(display.sessions[0]).toMatchObject({ phase: 'error', detail: 'boom' });
+
+    applyAgentIslandEvent(state, meta, toolUseEvent('tool-1'), originalErrorUntil + 200);
+    display = buildAgentIslandDisplayState(state, originalErrorUntil + 250);
+    expect(display.sessions[0]).toMatchObject({ phase: 'error', detail: 'boom' });
+
+    applyAgentIslandEvent(state, meta, doneEvent(), originalErrorUntil + 300);
+    expect(buildAgentIslandDisplayState(state, originalErrorUntil + 350).sessions[0]?.phase).toBe('completed');
+  });
+
+  it('新 prompt 后到达的旧轮 status Done / done 不会提前完成重试(running/交互态也不被破坏)', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('boom'), 2_000);
+    applyAgentIslandUserPrompt(state, meta, 'retry task', 3_000);
+
+    const sessionAfterRetry = state.sessions.get('s1');
+    expect(sessionAfterRetry?.running).toBe(true);
+
+    applyAgentIslandEvent(state, meta, statusEvent(false, 'Done'), 3_100);
+    applyAgentIslandEvent(state, meta, doneEvent(), 3_200);
+
+    // 旧轮尾事件应被"保留窗口"守卫直接拒绝:running / 交互态 / error phase 不变。
+    const session = state.sessions.get('s1');
+    expect(session?.running).toBe(true);
+    expect(session?.detailSource).toBe('status');
+    expect(session?.pendingInteractionIds.size).toBe(0);
+    expect(buildAgentIslandDisplayState(state, 3_250).sessions[0]).toMatchObject({
+      phase: 'error',
+      detail: 'boom',
+    });
+
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 3_300);
+    applyAgentIslandEvent(state, meta, doneEvent(), 3_400);
+    expect(buildAgentIslandDisplayState(state, 3_450).sessions[0]?.phase).toBe('completed');
+  });
+
+  it('旧错误在 errorUntil 过期后:新 user prompt 正常切回 running phase', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    // 第一轮:运行 -> 终态报错
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('boom'), 2_000);
+
+    // errorUntil(12s)已过期
+    // 第二轮:在 errorUntil 过期后发送新消息
+    applyAgentIslandUserPrompt(state, meta, 'retry task', 2_000 + AGENT_ISLAND_ERROR_DWELL_MS + 1_000);
+
+    // errorUntil 过期后,新 user prompt 应正常切回 running phase
+    const display = buildAgentIslandDisplayState(state, 2_000 + AGENT_ISLAND_ERROR_DWELL_MS + 1_050);
+    expect(display.sessions[0]?.phase).toBe('running');
+  });
+
+  it('旧错误保留窗口内再次报错:error phase 保持,新 errorUntil 被刷新', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    // 第一轮:运行 -> 终态报错
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('first error'), 2_000);
+
+    // 第二轮:在 errorUntil 有效期内重试 -> 再次终态报错
+    applyAgentIslandUserPrompt(state, meta, 'retry task', 3_000);
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 3_100);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('second error'), 4_000);
+
+    // 仍为 error phase,且显示的是最新报错信息
+    const display = buildAgentIslandDisplayState(state, 4_050);
+    expect(display.sessions[0]?.phase).toBe('error');
+    expect(display.sessions[0]?.detail).toBe('second error');
+  });
+
+  it('dismiss 能移除"旧错误保留窗口"中正在重试的错误卡片(running=true, phase=error)', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    // 第一轮:运行 -> 终态报错
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('boom'), 2_000);
+
+    // 第二轮:在 errorUntil 有效期内重试(running=true, phase=error)
+    applyAgentIslandUserPrompt(state, meta, 'retry task', 3_000);
+
+    let display = buildAgentIslandDisplayState(state, 3_050);
+    expect(display.sessions[0]).toMatchObject({ sessionId: 's1', phase: 'error' });
+    expect(state.sessions.get('s1')?.running).toBe(true);
+    expect(display.totalCount).toBe(1);
+
+    // 用户点击 × 显式移除:read-ack 路径无法移除(running=true 时 isSessionVisible 为 true),
+    // dismiss 路径应直接硬删条目
+    expect(dismissAgentIslandSession(state, 's1', 3_100)).toBe('cleared');
+
+    display = buildAgentIslandDisplayState(state, 3_150);
+    expect(display.totalCount).toBe(0);
+  });
+
+  it('dismiss 不存在的会话返回 not-found', () => {
+    const state = createAgentIslandState();
+    expect(dismissAgentIslandSession(state, 'nonexistent', 1_000)).toBe('not-found');
+  });
+
+  it('dismiss 后忽略同一轮的运行与尾事件,直到新 user prompt 才恢复展示', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('boom'), 2_000);
+    expect(dismissAgentIslandSession(state, 's1', 2_100)).toBe('cleared');
+
+    closeAgentIslandSessionPreservingUnread(state, 's1', 2_150);
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 2_200);
+    applyAgentIslandEvent(state, meta, textDeltaEvent('working'), 2_250);
+    applyAgentIslandEvent(state, meta, toolUseEvent('tool-1'), 2_300);
+    applyAgentIslandEvent(state, meta, toolResultEvent('tool-1'), 2_350);
+    applyAgentIslandEvent(state, meta, statusEvent(false, 'Done'), 2_400);
+    applyAgentIslandEvent(state, meta, doneEvent(), 2_450);
+    expect(buildAgentIslandDisplayState(state, 2_500).totalCount).toBe(0);
+
+    applyAgentIslandUserPrompt(state, meta, 'next task', 3_000);
+    expect(buildAgentIslandDisplayState(state, 3_050).sessions[0]).toMatchObject({
+      sessionId: 's1',
+      phase: 'running',
+    });
+  });
+});
+
+  it('纯附件/图片发送时也清除 dismiss 墓碑(不移除则灵动岛永不恢复)', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', title: 'Task', agentKind: 'codex' };
+
+    // 先完成一次任务,用户 dismiss 掉终态卡片。
+    applyAgentIslandUserPrompt(state, meta, 'first task', 1_000);
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('boom'), 2_000);
+    expect(dismissAgentIslandSession(state, 's1', 2_100)).toBe('cleared');
+
+    // 纯附件(空文字)发送:normalizeActivityText 返回空,旧逻辑会在
+    // delete 之前 return false。新逻辑下墓碑应在文字判空前就清除。
+    const changed = applyAgentIslandUserPrompt(state, meta, '', 3_000);
+    expect(state.dismissedTerminalSessionIds.has('s1')).toBe(false);
+    // 空文字不应创建条目(返回 false),但墓碑已清。
+    expect(changed).toBe(false);
+
+    // 随后的 running 事件不应被 dismissedTerminalSessionIds 拦截。
+    expect(applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 3_100)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 3_150).sessions[0]).toMatchObject({
+      sessionId: 's1',
+      phase: 'running',
+      detail: 'Generating...',
+    });
+  });
 
 describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限期霸占展开列表)', () => {
   it('unread completed 条目在 TTL 内仍然可见', () => {
