@@ -4,6 +4,7 @@ import { RuntimeGapSet } from '../runtimeGaps';
 
 const gap = (identity: string, generation: string) => ({
   identity,
+  bindingGeneration: 'binding-123456789',
   generation,
   state: 'dirty' as const,
 });

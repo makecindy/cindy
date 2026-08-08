@@ -60,7 +60,8 @@ Device Link 的具体 host/client 接线全部延后到 PR-B。PR-A 只在
 - 选主必须是确定性的，同一 `(channel, non-secret identity)` 同一时刻最多一个赢家。
 - 所有选主、快照和 gap 裁剪排序使用 locale-independent comparator；设备成员变化、时钟回拨、账号切换会使旧 discovery/runtime 视图失效。
 - 只有当前权威 Desktop 快照中的 peer 能参与 probe/advertisement；binding 变化会在下一轮 probe 中传播当前非敏感 identity，并立即重算本地选举。
-- runtime gap 以 identity 归属、generation 去重并有确定性上限；不携带 token 或 secret。
+- runtime gap 以 identity 归属、runtime generation 去重并有确定性上限；另带当前
+  binding generation 作为重绑生命周期屏障，不携带 token 或 secret。
 - PR-A 的 manager 不被任何现有 IM 启动路径调用。
 
 ### PR-A 不包含

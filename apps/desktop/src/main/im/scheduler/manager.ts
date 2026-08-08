@@ -3,10 +3,10 @@
 import { randomUUID } from 'node:crypto';
 
 import {
-  MAX_RUNTIME_GAPS,
   isImSchedulerFrame,
   type ImSchedulerFrame,
   type SchedulerAdvertisementFrame,
+  type SchedulerChannelBinding,
   type SchedulerRuntimeFrame,
 } from '@cindy/device-link';
 import { RuntimeGapSet } from './runtimeGaps';
@@ -42,14 +42,16 @@ interface PeerAdvertisement {
 }
 
 function sameSchedulerChannels(
-  left: readonly SchedulerChannelIdentity[],
-  right: readonly SchedulerChannelIdentity[],
+  left: readonly SchedulerChannelBinding[],
+  right: readonly SchedulerChannelBinding[],
 ): boolean {
   return (
     left.length === right.length &&
     left.every(
       (channel, index) =>
-        channel.channel === right[index]?.channel && channel.identity === right[index]?.identity,
+        channel.channel === right[index]?.channel &&
+        channel.identity === right[index]?.identity &&
+        channel.bindingGeneration === right[index]?.bindingGeneration,
     )
   );
 }
@@ -59,6 +61,7 @@ export interface ImSchedulerManagerOptions {
   getLocalChannel: () => SchedulerChannelIdentity | null;
   onDecision?: (decision: SchedulerDecision) => void;
   nonceFactory?: () => string;
+  bindingGenerationFactory?: () => string;
   discoveryRetryDelayMs?: number;
   snapshotResponseTimeoutMs?: number;
   maxDiscoveryRetries?: number;
@@ -73,19 +76,14 @@ export class ImSchedulerManager {
   private readonly getLocalChannel: () => SchedulerChannelIdentity | null;
   private readonly onDecision?: (decision: SchedulerDecision) => void;
   private readonly nonceFactory: () => string;
+  private readonly bindingGenerationFactory: () => string;
   private readonly discoveryRetryDelayMs: number;
   private readonly snapshotResponseTimeoutMs: number;
   private readonly maxDiscoveryRetries: number;
   private readonly peers = new Map<string, PeerAdvertisement>();
   private readonly confirmedPeers = new Set<string>();
-  private readonly pendingPeerProbeChannels = new Map<
-    string,
-    readonly SchedulerChannelIdentity[]
-  >();
+  private readonly pendingPeerProbeChannels = new Map<string, readonly SchedulerChannelBinding[]>();
   private readonly runtimeGaps = new RuntimeGapSet();
-  private readonly observedRuntimeGaps = new Map<string, SchedulerRuntimeFrame>();
-  private readonly invalidatedRuntimeGaps = new Set<string>();
-  private readonly invalidatedRuntimeGapIdentities = new Set<string>();
   private unsubscribe: (() => void) | null = null;
   private snapshot: SchedulerDesktopDeviceSnapshot | null = null;
   private lastSnapshotObservedAt: number | null = null;
@@ -95,6 +93,7 @@ export class ImSchedulerManager {
   private requiresTaggedSnapshot = false;
   private snapshotRefreshPending = false;
   private lastLocalIdentity: string | null = null;
+  private localBindingGeneration = '';
   private discoveryNonce = '';
   private discoveryRetryAttempt = 0;
   private discoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -106,6 +105,8 @@ export class ImSchedulerManager {
     this.getLocalChannel = options.getLocalChannel;
     this.onDecision = options.onDecision;
     this.nonceFactory = options.nonceFactory ?? (() => randomUUID().replaceAll('-', ''));
+    this.bindingGenerationFactory =
+      options.bindingGenerationFactory ?? (() => randomUUID().replaceAll('-', ''));
     this.discoveryRetryDelayMs = Math.max(
       1,
       Math.floor(options.discoveryRetryDelayMs ?? DEFAULT_DISCOVERY_RETRY_DELAY_MS),
@@ -126,6 +127,7 @@ export class ImSchedulerManager {
     this.resetSnapshotRequestState();
     this.requiresTaggedSnapshot = false;
     this.snapshotAccountGeneration = this.nonceFactory();
+    this.localBindingGeneration = this.bindingGenerationFactory();
     this.lastLocalIdentity = this.getLocalChannel()?.identity ?? null;
     this.unsubscribe = this.transport.subscribe((event) => this.handleEvent(event));
     this.beginDiscoveryRound();
@@ -139,9 +141,6 @@ export class ImSchedulerManager {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.runtimeGaps.clear();
-    this.observedRuntimeGaps.clear();
-    this.invalidatedRuntimeGaps.clear();
-    this.invalidatedRuntimeGapIdentities.clear();
     this.pendingPeerProbeChannels.clear();
     this.snapshot = null;
     this.lastSnapshotObservedAt = null;
@@ -149,6 +148,7 @@ export class ImSchedulerManager {
     this.requiresTaggedSnapshot = false;
     this.snapshotAccountGeneration = '';
     this.lastLocalIdentity = null;
+    this.localBindingGeneration = '';
     this.publishDecision({ state: 'standby', channel: null, reason: 'stopped' });
   }
 
@@ -173,18 +173,13 @@ export class ImSchedulerManager {
       this.requiresTaggedSnapshot = true;
       const currentIdentity = this.getLocalChannel()?.identity ?? null;
       this.lastLocalIdentity = currentIdentity;
-      this.rememberInvalidatedRuntimeGaps();
+      this.localBindingGeneration = this.bindingGenerationFactory();
       this.runtimeGaps.clear();
-      if (currentIdentity) this.clearInvalidatedRuntimeGapIdentity(currentIdentity);
     } else {
       const currentIdentity = this.getLocalChannel()?.identity ?? null;
-      if (this.lastLocalIdentity && this.lastLocalIdentity !== currentIdentity) {
-        this.invalidateRuntimeGapIdentity(this.lastLocalIdentity);
-      }
-      if (currentIdentity) {
-        this.clearRuntimeGapIdentity(currentIdentity);
-      }
-      if (currentIdentity) this.clearInvalidatedRuntimeGapIdentity(currentIdentity);
+      if (this.lastLocalIdentity) this.runtimeGaps.clearIdentity(this.lastLocalIdentity);
+      if (currentIdentity) this.runtimeGaps.clearIdentity(currentIdentity);
+      this.localBindingGeneration = this.bindingGenerationFactory();
       this.lastLocalIdentity = currentIdentity;
     }
     this.beginDiscoveryRound();
@@ -310,9 +305,6 @@ export class ImSchedulerManager {
 
   private handlePush(sourceDeviceId: string, payload: unknown): void {
     if (!isImSchedulerFrame(payload) || !this.isAuthoritativePeer(sourceDeviceId)) return;
-    for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
-      if (runtime?.state === 'dirty') this.rememberObservedRuntimeGap(runtime);
-    }
     if (payload.kind === 'probe') {
       this.observePeerProbe(sourceDeviceId, payload);
       this.sendAdvertisement(sourceDeviceId, payload.nonce);
@@ -344,79 +336,19 @@ export class ImSchedulerManager {
   }
 
   private adoptRuntimeGap(runtime: SchedulerRuntimeFrame): void {
-    if (this.invalidatedRuntimeGapIdentities.has(runtime.identity)) return;
-    if (this.invalidatedRuntimeGaps.has(this.runtimeGapKey(runtime))) return;
+    // Runtime frames are scoped to this Desktop's current binding lifecycle,
+    // not merely to the Discord application id. This is the durable barrier:
+    // an old peer frame cannot return after a reset, even if no tombstone for
+    // that opaque runtime generation was ever retained locally.
+    const localBinding = this.getLocalBinding();
+    if (
+      !localBinding ||
+      runtime.identity !== localBinding.identity ||
+      runtime.bindingGeneration !== localBinding.bindingGeneration
+    ) {
+      return;
+    }
     this.runtimeGaps.adopt(runtime);
-  }
-
-  private invalidateRuntimeGapIdentity(identity: string): void {
-    this.rememberInvalidatedRuntimeGapIdentity(identity);
-    this.clearRuntimeGapIdentity(identity);
-  }
-
-  private clearRuntimeGapIdentity(identity: string): void {
-    const runtime = this.runtimeGaps.get(identity);
-    if (runtime) this.rememberInvalidatedRuntimeGap(runtime);
-    for (const observed of this.observedRuntimeGaps.values()) {
-      if (observed.identity === identity) this.rememberInvalidatedRuntimeGap(observed);
-    }
-    this.runtimeGaps.clearIdentity(identity);
-  }
-
-  /**
-   * Identity-wide invalidation only applies while an identity is no longer
-   * the current binding. Keep generation tombstones for old gaps, but allow a
-   * newly current identity to publish a fresh legal gap.
-   */
-  private clearInvalidatedRuntimeGapIdentity(identity: string): void {
-    this.invalidatedRuntimeGapIdentities.delete(identity);
-  }
-
-  private rememberInvalidatedRuntimeGaps(): void {
-    for (const runtime of this.runtimeGaps.values()) {
-      this.rememberInvalidatedRuntimeGapIdentity(runtime.identity);
-      this.rememberInvalidatedRuntimeGap(runtime);
-    }
-    for (const runtime of this.observedRuntimeGaps.values()) {
-      this.rememberInvalidatedRuntimeGapIdentity(runtime.identity);
-      this.rememberInvalidatedRuntimeGap(runtime);
-    }
-  }
-
-  private rememberObservedRuntimeGap(runtime: SchedulerRuntimeFrame): void {
-    const key = this.runtimeGapKey(runtime);
-    if (this.observedRuntimeGaps.has(key)) return;
-    while (this.observedRuntimeGaps.size >= MAX_RUNTIME_GAPS) {
-      const oldest = this.observedRuntimeGaps.keys().next().value;
-      if (typeof oldest !== 'string') break;
-      this.observedRuntimeGaps.delete(oldest);
-    }
-    this.observedRuntimeGaps.set(key, { ...runtime, state: 'dirty' });
-  }
-
-  private rememberInvalidatedRuntimeGapIdentity(identity: string): void {
-    if (this.invalidatedRuntimeGapIdentities.has(identity)) return;
-    while (this.invalidatedRuntimeGapIdentities.size >= MAX_RUNTIME_GAPS) {
-      const oldest = this.invalidatedRuntimeGapIdentities.values().next().value;
-      if (typeof oldest !== 'string') break;
-      this.invalidatedRuntimeGapIdentities.delete(oldest);
-    }
-    this.invalidatedRuntimeGapIdentities.add(identity);
-  }
-
-  private rememberInvalidatedRuntimeGap(runtime: SchedulerRuntimeFrame): void {
-    const key = this.runtimeGapKey(runtime);
-    if (this.invalidatedRuntimeGaps.has(key)) return;
-    while (this.invalidatedRuntimeGaps.size >= MAX_RUNTIME_GAPS) {
-      const oldest = this.invalidatedRuntimeGaps.values().next().value;
-      if (typeof oldest !== 'string') break;
-      this.invalidatedRuntimeGaps.delete(oldest);
-    }
-    this.invalidatedRuntimeGaps.add(key);
-  }
-
-  private runtimeGapKey(runtime: SchedulerRuntimeFrame): string {
-    return `${runtime.identity}:${runtime.generation}`;
   }
 
   private observePeerProbe(
@@ -463,7 +395,7 @@ export class ImSchedulerManager {
   }
 
   private publishProbeToVisiblePeers(): void {
-    const channel = this.getLocalChannel();
+    const channel = this.getLocalBinding();
     for (const peer of this.snapshot?.peers ?? []) {
       this.sendPushSafely(peer.deviceId, {
         kind: 'probe',
@@ -603,7 +535,7 @@ export class ImSchedulerManager {
   }
 
   private sendAdvertisement(peerDeviceId: string, inReplyTo?: string): void {
-    const channel = this.getLocalChannel();
+    const channel = this.getLocalBinding();
     this.sendPushSafely(peerDeviceId, {
       kind: 'advertisement',
       sentAt: Date.now(),
@@ -619,6 +551,13 @@ export class ImSchedulerManager {
       // A single peer's queue/relay failure must not abort the rest of the
       // discovery round. The bounded retry timer remains the recovery path.
     }
+  }
+
+  private getLocalBinding(): SchedulerChannelBinding | null {
+    const channel = this.getLocalChannel();
+    return channel && this.localBindingGeneration
+      ? { ...channel, bindingGeneration: this.localBindingGeneration }
+      : null;
   }
 
   private reconcile(): void {
