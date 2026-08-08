@@ -191,10 +191,6 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     'echo hi 2> /dev/null.bak',
     'echo hi > /dev/nullx',
     'echo hi > /dev/null/x',
-    // /dev/fd 只豁免标准流 0/1/2;fd 3+ 可能是父进程打开的真实文件
-    'cat payload >/dev/fd/3',
-    'echo x 2>/dev/fd/3',
-    'cat p >/dev/fd/10',
   ],
 
   '工作区外的破坏性操作': [
@@ -274,6 +270,20 @@ const MUST_NOT_AUTO_APPROVE: Record<string, string[]> = {
     'GIT_SSH_COMMAND="ssh -i /tmp/k" git fetch',
     'GIT_EXTERNAL_DIFF=/tmp/x git diff',
     'PATH=/tmp:$PATH git status',
+  ],
+
+  '标准流别名 / 任意 fd 不是可证明安全的写目标': [
+    // `/dev/stdin|stdout|stderr` 与 `/dev/fd/N` 都是**继承描述符的别名** —— 进程的 stdout
+    // 若被重定向到文件,写它就会截断那个文件。只有 /dev/null 这类丢弃型设备才可豁免。
+    'echo CLOBBER >/dev/stdin',
+    'echo CLOBBER >/dev/stdout',
+    'echo CLOBBER >/dev/stderr',
+    'echo CLOBBER >/dev/fd/0',
+    'echo CLOBBER >/dev/fd/1',
+    'echo CLOBBER >/dev/fd/2',
+    'cat payload >/dev/fd/3',
+    'echo x 2>/dev/fd/3',
+    'cat p >/dev/fd/10',
   ],
 
   '命令替换 / 反引号:参数由现跑的命令决定': [

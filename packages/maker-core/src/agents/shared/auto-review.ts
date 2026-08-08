@@ -513,10 +513,13 @@ function argumentWriteTargets(tokens: string[]): string[] {
  * (`cmd > /dev/null`、`2>/dev/null`、`>/dev/null 2>&1`)。必须排除在系统红线外,否则 Auto 档会对
  * 几乎每条带静音重定向的命令弹窗,严重违反"尽量不打扰"(实机语料探针发现:44 条良性命令误拦 9 条)。
  * 块设备/内存设备(`/dev/sda`、`/dev/mem` 等)**不在**此列,仍按系统红线拦。
- * `/dev/fd/N` **只豁免标准流 0/1/2**:fd 3+ 可能是父进程打开的真实文件,`>/dev/fd/3`
- * 会覆写它,不能凭命令字符串证明安全(review 报)。
+ *
+ * 注意本常量只回答「**是不是受保护系统路径**」——写 `/dev/stdout`、`/dev/fd/3` 不等于写
+ * `/etc`,不该升成确定性红线。「这个重定向目标能不能证明无副作用」是**另一个问题**,由
+ * `segmentHasSideEffectRedirectOrSubstitution` 里那条更窄的剥离正则回答(只有真正的
+ * 丢弃型设备才剥)。两者故意不同口径。
  */
-const SAFE_DEVICE_PATH = /^\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/[012])$/i;
+const SAFE_DEVICE_PATH = /^\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)$/i;
 
 /** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
 export function isProtectedSystemPath(target: string): boolean {
@@ -882,7 +885,7 @@ function splitTopLevelSegments(command: string): string[] {
 function segmentHasSideEffectRedirectOrSubstitution(segment: string): boolean {
   const redirectScan = segment
     .replace(/'[^']*'|"[^"]*"/g, '')
-    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/[012])(?![\w/.-])/gi, '');
+    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|tty)(?![\w/.-])/gi, '');
   return OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment);
 }
 
@@ -3207,7 +3210,12 @@ function classifyShellSegment(
   const deQuoted = stripExpansions(segment.replace(/['"\\]/g, ''));
   // 去引号内容:判重定向时引号内的 `>` 是数据不是重定向(如 git log --format='%h>%s')。
   // 再抹掉指向安全伪设备的重定向(`2>/dev/null`、`>/dev/null`、`&>/dev/null`):写 /dev/null
-  // 等同丢弃、无落盘副作用,是实机语料里最高频的静音写法,不该把整段只读命令拖进灰区
+  // 等同丢弃、无落盘副作用,是实机语料里最高频的静音写法,不该把整段只读命令拖进灰区。
+  //
+  // **只剥真正的丢弃 / 终端型设备**。`/dev/stdin` `/dev/stdout` `/dev/stderr` `/dev/fd/N`
+  // 是**继承描述符的别名** —— 进程的 stdout 若被重定向到文件,`>/dev/stdout` 就会截断那个
+  // 文件,凭命令字符串证明不了安全(review 报:这几种形态原本落灰区,被一起剥掉后变成了
+  // 直接放行)。它们不剥即可 —— 落回灰区交 AI 审阅器判,与基线同档,不升红线。
   // (与 SAFE_DEVICE_PATH / isProtectedSystemPath 的伪设备白名单同口径)。`/dev/null/x`、
   // `/dev/nullx` / `/dev/null.tmp` / `/dev/null-foo` 等相近路径不匹配,仍按普通文件写升级。
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。

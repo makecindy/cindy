@@ -240,11 +240,23 @@ describe('review 第一轮 — 其余修复', () => {
     expect(classifyShellCommand('cat x | xargs sh -c', roots, opts)).toBe('prompt-each-time');
   });
 
-  it('重定向到 /dev/fd/<n> 与其它安全伪设备同口径,不当文件写', () => {
-    expect(classifyShellCommand('ls -la 2>/dev/fd/1', roots, opts)).toBe('auto-approve');
-    expect(classifyShellCommand('git status 2>/dev/fd/2', roots, opts)).toBe('auto-approve');
-    // 相近但非伪设备的目标仍升级。
-    expect(classifyShellCommand('ls > /dev/fd/x', roots, opts)).not.toBe('auto-approve');
+  it('/dev/fd/<n> 与标准流别名不是可证明安全的写目标 → 灰区(不放行也不升红线)', () => {
+    // 它们是**继承描述符的别名**:进程 stdout 若被重定向到文件,写它就会截断那个文件,
+    // 凭命令字符串证明不了安全(review 报)。但也不该升成红线 —— 写 /dev/stdout 不等于
+    // 写 /etc,灰区交 AI 审阅器判即可,与基线同档。
+    for (const c of [
+      'ls -la 2>/dev/fd/1',
+      'git status 2>/dev/fd/2',
+      'echo CLOBBER >/dev/stdout',
+      'echo CLOBBER >/dev/stdin',
+      'cat payload >/dev/fd/3',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt');
+    }
+    // `fd/x` 不是合法的 fd 编号 → 不匹配伪设备白名单 → 落回 /dev 系统目录红线(既有 fail-closed)。
+    expect(classifyShellCommand('ls > /dev/fd/x', roots, opts)).toBe('prompt-each-time');
+    // 真正的丢弃型设备仍照常放行 —— 这是本 PR 的核心修复,不受这次收窄影响。
+    expect(classifyShellCommand('ls -la 2>/dev/null', roots, opts)).toBe('auto-approve');
   });
 
   it('commandExecutableNames:环境变量前缀不吞掉真正的 bin,其它段照常收集', () => {
@@ -708,9 +720,6 @@ describe('语料回归 — 伪设备静音重定向仍照常放行(反向边界)
       'ls -la 2>/dev/null',
       'git log --all --oneline 2>/dev/null | head',
       'echo x > /dev/null',
-      'echo x > /dev/stdout',
-      'echo x > /dev/fd/2',
-      'cat p >/dev/fd/1',
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
     }
