@@ -94,11 +94,12 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | lane 模型 | per-principal | per-chat | 已在 `presentationCapabilities.ts` 声明 |
 | `message_thread_id` 的**归属判据在哪一侧** | 在**服务端**：桌面这半拿不到 `is_topic_message`（协议 payload 里没有这个字段），只按服务端下发的 threadId 分桶 | 在**客户端**：入站消息走 `laneThreadIdOf`、卡片回调走 `parseCallbackQuery`，都用 `is_topic_message === true` 门控——不是 forum topic 就记进主群流（threadId 空串） | 这个字段有**两个含义**，混用会出真故障：Telegram 对**普通群的 reply 链**也会给 `message_thread_id`（值 = reply root）。**投递位置**用裸值（带上它消息就投对地方，个人侧的出站与 typing 即如此；服务端 `topicThreadIdOf` 的注释也明写「不要拿归属标识替换投递位置参数」）；**归属**必须靠 `is_topic_message` 门控。而这个门控字段**只有持有 Telegram 连接的那一侧拿得到**——个人 bot 直连拿得到，官方 bot 的桌面这半只拿服务端下发的 payload，所以判据只能在服务端。这是架构决定的车道差异，不是谁漏做，已在 `presentationCapabilities.ts` 声明为 `threadIdDualSemantics`。**曾经的实机故障**：服务端早期把普通群 reply 链的 `message_thread_id` 当 topic 下发，那些发言散进一个个 reply-root 桶，agent 在群里答「我看不到群里的历史消息」（2026-08-03 实测：172 条在主群流、另有若干 reply-root 桶）。服务端现已按 `is_topic_message` 门控（`controller.ts` 的 `topicThreadIdOf`；**是否已上生产未核**），客户端保留一层兜底救存量错桶行——`buildGroupContextPrefix` 的 `fallbackThreadFilter` 让**主群流**额外读所有非空 threadId 的行（宁可多读同群发言、不可漏读），**topic lane 不读兜底集**：topic 之间严格隔离的优先级高于补读，代价是存量错桶行在 topic lane 里仍看不到 |
 | 终稿特效 `messageEffectId` | 有 | 无 | 官方装饰位，已声明 |
-| 交互卡的**渲染** | 按钮**每行一个**；`plan_review` / 权限卡的按钮文案在服务端硬编码；权限卡的工具入参是**单行 JSON 摘要**、上限 600（`HOOK_PERMISSION_INPUT_SUMMARY_MAX`）；截断用单行省略号（`truncateInline`） | label ≤12 字时**两个按钮并排**（`cardLayout.ts` 的 `pairLabelMax`）；按钮文案走 ui 文案包；权限卡入参是 **pretty JSON 代码块**、上限 800（`IM_PERMISSION_INPUT_PREVIEW_MAX`）；截断用折行「…(已截断)」（`truncateBlock`） | 两处都写着裁决，不是漂移。`interactionCardModel.ts` 的模块注释：**渠道差异不在语义层统一——统一是产品决策，不归那个模块**；`plan_review` 与权限卡的选项在语义层就是 `label: null`，文案本来就由各自渲染侧给。`cardLayout.ts` 更直接：**刻意不采用官方那套渲染参数**，因为那是「待退役的服务端渲染栈」的值，合同明确不得成为共享参数源。另有一条硬约束让分层无法合并：`@cindy/im` 不得依赖 `apps/desktop`，所以语义层（desktop 包）与渲染层（`@cindy/im`）必然是两个包、各持一份。这一档的寿命跟着第四节第 2 行走：msg.op 接线后官方出站改由桌面驱动，服务端那套渲染参数会一起退役。**两侧的按钮字数上限与按钮数上限不在这一档**——见表下说明 |
+| 交互卡的**渲染** | 按钮**每行一个**；`plan_review` / 权限卡的按钮文案在服务端硬编码；权限卡的工具入参是**单行 JSON 摘要**、上限 600（`HOOK_PERMISSION_INPUT_SUMMARY_MAX`）；截断用单行省略号（`truncateInline`）；**卡片正文上限 4000** | label ≤12 字时**两个按钮并排**（`cardLayout.ts` 的 `pairLabelMax`）；按钮文案走 ui 文案包；权限卡入参是 **pretty JSON 代码块**、上限 800（`IM_PERMISSION_INPUT_PREVIEW_MAX`）；截断用折行「…(已截断)」（`truncateBlock`）；**卡片正文上限 3800**（`cardTextMax`，交由 `capRenderedText` 做标签栈安全闭合） | 两处都写着裁决，不是漂移。**正文上限这一条是真差异**，只是触发窗口窄：`plan_review` 的正文有共享的 `MAX_PLAN_LEN = 1500` 挡着、权限入参有 600 / 800 挡着，都撞不到；只有 `ask_user_question` 的问题正文（`headerText` / `questionBody`）不受语义层约束——问题正文长到 3800 以上时，个人侧会先截、官方侧还能再放 200 字，用户能看出来。别把它和下面那段「用户看不见的按钮阈值」混为一谈。`interactionCardModel.ts` 的模块注释：**渠道差异不在语义层统一——统一是产品决策，不归那个模块**；`plan_review` 与权限卡的选项在语义层就是 `label: null`，文案本来就由各自渲染侧给。`cardLayout.ts` 更直接：**刻意不采用官方那套渲染参数**，因为那是「待退役的服务端渲染栈」的值，合同明确不得成为共享参数源。另有一条硬约束让分层无法合并：`@cindy/im` 不得依赖 `apps/desktop`，所以语义层（desktop 包）与渲染层（`@cindy/im`）必然是两个包、各持一份。这一档的寿命跟着第四节第 2 行走：msg.op 接线后官方出站改由桌面驱动，服务端那套渲染参数会一起退役。**两侧的按钮字数上限与按钮数上限不在这一档**——见表下说明 |
 
-### 交互卡上：看起来不同、但用户看不见的几个数
+### 交互卡的**按钮**阈值：看起来不同、但用户看不见
 
-这几对数字很容易被下一个人当成差异登记进来，先在这里钉死：
+这两对数字很容易被下一个人当成差异登记进来，先在这里钉死。**只有这两对**——正文上限
+不在此列，它是真差异，在上面那一行。
 
 - **按钮文案上限 60（官方）/ 64（个人）——不生效**。两侧 builder 都先按共享的
   `BTN_LABEL_MAX = 30` 截过每个按钮文案（`hook-control/interactions.ts` 与
@@ -106,12 +107,11 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
   永远轮不到它们。**有效上限两侧同为 30。**
 - **按钮数上限 20（官方）/ 协议 24——不生效**。选项被共享的 `MAX_OPTIONS = 6` 限死，
   `plan_review` 固定 2 个按钮、权限卡固定 3 个，离 20 差得远。
-- **卡片正文 4000 / 3800——几乎不生效**。plan 正文有共享的 `MAX_PLAN_LEN = 1500`、
-  权限入参有 600 / 800，都撞不到；只有 `ask_user_question` 的问题正文不受语义层约束，
-  超长时才可能被这两个数切到——而它们都在 Telegram 的 4096 之下，差的是约 200 字余量。
 
-上面三条都是**下游传输层的安全阈值**，不是产品差异。真正用户看得见的渲染差异只有
-第三节那一行列的：按钮排布、按钮文案来源、权限入参的渲染形态与上限、截断省略号样式。
+判据是**上游有没有更小的共享上限把它挡住**：按钮那两对有（30 与 6），所以是纯下游安全
+阈值；正文上限没有——`ask_user_question` 的问题正文一路不受语义层约束地流到渲染层，
+3800 与 4000 就直接决定用户看到多少。同一段话里既有「挡住了」又有「没挡住」的项时，
+不要用一句「这些都不是产品差异」收尾——本表上一版就是这么把真差异写没的。
 
 ## 四、缺口（待办）
 
@@ -152,6 +152,9 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
    反过来也要小心：**两个不一样的数不等于两种用户可见行为**。登记之前先往上游看一眼
    有没有更小的共享上限已经把它挡住了——交互卡的按钮字数 60 / 64 就是这样，看着差
    4 个字，实际都被共享的 30 截过，谁也见不到（第三节表下有专门一段钉这件事）。
+   但**挡住与没挡住要一项一项判**：同一段里的正文上限 3800 / 4000 就没人挡，`ask` 的
+   问题正文直通渲染层，那是真差异。本表上一版把它们写在一段里、最后用一句「这些都不是
+   产品差异」收尾，等于亲手把一条真差异抹掉了——**别用一句话收尾一堆结论不同的项**。
    还有一条同族的：**布尔契约字段的名字说的是策略，不是覆盖面**。`linkPreviewDisabled`
    / `progressSilent` 这种字段要数它实际挂在哪几个调用点上——个人侧的链接预览只关在
    答案那条路上，卡片与提示类消息并不带（见第四节 2c），字段名读起来却像"全关"。
