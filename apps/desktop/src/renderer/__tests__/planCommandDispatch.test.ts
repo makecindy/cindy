@@ -21,7 +21,8 @@
  *      命令列表每次 forceReload(缓存 key 感知不到同一上下文里 skill 增删),SSH 远程
  *      skipAgentSkills,device-link 远程草稿按 effectiveDeviceLinkDeviceId 从被控端读
  *      skill(与 ChatInput palette 语义一致);命中同名 agent skill 时放行发送,
- *      仅确认归属 desktop 命令后才 toast「远程草稿不可用」/ toggle 草稿 planMode。
+ *      仅当 merged 列表**明确命中 desktop /plan** 时才 toast「远程草稿不可用」/
+ *      toggle 草稿 planMode(未命中/拉取失败空列表一律放行,Copilot)。
  */
 
 import { readFileSync } from 'node:fs';
@@ -127,7 +128,7 @@ describe('/plan slash command contract', () => {
     // 避免正则字面量里反斜杠转义层级出错(CI 上实测过 toMatch 转义会挂)。
     expect(region).toContain('/^\\/plan');
     expect(region).toContain("test(message.trim())");
-    // device-link 远程草稿:确认 /plan 归属 desktop 命令(无同名命令)后才 toast 提示
+    // device-link 远程草稿:确认 merged 列表**明确命中 desktop /plan** 后才 toast 提示
     // 不可用 + return,不静默消费也不放行创建会话(Codex P1:避免 /plan 变成首条消息
     // 发给远程 agent)。Codex P2 修复:远程分支必须在归属判断**之后**,不能先于
     // loadAllCommands 提前 return —— 否则被控端安装的同名 plan skill 会被吞掉。
@@ -137,11 +138,14 @@ describe('/plan slash command contract', () => {
     const ownershipIdx = draftSource.indexOf("hit.kind === 'desktop'");
     expect(toastIdx).toBeGreaterThan(ownershipIdx);
     // 尊重 palette 优先级:每次 forceReload 拉取 merged 命令列表(不缓存 —— 缓存 key
-    // 感知不到同一上下文里 skill 增删,Copilot),仅当无同名命令或命中 desktop 才 toggle
-    // (用户装了名为 plan 的 skill 时不拦截,让 /plan 发给 agent —— 与会话路径一致)。
+    // 感知不到同一上下文里 skill 增删,Copilot),仅当 merged 列表**明确命中 desktop**
+    // /plan 时才 toggle/提示(Copilot:IPC 失败降级空列表时 `!hit` 无法证明归属,
+    // 未命中一律放行 —— 本地不误 toggle、远程不误 toast 吞掉同名 skill)。
     expect(region).toContain('loadAllCommands');
     expect(region).toContain('forceReload: true');
     expect(region).toContain("hit.kind === 'desktop'");
+    expect(region).toContain('hit && hit.kind');
+    expect(region).not.toContain('!hit ||');
     // SSH 远程与 ChatInput palette 一致 skipAgentSkills,避免误判本地 skill 归属。
     expect(region).toContain('skipAgentSkills');
     // device-link 远程草稿与 palette 一致传 effectiveDeviceLinkDeviceId,从被控端读

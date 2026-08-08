@@ -2846,11 +2846,12 @@ export function NewMakerDraftRoute() {
       // 而 undefined 走正常路径清空 composer —— 命令文本不留残影。
       // 尊重 palette 优先级:用户装了名为 plan 的 skill 时(agent-skill 优先于内置
       // desktop 命令,与会话路径 maybeDispatchDesktopSlashCommand 一致),不拦截,
-      // 让 /plan 作为首条消息发给 agent;仅当无同名命令或命中 desktop 命令才 toggle。
+      // 让 /plan 作为首条消息发给 agent;仅当 merged 列表明确命中 desktop /plan 才
+      // toggle/提示(未命中或拉取失败降级为空列表时一律放行,Copilot)。
       if (/^\/plan\s*$/i.test(message.trim())) {
         // 先做命令归属判断(与 ChatInput palette 合并语义一致:agent-skill > desktop):
         // 命中同名 agent skill(本地或被控端安装的 plan skill)时放行,让 /plan 作为
-        // 首条消息发给 agent;仅当无同名命令或 /plan 归属 desktop 命令时才进入下方分支。
+        // 首条消息发给 agent;仅当 merged 列表明确命中 desktop /plan 时才进入下方分支。
         // device-link 远程草稿按 effectiveDeviceLinkDeviceId 从被控端读 agent-builtin /
         // agent-skill(与 palette 的 deviceLinkDeviceId 传参一致),避免把被控端的 plan
         // skill 误判成 desktop 命令(Codex P2:远程草稿提前 return 会吞掉同名 skill)。
@@ -2871,20 +2872,22 @@ export function NewMakerDraftRoute() {
             effectiveDeviceLinkDeviceId,
           );
           const hit = cmds.find((c) => c.name.toLowerCase() === 'plan');
-          // 命中 agent skill(mergeCommands 优先级 agent-skill > desktop > agent-builtin,
-          // 同名时 agent-skill 覆盖 desktop) → 放行,让 /plan 作为首条消息发给 agent
-          // (本地或被控端的同名 skill 都算)。
-          if (!hit || hit.kind === 'desktop') {
+          // 仅当 merged 列表**明确命中 desktop** /plan 时才拦截(Copilot):loadAllCommands
+          // 在 IPC 失败时降级返回空列表,`!hit` 无法证明命令归属 —— 若把「未命中」也当
+          // desktop 拦截,本地草稿会误 toggle、远程草稿会误 toast 吞掉本应放行给 agent
+          // 的同名 skill/builtin。未命中(含拉取失败)或命中 agent skill 一律放行,
+          // 让 /plan 走默认发送路径(mergeCommands 优先级 agent-skill > desktop >
+          // agent-builtin,同名时 agent-skill 覆盖 desktop)。
+          if (hit && hit.kind === 'desktop') {
             if (isDeviceLinkDraft) {
-              // 无同名命令或 /plan 归属 desktop,但草稿是 device-link 远程:计划模式
-              // 切换在远程不可用(onPlanModeChange 不下发)。不静默消费也不放行创建
-              // 会话 —— 命中即提示并 return,避免 /plan 变成首条消息发给远程 agent
-              // 或走远程 create-session 路径(Codex P1)。返回 undefined 让 ChatInput
-              // 清空 composer(命令文本不留残影)。
+              // 明确命中 desktop /plan,但草稿是 device-link 远程:计划模式切换在远程
+              // 不可用(onPlanModeChange 不下发)。不静默消费也不放行创建会话 —— 命中
+              // 即提示并 return,避免 /plan 变成首条消息发给远程 agent 或走远程
+              // create-session 路径(Codex P1)。返回 undefined 让 ChatInput 清空 composer。
               toast.warning(t('newChat.collaboration.planModeUnavailableRemoteDraft'));
               return;
             }
-            // 本地草稿:无同名命令或命中 desktop 命令 → toggle 草稿 planMode。
+            // 本地草稿:明确命中 desktop /plan → toggle 草稿 planMode。
             handlePlanModeChange(!effectivePlanMode);
             return;
           }
