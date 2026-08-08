@@ -421,21 +421,22 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
     }
   }
 
-  function scheduleRejectedCredentialRecovery(identity: ClaudeAiOAuthCredentialIdentity): void {
-    if (!deps.onCredentialRejectionRecovery) return;
-    void (async () => {
-      for (const delay of CREDENTIAL_REJECTION_RETRY_DELAYS_MS) {
-        await sleep(delay);
-        try {
-          if (deps.onCredentialRejectionRecovery?.(identity)) return;
-        } catch (error) {
-          log.warn('retrying grant-scoped rejected credential recovery fence failed', {
-            code: nestedErrorCode(error) ?? 'unknown',
-          });
-        }
+  async function persistRejectedCredentialRecoveryAcrossRetries(
+    identity: ClaudeAiOAuthCredentialIdentity,
+  ): Promise<boolean> {
+    if (!deps.onCredentialRejectionRecovery) return false;
+    for (const delay of CREDENTIAL_REJECTION_RETRY_DELAYS_MS) {
+      await sleep(delay);
+      try {
+        if (deps.onCredentialRejectionRecovery(identity)) return true;
+      } catch (error) {
+        log.warn('retrying grant-scoped rejected credential recovery fence failed', {
+          code: nestedErrorCode(error) ?? 'unknown',
+        });
       }
-      log.error('grant-scoped rejected credential recovery fence exhausted retries');
-    })();
+    }
+    log.error('grant-scoped rejected credential recovery fence exhausted retries');
+    return false;
   }
 
   /**
@@ -847,11 +848,14 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
             });
           }
         }
-        // Token rejection is owner-independent. Keep its durable retry alive
-        // even if the user logs out or switches accounts before the UI-scoped
-        // invalid_grant proof below is eligible to fire.
+        // Token rejection is owner-independent. Do not let this refresh return
+        // while its only durable recovery write is still detached: a process
+        // exit in that window would lose the in-memory fence and revive the
+        // rejected grant on restart. The retry remains independent of owner
+        // changes; only the later UI-scoped cleanup uses the owner fence.
         if (!invalidGrantDurabilityEstablished) {
-          scheduleRejectedCredentialRecovery(rejectedCredential);
+          invalidGrantDurabilityEstablished =
+            await persistRejectedCredentialRecoveryAcrossRetries(rejectedCredential);
         }
       }
       if (generation !== gen) {

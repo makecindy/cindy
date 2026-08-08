@@ -953,6 +953,51 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     expect(onInvalidGrant).not.toHaveBeenCalled();
   });
 
+  it('invalid_grant 不在 grant recovery 落盘前返回,避免退出窗口丢失拒绝状态', async () => {
+    const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    let recoveryAttempts = 0;
+    const onCredentialRejectionRecovery = vi.fn(() => {
+      recoveryAttempts += 1;
+      return recoveryAttempts >= 2;
+    });
+    const onInvalidGrant = vi.fn();
+    const { deps } = makeDeps({
+      readOAuth: () => current,
+      onCredentialRejected: () => {
+        throw Object.assign(new Error('primary sidecar unavailable'), { code: 'EACCES' });
+      },
+      onCredentialRejectionRecovery,
+      clearRejectedCredential: () => {
+        throw Object.assign(new Error('credential store unavailable'), { code: 'EACCES' });
+      },
+      onInvalidGrant,
+      sleep: async () => recoveryGate,
+      fetchFn: (async () =>
+        jsonResponse(400, { error: 'invalid_grant' })) as unknown as typeof fetch,
+    });
+    const refresher = createClaudeOAuthRefresher(deps);
+
+    const pending = refresher.getValidOAuth({ forceRefresh: true });
+    let settled = false;
+    void pending.finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(onCredentialRejectionRecovery).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseRecovery();
+    await expect(pending).resolves.toBeNull();
+    expect(onCredentialRejectionRecovery).toHaveBeenCalledTimes(2);
+    expect(onInvalidGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ durabilityEstablished: true }),
+    );
+  });
+
   it('主拒绝记录和精确清除都失败时,grant-scoped recovery 仍让 proof 可耐久', async () => {
     const current = fixtureOAuth({
       expiresAt: NOW - 1,
