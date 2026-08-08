@@ -58,6 +58,12 @@ export async function fetchDeviceProviders(
 ): Promise<DeviceProvidersPayload> {
   const cached = cache.get(deviceId);
   if (cached) return cached;
+  // 重连期间 fresh 在途时 join fresh(greptile P1:重连请求覆盖 fresh 目录)——
+  // connectionEpoch 变化会让 useDeviceProviders 重跑 effect 发起普通请求;该请求
+  // 捕获与 fresh 相同的代际,晚于 fresh 返回仍通过 isCurrent() 覆盖共享缓存。
+  // fresh 结果即工作站最新真相,普通读取 join 它语义正确且不会产生竞争请求。
+  const fp = freshInflight.get(deviceId);
+  if (fp) return fp;
   const ip = inflight.get(deviceId);
   if (ip) return ip;
 

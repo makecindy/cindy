@@ -4741,6 +4741,24 @@ export default function NewRemoteSessionScreen() {
         await abortIfDeviceSwitched();
         return;
       }
+      // Goal 最终创建前重新执行鉴权门禁(codex review P2):freshAuth 在 worktree
+      // 创建/建链等异步步骤之前完成;guard 虽刷新目录却只校准草稿、不重算
+      // connectedProvidersForAgent——来源在准备期间断开时,仍会在无可用来源时
+      // 调用 createSession/goal.set。用最新目录行重验,目录就绪且无已连接来源 →
+      // 中止(与 create() 的鉴权门禁同口径)。fail-open(catalogKnown=false)时
+      // rows 不可信,保持信任语义不拦截。
+      if (guardResult.catalogKnown) {
+        const connectedCount = connectedProvidersForAgent(
+          [...new Map(guardResult.rows.map((row) => [row.provider.id, row.provider])).values()],
+          draft.agentKind,
+        ).length;
+        if (guardResult.rows.length > 0 && connectedCount === 0) {
+          if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
+          setGoalError(agentAuthGateHint(draft.agentKind));
+          return;
+        }
+      }
       // ── commit 段:started 写盘(await)后同步核对 genAt;此后无裸 return ──
       if (precreatedWorktree) {
         const startedRecorded = await registerPendingPrecreatedWorktree(
