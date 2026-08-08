@@ -53,7 +53,16 @@ function summarizeInput(input: Record<string, unknown>): string {
   }
 }
 
-/** 未决交互超时(必须短于 session-runner 的整 turn 硬超时 60min)。 */
+/**
+ * 未决交互超时: 到点按安全默认收口并撤卡。
+ *
+ * 原注释写的理由是"必须短于 session-runner 的整 turn 硬超时 60min" —— **那条硬超时
+ * 2026-08-01 已经撤掉**(见 session-runner「turn 时长策略」), 所以这个值现在不是为了
+ * 抢在它前面, 而是这条链路上**唯一**的兜底: maker-core 的 turn stall 看门狗刻意把
+ * "等用户回应交互"排除在静默之外, 没有它这张卡会一直挂着。
+ *
+ * 个人 IM 那侧没有等价定时器(见 docs/product-rules/telegram-bot-parity.md 缺口 2g)。
+ */
 export const HOOK_INTERACTION_TIMEOUT_MS = 30 * 60_000;
 
 /** 合成结果: 过网线的卡片 + 留在本端的按钮->决策映射与安全默认。 */
