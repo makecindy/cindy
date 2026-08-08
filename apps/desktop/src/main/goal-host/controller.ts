@@ -358,7 +358,7 @@ export class GoalController {
    * 每个 goal listener 当前绑定的 SessionLike 对象引用。deferred agent switch 落实后
    * live session 会被换成目标引擎的新对象(maker.getSession 返回新引用),用它判等
    * 以决定是否需要把 listener 迁到新 session —— 否则新引擎 turn 的 done/error 事件
-   * 进不了 finalizeTurn,目标永远卡在 active(reviewer P1)。
+   * 进不了 finalizeTurn,目标永远卡在 active()。
    */
   private readonly listenerSessions = new Map<string, SessionLike>();
   private readonly turns = new Map<string, TurnAccumulator>();
@@ -418,8 +418,7 @@ export class GoalController {
   /**
    * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
    * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
-   * turn-dispatched 同代成对。以 **boundary 身份**绑定生命周期(reviewer P1/P2:
-   * generation 不足以区分"busy 重试同代派发"与"同 sessionId 新目标首轮",二者都是
+   * turn-dispatched 同代成对。以 **boundary 身份**绑定生命周期(* generation 不足以区分"busy 重试同代派发"与"同 sessionId 新目标首轮",二者都是
    * gen 1;boundary 引用不变 = 同一次恢复的重试可消费,换代 = 新生命周期自动失效)。
    * busy / 预算预检拦截 / send 拒绝等未派发路径不产生孤儿恢复事件;stopSession
    * (生命周期接管)清空作废的恢复意图。
@@ -427,7 +426,7 @@ export class GoalController {
   private readonly pendingResumeEvents = new Map<string, { reason: string; boundary: TurnAccumulator }>();
 
   /**
-   * 仅当恢复标记属于给定 boundary 时才清除(reviewer P1:并发下旧 fireTurn 的早退
+   * 仅当恢复标记属于给定 boundary 时才清除(并发下旧 fireTurn 的早退
    * 清理不得按 sessionId 无条件删除新恢复刚登记的标记——否则新派发缺配对的 resumed)。
    * boundary 为空时视为无匹配(不删)。
    */
@@ -451,11 +450,13 @@ export class GoalController {
     type: GoalRunEventType,
     goalSessionId: string,
     state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
+    // 只允许补充/覆盖 helper 未计算/归一化的字段(from/to/generation/reason);
+    // type/goalSessionId/turnIndex/at/budget 由 helper 负责,调用方不可意外覆盖。
     // reason 允许 string | null(GoalState.lastReason 类型)——helper 内归一化为
     // undefined,避免 strict 下把 null 赋给 reason?: string 的类型错误。
-    extra?: Omit<Partial<GoalRunEvent>, 'reason'> & { reason?: string | null },
+    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation' | 'reason'> & { reason?: string | null },
   ): void {
-    // dispose 后丢弃观测(reviewer P1:登出/切账号 reset 后,in-flight 的旧 controller
+    // dispose 后丢弃观测(登出/切账号 reset 后,in-flight 的旧 controller
     // 扫描/收口不得把旧账号事件写回已清空的环)。
     if (this.disposed) return;
     if (!this.deps.recordRunEvent) return;
@@ -706,7 +707,7 @@ export class GoalController {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         if (limited) {
           // #2105 P0:编辑路径(降上限)触发预算终态。补 state-transition 供 consumer
-          // 重建状态迁移(reviewer P2:与 shouldLimit/preflight 路径语义对齐)。
+          // 重建状态迁移(与 shouldLimit/preflight 路径语义对齐)。
           this.recordRunEvent('state-transition', sessionId, limited, {
             from: 'active',
             to: 'budgetLimited',
@@ -793,7 +794,7 @@ export class GoalController {
       if (!changed) return null;
       if (shouldLimit) {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
-        // #2105 P0:直接降上限路径(reviewer P2:shouldLimit 分支写 budgetLimited 此前无
+        // #2105 P0:直接降上限路径(shouldLimit 分支写 budgetLimited 此前无
         // 事件,getGoalRunEvents 会漏掉该预算终态)。与 setGoal 降上限路径埋点语义对齐;
         // changed 为持久化后的 budgetLimited 状态,预算快照即最终值。补 state-transition
         // 供 consumer 重建状态迁移。
@@ -838,7 +839,7 @@ export class GoalController {
         if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
         if (resumed) {
           next = resumed;
-          // #2105 P0:预算复活(budgetLimited → active,reviewer P2:消费者重放
+          // #2105 P0:预算复活(budgetLimited → active,消费者重放
           // getGoalRunEvents 需要看到终态后的 active 迁移,否则"terminal 之后又有
           // 派发/收口"无法解释)。迁移在持久化提交后记录,与 resumeGoal 语义对齐。
           this.recordRunEvent('state-transition', sessionId, resumed, {
@@ -1188,7 +1189,7 @@ export class GoalController {
     this.turns.set(sessionId, resumedBoundary);
     this.attachListener(sessionId);
     this.emit(updated);
-    // #2105 P0:恢复写 active 的**真实状态迁移**(reviewer P2:resumed 只在派发边界
+    // #2105 P0:恢复写 active 的**真实状态迁移**(resumed 只在派发边界
     // 记录,若派发被拒绝 / preflight 拦截,审计会丢失 paused/blocked/usageLimited→active
     // 的迁移;此处持久化已提交,迁移在事件流中与状态机一致)。
     if (state.status !== 'active') {
@@ -1201,7 +1202,7 @@ export class GoalController {
     // #2105 P0:恢复边界事件(reviewer:resumed 此前只在 resumeActiveGoals 记录,
     // 手动 resumeGoal 会直接从旧生命周期跳到新 generation 的 turn-dispatched,
     // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑。
-    // **登记而非立即发出**(reviewer P1:busy / 预算预检拦截 / session 缺失等派发前
+    // **登记而非立即发出**(busy / 预算预检拦截 / session 缺失等派发前
     // 退出路径若已发 resumed,会产生无同代派发的孤儿事件)——fireTurn 在 onDispatching
     // 真实派发边界消费,与 turn-dispatched 同代成对;以 boundary 身份绑定本次生命周期,
     // busy 重试(同 boundary)可消费,新目标(换 boundary)自动失效。
@@ -1331,7 +1332,7 @@ export class GoalController {
    * "active 却永远不动"的 dormant 死状态。
    */
   async resumeActiveGoals(): Promise<void> {
-    // dispose 后丢弃(reviewer P1:登出/切账号时 in-flight 扫描不得重建 turns /
+    // dispose 后丢弃(登出/切账号时 in-flight 扫描不得重建 turns /
     // attach 旧 listener / emit 旧账号状态 / fireTurn)。await 前后各查一次。
     if (this.disposed) return;
     const active = await this.deps.storage.listActive();
@@ -1341,7 +1342,7 @@ export class GoalController {
       // listActive 是启动扫描快照；并发 Stop 可能已经立 cancelled boundary 或写成 paused。
       if (this.turns.has(snapshot.sessionId)) continue;
       const state = await this.deps.storage.get(snapshot.sessionId);
-      // per-goal await 期间可能已 dispose(reviewer P1:登出/切账号)——
+      // per-goal await 期间可能已 dispose(登出/切账号)——
       // 不得重建 boundary / attach 旧 listener / emit 旧状态。
       if (this.disposed) return;
       if (!state || state.status !== 'active' || this.turns.has(snapshot.sessionId)) continue;
@@ -1378,7 +1379,7 @@ export class GoalController {
     // usageLimited 行:重启后 timer 丢了,按存档的 usageResetAt 重排自动续跑
     //(已过点 → delay 0 触发;未知 resetAt → 不排,留待手动 resume)。
     const limited = await this.deps.storage.listUsageLimited();
-    // await 期间可能已 dispose(reviewer P1:登出/切账号)——不得给旧账号注册
+    // await 期间可能已 dispose(登出/切账号)——不得给旧账号注册
     // usage-resume timer,否则过期 resetAt 会立即触发跨边界的 autoResume。
     if (this.disposed) return;
     let rescheduled = 0;
@@ -1739,7 +1740,7 @@ export class GoalController {
       // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
       // 防止旧目标的删除迟到并抹掉新目标。
       const elapsedMs = Math.max(0, this.now() - state.startedAt);
-      // 捕获完成轮次的 generation(reviewer P2:await 期间 pause/clear/新 /goal 可能替换
+      // 捕获完成轮次的 generation(await 期间 pause/clear/新 /goal 可能替换
       // this.turns,事件若读当前 boundary 会被盖上新生命周期的 generation)。
       const completedGeneration = this.turns.get(sessionId)?.generation ?? 0;
       await this.trackCompletion(
@@ -1764,8 +1765,8 @@ export class GoalController {
         })(),
       );
       // 观测:completion 提交(达成记录 + clear + null emit)成功后才宣告终态
-      // (reviewer P1:提交卡住或 clear 拒绝时,不得产生假 terminal complete)。
-      // 再次校验生命周期(reviewer P1:await trackCompletion 期间登出/切账号会
+      // (提交卡住或 clear 拒绝时,不得产生假 terminal complete)。
+      // 再次校验生命周期(await trackCompletion 期间登出/切账号会
       // resetGoalController → dispose 清 turns + 环,本完成轮不得把旧账号事件重新
       // 写入已清空的环;trackCompletion 本身已提交,达成记录/clear 不受影响)。
       if (isCurrentTurn()) {
@@ -1867,11 +1868,11 @@ export class GoalController {
     if (updated) this.emit(updated);
 
     // ── #2105 P0 观测(确认提交后):本轮收口 + 状态迁移 ─────────────────────
-    // reviewer P1:事件必须在 quota override 完成 + current-turn 校验 + 持久化
+    // 事件必须在 quota override 完成 + current-turn 校验 + 持久化
     // 成功后发出——getAccountLimit pending 期间 Stop/clear 会让 finalizeTurn 提前
     // return,若事件在 await 前发,审计会报告未提交的假收口。用最终 status/lastReason
     // (含 quota 改判),state-transition 条件自然覆盖 active→usageLimited 改判场景。
-    // reviewer P1:非 goal turn(用户 turn 打断,origin==='other')不是 goal 的回合,
+    // 非 goal turn(用户 turn 打断,origin==='other')不是 goal 的回合,
     // 决策为 paused 且不递增 turnsUsed——不记录 turn-finalized(无对应 turn-dispatched,
     // turnIndex 会与上一轮重复),只发状态迁移与停滞/预算类事件(它们仍真实发生)。
     if (origin === 'goal') {
@@ -2043,7 +2044,7 @@ export class GoalController {
    * 60s 干等。所以过载那条提示只能说"正在重试",不能说"已恢复"(见 noticeKind)。
    */
   private async autoResumeFromUsageLimit(sessionId: string): Promise<void> {
-    // dispose 后丢弃(reviewer P1:登出/切账号后旧 timer 触发不得跨边界恢复旧账号 goal)。
+    // dispose 后丢弃(登出/切账号后旧 timer 触发不得跨边界恢复旧账号 goal)。
     if (this.disposed) return;
     this.usageResumeTimers.delete(sessionId);
     // usageLimited 停驻态正常没有 turn owner。为本次 timer 建一代临时 owner，所有 await
@@ -2117,13 +2118,13 @@ export class GoalController {
   }
 
   private async fireTurn(sessionId: string): Promise<void> {
-    // dispose 后丢弃(reviewer P1:登出/切账号后旧 controller 的续跑/扫描不得继续
+    // dispose 后丢弃(登出/切账号后旧 controller 的续跑/扫描不得继续
     // 实际操作——重建 turns、attach listener、emit 旧账号状态)。
     if (this.disposed) return;
     const lifecycleBoundary = this.turns.get(sessionId);
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) {
       // 生命周期已接管(cancelled / 无 owner):仅清除属于本次 boundary 的恢复标记
-      // (reviewer P2:此 early return 早于 preflight/finally;并发新恢复的标记不误删)。
+      // (此 early return 早于 preflight/finally;并发新恢复的标记不误删)。
       this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
       return;
     }
@@ -2156,7 +2157,7 @@ export class GoalController {
         }),
       );
       if (!isCurrentLifecycle()) return;
-      // #2105 P0:preflight 预算停止(reviewer P2:此路径写 budgetLimited 但此前无
+      // #2105 P0:preflight 预算停止(此路径写 budgetLimited 但此前无
       // 审计事件——usage-resume 自动续跑 / continuation timer 撞预算时,事件流会漏掉
       // 终态)。与 finalizeTurn 决策 budgetLimited 的语义对齐,补 state-transition +
       // budget-consumed + terminal(consumer 按事件重建状态需要 active→budgetLimited 迁移)。
@@ -2179,14 +2180,14 @@ export class GoalController {
       this.stopSession(sessionId);
       if (limited) this.emit(limited);
       // 派发被放弃:仅清除本次 boundary 的恢复标记,防串入同 sessionId 的下一个 Goal
-      // (reviewer P1/P2;并发新恢复的标记不误删)。
+      // (;并发新恢复的标记不误删)。
       this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
       return;
     }
     if (this.firing.has(sessionId)) {
       // 已在派发(并发旧 fireTurn 持有所有权):本次 fireTurn 不派发——**保留恢复标记**
-      // (reviewer P1:新恢复登记后若在此删除,旧 fireTurn 随后派发只记 turn-dispatched,
-      // 缺配对的 resumed)。**并安排防抖重试**(reviewer P1:直接 return 会让恢复后的
+      // (新恢复登记后若在此删除,旧 fireTurn 随后派发只记 turn-dispatched,
+      // 缺配对的 resumed)。**并安排防抖重试**(直接 return 会让恢复后的
       // active 目标僵死——旧 fireTurn 因 lifecycle 被替换在派发前退出且不调度;重试
       // 走同 boundary,onDispatching 消费标记)。串台由 boundary 身份校验防住。
       this.scheduleContinuation(sessionId);
@@ -2205,7 +2206,7 @@ export class GoalController {
       // status≠active 自然停,不会空转。
       this.deps.logger.info('[goal] session busy, retry fire soon', { sessionId, kind });
       this.scheduleContinuation(sessionId);
-      // **不删恢复标记**(reviewer P1:busy 重试是同一 boundary 的防抖续跑,重试真实
+      // **不删恢复标记**(busy 重试是同一 boundary 的防抖续跑,重试真实
       // 派发时 onDispatching 会消费标记并记录 resumed,恢复事件不得丢失)。换代
       // (Stop/新 setGoal 等)由 stopSession 清标记,新目标不会误消费旧恢复意图。
       return;
@@ -2245,7 +2246,7 @@ export class GoalController {
       }
       // deferred switch 可能刚把 live session 换成目标引擎的新对象;本会话若有 goal
       // listener,必须迁到新 session,否则这轮 turn 的 done/error 事件进不了 finalizeTurn,
-      // 目标卡死在 active(reviewer P1)。attachListener 按 session 身份判等,未换则 no-op;
+      // 目标卡死在 active()。attachListener 按 session 身份判等,未换则 no-op;
       // 只对已在管(非 dormant)的 goal 重挂,不给 dormant 会话平白加 listener。
       if (this.unsubscribers.has(sessionId)) {
         this.attachListener(sessionId);
@@ -2299,7 +2300,7 @@ export class GoalController {
               this.goalDispatchAbortControllers.delete(sessionId);
             }
             // #2105 P0:消费恢复标记——resumed 与 turn-dispatched 在真实派发边界同代
-            // 成对发出(reviewer P1:busy/预算预检/session 缺失等派发前退出不得产生
+            // 成对发出(busy/预算预检/session 缺失等派发前退出不得产生
             // 孤儿恢复事件;以 boundary 身份校验——busy 重试同 boundary 可消费,
             // 新目标换 boundary 自动失效,防旧标记串入)。
             const pendingResume = this.pendingResumeEvents.get(sessionId);
@@ -2357,7 +2358,7 @@ export class GoalController {
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
       }
-      // 清除残留恢复标记(reviewer P1/P2):正常派发时已在 onDispatching 消费删除,
+      // 清除残留恢复标记():正常派发时已在 onDispatching 消费删除,
       // 此处幂等兜底 send 失败/拒绝/未派发路径——按本次 dispatchBoundary 身份清理,
       // 并发新恢复登记的其他 boundary 标记不受影响。
       this.clearPendingResumeForBoundary(sessionId, dispatchBoundary ?? lifecycleBoundary);

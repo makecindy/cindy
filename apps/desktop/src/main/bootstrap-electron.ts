@@ -1105,7 +1105,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   } catch (err) {
     authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
   }
-  // goal-host 的观测 recorder 是模块级单例(reviewer P1):切账号/登出必须连同
+  // goal-host 的观测 recorder 是模块级单例():切账号/登出必须连同
   // controller 一起重置,否则用户 A 的 sessionId/reason 会留在环里泄漏给用户 B。
   // resetGoalController 同步 dispose + clear 观测环,与 scheduler reset 同属账号边界。
   try {

@@ -161,11 +161,11 @@ export function getGoalController(): GoalController | null {
   return _controller;
 }
 
-/** 切账号 / 登出时调(与 resetScheduler 对齐;当前 bootstrap 不联动)。 */
+/** 切账号 / 登出时调(与 resetScheduler 对齐;bootstrap-electron 的账号边界 teardown 已接入)。 */
 export function resetGoalController(): void {
   if (_controller) _controller.dispose();
   _controller = null;
-  // 清空观测环(reviewer P1):recorder 是模块级单例,不清空会让旧账号的
-  // sessionId/reason 泄漏给重置后的新查看方,造成排障误判与隐私暴露。
+  // 清空观测环:recorder 是模块级单例,不清空会让旧账号的 sessionId/reason 泄漏给
+  // 重置后的新查看方,造成排障误判与隐私暴露。
   goalRunRecorder.clear();
 }

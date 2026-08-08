@@ -26,9 +26,12 @@ export interface GoalRunEvent {
   /** 生命周期 generation —— 防 Stop/Resume 换代后旧事件串台(与 controller 同语义)。 */
   generation: number;
   /**
-   * 回合序号:1-based,= 事件时刻的累计轮数。回合内事件(turn-dispatched /
-   * turn-finalized / state-transition / budget-consumed / stall-detected / terminal)
-   * 以决策后快照为准(turnIndex=本轮);非回合事件(resumed)保持不递增(可为 0)。
+   * 回合序号:1-based,= 事件时刻的累计轮数。口径按事件类型区分(Copilot suppressed):
+   *  - turn-dispatched:派发前快照 —— turnIndex = 派发前 turnsUsed + 1(本轮),
+   *    budget.turnsUsed 仍为已完成轮数;
+   *  - turn-finalized / state-transition / budget-consumed / stall-detected /
+   *    terminal:决策后快照(turnIndex=本轮,含本轮计数);
+   *  - resumed:非回合事件,保持不递增(可为 0)。
    */
   turnIndex: number;
   from?: GoalStatus;
