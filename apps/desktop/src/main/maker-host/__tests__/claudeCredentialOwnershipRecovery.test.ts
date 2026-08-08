@@ -332,7 +332,8 @@ describe('Claude credential + ownership recovery integration', () => {
 
     // C stages over B, then D begins and is cancelled. C's deterministic
     // rollback restores the token B snapshot it observed on entry; cleanup must
-    // therefore restore B's suppression rather than remove every sidecar.
+    // therefore restore B's authorization suppression rather than inventing a
+    // logout tombstone or removing every sidecar.
     h.ownerId = 'owner-c';
     h.generation = 3;
     const loginC = binding.beginNativeProviderAuthAuthorization('anthropic', {
@@ -373,7 +374,7 @@ describe('Claude credential + ownership recovery integration', () => {
         ),
       ),
     ).toMatchObject({
-      intent: 'revoke',
+      intent: 'authorize',
       dataOwnerId: 'owner-b',
       generation: 2,
       operationId: loginB.operationId,

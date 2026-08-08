@@ -63,6 +63,7 @@ const CREDENTIAL_TEMP_STALE_MS = 60_000;
 const SECURITY_COMMAND_TIMEOUT_MS = 2_000;
 
 interface ActiveCredentialStorageLock {
+  mode: 'mutation' | 'snapshot';
   assertOwned(): void;
 }
 
@@ -93,15 +94,15 @@ function recoverCredentialBackupIfMainMissingLocked(): void {
   const file = credentialsFilePath();
   const backup = credentialBackupPath();
   if (fs.existsSync(file) || !fs.existsSync(backup)) return;
-  if (!activeCredentialStorageLock) {
-    throw new Error('claude credential backup requires the shared storage lock for recovery');
+  if (activeCredentialStorageLock?.mode !== 'mutation') {
+    throw new Error('claude credential backup requires a mutation storage lock for recovery');
   }
   renameSyncWithRetry(backup, file);
 }
 
 /** A valid main file proves any concurrently visible backup is stale. */
 function cleanupCredentialBackupAfterValidReadLocked(): void {
-  if (process.platform === 'darwin' || !activeCredentialStorageLock) return;
+  if (process.platform === 'darwin' || activeCredentialStorageLock?.mode !== 'mutation') return;
   unlinkSyncWithRetry(credentialBackupPath());
 }
 
@@ -552,6 +553,7 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
     throw new Error(message, { cause });
   }
   const lock: ActiveCredentialStorageLock = {
+    mode: 'mutation',
     assertOwned(): void {
       if (compromised) throw compromised;
     },
@@ -654,6 +656,7 @@ function withCredentialSnapshotLock<T>(snapshot: () => T, directoryAbsent: T): T
   }
 
   const lock: ActiveCredentialStorageLock = {
+    mode: 'snapshot',
     assertOwned(): void {
       if (compromised) throw compromised;
     },

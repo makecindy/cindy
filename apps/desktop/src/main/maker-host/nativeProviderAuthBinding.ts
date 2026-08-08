@@ -119,8 +119,14 @@ type PendingRevocationRead =
         owner: NativeProviderAuthOwnerFence;
         operationId: string | null;
       } | null;
+      fallbackAuthorizations: Array<{
+        owner: NativeProviderAuthOwnerFence;
+        operationId: string;
+      }>;
     }
   | { kind: 'unreadable' };
+
+const MAX_PENDING_AUTHORIZATION_FALLBACKS = 8;
 
 type OperationIntentRead =
   | { kind: 'absent' }
@@ -229,6 +235,8 @@ function readPendingRevocation(provider: NativeProviderId): PendingRevocationRea
     const intent = (value as { intent?: unknown }).intent;
     const operationId = (value as { operationId?: unknown }).operationId;
     const fallbackRevocation = (value as { fallbackRevocation?: unknown }).fallbackRevocation;
+    const fallbackAuthorizations = (value as { fallbackAuthorizations?: unknown })
+      .fallbackAuthorizations;
     let parsedFallback: {
       owner: NativeProviderAuthOwnerFence;
       operationId: string | null;
@@ -257,6 +265,43 @@ function readPendingRevocation(provider: NativeProviderId): PendingRevocationRea
         operationId: typeof fallbackOperationId === 'string' ? fallbackOperationId : null,
       };
     }
+    const parsedAuthorizationFallbacks: Array<{
+      owner: NativeProviderAuthOwnerFence;
+      operationId: string;
+    }> = [];
+    if (fallbackAuthorizations !== undefined) {
+      if (
+        !Array.isArray(fallbackAuthorizations) ||
+        fallbackAuthorizations.length > MAX_PENDING_AUTHORIZATION_FALLBACKS
+      ) {
+        return { kind: 'unreadable' };
+      }
+      for (const fallbackAuthorization of fallbackAuthorizations) {
+        if (
+          !fallbackAuthorization ||
+          typeof fallbackAuthorization !== 'object' ||
+          Array.isArray(fallbackAuthorization)
+        ) {
+          return { kind: 'unreadable' };
+        }
+        const fallbackOwner = (fallbackAuthorization as { dataOwnerId?: unknown }).dataOwnerId;
+        const fallbackGeneration = (fallbackAuthorization as { generation?: unknown }).generation;
+        const fallbackOperationId = (fallbackAuthorization as { operationId?: unknown })
+          .operationId;
+        if (
+          typeof fallbackOwner !== 'string' ||
+          typeof fallbackGeneration !== 'number' ||
+          typeof fallbackOperationId !== 'string' ||
+          fallbackOperationId.length === 0
+        ) {
+          return { kind: 'unreadable' };
+        }
+        parsedAuthorizationFallbacks.push({
+          owner: { dataOwnerId: fallbackOwner, generation: fallbackGeneration },
+          operationId: fallbackOperationId,
+        });
+      }
+    }
     return typeof owner === 'string' &&
       typeof generation === 'number' &&
       (operationId === undefined || (typeof operationId === 'string' && operationId.length > 0)) &&
@@ -267,6 +312,7 @@ function readPendingRevocation(provider: NativeProviderId): PendingRevocationRea
           intent,
           operationId: typeof operationId === 'string' ? operationId : null,
           fallbackRevocation: parsedFallback,
+          fallbackAuthorizations: parsedAuthorizationFallbacks,
         }
       : { kind: 'unreadable' };
   } catch {
@@ -979,20 +1025,33 @@ export function stageNativeProviderAuthAuthorization(
     const intent = readOperationIntent(provider);
     if (intent.kind !== 'present' || !sameOperation(intent.operation, operation)) return false;
     const previousPending = readPendingRevocation(provider);
-    const fallbackRevocation =
+    let fallbackRevocation =
       previousPending.kind === 'unreadable'
         ? { owner: operation, operationId: null }
         : previousPending.kind === 'present' && previousPending.intent === 'revoke'
-          ? {
-              owner: previousPending.owner,
-              operationId: previousPending.operationId,
-            }
+          ? { owner: previousPending.owner, operationId: previousPending.operationId }
           : previousPending.kind === 'present'
-            ? (previousPending.fallbackRevocation ?? {
-                owner: previousPending.owner,
-                operationId: previousPending.operationId,
-              })
+            ? previousPending.fallbackRevocation
             : null;
+    let fallbackAuthorizations: Array<{
+      owner: NativeProviderAuthOwnerFence;
+      operationId: string;
+    }> = [];
+    if (previousPending.kind === 'present' && previousPending.intent === 'authorize') {
+      if (
+        previousPending.operationId &&
+        previousPending.fallbackAuthorizations.length < MAX_PENDING_AUTHORIZATION_FALLBACKS
+      ) {
+        fallbackAuthorizations = [
+          { owner: previousPending.owner, operationId: previousPending.operationId },
+          ...previousPending.fallbackAuthorizations,
+        ];
+      } else {
+        // A malformed/deep chain cannot prove which shared token is safe. Keep
+        // the replacement fail-closed without mislabelling a normal authorize.
+        fallbackRevocation ??= { owner: operation, operationId: null };
+      }
+    }
     // Explicit authorization is the recovery authority for this provider, so
     // it may atomically replace a corrupt/stale staging marker.
     atomicWriteJson(pendingRevocationPath(provider), {
@@ -1009,6 +1068,15 @@ export function stageNativeProviderAuthAuthorization(
                 ? { operationId: fallbackRevocation.operationId }
                 : {}),
             },
+          }
+        : {}),
+      ...(fallbackAuthorizations.length > 0
+        ? {
+            fallbackAuthorizations: fallbackAuthorizations.map((fallback) => ({
+              dataOwnerId: fallback.owner.dataOwnerId,
+              generation: fallback.owner.generation,
+              operationId: fallback.operationId,
+            })),
           }
         : {}),
       createdAt: Date.now(),
@@ -1030,16 +1098,78 @@ export function clearNativeProviderAuthAuthorizationPending(
   if (operation.intent !== 'authorize') return false;
   return withBindingMutationLock(() => {
     const pending = readPendingRevocation(provider);
-    if (
-      pending.kind !== 'present' ||
-      pending.intent !== 'authorize' ||
-      pending.owner.dataOwnerId !== operation.dataOwnerId ||
-      pending.owner.generation !== operation.generation ||
-      pending.operationId !== operation.operationId
-    ) {
-      return false;
+    if (pending.kind !== 'present' || pending.intent !== 'authorize') return false;
+    const isCurrent =
+      pending.owner.dataOwnerId === operation.dataOwnerId &&
+      pending.owner.generation === operation.generation &&
+      pending.operationId === operation.operationId;
+    if (!isCurrent) {
+      const remainingFallbacks = pending.fallbackAuthorizations.filter(
+        (fallback) =>
+          fallback.owner.dataOwnerId !== operation.dataOwnerId ||
+          fallback.owner.generation !== operation.generation ||
+          fallback.operationId !== operation.operationId,
+      );
+      if (remainingFallbacks.length === pending.fallbackAuthorizations.length) return false;
+      atomicWriteJson(pendingRevocationPath(provider), {
+        intent: 'authorize',
+        dataOwnerId: pending.owner.dataOwnerId,
+        generation: pending.owner.generation,
+        operationId: pending.operationId,
+        ...(pending.fallbackRevocation
+          ? {
+              fallbackRevocation: {
+                dataOwnerId: pending.fallbackRevocation.owner.dataOwnerId,
+                generation: pending.fallbackRevocation.owner.generation,
+                ...(pending.fallbackRevocation.operationId
+                  ? { operationId: pending.fallbackRevocation.operationId }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(remainingFallbacks.length > 0
+          ? {
+              fallbackAuthorizations: remainingFallbacks.map((fallback) => ({
+                dataOwnerId: fallback.owner.dataOwnerId,
+                generation: fallback.owner.generation,
+                operationId: fallback.operationId,
+              })),
+            }
+          : {}),
+        createdAt: Date.now(),
+      });
+      return true;
     }
-    if (pending.fallbackRevocation) {
+    if (pending.fallbackAuthorizations.length > 0) {
+      const [fallbackAuthorization, ...remainingFallbacks] = pending.fallbackAuthorizations;
+      atomicWriteJson(pendingRevocationPath(provider), {
+        intent: 'authorize',
+        dataOwnerId: fallbackAuthorization.owner.dataOwnerId,
+        generation: fallbackAuthorization.owner.generation,
+        operationId: fallbackAuthorization.operationId,
+        ...(pending.fallbackRevocation
+          ? {
+              fallbackRevocation: {
+                dataOwnerId: pending.fallbackRevocation.owner.dataOwnerId,
+                generation: pending.fallbackRevocation.owner.generation,
+                ...(pending.fallbackRevocation.operationId
+                  ? { operationId: pending.fallbackRevocation.operationId }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(remainingFallbacks.length > 0
+          ? {
+              fallbackAuthorizations: remainingFallbacks.map((fallback) => ({
+                dataOwnerId: fallback.owner.dataOwnerId,
+                generation: fallback.owner.generation,
+                operationId: fallback.operationId,
+              })),
+            }
+          : {}),
+        createdAt: Date.now(),
+      });
+    } else if (pending.fallbackRevocation) {
       // This login had superseded an older crash/logout tombstone. Its token
       // write was rolled back, so restore fail-closed revocation semantics
       // instead of reviving the credential that predated the failed login.

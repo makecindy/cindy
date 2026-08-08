@@ -1611,20 +1611,43 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     },
   );
 
-  it('recovers a backup-only credential only while the shared storage lock is held', async () => {
+  it('leaves a backup-only credential untouched in snapshots and recovers it only for mutation', async () => {
     const root = makeRoot();
     const file = path.join(root, '.credentials.json');
     const backup = `${file}.bak`;
-    fs.writeFileSync(backup, JSON.stringify({ claudeAiOauth: oauth }));
+    const backupBytes = JSON.stringify({ claudeAiOauth: oauth });
+    fs.writeFileSync(backup, backupBytes);
     const store = await importStore({ platform: 'win32', configDir: root });
 
     expect(store.hasClaudeAiOAuthUnbound()).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
     expect(fs.existsSync(backup)).toBe(true);
 
-    expect(store.readClaudeAiOAuth()).toEqual(oauth);
+    expect(store.readClaudeAiOAuth()).toBeNull();
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readFileSync(backup, 'utf8')).toBe(backupBytes);
+
+    store.writeClaudeAiOAuth(oauth);
     expect(fs.existsSync(file)).toBe(true);
     expect(fs.existsSync(backup)).toBe(false);
+    expect(store.readClaudeAiOAuth()).toEqual(oauth);
+  });
+
+  it('snapshot reads keep a stale backup beside a valid main credential for the next mutation', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.credentials.json');
+    const backup = `${file}.bak`;
+    const backupBytes = JSON.stringify({ claudeAiOauth: { accessToken: 'older' } });
+    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: oauth }));
+    fs.writeFileSync(backup, backupBytes);
+    const store = await importStore({ platform: 'win32', configDir: root });
+
+    expect(store.readClaudeAiOAuth()).toEqual(oauth);
+    expect(fs.readFileSync(backup, 'utf8')).toBe(backupBytes);
+
+    store.writeClaudeAiOAuth({ ...oauth, accessToken: 'new-token' });
+    expect(fs.existsSync(backup)).toBe(false);
+    expect(store.readClaudeAiOAuth()?.accessToken).toBe('new-token');
   });
 
   it('retries backup deletion before removing the main credential', async () => {

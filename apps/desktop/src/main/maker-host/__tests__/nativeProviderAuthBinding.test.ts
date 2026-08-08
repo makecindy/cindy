@@ -598,13 +598,36 @@ describe('claimDetectedNativeProviderAuth', () => {
 
     const operationB = beginNativeProviderAuthAuthorization('anthropic', owner)!;
     expect(stageNativeProviderAuthAuthorization('anthropic', operationB)).toBe(true);
-    expect(clearNativeProviderAuthAuthorizationPending('anthropic', operationA)).toBe(false);
+    expect(clearNativeProviderAuthAuthorizationPending('anthropic', operationA)).toBe(true);
 
     const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
-    expect(JSON.parse(fs.readFileSync(pendingFile, 'utf8'))).toMatchObject({
+    const pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as Record<string, unknown>;
+    expect(pending).toMatchObject({
       intent: 'authorize',
       operationId: operationB.operationId,
     });
+    expect(pending).not.toHaveProperty('fallbackAuthorizations');
+  });
+
+  it('rolling back the newest staged login does not turn an older authorize marker into revoke', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(bindNativeProviderAuth('anthropic')).toBe(true);
+
+    const operationA = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', operationA)).toBe(true);
+    const operationB = beginNativeProviderAuthAuthorization('anthropic', owner)!;
+    expect(stageNativeProviderAuthAuthorization('anthropic', operationB)).toBe(true);
+
+    expect(clearNativeProviderAuthAuthorizationPending('anthropic', operationB)).toBe(true);
+    const pendingFile = path.join(userDataDir, 'native-provider-auth.pending', 'anthropic.json');
+    expect(JSON.parse(fs.readFileSync(pendingFile, 'utf8'))).toMatchObject({
+      intent: 'authorize',
+      operationId: operationA.operationId,
+    });
+    expect(clearNativeProviderAuthAuthorizationPending('anthropic', operationA)).toBe(true);
+    expect(fs.existsSync(pendingFile)).toBe(false);
+    expect(getNativeProviderAuthBindingState('anthropic')).toBe('bound');
   });
 
   it('explicit logout may supersede only its own in-flight authorization marker', () => {
