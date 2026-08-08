@@ -80,7 +80,16 @@ function requireInt(value: unknown, name: string): number {
 function serializeState(value: unknown): string {
   // undefined → 用默认 '{}';其它一律 stringify(包含 null,plugin 真要存 null 也能存)
   if (value === undefined) return '{}';
-  const json = JSON.stringify(value);
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    throwIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
+  }
+  // JSON.stringify 顶层 function / symbol 时不抛错而返回 undefined,不能交给 DB。
+  if (typeof json !== 'string') {
+    throwIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
+  }
   const bytes = Buffer.byteLength(json, 'utf8');
   if (bytes > MAX_STATE_JSON_BYTES) {
     throwIpcError(

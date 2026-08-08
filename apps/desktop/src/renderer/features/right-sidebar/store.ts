@@ -416,9 +416,15 @@ function markMemoryOnlySession(sessionId: string): void {
  * same patch forever.
  */
 function validateTabStateSize(state: unknown): void {
-  const json = state === undefined ? '{}' : JSON.stringify(state);
+  let json: string | undefined;
+  try {
+    json = state === undefined ? '{}' : JSON.stringify(state);
+  } catch {
+    throw createIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
+  }
+  // JSON.stringify 顶层 function / symbol 时不抛错而返回 undefined,同样不能持久化。
   if (typeof json !== 'string') {
-    throw new Error('tab state JSON must be serializable');
+    throw createIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
   }
   const bytes = new TextEncoder().encode(json).byteLength;
   if (bytes > MAX_STATE_JSON_BYTES) {

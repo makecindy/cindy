@@ -329,6 +329,30 @@ describe('RSB store', () => {
       unsubscribe();
     });
 
+    it.each([
+      ['cyclic state', () => {
+        const state: Record<string, unknown> = {};
+        state.self = state;
+        return state;
+      }],
+      ['BigInt state', () => ({ value: BigInt(1) })],
+      ['top-level function state', () => () => undefined],
+    ])('rejects non-JSON-serializable %s before optimistic insertion', async (_name, makeState) => {
+      const before = store.getBucket('s1');
+      const listener = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+
+      const rejection = store.addTab('s1', 'web-browser', makeState());
+      await expect(rejection).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      await expect(rejection).rejects.toThrow(/tab state must be JSON-serializable/);
+
+      expect(store.getBucket('s1')).toBe(before);
+      expect(listener).not.toHaveBeenCalled();
+      expect(ipc.upsert).not.toHaveBeenCalled();
+      expect(ipc.setActive).not.toHaveBeenCalled();
+      unsubscribe();
+    });
+
     it('falls back to memory-only when the first persist hits a missing session FK', async () => {
       ipc.upsert.mockRejectedValueOnce(new Error('SQLITE_CONSTRAINT_FOREIGNKEY: FOREIGN KEY constraint failed'));
       const tab = await store.addTab('ghost-race', 'web-browser', { url: 'https://example.com' });
