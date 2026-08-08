@@ -37,6 +37,7 @@ interface SurfaceRecord {
   tabId: string | null;
   favicon: string | null;
   crash: { reason: string } | null;
+  zoomFactor: number;
   requestedBounds: RsbNativePopupBounds;
   requestedVisible: boolean;
   openerPinRelease: (() => void) | null;
@@ -87,6 +88,15 @@ function sendEvent(record: SurfaceRecord, event: RsbNativePopupEvent): void {
 function publishState(record: SurfaceRecord): void {
   if (record.webContents.isDestroyed()) return;
   sendEvent(record, { surfaceId: record.surfaceId, type: 'state', snapshot: snapshot(record) });
+}
+
+function applyZoomFactor(record: SurfaceRecord): void {
+  if (!record.requestedVisible) return;
+  try {
+    record.webContents.setZoomFactor(record.zoomFactor);
+  } catch (err) {
+    log.warn('failed to update native popup zoom', { surfaceId: record.surfaceId, err });
+  }
 }
 
 function resolveViewBounds(record: SurfaceRecord): RsbNativePopupBounds {
@@ -162,8 +172,14 @@ function installSurfaceObservers(record: SurfaceRecord): void {
     publish();
   });
   wc.on('did-stop-loading', publish);
-  wc.on('did-navigate', publish);
-  wc.on('did-navigate-in-page', publish);
+  wc.on('did-navigate', () => {
+    applyZoomFactor(record);
+    publish();
+  });
+  wc.on('did-navigate-in-page', () => {
+    applyZoomFactor(record);
+    publish();
+  });
   wc.on('page-title-updated', publish);
   wc.on('page-favicon-updated', (_event, favicons) => {
     record.favicon = favicons.find((candidate) => candidate.trim().length > 0) ?? null;
@@ -213,6 +229,7 @@ export function createRsbNativePopupSurface(
     tabId: null,
     favicon: null,
     crash: null,
+    zoomFactor: 1,
     requestedBounds: { x: 0, y: 0, width: 1, height: 1 },
     requestedVisible: false,
     openerPinRelease: null,
@@ -342,6 +359,9 @@ function runCommand(record: SurfaceRecord, command: RsbNativePopupCommand): void
     if (wc.canGoBack()) wc.goBack();
   } else if (command.command === 'go-forward') {
     if (wc.canGoForward()) wc.goForward();
+  } else if (command.command === 'set-zoom-factor') {
+    record.zoomFactor = command.zoomFactor;
+    applyZoomFactor(record);
   } else {
     wc.stop();
   }
@@ -404,6 +424,7 @@ export function registerRsbNativePopupSurfaceIpc(tabRegistry: TabRegistry): void
     record.requestedBounds = bounds;
     record.requestedVisible = raw.visible;
     applyVisibility(record);
+    if (raw.visible) applyZoomFactor(record);
     return { ok: true };
   });
 
@@ -413,11 +434,24 @@ export function registerRsbNativePopupSurfaceIpc(tabRegistry: TabRegistry): void
     const record = assertSurfaceOwner(event, parseSurfaceId(raw));
     const command = requireEnum(
       raw.command,
-      ['navigate', 'reload', 'go-back', 'go-forward', 'stop'] as const,
+      ['navigate', 'reload', 'go-back', 'go-forward', 'stop', 'set-zoom-factor'] as const,
       'command',
     );
-    const parsed: RsbNativePopupCommand =
-      command === 'navigate' ? { command, url: requireString(raw.url, 'url') } : { command };
+    let parsed: RsbNativePopupCommand;
+    if (command === 'navigate') {
+      parsed = { command, url: requireString(raw.url, 'url') };
+    } else if (command === 'set-zoom-factor') {
+      const zoomFactor = raw.zoomFactor;
+      if (typeof zoomFactor !== 'number' || !Number.isFinite(zoomFactor)) {
+        throwIpcError('INVALID_PARAMS', 'zoomFactor must be a finite number');
+      }
+      if (zoomFactor < 0.25 || zoomFactor > 5) {
+        throwIpcError('INVALID_PARAMS', 'zoomFactor must be between 0.25 and 5');
+      }
+      parsed = { command, zoomFactor };
+    } else {
+      parsed = { command };
+    }
     runCommand(record, parsed);
     return { ok: true };
   });
