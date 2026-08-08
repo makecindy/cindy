@@ -85,4 +85,19 @@ describe('local SkillHub routes', () => {
     expect(findLocalSkillRouteEntry([first, second], params, search)).toBe(second);
     expect(findLocalSkillRouteEntry([second, first], params, search)).toBe(second);
   });
+
+  it('keeps a source-aware URL valid after its collision shrinks to one survivor', () => {
+    const survivor = entry({
+      engine: 'codex',
+      absolutePath: '/home/.agents/skills/demo',
+      sourceKey: undefined,
+      requiresSourceKey: undefined,
+    });
+
+    expect(findLocalSkillRouteEntry(
+      [survivor],
+      { kind: 'skill', projectHash: 'abcd1234', name: 'demo' },
+      new URLSearchParams('engine=codex&source=removed-source'),
+    )).toBe(survivor);
+  });
 });

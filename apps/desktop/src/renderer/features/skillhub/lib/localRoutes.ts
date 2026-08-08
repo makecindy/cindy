@@ -57,7 +57,14 @@ export function findLocalSkillRouteEntry<T extends LocalSkillRouteEntry>(
       skill.name === decodedName &&
       (!engine || skill.engine === engine),
   );
-  if (source) return matches.find((skill) => skill.sourceKey === source) ?? null;
+  if (source) {
+    const exact = matches.find((skill) => skill.sourceKey === source);
+    if (exact) return exact;
+    // A source-aware URL may outlive the collision that created it. Once only
+    // one physical source remains, that survivor is unambiguous even if older
+    // scanners omitted its no-longer-required sourceKey.
+    return matches.length === 1 ? matches[0] : null;
+  }
 
   // Old URLs cannot identify a physical source. Keep their fallback stable even
   // if an agent changes discovery order between scans.
