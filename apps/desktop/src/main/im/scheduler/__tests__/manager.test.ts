@@ -885,6 +885,38 @@ describe('dormant scheduler manager', () => {
     expect(manager.getDecision().reason).toBe('incomplete-peer-view');
   });
 
+  it('locks the tagged snapshot gate after the first tagged startup response', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      discoveryRetryDelayMs: 100,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    const request = harness.snapshotRequests.at(-1)!;
+    harness.emit({
+      type: 'snapshot',
+      accountGeneration: request.accountGeneration,
+      requestId: request.requestId,
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 2 },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [], observedAt: 100 },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+    manager.stop();
+  });
+
   it('drops an older snapshot instead of reviving a stale election view', () => {
     const harness = createTransport();
     const manager = new ImSchedulerManager({
