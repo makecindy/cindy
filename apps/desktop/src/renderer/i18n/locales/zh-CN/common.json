@@ -3517,9 +3517,9 @@
       },
       "connections": {
         "confirmTitle": "添加连接地址",
-        "confirmMessage": "插件「{{name}}」请求添加连接地址 {{host}}",
+        "confirmMessage": "请求添加连接地址 {{host}}",
         "confirmDetail": "允许后，该插件可经主机访问此地址({{label}})；你提供的凭证只会注入这个地址的请求。",
-        "confirmAllow": "允许",
+        "confirmAllow": "允许访问",
         "confirmCancel": "取消"
       },
       "errors": {

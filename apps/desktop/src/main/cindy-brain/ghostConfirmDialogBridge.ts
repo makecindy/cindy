@@ -32,6 +32,12 @@ export interface GhostConfirmPush {
   ghostName: string;
   iconDataUrl?: string;
   body: string;
+  /** 可选第二段正文(渲染在 body 之下、按钮之前),宿主受信确认(如连接授权)
+   *  的补充说明用;插件 confirm 槽不传。 */
+  detail?: string;
+  /** 可选标题覆盖。缺省时 renderer 用「插件「{{name}}」请你确认」;宿主受信确认
+   *  (如连接授权)传「添加连接地址 · 插件名」,避免正文与身份头重复。 */
+  title?: string;
   /** null = renderer 用自己的缺省按钮文案(跟用户语言走)。 */
   confirmText: string | null;
   cancelText: string | null;

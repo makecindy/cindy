@@ -31,29 +31,49 @@ export function GhostConfirmDialogHost() {
       if (!payload || typeof payload.requestId !== 'string' || typeof payload.body !== 'string') {
         return;
       }
-      const { requestId, ghostName, iconDataUrl, body, confirmText, cancelText, danger } = payload;
+      const { requestId, ghostName, iconDataUrl, body, detail, title, confirmText, cancelText, danger } = payload;
       void (async () => {
         let confirmed = false;
         try {
           confirmed = await confirm({
-            // 主机文案:插件名只作插值,伪装不了这句话本身
-            title: t('settings.ghosts.confirm.dialogTitle', { name: ghostName }),
+            // 主机文案:插件名只作插值,伪装不了这句话本身。宿主受信确认(连接授权)
+            // 传「添加连接地址 · 插件名」标题(插件名在标题里),正文不再重复。
+            title: title ?? t('settings.ghosts.confirm.dialogTitle', { name: ghostName }),
             description: body,
-            // 身份头:与 Toast 的来源头同款视觉(语义 token,明暗两档自动跟随)
-            content: (
-              <span className="inline-flex items-center gap-1.5">
-                {iconDataUrl && (
-                  <img
-                    src={iconDataUrl}
-                    alt=""
-                    draggable={false}
-                    className="h-4 w-4 rounded-[4px] object-cover"
-                  />
-                )}
-                <span className="max-w-[220px] truncate text-13 font-medium leading-snug text-[var(--text-tertiary)]">
-                  {ghostName}
+            // description 可能含长 host 等无空格串,补 break-words 防顶破弹窗宽度。
+            textClassName: 'break-words',
+            // 身份头(与 Toast 的来源头同款视觉,语义 token 明暗两档自动跟随)。
+            // 宿主受信确认(传了 title,标题已合并插件名)不重复身份头文字,
+            // 只渲染补充说明 detail;插件 confirm 槽保留身份头(标题是通用文案)。
+            // detail 用与共享 confirm-dialog 正文一致的 confirm-desc token
+            // (Dark 模式不比正文亮),并加 break-words 保护长 host/label 换行。
+            content: title ? (
+              detail ? (
+                <p className="break-words whitespace-pre-line text-13 leading-5 text-[var(--confirm-desc)]">
+                  {detail}
+                </p>
+              ) : null
+            ) : (
+              <>
+                <span className="inline-flex items-center gap-1.5">
+                  {iconDataUrl && (
+                    <img
+                      src={iconDataUrl}
+                      alt=""
+                      draggable={false}
+                      className="h-4 w-4 rounded-[4px] object-cover"
+                    />
+                  )}
+                  <span className="max-w-[220px] truncate text-13 font-medium leading-snug text-[var(--text-tertiary)]">
+                    {ghostName}
+                  </span>
                 </span>
-              </span>
+                {detail && (
+                  <p className="mt-1.5 break-words whitespace-pre-line text-13 leading-5 text-[var(--confirm-desc)]">
+                    {detail}
+                  </p>
+                )}
+              </>
             ),
             ...(confirmText ? { confirmText } : {}),
             ...(cancelText ? { cancelText } : {}),

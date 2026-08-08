@@ -3517,9 +3517,9 @@
       },
       "connections": {
         "confirmTitle": "接続先の追加",
-        "confirmMessage": "プラグイン「{{name}}」が接続先 {{host}} の追加を求めています",
+        "confirmMessage": "接続先 {{host}} の追加を求めています",
         "confirmDetail": "許可すると、このプラグインはホスト経由でこのアドレスにアクセスできます({{label}})。入力した資格情報はこのアドレスへのリクエストにのみ注入されます。",
-        "confirmAllow": "許可",
+        "confirmAllow": "アクセスを許可",
         "confirmCancel": "キャンセル"
       },
       "errors": {
