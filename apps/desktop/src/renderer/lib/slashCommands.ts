@@ -75,13 +75,13 @@ export function mergeCommands(
 ): UnifiedCommand[] {
   const seen = new Set<string>();
   const result: UnifiedCommand[] = [];
+  const availableSkills = agentSkill.filter((command) => !isSlashCommandUnavailable(command));
+  const unavailableSkills = agentSkill.filter(isSlashCommandUnavailable);
   const tiers: UnifiedCommand[][] = [
-    [...agentSkill].sort((a, b) => (
-      a.name.localeCompare(b.name)
-      || Number(isSlashCommandUnavailable(a)) - Number(isSlashCommandUnavailable(b))
-    )),
+    availableSkills.sort((a, b) => a.name.localeCompare(b.name)),
     [...desktop].sort((a, b) => a.name.localeCompare(b.name)),
     [...agentBuiltin].sort((a, b) => a.name.localeCompare(b.name)),
+    unavailableSkills.sort((a, b) => a.name.localeCompare(b.name)),
   ];
   for (const tier of tiers) {
     for (const cmd of tier) {

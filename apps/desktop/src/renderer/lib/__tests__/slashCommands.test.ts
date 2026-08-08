@@ -77,6 +77,17 @@ describe('Pi project skill availability', () => {
     expect(mergeCommands([], [], [discovered, available])).toEqual([available]);
   });
 
+  it('does not let a discovered preview shadow same-name executable tiers', () => {
+    const discovered = skill({ name: 'help', scope: 'repo', runtimeStatus: 'discovered' });
+    const desktop: UnifiedCommand = {
+      kind: 'desktop',
+      name: 'help',
+      description: 'Open help',
+    };
+
+    expect(mergeCommands([desktop], [], [discovered])).toEqual([desktop]);
+  });
+
   it('initializes and moves keyboard focus past unavailable project skills', () => {
     const commands = [
       skill({ name: 'first', scope: 'repo', runtimeStatus: 'discovered' }),
