@@ -7,10 +7,11 @@ import { describe, expect, it } from 'vitest';
  * 白名单的 CI 红线。蓝本 = 手机端 typographyTokenDiscipline.test.ts;规范正文 =
  * DESIGN.md §3「字重阶梯」与「桌面 UI 字号白名单」(2026-08 修订)。
  *
- * ## 规则(值白名单制:值出梯即红,豁免须在下方 EXEMPTIONS 四元登记)
+ * ## 规则(值白名单制:值出梯即红,豁免须在下方 EXEMPTIONS 精确登记)
  *  1. Tailwind 字重类只许 font-normal / font-medium / font-semibold;
  *     font-bold 及以上、以下与任意值 font-[...] 一律禁止(豁免域除外)。
- *  2. Tailwind 任意值字号 text-[N<unit>] 与 text-[length:<function>] 零容忍:
+ *  2. Tailwind 任意值字号 text-[N<unit>]、无类型提示的长度函数、属性形式
+ *     `[font-size:...]` 与 text-[length:<function>] 零容忍:
  *     px/em/rem/pt/pc/ch/ex/q/cm/mm/in/vw/vh/vmin/vmax 全单位、大小写不敏感、
  *     含小数与 .75 形态、length: 前缀及 calc()/var() 函数均命中;已登记的
  *     code-font/compact 派生值只能按具体文件 + 具体命中精确豁免。token 类
@@ -42,8 +43,8 @@ import { describe, expect, it } from 'vitest';
  *     theme.extend 下,删除会静默回退到不跟随用户缩放的 Tailwind 默认值;
  *     守卫在源码侧拒绝 xl..9xl,配置清理留待后续改成显式 numeric 档位。
  *
- * ## 豁免(精确绑定:文件 + 规则 + 理由 + 具体合法命中及期望次数)
- *  每条豁免按具体 match 签名计数;新增 font-black 或 800 即使总数不变也红。
+ * ## 豁免(精确绑定:文件 + 规则 + 理由 + 具体合法命中/上下文及期望次数)
+ *  每条豁免按具体 match 与上下文签名计数;新增 font-black 或 800 即使总数不变也红。
  *  豁免域清单与理由正本见 DESIGN.md §3「排版豁免登记表」;下表是其中
  *  落到静态扫描命中的子集(外部页注入的字体族、手机 WebView 生成器、紧凑
  *  派生值等域由「合法值 / SKIP / 手机侧守卫」承接,天然无命中,不在此表)。
@@ -60,9 +61,11 @@ import { describe, expect, it } from 'vitest';
  *    (`size * 0.86`、`17 / 1`,片段含 * 或 / 即跳过)—— 非静态可判;
  *  - CSS font-weight 的动态值(var(...)、模板插值、calc())与
  *    initial/unset/revert 全局关键字(计算结果不引入梯外静态值)不判红;
- *  - .css 与字符串内嵌 CSS 的 font-size 值域(紧凑模式 -1px 派生、
+ *  - .css 与字符串内嵌 CSS 的直接 font-size 声明值域(紧凑模式 -1px 派生、
  *    FileBrowserBody 的 em 标题系数、oauthResultPage 品牌块等机制/豁免域,
- *    v1 不做值校验);
+ *    v1 不做值校验);新增规则先扩展 CSS 值扫描并登记精确派生豁免;
+ *  - renderer HTML 模板只扫描 class 中的 Tailwind 字号/字重类,不解析内联
+ *    style 的 CSS font-size 值;CSS 值域走上条登记盲区;
  *  - 注释剥离为启发式而非解析器:TS 行中块注释、含「空白+//」的字符串字面量、
  *    CSS 字符串字面量内的块注释起始序列(content 属性存 "/*" 类)可造成漏报;
  *    jsdoc 中「* {@link …}」形态的行会被当作选择器行扫描(可能误报,现库零实例);
@@ -108,8 +111,8 @@ interface Exemption {
   rule: string;
   /** 理由(正本在 DESIGN.md §3 排版豁免登记表)。 */
   reason: string;
-  /** 允许的具体命中及 occurrence 期望次数;未登记 match 一律不享有豁免。 */
-  signatures: ReadonlyArray<{ match: string; expected: number }>;
+  /** 允许的具体命中/上下文及 occurrence 期望次数;未登记签名一律不享有豁免。 */
+  signatures: ReadonlyArray<{ match: string; expected: number; context?: string }>;
 }
 
 const EXEMPTIONS: Exemption[] = [
@@ -149,7 +152,21 @@ const EXEMPTIONS: Exemption[] = [
     file: 'src/renderer/styles/globals.css',
     rule: 'css-weight',
     reason: 'hljs 语法高亮主题移植(§3 豁免表,保真优先)',
-    signatures: [{ match: 'font-weight: bold', expected: 4 }],
+    signatures: [
+      { match: 'font-weight: bold', context: '.dark .hljs-section', expected: 1 },
+      { match: 'font-weight: bold', context: '.dark .hljs-strong', expected: 1 },
+      {
+        match: 'font-weight: bold',
+        context: "[data-theme='solarized-light'] .hljs-strong",
+        expected: 1,
+      },
+      {
+        match: 'font-weight: bold',
+        context:
+          "[data-theme='solarized-light'] .hljs-meta .hljs-keyword, [data-theme='solarized-light'] .hljs-meta-keyword",
+        expected: 1,
+      },
+    ],
   },
   // 紧凑代码字号是 DESIGN.md §3 已登记的机制本体;只允许这些现有文件/具体类。
   {
@@ -269,6 +286,8 @@ export function stripCssComments(css: string): string {
 interface Hit {
   match: string;
   index: number;
+  /** CSS selector/context for declarations whose exemption must be location-bound. */
+  context?: string;
 }
 
 // ── 检查器(输入为**预处理后的全文**,返回全部命中及偏移;红绿 fixture 直测) ──
@@ -285,8 +304,9 @@ export function findTwWeightViolations(text: string): Hit[] {
 export function findArbitrarySizes(text: string): Hit[] {
   return [
     ...text.matchAll(
-      /\btext-\[(?:length:[^\]\n]+|(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax))\]/gi,
+      /\btext-\[(?:(?:length:)?(?:\d+(?:\.\d+)?|\.\d+)(?:px|r?em|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax|%)|(?:length:)?(?:calc|clamp|min|max)\([^\]\n]+\)|length:var\([^\]\n]+\)|(?:length:)?(?:xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger))\]/gi,
     ),
+    ...text.matchAll(/\[(?:font-size):[^\]\n]+\]/gi),
   ].map((m) => ({ match: m[0], index: m.index ?? 0 }));
 }
 
@@ -361,7 +381,7 @@ export function findInlineSizeViolations(text: string): Hit[] {
   for (const seg of segmentsAfter(text, 'fontSize')) {
     if (/[*/]/.test(seg.match)) continue;
     for (const m of seg.match.matchAll(
-      /\b(\d+(?:\.\d+)?|\.\d+)(px|r?em|%|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax)?\b/gi,
+      /(?<![\w.])(\d+(?:\.\d+)?|\.\d+)(px|r?em|%|pt|pc|ch|ex|q|cm|mm|in|vw|vh|vmin|vmax)?\b/gi,
     )) {
       const unit = m[2]?.toLowerCase();
       if (unit === 'em' || unit === 'rem' || unit === '%') continue;
@@ -380,7 +400,22 @@ export function findInlineSizeViolations(text: string): Hit[] {
  *  (含小数)必须精确 ∈ WEIGHT_SET(400.5 不再截成 400 放行);关键字统一
  *  lower-case 后 bold/bolder/lighter 判红,normal/inherit 放行;var(...)、
  *  模板插值等动态值与 initial/unset/revert 为登记盲区。属性名 /i。 */
-export function findStringWeightViolations(text: string): Hit[] {
+function cssSelectorContextAt(text: string, index: number): string | undefined {
+  const before = text.slice(0, index);
+  const blockStart = before.lastIndexOf('{');
+  const blockEnd = before.lastIndexOf('}');
+  if (blockStart <= blockEnd) return undefined;
+  const selector = before
+    .slice(blockEnd + 1, blockStart)
+    .trim()
+    .replace(/\s+/g, ' ');
+  return selector || undefined;
+}
+
+export function findStringWeightViolations(
+  text: string,
+  options: { includeSelectorContext?: boolean } = {},
+): Hit[] {
   const hits: Hit[] = [];
   for (const m of text.matchAll(/font-weight\s*:\s*([^;}\n]+)/gi)) {
     const value = m[1]
@@ -393,7 +428,12 @@ export function findStringWeightViolations(text: string): Hit[] {
     } else if (!/^(?:bold(?:er)?|lighter)$/.test(value)) {
       continue;
     }
-    hits.push({ match: m[0].replace(/\s+/g, ' ').slice(0, 60), index: m.index ?? 0 });
+    const index = m.index ?? 0;
+    hits.push({
+      match: m[0].replace(/\s+/g, ' ').slice(0, 60),
+      index,
+      ...(options.includeSelectorContext ? { context: cssSelectorContextAt(text, index) } : {}),
+    });
   }
   return hits;
 }
@@ -477,6 +517,7 @@ interface Violation {
   line: number;
   rule: string;
   match: string;
+  context?: string;
 }
 
 function lineOf(text: string, index: number): number {
@@ -491,10 +532,16 @@ function scan(): Violation[] {
   const violations: Violation[] = [];
   const push = (file: string, text: string, rule: string, hits: Hit[]) => {
     for (const h of hits)
-      violations.push({ file, line: lineOf(text, h.index), rule, match: h.match });
+      violations.push({
+        file,
+        line: lineOf(text, h.index),
+        rule,
+        match: h.match,
+        ...(h.context ? { context: h.context } : {}),
+      });
   };
 
-  for (const rel of collectFiles(/\.(ts|tsx)$/)) {
+  for (const rel of collectFiles(/\.(ts|tsx|html)$/)) {
     const text = prepareTsContent(readFileSync(join(ROOT, rel), 'utf8'));
     push(rel, text, 'tw-weight', findTwWeightViolations(text));
     push(rel, text, 'arb-size', findArbitrarySizes(text));
@@ -506,7 +553,12 @@ function scan(): Violation[] {
   }
   for (const rel of collectFiles(/\.css$/)) {
     const text = stripCssComments(readFileSync(join(ROOT, rel), 'utf8'));
-    push(rel, text, 'css-weight', findStringWeightViolations(text));
+    push(
+      rel,
+      text,
+      'css-weight',
+      findStringWeightViolations(text, { includeSelectorContext: true }),
+    );
     push(rel, text, 'font-shorthand', findFontShorthands(text));
   }
   return violations;
@@ -535,19 +587,25 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     const keyOf = (file: string, rule: string) => `${file} ${rule}`;
     const exemptionByKey = new Map(EXEMPTIONS.map((e) => [keyOf(e.file, e.rule), e]));
 
+    const signatureKey = (match: string, context?: string) => `${match} @ ${context ?? '<any>'}`;
     const counts = new Map<string, Map<string, number>>();
     const unexempted: string[] = [];
     for (const v of violations) {
       const key = keyOf(v.file, v.rule);
       const exemption = exemptionByKey.get(key);
       if (exemption) {
-        const signature = exemption.signatures.find((s) => s.match === v.match);
+        const signature = exemption.signatures.find(
+          (s) => s.match === v.match && (!s.context || s.context === v.context),
+        );
         if (!signature) {
           unexempted.push(`${v.file}:${v.line} [${v.rule}] ${v.match}（未登记的豁免命中）`);
           continue;
         }
         const bucket = counts.get(key) ?? new Map<string, number>();
-        bucket.set(v.match, (bucket.get(v.match) ?? 0) + 1);
+        bucket.set(
+          signatureKey(v.match, signature.context),
+          (bucket.get(signatureKey(v.match, signature.context)) ?? 0) + 1,
+        );
         counts.set(key, bucket);
       } else {
         unexempted.push(`${v.file}:${v.line} [${v.rule}] ${v.match}`);
@@ -558,7 +616,7 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     for (const e of EXEMPTIONS) {
       const actual = counts.get(keyOf(e.file, e.rule)) ?? new Map<string, number>();
       for (const signature of e.signatures) {
-        const hits = actual.get(signature.match) ?? 0;
+        const hits = actual.get(signatureKey(signature.match, signature.context)) ?? 0;
         if (hits !== signature.expected) {
           exemptionDrift.push(
             `${e.file} [${e.rule}] ${signature.match} 登记 ${signature.expected} 次,实测 ${hits} 次 —— ` +
@@ -687,7 +745,13 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findArbitrarySizes('text-[.75rem]')).toHaveLength(1);
       // 函数形式不能因 `[` 后不是数字而绕过守卫(P1)
       expect(findArbitrarySizes('text-[length:calc(9px+1vw)]')).toHaveLength(1);
+      // Tailwind 可推断为 length 的函数无需显式 `length:` 也必须拦截。
+      expect(findArbitrarySizes('text-[calc(9px+1vw)] text-[clamp(9px,1vw,12px)]')).toHaveLength(2);
       expect(findArbitrarySizes('text-[length:var(--app-code-font-size)]')).toHaveLength(1);
+      // Tailwind 任意属性形式同样会生成字号样式,不能绕过 text- 类守卫。
+      expect(findArbitrarySizes('[font-size:9px] [font-size:17px]')).toHaveLength(2);
+      // 百分比与 CSS 字号关键字也是可生成 font-size 的任意值。
+      expect(findArbitrarySizes('text-[50%] text-[xx-small]')).toHaveLength(2);
       // 省略前导零的小数必须按完整 0.12px 识别(P2)
       expect(findArbitrarySizes('text-[.12px]')).toHaveLength(1);
       expect(findArbitrarySizes('text-[12PX]')).toHaveLength(1);
@@ -722,6 +786,7 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       expect(findStringWeightViolations('.x {\n  font-weight:\n    900;\n}')).toHaveLength(1);
       expect(findFontShorthands('font:\n  normal 700 12px/22px sans-serif;')).toHaveLength(1);
       expect(findInlineSizeViolations('fontSize: 17,')).toHaveLength(1);
+      expect(findInlineSizeViolations("fontSize: '.12px',")).toHaveLength(1);
       expect(findInlineSizeViolations("fontSize: '12.5px' }")).toHaveLength(1);
       expect(findInlineSizeViolations('fontSize={17}')).toHaveLength(1);
       // 非 px 绝对/视口单位与大小写(三轮加固)
@@ -734,6 +799,11 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
       ]);
       expect(findStringWeightViolations('h1{font-weight:700} h2{font-weight:900}')).toHaveLength(2);
       expect(findStringWeightViolations('font-weight: bold;')).toHaveLength(1);
+      const selectorBound = findStringWeightViolations(
+        '.hljs-strong { font-weight: bold; } .ordinary-ui { font-weight: bold; }',
+        { includeSelectorContext: true },
+      );
+      expect(selectorBound.map((hit) => hit.context)).toEqual(['.hljs-strong', '.ordinary-ui']);
       // CSS 通配选择器不是注释(css 路径经 stripCssComments,ts 路径经 prepareTsContent)
       expect(findStringWeightViolations(stripCssComments('* { font-weight: 900; }'))).toHaveLength(
         1,

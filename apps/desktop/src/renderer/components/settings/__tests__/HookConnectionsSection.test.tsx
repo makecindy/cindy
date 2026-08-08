@@ -1336,7 +1336,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     const tooSmall: string[] = [];
     for (const el of [root!, ...Array.from(root!.querySelectorAll('*'))]) {
       for (const cls of Array.from(el.classList)) {
-        // 本仓的字号既有 `text-11` 这种自定义档, 也有 `text-11` 这种字面量
+        // 本仓的字号既有 `text-11` 这种自定义档, 也有 `text-[11px]` 这种字面量
         const px = /^text-(\d+)$/.exec(cls)?.[1] ?? /^text-\[(\d+)px\]$/.exec(cls)?.[1];
         if (px !== undefined && Number(px) < 12) tooSmall.push(cls);
       }
