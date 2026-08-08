@@ -3256,7 +3256,7 @@ describe('GoalController', () => {
   // ── Goal run observation events (#2105 P0) ───────────────────────────────
   it('records turn-dispatched when the first turn fires', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await local.controller.setGoal({ sessionId: 's1', objective: 'ship it' });
     await tick();
     const dispatched = events.filter((e) => e.type === 'turn-dispatched');
@@ -3270,7 +3270,7 @@ describe('GoalController', () => {
 
   it('records turn-finalized on a continue verdict without a state-transition (active→active)', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await startGoal(local);
     local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```', tokens: 100 });
     await tick();
@@ -3282,7 +3282,7 @@ describe('GoalController', () => {
 
   it('records turn-finalized + state-transition + terminal on a complete verdict', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await startGoal(local);
     local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"all green"}\n```', tokens: 50 });
     await tick();
@@ -3296,7 +3296,7 @@ describe('GoalController', () => {
 
   it('records stall-detected when noProgressLimit is hit (no tool use)', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     // noProgressLimit=1:第一轮无 tool_use 即撞线。
     await local.storage.upsert(seededGoal({ noProgressLimit: 1 }));
     await local.controller.setGoal({ sessionId: 's1', objective: 'stall me' });
@@ -3310,7 +3310,7 @@ describe('GoalController', () => {
 
   it('records resumed when resumeActiveGoals re-hooks an active goal', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await local.storage.upsert(seededGoal({ status: 'active', objective: 'resume me' }));
     await local.controller.resumeActiveGoals();
     await tick();
@@ -3320,7 +3320,7 @@ describe('GoalController', () => {
 
   it('records decision-post counters on finalize events (turnIndex=1 / budget.turnsUsed=1 on first completion)', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await startGoal(local);
     local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"all green"}\n```', tokens: 50 });
     await tick();
@@ -3335,7 +3335,7 @@ describe('GoalController', () => {
 
   it('records resumed with reason manual-resume on manual resumeGoal', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await local.storage.upsert(seededGoal({ status: 'paused', objective: 'resume me' }));
     await local.controller.resumeGoal('s1');
     await tick();
@@ -3362,7 +3362,7 @@ describe('GoalController', () => {
 
   it('records resumed with the same generation as the dispatch it triggers', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await local.storage.upsert(seededGoal({ status: 'paused', objective: 'resume me' }));
     await local.controller.resumeGoal('s1');
     await tick();
@@ -3377,7 +3377,7 @@ describe('GoalController', () => {
 
   it('records a corrective state-transition when quota override moves active to usageLimited', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     local.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
     await startGoal(local);
     local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```', tokens: 30 });
@@ -3395,7 +3395,7 @@ describe('GoalController', () => {
 
   it('records budget-consumed + terminal on preflight budget stop', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     // maxTurns 已耗尽:resumeActiveGoals → fireTurn 的 preflight 守卫撞线 → budgetLimited。
     await local.storage.upsert(seededGoal({ status: 'active', turnsUsed: 5, maxTurns: 5, objective: 'preflight' }));
     await local.controller.resumeActiveGoals();
@@ -3409,7 +3409,7 @@ describe('GoalController', () => {
 
   it('does not record resumed when auto-resume finds the session busy (no orphan resume events)', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await local.storage.upsert(seededGoal({ status: 'usageLimited', usageResetAt: 0, objective: 'busy resume' }));
     local.session.running = true; // busy → fireTurn 被跳过,resumed 也不得记录
     await local.controller.resumeGoal('s1', { auto: true });
@@ -3420,7 +3420,7 @@ describe('GoalController', () => {
 
   it('records budget-consumed + terminal when updateGoal lowers limits below current usage', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     await local.storage.upsert(seededGoal({ status: 'active', turnsUsed: 3, tokensUsed: 900, budgetTokens: 1000, objective: 'edit me' }));
     await local.controller.updateGoal('s1', { budgetTokens: 100 });
     await tick();
@@ -3433,7 +3433,7 @@ describe('GoalController', () => {
 
   it('does not record resumed when resume hits a preflight budget stop (no orphan resume events)', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     // maxTurns 已耗尽:resumeGoal → fireTurn preflight 撞线 → budgetLimited,无实际派发。
     await local.storage.upsert(seededGoal({ status: 'paused', turnsUsed: 5, maxTurns: 5, objective: 'resume preflight' }));
     await local.controller.resumeGoal('s1');
@@ -3450,10 +3450,10 @@ describe('GoalController', () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
     let releaseQuota: (() => void) | null = null;
     const quotaGate = new Promise<void>((resolve) => {
-      releaseQuota = resolve;
+      releaseQuota = () => resolve();
     });
     const local = makeController({
-      recordRunEvent: (e) => events.push(e),
+      recordRunEvent: (e) => void events.push(e),
       getAccountLimit: async () => {
         await quotaGate;
         return { limited: false, resetAtMs: null };
@@ -3465,7 +3465,7 @@ describe('GoalController', () => {
     // finalizeTurn 已卡在 getAccountLimit;用户此刻清目标。
     await local.controller.clearGoal('s1');
     expect(await local.storage.get('s1')).toBeNull();
-    releaseQuota?.();
+    if (releaseQuota) (releaseQuota as () => void)();
     await tick();
     // abandoned generation:不得出现未提交的假收口事件。
     expect(events.some((e) => e.type === 'turn-finalized')).toBe(false);
@@ -3475,7 +3475,7 @@ describe('GoalController', () => {
 
   it('does not leak a stale resume intent into a new goal on the same session', async () => {
     const events: Array<import('../runEvents').GoalRunEvent> = [];
-    const local = makeController({ recordRunEvent: (e) => events.push(e) });
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
     // 恢复预算已耗尽的 goal:登记 resumed 意图 → fireTurn preflight 拦截(无派发)。
     await local.storage.upsert(seededGoal({ status: 'paused', turnsUsed: 5, maxTurns: 5, objective: 'old goal' }));
     await local.controller.resumeGoal('s1');
