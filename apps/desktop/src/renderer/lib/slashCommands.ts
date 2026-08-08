@@ -291,6 +291,9 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   retryDelaysMs?: readonly number[];
   sleep?: (delayMs: number) => Promise<void>;
 }): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
+  if (params.agentKind !== 'pi' || !params.sessionId) {
+    return reconcilePiRuntimeCommandForDispatch(params);
+  }
   const retryDelaysMs = params.retryDelaysMs ?? PI_RUNTIME_SKILL_RETRY_DELAYS_MS;
   const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>(
     (resolve) => window.setTimeout(resolve, delayMs),

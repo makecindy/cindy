@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import type { Maker } from '@cindy/maker-core';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { getCurrentDataOwnerId } from '../authManager';
@@ -6,6 +7,7 @@ import { isAppSessionBoundaryPending } from '../appSessionState';
 import { ensureReady as ensureLocalDbReady, getRawDb } from '../localDb';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { computeFolderHashDetailed } from './folderHash';
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
 import * as importLocalSkill from './importLocalSkill';
@@ -45,8 +47,44 @@ interface LocalImportGrant {
 
 export interface RegisterSkillhubIpcOptions {
   getMaker: () => Maker;
+  getAllowedProjectRoots: () => Promise<readonly string[]>;
   marketService?: SkillhubMarketService;
   publishService?: SkillPublishService;
+}
+
+function projectRootKey(value: unknown): string | null {
+  if (typeof value !== 'string' || value.includes('\0') || value.includes('\uFFFD')) return null;
+  const normalized = normalizeWorkingDirForStorage(value);
+  if (!normalized || !path.isAbsolute(normalized)) return null;
+  try {
+    const resolved = path.resolve(normalized);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return null;
+  }
+}
+
+async function validateRequestedProjects(
+  requestedProjects: import('./scanner').ProjectInput[] | undefined,
+  getAllowedProjectRoots: RegisterSkillhubIpcOptions['getAllowedProjectRoots'],
+): Promise<import('./scanner').ProjectInput[]> {
+  const projects = requestedProjects ?? [];
+  if (projects.length === 0) return [];
+
+  const allowedKeys = new Set(
+    (await getAllowedProjectRoots())
+      .map(projectRootKey)
+      .filter((key): key is string => key !== null),
+  );
+  const validated: import('./scanner').ProjectInput[] = [];
+  for (const project of projects) {
+    const key = projectRootKey(project.projectRoot);
+    if (!key || !allowedKeys.has(key)) {
+      throw new Error('projectRoot is not owned by an active local project session');
+    }
+    validated.push(project);
+  }
+  return validated;
 }
 
 /**
@@ -187,7 +225,11 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       // discovery fails, stale paths must not remain authorized.
       scannedSkillRootsBySender.delete(event.sender.id);
       try {
-        const result = await scanAllSkills(params ?? {}, options.getMaker());
+        const projects = await validateRequestedProjects(
+          params?.projects,
+          options.getAllowedProjectRoots,
+        );
+        const result = await scanAllSkills({ projects }, options.getMaker());
         if (scanGenerationBySender.get(event.sender.id) === scanGeneration) {
           rememberScannedSkillRoots(event, result.skills);
         }

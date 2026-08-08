@@ -120,6 +120,23 @@ describe('filterSlashCommands', () => {
 });
 
 describe('Pi project skill availability', () => {
+  it('does not apply Pi runtime retry delays to non-Pi sessions', async () => {
+    const sleeps: number[] = [];
+    const reload = vi.fn(async () => [] as UnifiedCommand[]);
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'codex',
+      sessionId: 'session-1',
+      commandName: 'missing',
+      commands: [],
+      retryDelaysMs: [10, 20],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload,
+    })).resolves.toEqual({ command: undefined, commands: [] });
+    expect(sleeps).toEqual([]);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it('disables only discovered project skills', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);

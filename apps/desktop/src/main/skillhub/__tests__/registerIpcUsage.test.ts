@@ -88,6 +88,7 @@ vi.mock('../importLocalSkill', () => importLocalSkillMocks);
 const publish = vi.fn();
 const cancel = vi.fn();
 const listAgentSkills = vi.fn();
+const getAllowedProjectRoots = vi.fn();
 const marketService = {
   deletePublished: vi.fn(),
   getPublishedFiles: vi.fn(),
@@ -105,6 +106,7 @@ describe('registerSkillhubIpc usage handlers', () => {
     ensureReady.mockResolvedValue({ ready: true });
     requestLocalSkillUsageAnalyticsRefresh.mockReturnValue(null);
     showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    getAllowedProjectRoots.mockResolvedValue(['/repo', '/old', '/new']);
     resolveExistingSkillPathForGrant.mockImplementation((candidate: string) => (
       candidate.includes('/authorized/demo') ? '/physical/demo' : null
     ));
@@ -114,6 +116,7 @@ describe('registerSkillhubIpc usage handlers', () => {
     const { registerSkillhubIpc } = await import('../registerIpc');
     registerSkillhubIpc({
       getMaker: () => ({ listAgentSkills }) as never,
+      getAllowedProjectRoots,
       marketService: marketService as never,
       publishService: { publish, cancel } as never,
     });
@@ -233,6 +236,21 @@ describe('registerSkillhubIpc usage handlers', () => {
       { sender },
       { filePath: '/old/.pi/skills/old-skill/SKILL.md' },
     )).resolves.toMatchObject({ success: false });
+  });
+
+  it('rejects renderer-provided project roots outside Main-owned active projects', async () => {
+    const sender = { id: 44, once: vi.fn() };
+
+    const result = await handlers.get('skillhub:scan')?.(
+      { sender },
+      { projects: [{ projectRoot: '/arbitrary', hash: 'bad' }] },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('not owned'),
+    });
+    expect(scanAllSkills).not.toHaveBeenCalled();
   });
 
   it('issues a sender-bound grant for the file selected and inspected in main', async () => {
