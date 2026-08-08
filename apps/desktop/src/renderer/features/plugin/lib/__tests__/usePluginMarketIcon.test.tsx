@@ -340,7 +340,10 @@ describe('usePluginMarketIcon', () => {
 
   it('releases a hung IPC batch after its timeout and ignores late results', async () => {
     vi.useFakeTimers();
-    const items = Array.from({ length: 9 }, (_, index) => customItem(`timeout-${index}`));
+    const items = [
+      ...Array.from({ length: 8 }, (_, index) => customItem(`timeout-${index}`)),
+      customItem('healthy-after-timeout', undefined, 'other-market'),
+    ];
     localIcons
       .mockImplementationOnce(
         () => new Promise<PluginMarketLocalIconResult[]>(() => undefined),
@@ -397,7 +400,9 @@ describe('usePluginMarketIcon', () => {
     await act(async () => Promise.resolve());
     await act(async () => vi.advanceTimersByTimeAsync(10_000));
     const second = renderHook(() =>
-      usePluginMarketIcon(customItem('cap-b'), { deferUntilVisible: false }),
+      usePluginMarketIcon(customItem('cap-b', undefined, 'other-market'), {
+        deferUntilVisible: false,
+      }),
     );
     await act(async () => Promise.resolve());
     await act(async () => vi.advanceTimersByTimeAsync(10_000));
@@ -405,6 +410,58 @@ describe('usePluginMarketIcon', () => {
     expect(localIcons).toHaveBeenCalledTimes(2);
     first.unmount();
     second.unmount();
+  });
+
+  it('does not let one hung marketplace consume both transport slots', async () => {
+    vi.useFakeTimers();
+    let resolveHealthy: ((results: PluginMarketLocalIconResult[]) => void) | undefined;
+    localIcons
+      .mockImplementationOnce(() => new Promise<PluginMarketLocalIconResult[]>(() => undefined))
+      .mockImplementationOnce(
+        () =>
+          new Promise<PluginMarketLocalIconResult[]>((resolve) => {
+            resolveHealthy = resolve;
+          }),
+      );
+    const hung = renderHook(() =>
+      usePluginMarketIcon(customItem('hung-a'), { deferUntilVisible: false }),
+    );
+    await act(async () => Promise.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(localIcons).toHaveBeenCalledTimes(1);
+
+    const healthyMarketItem = customItem('healthy-b', undefined, 'other-market');
+    const healthy = renderHook(() =>
+      usePluginMarketIcon(healthyMarketItem, { deferUntilVisible: false }),
+    );
+    await act(async () => Promise.resolve());
+
+    expect(localIcons).toHaveBeenCalledTimes(2);
+    expect(localIcons.mock.calls[1]?.[0]).toEqual([
+      {
+        pluginId: healthyMarketItem.pluginId,
+        expectedIconKey: healthyMarketItem.customIconKey,
+      },
+    ]);
+    expect(__pluginMarketIconStoreStatsForTest().unsettledRequests).toBe(2);
+
+    await act(async () =>
+      resolveHealthy?.([
+        {
+          pluginId: healthyMarketItem.pluginId,
+          expectedIconKey: healthyMarketItem.customIconKey!,
+          status: 'loaded',
+          dataUrl: `data:image/png;base64,${healthyMarketItem.pluginId}`,
+        },
+      ]),
+    );
+    expect(healthy.result.current.iconDataUrl).toContain(healthyMarketItem.pluginId);
+    expect(__pluginMarketIconStoreStatsForTest().unsettledRequests).toBe(1);
+    expect(localIcons).toHaveBeenCalledTimes(2);
+
+    hung.unmount();
+    healthy.unmount();
   });
 
   it('wakes transport-blocked icons when a slot settles without consuming retry budget', async () => {
@@ -426,11 +483,13 @@ describe('usePluginMarketIcon', () => {
     await act(async () => Promise.resolve());
     await act(async () => vi.advanceTimersByTimeAsync(10_000));
     const second = renderHook(() =>
-      usePluginMarketIcon(customItem('blocked-b'), { deferUntilVisible: false }),
+      usePluginMarketIcon(customItem('blocked-b', undefined, 'other-market'), {
+        deferUntilVisible: false,
+      }),
     );
     await act(async () => Promise.resolve());
     await act(async () => vi.advanceTimersByTimeAsync(10_000));
-    const thirdItem = customItem('blocked-c');
+    const thirdItem = customItem('blocked-c', undefined, 'third-market');
     const third = renderHook(() => usePluginMarketIcon(thirdItem, { deferUntilVisible: false }));
     await act(async () => Promise.resolve());
 
@@ -438,6 +497,8 @@ describe('usePluginMarketIcon', () => {
     await act(async () => vi.advanceTimersByTimeAsync(60_000));
     expect(localIcons).toHaveBeenCalledTimes(2);
 
+    first.unmount();
+    second.unmount();
     await act(async () => pending[0]!.resolve([]));
     expect(localIcons).toHaveBeenCalledTimes(3);
     const recovery = pending[2]!;
@@ -453,8 +514,6 @@ describe('usePluginMarketIcon', () => {
     );
     expect(third.result.current.iconDataUrl).toContain(thirdItem.pluginId);
 
-    first.unmount();
-    second.unmount();
     third.unmount();
   });
 

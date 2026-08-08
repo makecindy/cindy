@@ -2,7 +2,8 @@
  * Custom marketplace icon loader.
  *
  * Main owns discovery and filesystem access. Renderer batches visible requests, keeps bytes in a
- * bounded shared LRU, and treats a changed customIconKey as a new immutable generation.
+ * bounded shared LRU, and treats customIconKey as a snapshot cache generation rather than a byte
+ * content hash. Main verifies every materialized read; a refreshed projection gets a new key.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -49,7 +50,7 @@ const RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const;
 const records = new Map<string, LocalIconRecord>();
 const queuedKeys = new Set<string>();
 const transportBlockedKeys = new Set<string>();
-const unsettledLocalIconRequests = new Set<object>();
+const unsettledLocalIconRequests = new Map<object, string>();
 let flushScheduled = false;
 let flushInFlight = false;
 let pruneScheduled = false;
@@ -61,6 +62,13 @@ function requestKey(request: PluginMarketLocalIconRequest): string {
 
 function requestMarketKey(request: PluginMarketLocalIconRequest): string {
   return parseCustomMarketPluginId(request.pluginId)?.marketName ?? request.pluginId;
+}
+
+function hasUnsettledRequestForMarket(marketKey: string): boolean {
+  for (const unsettledMarketKey of unsettledLocalIconRequests.values()) {
+    if (unsettledMarketKey === marketKey) return true;
+  }
+  return false;
 }
 
 function recordFor(request: PluginMarketLocalIconRequest): LocalIconRecord {
@@ -221,9 +229,12 @@ function localIconsWithinTimeoutFromPromise(
   }) as Promise<PluginMarketLocalIconResult[]>;
 }
 
-function trackUnsettledLocalIconRequest(request: Promise<PluginMarketLocalIconResult[]>): void {
+function trackUnsettledLocalIconRequest(
+  request: Promise<PluginMarketLocalIconResult[]>,
+  marketKey: string,
+): void {
   const token = {};
-  unsettledLocalIconRequests.add(token);
+  unsettledLocalIconRequests.set(token, marketKey);
   const release = () => {
     if (!unsettledLocalIconRequests.delete(token)) return;
     wakeTransportBlockedRecords();
@@ -268,13 +279,26 @@ async function flushQueue(): Promise<void> {
   const pendingKeys = [...queuedKeys];
   const firstPendingRecord = pendingKeys
     .map((key) => records.get(key))
-    .find((record): record is LocalIconRecord => record?.snapshot.status === 'queued');
-  const batchMarket = firstPendingRecord ? requestMarketKey(firstPendingRecord.request) : null;
+    .find(
+      (record): record is LocalIconRecord =>
+        record?.snapshot.status === 'queued' &&
+        !hasUnsettledRequestForMarket(requestMarketKey(record.request)),
+    );
+  if (!firstPendingRecord) {
+    for (const key of pendingKeys) {
+      queuedKeys.delete(key);
+      const record = records.get(key);
+      if (record?.snapshot.status === 'queued') parkForTransportCapacity(record);
+    }
+    pruneRecords();
+    return;
+  }
+  const batchMarket = requestMarketKey(firstPendingRecord.request);
   for (const key of pendingKeys) {
     queuedKeys.delete(key);
     const record = records.get(key);
     if (!record || record.snapshot.status !== 'queued') continue;
-    if (batchMarket !== null && requestMarketKey(record.request) !== batchMarket) {
+    if (requestMarketKey(record.request) !== batchMarket) {
       queuedKeys.add(key);
       continue;
     }
@@ -297,7 +321,9 @@ async function flushQueue(): Promise<void> {
     return;
   }
 
-  trackUnsettledLocalIconRequest(ipcRequest);
+  // Raw Electron invoke 是不可取消的 transport 资源：全局最多 2 个，且同一市场最多
+  // 占 1 个槽，避免一个持续挂起的来源把健康来源也永久饿死。
+  trackUnsettledLocalIconRequest(ipcRequest, batchMarket);
   flushInFlight = true;
   try {
     const results = await localIconsWithinTimeoutFromPromise(ipcRequest);
@@ -313,9 +339,9 @@ async function flushQueue(): Promise<void> {
       if (record.loadAttempt === attempt) markRetryable(record);
     }
   } finally {
-    // A timeout is a logical failure boundary: release the queue so a hung Main request cannot
-    // stop all later cards. The original invoke is already observed by Promise.race; its late
-    // result is intentionally ignored and cannot overwrite a newer loadAttempt.
+    // Timeout 只释放逻辑批次（flushInFlight），不会释放不可取消 raw invoke 的 transport
+    // 槽位；后者必须等真实 settle，才能维持“底层未完成请求严格 <= 2”的硬上界。
+    // 迟到结果由 loadAttempt 隔离，不能覆盖新尝试。
     flushInFlight = false;
     pruneRecords();
     if (queuedKeys.size > 0) scheduleFlush();

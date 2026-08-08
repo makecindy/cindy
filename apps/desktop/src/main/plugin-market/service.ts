@@ -307,8 +307,10 @@ function installedGhostRawManifestDigest(dir: string): string | null {
 }
 
 /**
- * 自定义市场图标的不可逆身份键。Renderer 只拿摘要，不拿来源路径；每次新的
- * 市场快照都会换 projection token，文件代际仍由同一安全读取句柄的 stat 复核。
+ * 自定义市场图标的不可逆投影键。Renderer 只拿摘要，不拿来源路径；每次新的
+ * 市场快照都会换 projection token。它是快照级缓存代际，不是预读全部图标得出的
+ * 内容 hash：localIcons 会重新核对当前投影事实并稳定读取；Renderer 可丢弃字节缓存
+ * 后按同一代际重新物化，而刷新市场快照一定换 token 并触发新读取。
  */
 function customMarketIconPath(plugin: DiscoveredMarketPlugin): string | null {
   const icon = plugin.manifest.icon;

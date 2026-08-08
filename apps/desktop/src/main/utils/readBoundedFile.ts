@@ -40,6 +40,11 @@ export interface ReadBoundedFileOptions {
   verifyContentStability?: boolean;
 }
 
+type ReadBoundedFileNoFollowSyncOptions = Pick<
+  ReadBoundedFileOptions,
+  'noFollowFlag' | 'containWithin'
+>;
+
 export interface BoundedFileRead {
   bytes: Buffer;
   /** 与 bytes 来自同一已打开句柄，且读取前后版本字段保持不变。 */
@@ -251,7 +256,7 @@ export async function readBoundedFileFollowLinks(
 export function readBoundedFileNoFollowSync(
   filePath: string,
   maxBytes: number,
-  options?: ReadBoundedFileOptions,
+  options?: ReadBoundedFileNoFollowSyncOptions,
 ): Buffer | null {
   const noFollow =
     options?.noFollowFlag !== undefined ? options.noFollowFlag : (fs.constants.O_NOFOLLOW ?? null);
