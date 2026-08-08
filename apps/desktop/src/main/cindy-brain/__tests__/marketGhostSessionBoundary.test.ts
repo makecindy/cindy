@@ -58,4 +58,43 @@ describe('market Ghost session boundary', () => {
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
     expect(body).toContain('releaseMutation?.();');
   });
+
+  it('waits for Node processes before a market update can rename the plugin directory', () => {
+    const installStart = source.indexOf(
+      'export async function installOrUpdateMarketGhostPackage(',
+    );
+    const installEnd = source.indexOf(
+      '\n}\n\ntype GhostUninstallLedgerCompletion',
+      installStart,
+    );
+    const body = source.slice(installStart, installEnd);
+
+    const waitIndex = body.indexOf(
+      'await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);',
+    );
+    const updateIndex = body.indexOf('await manager.update(cindyFilePath,');
+
+    expect(waitIndex).toBeGreaterThan(-1);
+    expect(waitIndex).toBeLessThan(updateIndex);
+    const restoreIndex = body.indexOf('spawnIfResident(installed);');
+    expect(restoreIndex).toBeGreaterThan(updateIndex);
+  });
+
+  it('only restores a resident local-update plugin after shutdown was confirmed', () => {
+    const updateStart = source.indexOf("ipcMain.handle('ghosts:update'");
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:pick-file'", updateStart);
+    const body = source.slice(updateStart, updateEnd);
+
+    const waitIndex = body.indexOf(
+      'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
+    );
+    const updateIndex = body.indexOf('await manager.update(lizFilePath, { expectedPackageSha256 });');
+    const restoreIndex = body.indexOf(
+      'if (previousGhost) spawnIfResident(previousGhost);',
+    );
+
+    expect(waitIndex).toBeGreaterThan(-1);
+    expect(waitIndex).toBeLessThan(updateIndex);
+    expect(restoreIndex).toBeGreaterThan(updateIndex);
+  });
 });
