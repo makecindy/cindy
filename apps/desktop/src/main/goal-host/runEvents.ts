@@ -59,8 +59,8 @@ export interface GoalRunRecorder {
 }
 
 export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRunRecorder {
-  // 归一化容量(reviewer suppressed):0 / 负数 / NaN 会让环退化为每次 record 都
-  // shift,行为意外——下限 1,避免调用方意外禁用/劣化 recorder。
+  // 归一化容量:0 / 负数 / NaN 会让环退化为每次 record 都 shift,行为意外——
+  // 下限 1,避免调用方意外禁用/劣化 recorder。
   const capacity = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 200;
   const ring: GoalRunEvent[] = [];
   return {

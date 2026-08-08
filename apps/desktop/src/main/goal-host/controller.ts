@@ -1172,6 +1172,16 @@ export class GoalController {
     this.turns.set(sessionId, resumedBoundary);
     this.attachListener(sessionId);
     this.emit(updated);
+    // #2105 P0:恢复写 active 的**真实状态迁移**(reviewer P2:resumed 只在派发边界
+    // 记录,若派发被拒绝 / preflight 拦截,审计会丢失 paused/blocked/usageLimited→active
+    // 的迁移;此处持久化已提交,迁移在事件流中与状态机一致)。
+    if (state.status !== 'active') {
+      this.recordRunEvent('state-transition', sessionId, updated, {
+        from: state.status,
+        to: 'active',
+        reason: opts?.auto ? 'auto-resume' : 'manual-resume',
+      });
+    }
     // #2105 P0:恢复边界事件(reviewer:resumed 此前只在 resumeActiveGoals 记录,
     // 手动 resumeGoal 会直接从旧生命周期跳到新 generation 的 turn-dispatched,
     // 审计流无法识别派发源于恢复操作)。区分用户恢复与 usage reset 自动续跑。
