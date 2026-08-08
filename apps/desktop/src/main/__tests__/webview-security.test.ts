@@ -623,7 +623,7 @@ describe('installDeferredPopupRouter', () => {
   it('host send 中途失败时从失败项原序重试,不重复已成功项', () => {
     let currentHost: WebContents | null = null;
     let sendAttempt = 0;
-    const send = vi.fn(() => {
+    const send = vi.fn((_channel: string, _payload: unknown) => {
       sendAttempt += 1;
       if (sendAttempt === 2) throw new Error('renderer changed during flush');
     });
