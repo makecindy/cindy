@@ -41,6 +41,7 @@ import type {
 import {
   customMarketPluginId,
   customMarketReleaseId,
+  isPluginMarketCustomIconKey,
   marketSourceKey,
   parseCustomMarketPluginId,
 } from '../../shared/pluginMarket.js';
@@ -109,7 +110,6 @@ class SilentUpgradeStaleBaselineError extends Error {}
 const SOURCE_MUTATION_KEY = 'market-sources';
 const CUSTOM_ICON_PROJECTION_TOKEN_LENGTH = 16;
 const CUSTOM_ICON_PROJECTION_TOKEN_RE = /^[a-f0-9]{16}$/;
-const CUSTOM_ICON_KEY_RE = /^[1-9a-f][a-f0-9]{63}$/;
 
 /**
  * 扩权批准的原子复核:Renderer 的 allowPermissionExpansion 只代表「用户对
@@ -365,7 +365,7 @@ async function customMarketIconKey(
 }
 
 function customMarketIconProjectionToken(expectedIconKey: string): string | null {
-  if (!CUSTOM_ICON_KEY_RE.test(expectedIconKey)) return null;
+  if (!isPluginMarketCustomIconKey(expectedIconKey)) return null;
   return expectedIconKey.slice(1, 1 + CUSTOM_ICON_PROJECTION_TOKEN_LENGTH);
 }
 
@@ -713,6 +713,7 @@ export class PluginMarketService {
                 const read = await readBoundedFileNoFollowWithStat(iconPath, GHOST_ICON_MAX_BYTES, {
                   containWithin: plugin.dir,
                   nonBlocking: true,
+                  rejectHardLinks: true,
                   verifyContentStability: true,
                 });
                 if (read === null) {

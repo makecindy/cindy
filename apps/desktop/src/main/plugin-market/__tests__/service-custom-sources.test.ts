@@ -862,6 +862,35 @@ describe('PluginMarketService 自定义市场图标', () => {
       expect(JSON.stringify(results)).not.toContain(Buffer.from('PRIVATE').toString('base64'));
     },
   );
+
+  it('does not return bytes from a marketplace icon hard-linked to a file outside the plugin directory', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/alpha', id: 'alpha', icon: 'assets/icon.png', iconBytes: 'ALPHA' },
+    ]);
+    const secret = path.join(root, 'secret.txt');
+    fs.writeFileSync(secret, 'PRIVATE');
+    const iconPath = path.join(dir, 'plugins', 'alpha', 'assets', 'icon.png');
+    fs.rmSync(iconPath);
+    try {
+      fs.linkSync(secret, iconPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'ENOTSUP' || code === 'EOPNOTSUPP') return;
+      throw error;
+    }
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const item = (await h.service.snapshot()).items[0]!;
+
+    const results = await h.service.localIcons([
+      { pluginId: item.pluginId, expectedIconKey: item.customIconKey! },
+    ]);
+    expect(results).toEqual([
+      { pluginId: item.pluginId, expectedIconKey: item.customIconKey, status: 'missing' },
+    ]);
+    expect(JSON.stringify(results)).not.toContain(Buffer.from('PRIVATE').toString('base64'));
+  });
 });
 
 describe('PluginMarketService 自定义市场 snapshot 账户作用域', () => {

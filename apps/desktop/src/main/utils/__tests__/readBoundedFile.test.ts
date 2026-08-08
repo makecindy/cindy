@@ -39,6 +39,58 @@ describe('readBoundedFileNoFollow', () => {
     expect(await readBoundedFileNoFollow(big, GHOST_MANIFEST_MAX_BYTES)).toBeNull();
   });
 
+  it('rejectHardLinks:拒绝已有硬链接的文件', async () => {
+    const original = path.join(workDir, 'outside-secret.png');
+    const linked = path.join(workDir, 'market-icon.png');
+    await fs.promises.writeFile(original, 'PRIVATE');
+    await fs.promises.link(original, linked);
+
+    expect(await readBoundedFileNoFollow(linked, 1024, { rejectHardLinks: true })).toBeNull();
+  });
+
+  it('rejectHardLinks:读取后链接计数变化时按内容变化拒绝', async () => {
+    const file = path.join(workDir, 'linked-during-read.png');
+    await fs.promises.writeFile(file, 'SAFE');
+    const realOpen = fs.promises.open;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      const realStat = handle.stat.bind(handle);
+      let statCalls = 0;
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') {
+            return async (options?: fs.StatOptions) => {
+              const stat = (await realStat(options as never)) as unknown as fs.BigIntStats;
+              statCalls += 1;
+              if (statCalls === 1) return stat;
+              return new Proxy(stat, {
+                get(statTarget, statKey) {
+                  if (statKey === 'nlink') return 2n;
+                  const value = Reflect.get(statTarget, statKey);
+                  return typeof value === 'function' ? value.bind(statTarget) : value;
+                },
+              }) as fs.BigIntStats;
+            };
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      await expect(
+        readBoundedFileNoFollow(file, 1024, {
+          rejectHardLinks: true,
+          verifyContentStability: true,
+        }),
+      ).rejects.toBeInstanceOf(BoundedFileReadChangedError);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it.runIf(process.platform !== 'win32')('POSIX:符号链接在 open 处被 O_NOFOLLOW 拒绝', async () => {
     const target = path.join(workDir, 'target.json');
     await fs.promises.writeFile(target, '{"ok":true}');

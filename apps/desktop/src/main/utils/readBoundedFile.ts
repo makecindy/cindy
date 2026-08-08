@@ -34,6 +34,8 @@ export interface ReadBoundedFileOptions {
   containWithin?: string;
   /** 特殊文件场景使用非阻塞打开，避免 FIFO 在 Main 中永久等待。 */
   nonBlocking?: boolean;
+  /** 拒绝链接计数不为 1 的文件，并在读取后再次复核。 */
+  rejectHardLinks?: boolean;
   /** 复读同一句柄并比较字节；内容或版本变化时抛出可重试错误。 */
   verifyContentStability?: boolean;
 }
@@ -100,8 +102,8 @@ function sameHandleVersion(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
 
 /**
  * 在已打开句柄上循环读满已校验的长度。网络盘/FUSE 上单次 read() 不保证填满
- * 请求区间,单次读会把合法文件截断成解析失败。EOF 早于已校验长度(并发截断)
- * 时按实际读到的字节返回,交由上层解析/校验自然拒绝。
+ * 请求区间,单次读会把合法文件截断成解析失败。EOF 提前时这里只返回实际字节；
+ * 调用方随后用句柄版本复核（及可选复读）拒绝并发截断或改写。
  */
 async function readToLength(handle: fs.promises.FileHandle, size: number): Promise<Buffer> {
   const buffer = Buffer.alloc(size);
@@ -164,6 +166,7 @@ export async function readBoundedFileNoFollowWithStat(
   try {
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile() || Number(stat.size) > maxBytes) return null;
+    if (options?.rejectHardLinks && stat.nlink !== 1n) return null;
     if (noFollow === null) {
       let linkStat: fs.BigIntStats;
       try {
@@ -183,6 +186,10 @@ export async function readBoundedFileNoFollowWithStat(
     }
     const bytes = await readToLength(handle, Number(stat.size));
     const finalStat = await handle.stat({ bigint: true });
+    if (options?.rejectHardLinks && finalStat.nlink !== 1n) {
+      if (options.verifyContentStability) throw new BoundedFileReadChangedError();
+      return null;
+    }
     if (!sameHandleVersion(stat, finalStat)) {
       if (options?.verifyContentStability) throw new BoundedFileReadChangedError();
       return null;
@@ -191,6 +198,7 @@ export async function readBoundedFileNoFollowWithStat(
       const verificationBytes = await readToLength(handle, Number(stat.size));
       const verificationStat = await handle.stat({ bigint: true });
       if (
+        (options.rejectHardLinks && verificationStat.nlink !== 1n) ||
         !sameHandleVersion(finalStat, verificationStat) ||
         bytes.length !== verificationBytes.length ||
         !bytes.equals(verificationBytes)

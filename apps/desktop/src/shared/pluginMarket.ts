@@ -74,6 +74,13 @@ export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;
 }
 
+/** Main 生成并接受的自定义市场图标身份键形状；首位 0 为保留值。 */
+export const PLUGIN_MARKET_CUSTOM_ICON_KEY_RE = /^[1-9a-f][a-f0-9]{63}$/;
+
+export function isPluginMarketCustomIconKey(value: string): boolean {
+  return PLUGIN_MARKET_CUSTOM_ICON_KEY_RE.test(value);
+}
+
 /** Renderer 请求 Main 按当前自定义市场事实读取一个本地图标。 */
 export interface PluginMarketLocalIconRequest {
   pluginId: string;

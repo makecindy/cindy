@@ -4,6 +4,7 @@ import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { GhostManifest } from '../../shared/ghost.js';
+import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';
 import {
   sendToTrustedAppWindows,
   setGhostUninstallLedgerPreparer,
@@ -131,7 +132,7 @@ export function registerPluginMarketIpc(): void {
       const payload = requireObject(entry);
       const pluginId = requireString(payload.pluginId, 'pluginId');
       const expectedIconKey = requireString(payload.expectedIconKey, 'expectedIconKey');
-      if (pluginId.length > 1024 || !/^[a-f0-9]{64}$/.test(expectedIconKey)) {
+      if (pluginId.length > 1024 || !isPluginMarketCustomIconKey(expectedIconKey)) {
         throwIpcError('INVALID_PARAMS', 'Invalid local Plugin icon request');
       }
       return { pluginId, expectedIconKey };
