@@ -35,7 +35,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
-| 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）、正文累积引擎——两侧都经 `createTurnPresenter` 走这一份 |
+| 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
 | 节流间隔与长度上限的**取值** | `PresenterPolicy` | 只有**取值**同源。个人侧仅复用 1.5s 这个常量，自己维护 `ACTIVITY_TICK_MS` 与卡片 patch 定时器；官方侧走 `createProgressEmitter`。**两套发射逻辑各自维护**，改一边必须核对另一边 |
 | 命令面登记 | `im/shared/botCommands.ts` | 一张表覆盖两侧；`surfaces` 标注谁有谁没有，单侧独有必须写 `parityNote`，缺了 CI 红 |
 | 群历史检索核心 | `im/shared/groupHistoryAccess.ts` | 官方侧由 `hook-control/groupHistoryScope.ts` 把官方 externalKey 解析成同一套 access scope，两侧检索走同一实现 |
@@ -59,13 +59,16 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 |---|---|---|
 | 首帧 | 有真实内容（含工具步骤）就建一条**真实消息**；空内容不建（惰性占位） | 快照进 `turn.progress` 帧发给服务端 |
 | 过程中 | **同一条消息持续 `editMessageText` 覆盖**，用户看着它长大：过程区在上、正文在下 | **私聊**：进 Telegram **草稿**（`sendDraft`）——在输入框那个位置，**不在消息流里**；**群**：一条进度消息，`editMessageText` 覆盖 |
-| 终稿内容 | **只有正文**（`composeStreamingView` 在 `turn.done` 时直接 `return body`，不再合成过程区） | **只有正文**（`presenter.finalText()` 取 body 引擎的缓冲，不经过 `composeProgressView`） |
+| 终稿内容（**成功收口**） | **只有正文**（`composeStreamingView` 在 `turn.done` 时直接 `return body`，不再合成过程区） | **只有正文**（`presenter.finalText()` 取 body 引擎的缓冲，不经过 `composeProgressView`） |
 | 终稿落在哪 | **还是那条消息**，原地定稿（编辑失败才 repost） | **私聊**：新发一条正文消息，草稿随之消失；**群**：编辑那条进度消息 |
+| **失败收口** | **过程区保留**：错误路径不置 `turn.done`，`composeStreamingView` 仍走运行中合成——卡片定稿成「过程区 + 正文 + ❌ 错误：…」，用户能看到失败前干到了哪一步 | 终稿正文为**空**，错误信息走独立的 `errorMessage` 字段，由服务端按语言渲染成「任务失败：…」——**不带过程区** |
 
-**两侧的终稿都只有正文**，过程区在收口时都会消失——这一点没有差异，不要再登记成缺口。
+**成功收口的终稿两侧都只有正文**，过程区消失——这一点没有差异，不要登记成缺口。
+这条不变量**只对成功成立**：失败收口两侧形态不同（上表末行），个人 bot 保留故障现场、
+官方 bot 只给一句错误。改收口逻辑时不要拿「终稿只有正文」去删失败路径的过程信息——
+那是用户排障的唯一线索。
 
-真正的差异只在**过程阶段**：个人 bot 的过程在聊天记录里（一条持续变化的消息），官方 bot
-私聊的过程在输入框里（草稿）。这条已经裁决过，见下节。
+过程阶段的载体差异（个人在聊天记录里、官方私聊在输入框草稿里）已经裁决过，见下节。
 
 ## 三、有意不同（已裁决，不要"统一"）
 
@@ -76,7 +79,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | `/status` | 有 | 无 | 官方 bot 经服务端中继，链路可断，所以有「关联状态」可看；个人 bot 由桌面直连 Bot API，没有等价概念。见注册表 `parityNote` |
 | `/unlink` | 有 | 无 | 官方 bot 的关联由服务端持有；个人 bot 的 token 是用户自填的，解绑入口在桌面设置页 |
 | `/workspace` | 独立命令 | `/project` 的**别名** | 服务端两条菜单文案逐字相同。个人 bot 用别名表达同义拼写，不重复占一个菜单位，因此不登记为独立命令——**不是缺口** |
-| 正文累积语义 | `finalized-segments`：`isFinal` 是**逐条** agent_message 的完成信号，按消息边界切成已定稿段 | `buffer-replace`：`isFinal` 用该条全文整体替换累积缓冲 | 两侧 `isFinal` 的含义本来就不同，presenter 做成显式 `mode` 参数，不强行统一 |
+| 正文累积引擎 | `finalized-segments` 引擎：`isFinal` 是**逐条** agent_message 的完成信号，按消息边界切成已定稿段，完成态投影成 normalized messages 走折叠判定，`finalText()` 取定稿段合成 | `buffer-replace` 引擎：`isFinal` 用该条全文整体替换单一缓冲，无消息投影，`finalText()` 即整段缓冲 | 两侧 `isFinal` 的含义本来就不同，presenter 按 `mode` 实例化**两个独立引擎**（`createSegmentsEngine` / `createBufferEngine`）。**改正文累积相关逻辑时两个引擎要分别核对**——它们只共享接口，不共享实现 |
 | lane 模型 | per-principal | per-chat | 已在 `presentationCapabilities.ts` 声明 |
 | 终稿特效 `messageEffectId` | 有 | 无 | 官方装饰位，已声明 |
 
@@ -102,6 +105,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
    便宜得多（`xindong/cindy-server#348` 十九轮 review 的教训）。
 3. 第四节里标「待核」的行，核完就把结论写回来，不要让它一直挂着。
 4. 判「同源」之前，**读那条路径最后真正交出去的是什么**，不要读模块注释就下结论。
+   成功与失败要分开看——本表初版曾把只对成功收口成立的不变量泛化到失败路径。
 5. 命令的分类以 `botCommands.ts` 的 `parityNote` 为准——那里是唯一真相源，本表只是
    把它的结论摊开讲。两边对不上时，改本表，不是改注册表。
 
