@@ -319,7 +319,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     ).resolves.toBe('ok');
 
     expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
-      200,
+      1000,
       'archived',
       { includePinned: true },
     ]);
@@ -370,9 +370,9 @@ describe('refreshRemoteDeviceSessions retry', () => {
     ]);
   });
 
-  it('archived 满窗口以最近 200 条替换旧缓存，清掉断线期间可能陈旧的窗口外行', async () => {
+  it('archived 使用 1000 条产品窗口，保留第 201 条之后的有效任务并清理陈旧缓存', async () => {
     const d = did();
-    const recent = Array.from({ length: 200 }, (_, index) =>
+    const archived = Array.from({ length: 250 }, (_, index) =>
       session(`archived-recent-${index}`, { status: 'archived' }),
     );
     remoteProjectsStore.setDeviceSessions(
@@ -381,7 +381,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       [session('stale-outside-window', { status: 'archived' })],
       'archived',
     );
-    invoke.mockResolvedValueOnce(recent);
+    invoke.mockResolvedValueOnce(archived);
 
     await refreshRemoteDeviceSessions(d, 'Mac B', {
       sleep: noSleep,
@@ -389,11 +389,17 @@ describe('refreshRemoteDeviceSessions retry', () => {
       status: 'archived',
     });
 
-    expect(remoteProjectsStore.getDeviceSessions(d, 'archived')).toHaveLength(200);
-    expect(remoteProjectsStore.getDeviceSessions(d, 'archived').map((s) => s.id)).not.toContain(
-      'stale-outside-window',
-    );
+    const archivedIds = remoteProjectsStore.getDeviceSessions(d, 'archived').map((item) => item.id);
+    expect(archivedIds).toHaveLength(250);
+    expect(archivedIds).toContain('archived-recent-200');
+    expect(archivedIds).toContain('archived-recent-249');
+    expect(archivedIds).not.toContain('stale-outside-window');
     expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
+      1000,
+      'archived',
+      { includePinned: true },
+    ]);
   });
 
   it('周期有界快照更新命中行但保留 200 条窗口外的有效会话', async () => {
