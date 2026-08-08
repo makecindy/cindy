@@ -26,6 +26,10 @@ const h = vi.hoisted(() => ({
     at: string;
     detail?: string;
   } | null,
+  anthropicEpochChanged: false,
+  anthropicObserveOptions: [] as Array<{ allowHydration?: boolean }>,
+  anthropicProjectionOptions: [] as Array<{ allowHydration?: boolean }>,
+  retireAnthropicCatalog: null as (() => void) | null,
 }));
 
 vi.mock('electron', () => ({
@@ -49,8 +53,8 @@ vi.mock('../../appSessionState.js', () => ({
 // 与真实实现(readClaudeAiOAuth / hasGrokOAuthLogin)的分层一致。
 vi.mock('../claude-credentials-store.js', () => ({
   hasClaudeAiOAuthUnbound: () => h.claudeCredentialPresent,
-  hasClaudeAiOAuth: () =>
-    h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
+  hasClaudeAiOAuthUnboundForBindingTransaction: () => h.claudeCredentialPresent,
+  hasClaudeAiOAuth: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
 }));
 vi.mock('../grok-oauth-login.js', () => ({
   hasGrokOAuthLoginUnbound: () => h.grokCredentialPresent,
@@ -61,6 +65,31 @@ vi.mock('../grok-oauth-login.js', () => ({
 
 vi.mock('../model-discovery/anthropic.js', () => ({
   loadAnthropicModelsFromDiskCache: h.loadAnthropicDiskCache,
+  observeAnthropicCredentialEpoch: (options: { allowHydration?: boolean } = {}) => {
+    h.anthropicObserveOptions.push(options);
+    if (!h.claudeCredentialPresent || !isBoundToCurrentOwner('anthropic')) return false;
+    if (options.allowHydration === false && h.anthropicEpochChanged) {
+      h.anthropicEpochChanged = false;
+      h.retireAnthropicCatalog?.();
+      return false;
+    }
+    return true;
+  },
+  runWithAnthropicCredentialEpochProjection: <T>(
+    options: { allowHydration?: boolean },
+    project: (connected: boolean) => T,
+  ) => {
+    h.anthropicProjectionOptions.push(options);
+    if (!h.claudeCredentialPresent || !isBoundToCurrentOwner('anthropic')) {
+      return project(false);
+    }
+    const changed = h.anthropicEpochChanged;
+    if (changed) {
+      h.anthropicEpochChanged = false;
+      h.retireAnthropicCatalog?.();
+    }
+    return project(options.allowHydration === false ? !changed : true);
+  },
   refreshAnthropicModelsFromHttp: h.refreshAnthropicModels,
   getAnthropicModelDiscoveryFailure: () => h.anthropicDiscoveryFailure,
 }));
@@ -76,11 +105,21 @@ vi.mock('../auth-adapters.js', () => ({
   },
 }));
 
-vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ mode: 'local' as const, user: null }) }));
-vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
+vi.mock('../../authManager.js', () => ({
+  getAuthState: () => ({ mode: 'local' as const, user: null }),
+}));
+vi.mock('../../appCapabilities.js', () => ({
+  getAppCapabilities: () => ({ canUseCindyGateway: false }),
+}));
 vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
-vi.mock('../../manifestService.js', () => ({ isDev: () => true, getBaseUrl: () => 'https://example.invalid' }));
-vi.mock('../../clientEndpointsService.js', () => ({ getBuildClientEndpoint: () => 'https://example.invalid', getClientEndpoint: () => 'https://example.invalid' }));
+vi.mock('../../manifestService.js', () => ({
+  isDev: () => true,
+  getBaseUrl: () => 'https://example.invalid',
+}));
+vi.mock('../../clientEndpointsService.js', () => ({
+  getBuildClientEndpoint: () => 'https://example.invalid',
+  getClientEndpoint: () => 'https://example.invalid',
+}));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   setProviderSecretsClearedListener: () => {},
@@ -95,6 +134,7 @@ import {
   getDesktopProviderService,
   setNativeProviderClaimListener,
 } from '../createDesktopProviderService.js';
+import { getActiveCatalog, setAnthropicDiscoveredModels } from '../active-catalog.js';
 import { isNativeProviderAuthBound } from '../nativeProviderAuthBinding.js';
 
 function isBoundToCurrentOwner(provider: 'anthropic' | 'xai'): boolean {
@@ -116,6 +156,10 @@ beforeEach(() => {
   h.claudeCredentialPresent = true;
   h.grokCredentialPresent = true;
   h.anthropicDiscoveryFailure = null;
+  h.anthropicEpochChanged = false;
+  h.anthropicObserveOptions = [];
+  h.anthropicProjectionOptions = [];
+  h.retireAnthropicCatalog = () => setAnthropicDiscoveredModels([]);
   h.refreshAnthropicModels.mockClear();
   h.loadAnthropicDiskCache.mockClear();
   h.codexLoginWithSideEffects.mockClear();
@@ -205,6 +249,62 @@ describe('native provider connection claim on read', () => {
 
     await connectedMap(true);
     expect(h.codexLoginWithSideEffects).toHaveBeenCalled();
+  });
+
+  it('已绑定账号被另一进程替换时,只读快照先 fail-closed 且不触发 hydration', async () => {
+    await connectedMap(true);
+    h.refreshAnthropicModels.mockClear();
+    h.loadAnthropicDiskCache.mockClear();
+    h.anthropicObserveOptions = [];
+    h.anthropicEpochChanged = true;
+
+    expect((await connectedMap(false)).anthropic).toBe(false);
+    expect(h.anthropicObserveOptions).toContainEqual({ allowHydration: false });
+    expect(h.refreshAnthropicModels).not.toHaveBeenCalled();
+    expect(h.loadAnthropicDiskCache).not.toHaveBeenCalled();
+
+    expect((await connectedMap(true)).anthropic).toBe(true);
+  });
+
+  it('其它连接读取器等待期间换号,最终投影不再返回账号 A 的模型', async () => {
+    await connectedMap(true);
+    setAnthropicDiscoveredModels([
+      {
+        id: 'claude-account-a',
+        name: 'Account A',
+        group: 'anthropic',
+        sortOrder: 0,
+        contextWindow: 1_000_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsFastMode: false,
+        status: 'active',
+      },
+    ]);
+    let releaseOpenAi!: (connected: boolean) => void;
+    const openAiGate = new Promise<boolean>((resolve) => {
+      releaseOpenAi = resolve;
+    });
+    h.codexLoginWithSideEffects.mockImplementationOnce(() => openAiGate);
+
+    // 真实的路由 / provider-route 调用传入 late getter，必须在最终账号锁内现读。
+    const pending = getDesktopProviderService().listProviders({
+      allowSideEffects: true,
+      getCatalog: getActiveCatalog,
+    });
+    expect(h.codexLoginWithSideEffects).toHaveBeenCalled();
+    // Anthropic 的第一次连接判定已返回 A；此时独立进程提交 B。
+    h.anthropicEpochChanged = true;
+    releaseOpenAi(false);
+    const providers = await pending;
+    const anthropic = providers.find((provider) => provider.id === 'anthropic');
+
+    expect(h.anthropicProjectionOptions).toContainEqual({ allowHydration: true });
+    expect(
+      Object.values(anthropic?.models ?? {})
+        .flat()
+        .map((model) => model.id),
+    ).not.toContain('claude-account-a');
   });
 
   it('凭证不在本机时既不认领也不误报已连接', async () => {

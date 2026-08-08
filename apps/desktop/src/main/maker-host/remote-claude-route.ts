@@ -25,13 +25,16 @@
  * 会话会落到网关路径 —— 与升级前「远端恒网关」一致。
  */
 
-import type { RemoteClaudeRoute } from '@cindy/maker-core';
+import { CINDY_CLAUDE_OAUTH_REVISION_ENV, type RemoteClaudeRoute } from '@cindy/maker-core';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import { readClaudeApiKey } from './auth-adapters.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import { getClaudeAiOAuthForSpawn } from './claude-oauth-refresh.js';
-import { hasClaudeAiOAuth } from './claude-credentials-store.js';
+import {
+  getClaudeAiOAuthSessionAuthorizationRevision,
+  hasClaudeAiOAuth,
+} from './claude-credentials-store.js';
 import { getActiveCatalog } from './active-catalog.js';
 import {
   ANTHROPIC_DIRECT_UPSTREAM,
@@ -115,6 +118,7 @@ function nativeAnthropicRoute(): RemoteClaudeRoute {
   ];
   const endpoint = descriptor?.upstream?.trim() || ANTHROPIC_DIRECT_UPSTREAM;
   const env = claudeOAuthSpawnEnv(oauth);
+  env[CINDY_CLAUDE_OAUTH_REVISION_ENV] = getClaudeAiOAuthSessionAuthorizationRevision(oauth);
   const customHeaders = descriptor?.headerOverride;
   if (customHeaders && Object.keys(customHeaders).length > 0) {
     env.ANTHROPIC_CUSTOM_HEADERS = serializeCustomHeaders(customHeaders);
@@ -173,7 +177,9 @@ function materializeRoutedProvider(routed: ResolvedProviderRouteDecision): Remot
     );
   }
   if (!endpoint) {
-    throw new Error(`[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" has no upstream endpoint`);
+    throw new Error(
+      `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" has no upstream endpoint`,
+    );
   }
   return { endpoint, env: routeDecisionToCcEnv(decision) };
 }

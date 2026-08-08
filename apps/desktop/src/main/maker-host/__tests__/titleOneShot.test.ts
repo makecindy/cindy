@@ -43,6 +43,7 @@ vi.mock('electron', () => ({
 
 // 只取 toSdkModelString,避免在 vitest 里加载整个 maker-core runtime(含 agent SDK 图)。
 vi.mock('@cindy/maker-core', () => ({
+  CINDY_CLAUDE_OAUTH_REVISION_ENV: 'CINDY_CLAUDE_OAUTH_REVISION',
   toSdkModelString: (m: string) => (m === 'claude-haiku-4-5' ? 'claude-haiku-4-5-20251001' : m),
 }));
 
@@ -59,7 +60,11 @@ import {
   parseResponsesSse,
   type TitleOneShotDeps,
 } from '../title-one-shot.js';
-import { setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import {
+  setActiveCatalog,
+  setDiscoveredCodexModels,
+  setXdGatewayModels,
+} from '../active-catalog.js';
 
 /** openai 是动态清单供应商(2026-07-19 统一重构):注入 codex 注册表快照模拟运行时形态。 */
 async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -432,7 +437,12 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('用户停用清单中最便宜的模型 → 选次便宜可用模型(Codex round 2)', () => {
     setXdGatewayModels([
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat', inputCostPerToken: 0.1, outputCostPerToken: 0.2 },
+      {
+        id: 'deepseek/deepseek-v4-flash',
+        mode: 'chat',
+        inputCostPerToken: 0.1,
+        outputCostPerToken: 0.2,
+      },
       { id: 'moonshotai/kimi-k3', mode: 'chat', inputCostPerToken: 1, outputCostPerToken: 2 },
     ]);
     mockReadModelDisableOverrides.mockReturnValueOnce({

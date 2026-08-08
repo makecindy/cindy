@@ -101,6 +101,10 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'CLAUDE_CODE_OAUTH_SCOPES',
   'CLAUDE_CODE_SUBSCRIPTION_TYPE',
   'CLAUDE_CODE_RATE_LIMIT_TIER',
+  // Host-only, non-secret authorization epoch. An inherited value is still
+  // unsafe: it can make a markerless session claim a revision the host never
+  // attached and suppress a required 401 refresh.
+  'CINDY_CLAUDE_OAUTH_REVISION',
   // endpoint 重定向
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_UNIX_SOCKET',
@@ -140,6 +144,7 @@ export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
   'CLAUDE_CODE_OAUTH_SCOPES',
   'CLAUDE_CODE_SUBSCRIPTION_TYPE',
   'CLAUDE_CODE_RATE_LIMIT_TIER',
+  'CINDY_CLAUDE_OAUTH_REVISION',
   'ANTHROPIC_CUSTOM_HEADERS',
   'ANTHROPIC_BASE_URL',
 ] as const;

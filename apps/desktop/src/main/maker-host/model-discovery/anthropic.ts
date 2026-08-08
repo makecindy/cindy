@@ -42,14 +42,12 @@
  */
 
 import { app } from 'electron';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import type {
-  CatalogModel,
-  Effort,
-  ProviderModelDiscoveryFailure,
-} from '@cindy/model-providers';
+import type { CatalogModel, Effort, ProviderModelDiscoveryFailure } from '@cindy/model-providers';
 
 import { createLogger } from '../../logger.js';
 import {
@@ -58,16 +56,125 @@ import {
   getCindyModelEffortBaseline,
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
-import { hasClaudeAiOAuth, readClaudeAiOAuth } from '../claude-credentials-store.js';
+import {
+  CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION,
+  fingerprintClaudeAiOAuthCredentialIdentity,
+  getClaudeAiOAuthSessionAuthorizationRevision,
+  hasClaudeAiOAuth,
+  readClaudeAiOAuth,
+  runWithClaudeAiOAuthCredentialAbsent,
+  runWithClaudeAiOAuthCredentialCurrent,
+  runWithClaudeAiOAuthCredentialNotReplaced,
+  runWithClaudeAiOAuthCredentialSnapshotCurrent,
+  type ClaudeAiOAuthCredentialIdentity,
+} from '../claude-credentials-store.js';
 import { getValidClaudeAiOAuth } from '../claude-oauth-refresh.js';
 import { outboundFetch } from '../outbound-fetch.js';
 
 const log = createLogger('model-discovery:anthropic');
 
-const VALID_EFFORTS: ReadonlySet<string> = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const VALID_EFFORTS: ReadonlySet<string> = new Set([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
 const HTTP_TIMEOUT_MS = 15_000;
 /** /v1/models 游标分页的最大页数(现实模型数远小于单页 1000,纯防御)。 */
 const MAX_MODEL_PAGES = 5;
+
+interface AnthropicCredentialEpoch {
+  credentialFingerprint: string;
+  authorizationRevision: string;
+}
+
+interface AnthropicCredentialContext {
+  identity: ClaudeAiOAuthCredentialIdentity;
+  epoch: AnthropicCredentialEpoch;
+}
+
+export interface AnthropicSdkModelSource {
+  accessTokenFingerprint: string;
+  authorizationRevision: string;
+}
+
+function credentialEpochFor(identity: ClaudeAiOAuthCredentialIdentity): AnthropicCredentialEpoch {
+  return {
+    credentialFingerprint: fingerprintClaudeAiOAuthCredentialIdentity(identity),
+    authorizationRevision: getClaudeAiOAuthSessionAuthorizationRevision(identity),
+  };
+}
+
+function credentialEpochKey(epoch: AnthropicCredentialEpoch): string {
+  // A Cindy browser authorization revision is the stable grant/account epoch:
+  // access and refresh tokens may both rotate without changing it. Keep the
+  // token fingerprint only for legacy/externally claimed credentials that have
+  // no durable authorization revision, where it remains the sole account fence.
+  return epoch.authorizationRevision === CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION
+    ? `credential:${epoch.credentialFingerprint}`
+    : `authorization:${epoch.authorizationRevision}`;
+}
+
+function sameCredentialEpoch(
+  left: AnthropicCredentialEpoch | null,
+  right: AnthropicCredentialEpoch,
+): boolean {
+  return left !== null && credentialEpochKey(left) === credentialEpochKey(right);
+}
+
+function parseCredentialEpoch(value: unknown): AnthropicCredentialEpoch | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as {
+    credentialFingerprint?: unknown;
+    authorizationRevision?: unknown;
+  };
+  return typeof candidate.credentialFingerprint === 'string' &&
+    /^[0-9a-f]{64}$/.test(candidate.credentialFingerprint) &&
+    typeof candidate.authorizationRevision === 'string' &&
+    candidate.authorizationRevision.length > 0
+    ? {
+        credentialFingerprint: candidate.credentialFingerprint,
+        authorizationRevision: candidate.authorizationRevision,
+      }
+    : null;
+}
+
+function currentCredentialEpoch(): AnthropicCredentialEpoch | null {
+  const credential = readClaudeAiOAuth();
+  return credential ? credentialEpochFor(credential) : null;
+}
+
+function credentialContextFor(
+  identity: ClaudeAiOAuthCredentialIdentity,
+): AnthropicCredentialContext {
+  return { identity, epoch: credentialEpochFor(identity) };
+}
+
+function currentCredentialContext(): AnthropicCredentialContext | null {
+  const identity = readClaudeAiOAuth();
+  return identity ? credentialContextFor(identity) : null;
+}
+
+function accessTokenFingerprint(accessToken: string): string {
+  return createHash('sha256').update(accessToken, 'utf8').digest('hex');
+}
+
+function sdkSourceMatchesCredential(
+  source: AnthropicSdkModelSource,
+  credential: ClaudeAiOAuthCredentialIdentity,
+): boolean {
+  const currentRevision = getClaudeAiOAuthSessionAuthorizationRevision(credential);
+  if (source.authorizationRevision !== currentRevision) return false;
+  // SDK capabilities describe the authorization/account, not one short-lived
+  // access token. Explicit Cindy revisions survive normal token rotation; only
+  // unattributed legacy credentials still need the access-token fence.
+  return (
+    currentRevision !== CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION ||
+    source.accessTokenFingerprint === accessTokenFingerprint(credential.accessToken)
+  );
+}
 
 /** 最近一次生效的发现结果(含缓存加载),合并时的能力字段保留源。 */
 let lastApplied: CatalogModel[] = [];
@@ -82,6 +189,10 @@ const explicitFastModeModelIds = new Set<string>();
 const explicitWindows = new Map<string, number>();
 /** 授权边界(登出 / 换号)自增:在途发现若世代已变,结果作废不写回。 */
 let authGeneration = 0;
+/** Credential epoch currently allowed to own `lastApplied` and new cache writes. */
+let activeCredentialEpochKey: string | null = null;
+/** Trusted hydration is scheduled once per observed credential epoch. */
+let scheduledHydrationEpochKey: string | null = null;
 let httpRefreshInflight: Promise<boolean> | null = null;
 /** 在途拉取所属的世代;世代已变时新调用不复用旧 promise(换号补拉不被吞)。 */
 let httpRefreshInflightGen = -1;
@@ -125,8 +236,108 @@ function enqueueCacheMutation(task: () => Promise<void>): Promise<void> {
   return cacheMutationQueue;
 }
 
-function generationCanApply(generation: number, models: CatalogModel[]): boolean {
-  return generation === authGeneration && (models.length === 0 || hasClaudeAiOAuth());
+function activateCredentialEpoch(epoch: AnthropicCredentialEpoch): number {
+  const nextKey = credentialEpochKey(epoch);
+  if (activeCredentialEpochKey === nextKey) return authGeneration;
+
+  // A different grant/authorization epoch may have replaced the credential in
+  // another process without calling this module's explicit clear hook. Retire
+  // every account-scoped in-memory artifact before the new source can merge.
+  authGeneration += 1;
+  activeCredentialEpochKey = nextKey;
+  scheduledHydrationEpochKey = null;
+  const hadFailure = lastFailure !== null;
+  lastFailure = null;
+  cancelHttpRetry();
+  lastApplied = [];
+  explicitWindows.clear();
+  explicitEffortModelIds.clear();
+  explicitFastModeModelIds.clear();
+  resetHttpShrinkStreak();
+  setAnthropicDiscoveredModels([]);
+  if (hadFailure) notifyFailureChanged();
+  return authGeneration;
+}
+
+function deactivateCredentialEpoch(): number {
+  if (activeCredentialEpochKey === null) return authGeneration;
+
+  authGeneration += 1;
+  activeCredentialEpochKey = null;
+  scheduledHydrationEpochKey = null;
+  const hadFailure = lastFailure !== null;
+  lastFailure = null;
+  cancelHttpRetry();
+  lastApplied = [];
+  explicitWindows.clear();
+  explicitEffortModelIds.clear();
+  explicitFastModeModelIds.clear();
+  resetHttpShrinkStreak();
+  setAnthropicDiscoveredModels([]);
+  if (hadFailure) notifyFailureChanged();
+  return authGeneration;
+}
+
+function localCredentialEpochCanApply(
+  generation: number,
+  epoch: AnthropicCredentialEpoch,
+): boolean {
+  return generation === authGeneration && activeCredentialEpochKey === credentialEpochKey(epoch);
+}
+
+function synchronizeCurrentCredentialEpochBoundary(): void {
+  const current = currentCredentialContext();
+  if (current) activateCredentialEpoch(current.epoch);
+  else deactivateCredentialEpoch();
+}
+
+function credentialEpochCanApply(generation: number, epoch: AnthropicCredentialEpoch): boolean {
+  const current = currentCredentialEpoch();
+  if (!current) {
+    deactivateCredentialEpoch();
+    return false;
+  }
+  if (!sameCredentialEpoch(current, epoch)) {
+    activateCredentialEpoch(current);
+    return false;
+  }
+  return localCredentialEpochCanApply(generation, epoch);
+}
+
+function runWithAnthropicCredentialEpochCurrent<T>(
+  generation: number,
+  context: AnthropicCredentialContext,
+  action: () => T,
+): { state: 'current'; value: T } | { state: 'changed' } {
+  if (!localCredentialEpochCanApply(generation, context.epoch)) {
+    synchronizeCurrentCredentialEpochBoundary();
+    return { state: 'changed' };
+  }
+  let actionStarted = false;
+  try {
+    const guarded = runWithClaudeAiOAuthCredentialCurrent(context.identity, () => {
+      // Local auth-boundary callbacks run on this event loop. Recheck after
+      // waiting for the cross-process storage lock, then keep the synchronous
+      // catalog/cache commit inside that same lock.
+      if (!localCredentialEpochCanApply(generation, context.epoch)) {
+        return { state: 'changed' as const };
+      }
+      actionStarted = true;
+      return { state: 'current' as const, value: action() };
+    });
+    const result = guarded.state === 'changed' ? guarded : guarded.value;
+    if (result.state === 'changed') synchronizeCurrentCredentialEpochBoundary();
+    return result;
+  } catch (error) {
+    // The credential decision succeeded and the protected operation itself
+    // failed (for example ENOSPC during a cache publish). Preserve the valid
+    // live catalog and let the caller's normal I/O handling report the error.
+    if (actionStarted) throw error;
+    // Unknown shared-store state is fail-closed for account-scoped model data.
+    log.warn('anthropic credential epoch guard failed', { error: String(error) });
+    deactivateCredentialEpoch();
+    return { state: 'changed' };
+  }
 }
 
 /**
@@ -205,31 +416,51 @@ function resetHttpShrinkStreak(): void {
  */
 function persistPendingShrink(): void {
   const state =
-    httpShrinkSignature !== null ? { signature: httpShrinkSignature, streak: httpShrinkStreak } : null;
+    httpShrinkSignature !== null
+      ? { signature: httpShrinkSignature, streak: httpShrinkStreak }
+      : null;
+  const context = currentCredentialContext();
+  if (!context) return;
+  // Only the already-active credential may own shrink accounting. Activating
+  // here would itself reset the streak that evaluateHttpShrink just recorded;
+  // production HTTP discovery activates before evaluation, while standalone
+  // pure-function calls intentionally remain memory-only.
+  if (activeCredentialEpochKey !== credentialEpochKey(context.epoch)) return;
   const generation = authGeneration;
   void enqueueCacheMutation(async () => {
-    if (generation !== authGeneration || !hasClaudeAiOAuth()) return;
-    const file = cacheFilePath();
-    let raw: Record<string, unknown> | null = null;
-    try {
-      const parsed: unknown = JSON.parse(await fsp.readFile(file, 'utf-8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        raw = parsed as Record<string, unknown>;
+    const published = runWithAnthropicCredentialEpochCurrent(generation, context, () => {
+      // Reread and patch the latest whole cache while the same cross-process
+      // credential lock also excludes model-cache publishers. Reading before
+      // this transaction would let a stale pendingShrink snapshot overwrite a
+      // newer model list from another Cindy process.
+      const file = cacheFilePath();
+      let raw: Record<string, unknown> | null = null;
+      try {
+        const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          raw = parsed as Record<string, unknown>;
+        }
+      } catch {
+        /* 缓存缺失 / 损坏:不为记账凭空造缓存 */
       }
-    } catch {
-      /* 缓存缺失 / 损坏:不为记账凭空造缓存 */
-    }
-    if (!raw) return;
-    if (state) raw.pendingShrink = state;
-    else if (raw.pendingShrink === undefined) return; // 无变化不写盘
-    else delete raw.pendingShrink;
-    const temp = `${file}.${process.pid}.${cacheTempSequence += 1}.tmp`;
-    try {
-      await fsp.writeFile(temp, JSON.stringify(raw, null, 2), 'utf-8');
-      if (generation !== authGeneration || !hasClaudeAiOAuth()) return;
-      await fsp.rename(temp, file);
-    } finally {
-      await fsp.rm(temp, { force: true }).catch(() => undefined);
+      if (!raw || !sameCredentialEpoch(parseCredentialEpoch(raw.credentialEpoch), context.epoch)) {
+        return false;
+      }
+      if (state) raw.pendingShrink = state;
+      else if (raw.pendingShrink === undefined)
+        return false; // 无变化不写盘
+      else delete raw.pendingShrink;
+      const temp = `${file}.${process.pid}.${(cacheTempSequence += 1)}.tmp`;
+      try {
+        fs.writeFileSync(temp, JSON.stringify(raw, null, 2), 'utf-8');
+        fs.renameSync(temp, file);
+      } finally {
+        fs.rmSync(temp, { force: true });
+      }
+      return true;
+    });
+    if (published.state === 'changed') {
+      log.info('anthropic pending-shrink cache publish skipped after credential replacement');
     }
   });
 }
@@ -245,7 +476,10 @@ function persistPendingShrink(): void {
  * 只有 HTTP 通道参与收敛:它是 Anthropic 官方列模型端点,连续一致可作可用性证据;
  * SDK 捕获(本地 CLI 注册表,正是打塌事故的退化来源)永不收敛,等 HTTP 纠正。
  */
-export function evaluateHttpShrink(prevCount: number, nextIds: readonly string[]): 'accept' | 'reject' {
+function evaluateHttpShrinkState(
+  prevCount: number,
+  nextIds: readonly string[],
+): 'accept' | 'reject' {
   let verdict: 'accept' | 'reject';
   if (!isDegenerateModelListShrink(prevCount, nextIds.length)) {
     resetHttpShrinkStreak();
@@ -261,6 +495,14 @@ export function evaluateHttpShrink(prevCount: number, nextIds: readonly string[]
       verdict = 'reject';
     }
   }
+  return verdict;
+}
+
+export function evaluateHttpShrink(
+  prevCount: number,
+  nextIds: readonly string[],
+): 'accept' | 'reject' {
+  const verdict = evaluateHttpShrinkState(prevCount, nextIds);
   persistPendingShrink();
   return verdict;
 }
@@ -280,9 +522,7 @@ export interface SdkMappedModel {
 function fallbackEffortBaseline(id: string): { efforts: Effort[]; defaultEffort: Effort | null } {
   const catalogBaseline = getCindyModelEffortBaseline(id);
   if (catalogBaseline) return catalogBaseline;
-  const efforts: Effort[] = /haiku/.test(id)
-    ? []
-    : ['low', 'medium', 'high', 'xhigh', 'max'];
+  const efforts: Effort[] = /haiku/.test(id) ? [] : ['low', 'medium', 'high', 'xhigh', 'max'];
   return { efforts, defaultEffort: pickDefaultEffort(efforts) };
 }
 
@@ -311,8 +551,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     const id = normalizeModelId(e.value);
     if (!id.startsWith('claude') || seen.has(id)) continue;
     seen.add(id);
-    const hasEffortInfo =
-      e.supportsEffort !== undefined || e.supportedEffortLevels !== undefined;
+    const hasEffortInfo = e.supportsEffort !== undefined || e.supportedEffortLevels !== undefined;
     const hasFastModeInfo = e.supportsFastMode !== undefined;
     const fallback = fallbackEffortBaseline(id);
     let efforts: Effort[];
@@ -326,7 +565,8 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     } else {
       const levels = toEfforts(e.supportedEffortLevels);
       // supportsEffort=true 但没给档位清单:按目录基线 / 确定性默认合成,不解读为不可调。
-      efforts = levels && levels.length > 0 ? levels : e.supportsEffort === true ? fallback.efforts : [];
+      efforts =
+        levels && levels.length > 0 ? levels : e.supportsEffort === true ? fallback.efforts : [];
       defaultEffort =
         levels && levels.length > 0
           ? pickDefaultEffort(efforts)
@@ -378,9 +618,7 @@ interface CapabilityMappedModel {
  * 把一份完整存在性快照与上一轮能力状态逐字段合并。缺席字段只有上一轮已标记为明确
  * 来源时才保留旧值；否则直接使用 mapper 生成的当前目录基线。
  */
-function mergeCapabilitiesWithPrevious(
-  mapped: readonly CapabilityMappedModel[],
-): {
+function mergeCapabilitiesWithPrevious(mapped: readonly CapabilityMappedModel[]): {
   models: CatalogModel[];
   explicitEffortIds: Set<string>;
   explicitFastModeIds: Set<string>;
@@ -487,8 +725,9 @@ async function applyModels(
   generation = authGeneration,
   nextExplicitEffortIds: ReadonlySet<string> = explicitEffortModelIds,
   nextExplicitFastModeIds: ReadonlySet<string> = explicitFastModeModelIds,
+  credentialContext: AnthropicCredentialContext | null = null,
+  beforeCommit?: () => boolean,
 ): Promise<boolean> {
-  if (!generationCanApply(generation, models)) return false;
   const modelIds = new Set(models.map((model) => model.id));
   const normalizedExplicitEffortIds = new Set(
     [...nextExplicitEffortIds].filter((id) => modelIds.has(id)),
@@ -496,58 +735,124 @@ async function applyModels(
   const normalizedExplicitFastModeIds = new Set(
     [...nextExplicitFastModeIds].filter((id) => modelIds.has(id)),
   );
-  const modelsChanged = JSON.stringify(models) !== JSON.stringify(lastApplied);
-  const capabilityProvenanceChanged =
-    normalizedExplicitEffortIds.size !== explicitEffortModelIds.size ||
-    [...normalizedExplicitEffortIds].some((id) => !explicitEffortModelIds.has(id)) ||
-    normalizedExplicitFastModeIds.size !== explicitFastModeModelIds.size ||
-    [...normalizedExplicitFastModeIds].some((id) => !explicitFastModeModelIds.has(id));
-  if (!modelsChanged && !capabilityProvenanceChanged) {
-    return generationCanApply(generation, models);
+  const commit = (): { accepted: boolean; payload: string | null } => {
+    if (beforeCommit && !beforeCommit()) return { accepted: false, payload: null };
+    const modelsChanged = JSON.stringify(models) !== JSON.stringify(lastApplied);
+    const capabilityProvenanceChanged =
+      normalizedExplicitEffortIds.size !== explicitEffortModelIds.size ||
+      [...normalizedExplicitEffortIds].some((id) => !explicitEffortModelIds.has(id)) ||
+      normalizedExplicitFastModeIds.size !== explicitFastModeModelIds.size ||
+      [...normalizedExplicitFastModeIds].some((id) => !explicitFastModeModelIds.has(id));
+    if (!modelsChanged && !capabilityProvenanceChanged) {
+      return { accepted: true, payload: null };
+    }
+    lastApplied = models;
+    explicitEffortModelIds.clear();
+    for (const id of normalizedExplicitEffortIds) explicitEffortModelIds.add(id);
+    explicitFastModeModelIds.clear();
+    for (const id of normalizedExplicitFastModeIds) explicitFastModeModelIds.add(id);
+    if (modelsChanged) setAnthropicDiscoveredModels(models);
+    return {
+      accepted: true,
+      payload: persist
+        ? JSON.stringify(
+            {
+              fetchedAt: new Date().toISOString(),
+              credentialEpoch: credentialContext?.epoch ?? null,
+              models,
+              explicitWindows: Object.fromEntries(explicitWindows),
+              explicitEffortModelIds: models
+                .map((model) => model.id)
+                .filter((id) => explicitEffortModelIds.has(id)),
+              explicitFastModeModelIds: models
+                .map((model) => model.id)
+                .filter((id) => explicitFastModeModelIds.has(id)),
+              // 整份重写不得抹掉跨重启的待确认骤减记账(SDK 每会话都会持久化一次)。
+              ...(httpShrinkSignature !== null
+                ? { pendingShrink: { signature: httpShrinkSignature, streak: httpShrinkStreak } }
+                : {}),
+            },
+            null,
+            2,
+          )
+        : null,
+    };
+  };
+
+  let committed: { accepted: boolean; payload: string | null };
+  if (models.length === 0) {
+    if (generation !== authGeneration) return false;
+    committed = commit();
+  } else {
+    if (!credentialContext) return false;
+    const guarded = runWithAnthropicCredentialEpochCurrent(generation, credentialContext, commit);
+    if (guarded.state === 'changed') return false;
+    committed = guarded.value;
   }
-  lastApplied = models;
-  explicitEffortModelIds.clear();
-  for (const id of normalizedExplicitEffortIds) explicitEffortModelIds.add(id);
-  explicitFastModeModelIds.clear();
-  for (const id of normalizedExplicitFastModeIds) explicitFastModeModelIds.add(id);
-  if (modelsChanged) setAnthropicDiscoveredModels(models);
-  if (persist) {
-    const payload = JSON.stringify(
-      {
-        fetchedAt: new Date().toISOString(),
-        models,
-        explicitWindows: Object.fromEntries(explicitWindows),
-        explicitEffortModelIds: models
-          .map((model) => model.id)
-          .filter((id) => explicitEffortModelIds.has(id)),
-        explicitFastModeModelIds: models
-          .map((model) => model.id)
-          .filter((id) => explicitFastModeModelIds.has(id)),
-        // 整份重写不得抹掉跨重启的待确认骤减记账(SDK 每会话都会持久化一次)。
-        ...(httpShrinkSignature !== null
-          ? { pendingShrink: { signature: httpShrinkSignature, streak: httpShrinkStreak } }
-          : {}),
-      },
-      null,
-      2,
-    );
-    await enqueueCacheMutation(async () => {
-      if (!generationCanApply(generation, models)) return;
-      const file = cacheFilePath();
-      const temp = `${file}.${process.pid}.${cacheTempSequence += 1}.tmp`;
-      try {
-        await fsp.mkdir(path.dirname(file), { recursive: true });
-        if (!generationCanApply(generation, models)) return;
-        await fsp.writeFile(temp, payload, 'utf-8');
-        // 写临时文件期间可能发生登出 / 换号:禁止旧世代 rename 成正式缓存。
-        if (!generationCanApply(generation, models)) return;
-        await fsp.rename(temp, file);
-      } finally {
-        await fsp.rm(temp, { force: true }).catch(() => undefined);
+  if (!committed.accepted) return false;
+  const payload = committed.payload;
+  if (!payload || !credentialContext) return true;
+
+  let credentialChanged = false;
+  await enqueueCacheMutation(async () => {
+    if (!localCredentialEpochCanApply(generation, credentialContext.epoch)) {
+      credentialChanged = true;
+      return;
+    }
+    const file = cacheFilePath();
+    const temp = `${file}.${process.pid}.${(cacheTempSequence += 1)}.tmp`;
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      if (!localCredentialEpochCanApply(generation, credentialContext.epoch)) {
+        credentialChanged = true;
+        return;
       }
-    });
-  }
-  return generationCanApply(generation, models);
+      await fsp.writeFile(temp, payload, 'utf-8');
+      // The final comparison and rename are one cross-process transaction:
+      // account A can no longer overwrite account B's already-published cache.
+      // Preserve the latest pendingShrink patch from another same-account
+      // process as part of this transaction; the HTTP path subsequently writes
+      // its own accepted/reset shrink state through persistPendingShrink().
+      const published = runWithAnthropicCredentialEpochCurrent(
+        generation,
+        credentialContext,
+        () => {
+          let finalPayload = payload;
+          try {
+            const currentRaw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<
+              string,
+              unknown
+            >;
+            if (
+              currentRaw &&
+              typeof currentRaw === 'object' &&
+              !Array.isArray(currentRaw) &&
+              sameCredentialEpoch(
+                parseCredentialEpoch(currentRaw.credentialEpoch),
+                credentialContext.epoch,
+              )
+            ) {
+              const nextRaw = JSON.parse(payload) as Record<string, unknown>;
+              if (Object.prototype.hasOwnProperty.call(currentRaw, 'pendingShrink')) {
+                nextRaw.pendingShrink = currentRaw.pendingShrink;
+              } else {
+                delete nextRaw.pendingShrink;
+              }
+              finalPayload = JSON.stringify(nextRaw, null, 2);
+            }
+          } catch {
+            /* missing/corrupt prior cache: publish the validated new snapshot */
+          }
+          fs.writeFileSync(temp, finalPayload, 'utf-8');
+          fs.renameSync(temp, file);
+        },
+      );
+      if (published.state === 'changed') credentialChanged = true;
+    } finally {
+      await fsp.rm(temp, { force: true }).catch(() => undefined);
+    }
+  });
+  return !credentialChanged;
 }
 
 /**
@@ -555,13 +860,25 @@ async function applyModels(
  * 残留缓存也不能代表可用性);缓存缺失 / 坏 JSON 静默跳过(等 HTTP / SDK 通道)。
  */
 export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
-  if (!hasClaudeAiOAuth()) return;
-  const generation = authGeneration;
+  const context = currentCredentialContext();
+  if (!context) {
+    deactivateCredentialEpoch();
+    return;
+  }
+  const generation = activateCredentialEpoch(context.epoch);
   try {
     const raw: unknown = JSON.parse(await fsp.readFile(cacheFilePath(), 'utf-8'));
-    if (generation !== authGeneration || !hasClaudeAiOAuth()) return;
+    if (!credentialEpochCanApply(generation, context.epoch)) return;
+    const cacheEpoch = parseCredentialEpoch(
+      (raw as { credentialEpoch?: unknown } | null)?.credentialEpoch,
+    );
+    if (!sameCredentialEpoch(cacheEpoch, context.epoch)) {
+      log.info('anthropic disk cache ignored because credential epoch does not match');
+      return;
+    }
     const models = (raw as { models?: unknown } | null)?.models;
     if (!Array.isArray(models) || models.length === 0) return;
+    const restoredWindows = new Map<string, number>();
     // 恢复「窗口来自 HTTP 明说」的记账,否则重启后首个 SDK 捕获会把精确窗口打回猜测值。
     const windows = (raw as { explicitWindows?: unknown }).explicitWindows;
     if (windows && typeof windows === 'object' && !Array.isArray(windows)) {
@@ -570,9 +887,11 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
         // first-wins,与下方 models 去重同口径,避免拼出「窗口来自 A、能力来自 B」的杂交态。
         if (typeof win !== 'number' || win <= 0) continue;
         const normalizedId = normalizeModelId(id);
-        if (!explicitWindows.has(normalizedId)) explicitWindows.set(normalizedId, win);
+        if (!restoredWindows.has(normalizedId)) restoredWindows.set(normalizedId, win);
       }
     }
+    let restoredShrinkSignature: string | null = null;
+    let restoredShrinkStreak = 0;
     // 恢复待确认骤减记账(跨重启累计,见 persistPendingShrink;坏字段静默忽略)。
     const pending = (raw as { pendingShrink?: unknown }).pendingShrink;
     if (pending && typeof pending === 'object' && !Array.isArray(pending)) {
@@ -586,10 +905,10 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
       ) {
         // 签名按当前归一化口径重算(排序 id 集):历史签名可能含脏 id,口径漂移会让
         // 跨重启的骤减确认计数被无声重置。
-        httpShrinkSignature = [...new Set(p.signature.split('\n').map(normalizeModelId))]
+        restoredShrinkSignature = [...new Set(p.signature.split('\n').map(normalizeModelId))]
           .sort()
           .join('\n');
-        httpShrinkStreak = Math.min(p.streak, CONFIRMED_SHRINK_STREAK);
+        restoredShrinkStreak = Math.min(p.streak, CONFIRMED_SHRINK_STREAK);
       }
     }
     // 缓存内容出自本模块 mapper,仍做最小结构校验防手改坏文件。
@@ -650,21 +969,30 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
       // 触发面窄但后果正是本次要消除的那种:某模型被新版目录移除、又不在 explicitWindows
       // 里(命中目录的窗口不进那张表)时,会得到一个「已核实」的猜测值 —— 例如 Haiku 残留
       // 200K 而运行期真实 1M,反倒把上报值压小。这也是上面那条刷新不变量的要求。
-      const { contextWindowVerified: _staleProvenance, ...rest } = model;
+      const rest = { ...model };
+      delete rest.contextWindowVerified;
       return {
         ...rest,
-        ...contextWindowFor(model.id, explicitWindows.get(model.id)),
+        ...contextWindowFor(model.id, restoredWindows.get(model.id)),
         ...(effortBaseline ?? {}),
       };
     });
-    await applyModels(
+    const applied = await applyModels(
       normalized,
       false,
       generation,
       restoredExplicitEffortIds,
       restoredExplicitFastModeIds,
+      context,
+      () => {
+        explicitWindows.clear();
+        for (const [id, window] of restoredWindows) explicitWindows.set(id, window);
+        httpShrinkSignature = restoredShrinkSignature;
+        httpShrinkStreak = restoredShrinkStreak;
+        return true;
+      },
     );
-    log.info(`anthropic models loaded from disk cache: ${normalized.length}`);
+    if (applied) log.info(`anthropic models loaded from disk cache: ${normalized.length}`);
   } catch {
     /* 缓存缺失 / 损坏:等动态通道,不影响启动 */
   }
@@ -676,9 +1004,22 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
  * 未登录 Claude.ai 时不得注入(否则登出被击穿 / 纯网关用户长出 anthropic 清单)。
  * 按 id 合并:条目带能力信息则覆盖,否则保留已精化条目;HTTP 明说过的窗口不回退。
  */
-export function noteAnthropicSdkSupportedModels(raw: unknown): void {
-  if (!hasClaudeAiOAuth()) return;
-  const generation = authGeneration;
+export function noteAnthropicSdkSupportedModels(
+  raw: unknown,
+  source: AnthropicSdkModelSource | null,
+): void {
+  const credential = readClaudeAiOAuth();
+  if (!credential) {
+    deactivateCredentialEpoch();
+    return;
+  }
+  const context = credentialContextFor(credential);
+  const generation = activateCredentialEpoch(context.epoch);
+  if (!source) return;
+  if (!sdkSourceMatchesCredential(source, credential)) {
+    log.info('stale anthropic SDK model capture discarded after credential replacement');
+    return;
+  }
   const mapped = mapAnthropicSdkModels(raw);
   if (mapped.length === 0) return;
   const mappedWithWindows = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
@@ -742,6 +1083,7 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
       generation,
       mergedExplicitEffortIds,
       mergedExplicitFastModeIds,
+      context,
     ).catch((err) => {
       log.warn('apply partial anthropic SDK capabilities failed', { error: String(err) });
     });
@@ -749,9 +1091,11 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
     return;
   }
   log.info(`anthropic models captured from SDK init: ${models.length}`);
-  void applyModels(models, true, generation, explicitEffortIds, explicitFastModeIds).catch((err) => {
-    log.warn('apply anthropic SDK models failed', { error: String(err) });
-  });
+  void applyModels(models, true, generation, explicitEffortIds, explicitFastModeIds, context).catch(
+    (err) => {
+      log.warn('apply anthropic SDK models failed', { error: String(err) });
+    },
+  );
 }
 
 /** 非 2xx 响应:带上状态码与响应体片段抛出 —— 地域拒绝只能从响应体认出来。 */
@@ -890,22 +1234,22 @@ function scheduleHttpRetry(generation: number): void {
  */
 function noteDiscoveryFailure(
   generation: number,
+  context: AnthropicCredentialContext,
   kind: ProviderModelDiscoveryFailure['kind'],
   detail?: string,
 ): void {
-  if (generation !== authGeneration) return;
-  lastFailure = {
-    kind,
-    at: new Date().toISOString(),
-    ...(detail ? { detail } : {}),
-  };
+  const guarded = runWithAnthropicCredentialEpochCurrent(generation, context, () => {
+    lastFailure = {
+      kind,
+      at: new Date().toISOString(),
+      ...(detail ? { detail } : {}),
+    };
+    if (isRetryableFailure(kind)) scheduleHttpRetry(generation);
+    else cancelHttpRetry();
+  });
+  if (guarded.state === 'changed') return;
   log.warn(`anthropic model discovery failed (${kind})`, { detail });
   notifyFailureChanged();
-  if (isRetryableFailure(kind)) {
-    scheduleHttpRetry(generation);
-    return;
-  }
-  cancelHttpRetry();
 }
 
 /**
@@ -916,11 +1260,11 @@ function noteDiscoveryFailure(
  * 「上次失败、这次成功且清单与上次一致」正好落在它的 early return 里;快照被 shrink 守卫
  * 拒绝时更是连 applyModels 都不会走到。不在这里通知,UI 会继续显示已经不成立的失败理由。
  */
-function clearDiscoveryFailure(): void {
+function clearDiscoveryFailureState(): boolean {
   const hadFailure = lastFailure !== null;
   lastFailure = null;
   cancelHttpRetry();
-  if (hadFailure) notifyFailureChanged();
+  return hadFailure;
 }
 
 /**
@@ -975,14 +1319,34 @@ export function refreshAnthropicModelsFromHttp(options?: {
   afterForcedRefresh?: boolean;
 }): Promise<boolean> {
   if (!options?.fromRetry) cancelHttpRetry();
+  const initialContext = currentCredentialContext();
+  if (!initialContext) {
+    deactivateCredentialEpoch();
+    return Promise.resolve(false);
+  }
+  const initialGeneration = activateCredentialEpoch(initialContext.epoch);
   // 只复用**同世代**的在途拉取:登出后世代已变,旧 promise 的结果注定作废,
   // 复用会吞掉换号后新账号的补拉。
-  if (httpRefreshInflight && httpRefreshInflightGen === authGeneration) return httpRefreshInflight;
-  const gen = authGeneration;
+  if (httpRefreshInflight && httpRefreshInflightGen === initialGeneration) {
+    return httpRefreshInflight;
+  }
+  let gen = initialGeneration;
+  let context = initialContext;
   const flight = (async () => {
     const oauth = await getValidClaudeAiOAuth();
     if (!oauth?.accessToken) return false;
-    if (gen !== authGeneration || !hasClaudeAiOAuth()) return false;
+    const current = readClaudeAiOAuth();
+    if (!current) return false;
+    const requestEpoch = credentialEpochFor(oauth);
+    const nowContext = credentialContextFor(current);
+    const nowEpoch = nowContext.epoch;
+    if (!sameCredentialEpoch(requestEpoch, nowEpoch)) {
+      log.info('anthropic /v1/models request discarded before fetch: credential changed');
+      return false;
+    }
+    context = nowContext;
+    gen = activateCredentialEpoch(context.epoch);
+    if (!credentialEpochCanApply(gen, context.epoch)) return false;
     const provider = getActiveCatalog().providers.find((p) => p.id === 'anthropic');
     const upstream = provider?.routing['claude-code']?.upstream ?? 'https://api.anthropic.com';
     const entries: unknown[] = [];
@@ -1062,11 +1426,15 @@ export function refreshAnthropicModelsFromHttp(options?: {
           refreshError = err;
           return null;
         });
+        const currentAfterRefresh = refreshed ? readClaudeAiOAuth() : null;
         if (
           refreshed?.accessToken &&
           refreshed.accessToken !== oauth.accessToken &&
-          gen === authGeneration &&
-          hasClaudeAiOAuth()
+          currentAfterRefresh &&
+          sameCredentialEpoch(
+            credentialEpochFor(refreshed),
+            credentialEpochFor(currentAfterRefresh),
+          )
         ) {
           httpRefreshInflight = null;
           log.info('anthropic /v1/models got 401; retrying once with a force-refreshed token');
@@ -1088,10 +1456,12 @@ export function refreshAnthropicModelsFromHttp(options?: {
         // 可用 —— 那两种同样是 unauthorized。凭证还在、也还能刷,才是暂时性故障。
         if (refreshed == null) {
           const credential = readClaudeAiOAuth();
-          const stillRefreshable = typeof credential?.refreshToken === 'string' && credential.refreshToken.length > 0;
+          const stillRefreshable =
+            typeof credential?.refreshToken === 'string' && credential.refreshToken.length > 0;
           if (refreshError !== null || stillRefreshable) {
             noteDiscoveryFailure(
               gen,
+              context,
               'upstream',
               `401 then forced token refresh yielded nothing${
                 refreshError instanceof Error ? `: ${refreshError.message}` : ' (transient)'
@@ -1101,11 +1471,11 @@ export function refreshAnthropicModelsFromHttp(options?: {
           }
         }
       }
-      noteDiscoveryFailure(gen, kind, detail);
+      noteDiscoveryFailure(gen, context, kind, detail);
       return false;
     }
     // 在途期间登出 / 换号:结果作废,不写回、不重建缓存(review P1 竞态豁口)。
-    if (gen !== authGeneration || !hasClaudeAiOAuth()) {
+    if (!credentialEpochCanApply(gen, context.epoch)) {
       log.info('anthropic /v1/models result discarded: auth changed mid-flight');
       return false;
     }
@@ -1120,54 +1490,218 @@ export function refreshAnthropicModelsFromHttp(options?: {
       if (entries.length > 0) {
         noteDiscoveryFailure(
           gen,
+          context,
           'upstream',
           `payload listed ${entries.length} entries but none mapped to a usable model`,
         );
         return false;
       }
-      noteDiscoveryFailure(gen, 'empty');
+      noteDiscoveryFailure(gen, context, 'empty');
       return false;
     }
-    // 退化判定必须先于任何状态写入:被拒快照连 explicitWindows 也不许污染,
-    // 否则后续 SDK 捕获会把退化响应带来的窗口值用作精确记账(review P2)。
-    // 连续多次相同的骤减快照经 evaluateHttpShrink 收敛放行(真实批量下架自愈)。
-    if (evaluateHttpShrink(lastApplied.length, mapped.map((m) => m.model.id)) === 'reject') {
-      log.warn(
-        `anthropic /v1/models response looks degenerate (${lastApplied.length} -> ${mapped.length}); keeping current list (streak ${httpShrinkStreak}/${CONFIRMED_SHRINK_STREAK})`,
-      );
-      // 快照被拒 ≠ 发现失败:上游确确实实答了,而且旧清单原样留用 —— 此刻供应商对用户是可用的。
-      // 若还挂着上一次的 network / timeout 理由,UI 就会对着一个有模型可选的供应商说「连不上」;
-      // 而这条早退路径既不记新失败也不排重试,那个过期理由会一直挂到下次成功发现(PR #548 review)。
-      clearDiscoveryFailure();
-      return false;
-    }
-    for (const { model, explicitContextWindow } of mapped) {
-      if (explicitContextWindow != null) explicitWindows.set(model.id, explicitContextWindow);
-    }
+    const previousCount = lastApplied.length;
     // HTTP 不带能力时只保留明确探测过的旧能力；旧版缓存 / 合成默认用当前目录基线刷新。
+    // 这里只读本进程快照；所有 account-scoped mutation 仍在 applyModels 的共享凭证锁内完成。
     const { models, explicitEffortIds, explicitFastModeIds } =
       mergeCapabilitiesWithPrevious(mapped);
-    log.info(`anthropic models refreshed via HTTP: ${models.length}`);
-    // 拿到有效清单 = 发现已恢复,清掉失败态与待执行的重试(放在 apply 之前:apply 只负责
-    // 生效,它因世代变化被 gate 掉时新世代会带着自己的触发重来)。
-    clearDiscoveryFailure();
-    return applyModels(models, true, gen, explicitEffortIds, explicitFastModeIds);
+    let shrinkEvaluated = false;
+    let shrinkVerdict: 'accept' | 'reject' = 'reject';
+    let shrinkStreakAtDecision = 0;
+    let failureCleared = false;
+    const applied = await applyModels(
+      models,
+      true,
+      gen,
+      explicitEffortIds,
+      explicitFastModeIds,
+      context,
+      () => {
+        // The shrink verdict, failure state, explicit-window provenance, and
+        // catalog commit share one credential transaction. A replacement
+        // login therefore cannot land between the final epoch check and any
+        // account-A mutation.
+        shrinkEvaluated = true;
+        shrinkVerdict = evaluateHttpShrinkState(
+          lastApplied.length,
+          mapped.map((entry) => entry.model.id),
+        );
+        shrinkStreakAtDecision = httpShrinkStreak;
+        if (shrinkVerdict === 'reject') {
+          failureCleared = clearDiscoveryFailureState();
+          return false;
+        }
+        for (const { model, explicitContextWindow } of mapped) {
+          if (explicitContextWindow != null) {
+            explicitWindows.set(model.id, explicitContextWindow);
+          }
+        }
+        failureCleared = clearDiscoveryFailureState();
+        return true;
+      },
+    );
+    if (shrinkEvaluated) persistPendingShrink();
+    if (failureCleared) notifyFailureChanged();
+    if (!shrinkEvaluated) return false;
+    if (shrinkVerdict === 'reject') {
+      log.warn(
+        `anthropic /v1/models response looks degenerate (${previousCount} -> ${mapped.length}); keeping current list (streak ${shrinkStreakAtDecision}/${CONFIRMED_SHRINK_STREAK})`,
+      );
+      return false;
+    }
+    if (applied) log.info(`anthropic models refreshed via HTTP: ${models.length}`);
+    return applied;
   })().finally(() => {
     // 只清自己的登记:世代变化后可能已有新 flight 顶替,不能误清。
     if (httpRefreshInflight === flight) httpRefreshInflight = null;
   });
   httpRefreshInflight = flight;
-  httpRefreshInflightGen = gen;
+  httpRefreshInflightGen = initialGeneration;
   return flight;
+}
+
+/**
+ * A stale invalid_grant callback can be the first local observer that another
+ * Cindy process has already committed a replacement login. Retire the old
+ * in-memory catalog synchronously, then hydrate only cache/HTTP results tagged
+ * for the positively observed replacement credential.
+ */
+export async function synchronizeAnthropicModelsWithCurrentCredential(): Promise<void> {
+  const context = currentCredentialContext();
+  if (!context) {
+    deactivateCredentialEpoch();
+    return;
+  }
+  activateCredentialEpoch(context.epoch);
+  scheduledHydrationEpochKey = credentialEpochKey(context.epoch);
+  await loadAnthropicModelsFromDiskCache();
+  await refreshAnthropicModelsFromHttp();
+}
+
+/**
+ * Side-effectful provider observations are the normal cross-process epoch
+ * detector, not just invalid_grant recovery. Return the connection state while
+ * synchronously retiring any previous account's in-memory model plane; hydrate
+ * the newly observed epoch in the background once per actual boundary.
+ */
+export function observeAnthropicCredentialEpoch(
+  options: { allowHydration?: boolean } = {},
+): boolean {
+  const context = currentCredentialContext();
+  if (!context) {
+    deactivateCredentialEpoch();
+    return false;
+  }
+  const epochKey = credentialEpochKey(context.epoch);
+  const changed = activeCredentialEpochKey !== epochKey;
+  if (changed) activateCredentialEpoch(context.epoch);
+  if (options.allowHydration === false) {
+    // An untrusted/read-only observation may retire stale account-A state, but
+    // it must not initiate credential-bearing network I/O. Fail this first
+    // snapshot closed as disconnected as well: callers may have captured the
+    // old catalog immediately before this boundary was observed.
+    return !changed;
+  }
+  if (scheduledHydrationEpochKey !== epochKey) {
+    scheduledHydrationEpochKey = epochKey;
+    void loadAnthropicModelsFromDiskCache()
+      .catch(() => undefined)
+      .finally(() => {
+        void refreshAnthropicModelsFromHttp();
+      });
+  }
+  return true;
+}
+
+/**
+ * Revalidate Anthropic immediately before a provider snapshot reads the active
+ * catalog, and keep that synchronous projection inside the shared credential
+ * transaction. This closes the await gap between the earlier connection
+ * readers and `buildRegistry`: account A cannot remain projected after another
+ * process commits account B while an unrelated async reader is still pending.
+ *
+ * `project` must stay synchronous and must not re-enter the Claude credential
+ * store. If the shared store cannot be read or keeps changing, the safe result
+ * is a disconnected Anthropic provider with all account-scoped models retired.
+ */
+export function runWithAnthropicCredentialEpochProjection<T>(
+  options: { allowHydration?: boolean },
+  project: (connected: boolean) => T,
+): T {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const context = currentCredentialContext();
+    let projectStarted = false;
+    let shouldHydrate = false;
+    try {
+      if (!context) {
+        if (options.allowHydration === false) {
+          // A read-only status path must not create ~/.claude merely to prove
+          // absence. Retiring local state and projecting disconnected is
+          // already fail-closed; no other process can mutate this process's
+          // in-memory catalog during the synchronous projection.
+          deactivateCredentialEpoch();
+          projectStarted = true;
+          return project(false);
+        }
+        const guarded = runWithClaudeAiOAuthCredentialAbsent(() => {
+          deactivateCredentialEpoch();
+          projectStarted = true;
+          return project(false);
+        });
+        if (guarded.state === 'current') return guarded.value;
+        continue;
+      }
+
+      const epochKey = credentialEpochKey(context.epoch);
+      const guardCurrent =
+        options.allowHydration === false
+          ? runWithClaudeAiOAuthCredentialSnapshotCurrent
+          : runWithClaudeAiOAuthCredentialCurrent;
+      const guarded = guardCurrent(context.identity, () => {
+        const changed = activeCredentialEpochKey !== epochKey;
+        if (changed) activateCredentialEpoch(context.epoch);
+        const connected = options.allowHydration === false ? !changed : true;
+        if (options.allowHydration !== false && scheduledHydrationEpochKey !== epochKey) {
+          scheduledHydrationEpochKey = epochKey;
+          shouldHydrate = true;
+        }
+        projectStarted = true;
+        return project(connected);
+      });
+      if (guarded.state === 'changed') continue;
+      if (shouldHydrate) {
+        void loadAnthropicModelsFromDiskCache()
+          .catch(() => undefined)
+          .finally(() => {
+            void refreshAnthropicModelsFromHttp();
+          });
+      }
+      return guarded.value;
+    } catch (error) {
+      // Projection errors are caller errors, not credential uncertainty.
+      if (projectStarted) throw error;
+      log.warn('anthropic credential projection guard failed', { error: String(error) });
+      break;
+    }
+  }
+
+  // Repeated replacement or an unreadable store: no local async work can
+  // repopulate the catalog during this synchronous fail-closed projection.
+  deactivateCredentialEpoch();
+  return project(false);
 }
 
 /**
  * 授权边界收口(登出 / 直接换号共用):清空清单 + 删磁盘缓存 + 作废在途发现。
  * 删除与持久化走同一队列,所以函数 resolve 后旧世代缓存不可能重新出现。
  */
-export async function clearAnthropicDiscoveredModels(): Promise<void> {
+export async function clearAnthropicDiscoveredModels(
+  rejectedCredential?: ClaudeAiOAuthCredentialIdentity,
+): Promise<boolean> {
+  const observedCurrentCredential = rejectedCredential ? null : readClaudeAiOAuth();
   const generation = authGeneration + 1;
   authGeneration = generation;
+  activeCredentialEpochKey = null;
+  scheduledHydrationEpochKey = null;
   // 失败态与待执行的重试都属于旧世代的账:登出 / 换号后既不能把上一个账号的失败理由
   // 摆给新账号看,也不该让旧世代排的重试继续跑(回调自带世代校验,这里再显式取消)。
   const hadFailure = lastFailure !== null;
@@ -1183,8 +1717,51 @@ export async function clearAnthropicDiscoveredModels(): Promise<void> {
   // 一直留着旧的失败理由。失败态由有变无时补一次通知,让两边都收敛(PR #548 review)。
   if (hadFailure) notifyFailureChanged();
   await enqueueCacheMutation(async () => {
-    await fsp.rm(cacheFilePath(), { force: true });
+    if (!rejectedCredential && observedCurrentCredential) {
+      const observedContext = credentialContextFor(observedCurrentCredential);
+      const guarded = runWithClaudeAiOAuthCredentialCurrent(observedCurrentCredential, () => {
+        let cacheEpoch: AnthropicCredentialEpoch | null = null;
+        try {
+          const raw = JSON.parse(fs.readFileSync(cacheFilePath(), 'utf-8')) as {
+            credentialEpoch?: unknown;
+          };
+          cacheEpoch = parseCredentialEpoch(raw?.credentialEpoch);
+        } catch {
+          /* missing/corrupt cache is safe to remove */
+        }
+        // Login B clears only stale A/legacy cache. A concurrently published B
+        // cache is already a valid LKG and must survive this boundary cleanup.
+        if (!sameCredentialEpoch(cacheEpoch, observedContext.epoch)) {
+          fs.rmSync(cacheFilePath(), { force: true });
+        }
+      });
+      if (guarded.state === 'changed') {
+        log.info('anthropic models cache clear skipped after credential replacement');
+      }
+      return;
+    }
+    if (!rejectedCredential) {
+      const guarded = runWithClaudeAiOAuthCredentialAbsent(() => {
+        fs.rmSync(cacheFilePath(), { force: true });
+      });
+      if (guarded.state === 'changed') {
+        log.info('anthropic models cache clear skipped because a new credential is present');
+      }
+      return;
+    }
+    const guarded = runWithClaudeAiOAuthCredentialNotReplaced(rejectedCredential, () => {
+      fs.rmSync(cacheFilePath(), { force: true });
+    });
+    if (guarded.state === 'changed') {
+      log.info('anthropic models cache clear skipped after replacement credential');
+    }
   });
+  // Recheck only after every cache guard and credential lock has released. A
+  // replacement login observed by any final guard must not be reduced to a log:
+  // retire the old epoch synchronously, then hydrate B in the background. The
+  // boolean lets auth-boundary callers correct an earlier `authenticated:false`
+  // broadcast without importing UI concerns into this model module.
+  return observeAnthropicCredentialEpoch();
 }
 
 /** 仅测试:等待所有缓存写删完成,不在生产路径调用。 */
@@ -1195,6 +1772,8 @@ export function waitForAnthropicDiscoveryIdleForTest(): Promise<void> {
 /** 仅测试:重置模块态。 */
 export function resetAnthropicDiscoveryForTest(): void {
   lastApplied = [];
+  activeCredentialEpochKey = null;
+  scheduledHydrationEpochKey = null;
   explicitWindows.clear();
   explicitEffortModelIds.clear();
   explicitFastModeModelIds.clear();

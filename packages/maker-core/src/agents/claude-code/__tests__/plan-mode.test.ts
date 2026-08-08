@@ -8,6 +8,7 @@
  *  - ExitPlanMode 批准 → 自动退出计划模式 (plan_mode_changed 事件 + SDK 切回底层档)
  */
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -30,7 +31,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
-import { ClaudeCodeAgent } from '../index.js';
+import { ClaudeCodeAgent, setClaudeSupportedModelsListener } from '../index.js';
 
 const tempDirs: string[] = [];
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -158,6 +159,7 @@ async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEven
 }
 
 afterEach(async () => {
+  setClaudeSupportedModelsListener(null);
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
   if (originalClaudeConfigDir === undefined) {
@@ -169,6 +171,60 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent plan mode', () => {
+  it('attributes an async supportedModels result to the credential that started its query', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    let resolveModels!: (models: unknown[]) => void;
+    const pendingModels = new Promise<unknown[]>((resolve) => { resolveModels = resolve; });
+    const fakeQuery = {
+      ...createFakeQuery(),
+      supportedModels: vi.fn(() => pendingModels),
+    };
+    sdkMock.query.mockReturnValue(fakeQuery);
+    const captures: Array<{ models: unknown[]; source: unknown }> = [];
+    setClaudeSupportedModelsListener((models, source) => captures.push({ models, source }));
+    const auth: AuthAdapter = {
+      async getState() {
+        return { authenticated: true };
+      },
+      async triggerLogin() {
+        return { authenticated: true };
+      },
+      async logout() {},
+      async getAuthEnv() {
+        return {
+          CLAUDE_CODE_OAUTH_TOKEN: 'account-a-token',
+          CINDY_CLAUDE_OAUTH_REVISION: 'account-a-revision',
+        };
+      },
+    };
+    const agent = new ClaudeCodeAgent(createDeps({ auth }));
+    const handle = await agent.startSession({
+      sessionId: 'supported-model-source',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+      planMode: false,
+    });
+
+    resolveModels([{ value: 'claude-account-a' }]);
+    await vi.waitFor(() => expect(captures).toHaveLength(1));
+
+    expect(captures).toEqual([
+      {
+        models: [{ value: 'claude-account-a' }],
+        source: {
+          accessTokenFingerprint: createHash('sha256')
+            .update('account-a-token', 'utf8')
+            .digest('hex'),
+          authorizationRevision: 'account-a-revision',
+        },
+      },
+    ]);
+    await handle.close();
+  });
+
   it('starts the SDK query in plan mode while keeping the underlying permission mode', async () => {
     const { handle, queryOptions } = await startPlanSession(true);
 
@@ -449,7 +505,7 @@ describe('ClaudeCodeAgent plan mode', () => {
   // 远端订阅 token 续命:route env 带 CLAUDE_CODE_OAUTH_TOKEN 且 host 实现强刷时,
   // remoteCcQueryFactory 必须拿到 onOAuthRefresh;回调返回新 token 并把 remoteEnv
   // 原地写新(单一事实源,重连 fresh-start 直接用新 token 起跑)。网关路径绝不接线。
-  it('wires onOAuthRefresh for native-OAuth remote routes and refreshes the env in place', async () => {
+  it('advances token and authorization revision together across consecutive remote 401s', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
     const workingDir = await makeTempDir();
@@ -462,7 +518,16 @@ describe('ClaudeCodeAgent plan mode', () => {
       factoryArgs.push(args);
       return fakeQuery as never;
     };
-    const getFreshSubscriptionToken = vi.fn(async () => 'tok-new');
+    const getFreshSubscriptionToken = vi
+      .fn()
+      .mockResolvedValueOnce({
+        token: 'tok-same',
+        authorizationRevision: 'login-revision-2',
+      })
+      .mockResolvedValueOnce({
+        token: 'tok-new',
+        authorizationRevision: 'login-revision-2',
+      });
     const auth: AuthAdapter = {
       async getState() {
         return { authenticated: true };
@@ -482,7 +547,10 @@ describe('ClaudeCodeAgent plan mode', () => {
       remoteCcQueryFactory,
       resolveRemoteClaudeRoute: async () => ({
         endpoint: 'https://api.anthropic.com',
-        env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok-old' },
+        env: {
+          CLAUDE_CODE_OAUTH_TOKEN: 'tok-same',
+          CINDY_CLAUDE_OAUTH_REVISION: 'login-revision-1',
+        },
       }),
     }));
     const handle = await agent.startSession({
@@ -496,11 +564,27 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(factoryArgs).toHaveLength(1);
     expect(factoryArgs[0]?.onOAuthRefresh).toBeDefined();
     await expect(factoryArgs[0]!.onOAuthRefresh!({ sessionId: 'x' })).resolves.toEqual({
+      token: 'tok-same',
+    });
+    expect(getFreshSubscriptionToken).toHaveBeenNthCalledWith(
+      1,
+      'tok-same',
+      'login-revision-1',
+    );
+    const env = factoryArgs[0]?.startParams.env as Record<string, string>;
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-same');
+    expect(env.CINDY_CLAUDE_OAUTH_REVISION).toBe('login-revision-2');
+
+    await expect(factoryArgs[0]!.onOAuthRefresh!({ sessionId: 'x' })).resolves.toEqual({
       token: 'tok-new',
     });
-    expect(getFreshSubscriptionToken).toHaveBeenCalledWith('tok-old');
-    const env = factoryArgs[0]?.startParams.env as Record<string, string>;
+    expect(getFreshSubscriptionToken).toHaveBeenNthCalledWith(
+      2,
+      'tok-same',
+      'login-revision-2',
+    );
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-new');
+    expect(env.CINDY_CLAUDE_OAUTH_REVISION).toBe('login-revision-2');
     await handle.close();
   });
 

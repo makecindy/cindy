@@ -27,7 +27,9 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }));
 
-vi.mock('@cindy/maker-core', () => ({}));
+vi.mock('@cindy/maker-core', () => ({
+  CINDY_CLAUDE_OAUTH_REVISION_ENV: 'CINDY_CLAUDE_OAUTH_REVISION',
+}));
 
 // 只覆写 getActiveAppSession(绑定判定的唯一输入);其余导出保持原实现,供
 // appCapabilities / providerSecretStore 等传递依赖正常加载。mode 用 'local':
@@ -45,7 +47,12 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
   };
 });
 
-function fixture(): { codexHome: string; systemAuth: string; localAuth: string; bindingFile: string } {
+function fixture(): {
+  codexHome: string;
+  systemAuth: string;
+  localAuth: string;
+  bindingFile: string;
+} {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-binding-claim-'));
   dirs.push(root);
   h.userDataDir = path.join(root, 'user-data');
@@ -138,9 +145,8 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     const { codexHome, systemAuth, localAuth, bindingFile } = fixture();
     fs.mkdirSync(codexHome, { recursive: true });
     fs.copyFileSync(systemAuth, localAuth);
-    const { CODEX_USER_DISCONNECT_REASON, writeInvalidatedSystemCodexAuthMarker } = await import(
-      '../codex-auth-invalidation.js'
-    );
+    const { CODEX_USER_DISCONNECT_REASON, writeInvalidatedSystemCodexAuthMarker } =
+      await import('../codex-auth-invalidation.js');
     expect(
       writeInvalidatedSystemCodexAuthMarker(
         codexHome,

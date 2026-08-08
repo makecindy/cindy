@@ -11,7 +11,9 @@
  */
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
@@ -29,13 +31,81 @@ vi.mock('electron', () => ({
 
 const authState = vi.hoisted(() => ({ loggedIn: true }));
 // refreshToken 决定「401 后没换到新 token」是暂时故障还是真的无从刷新（见归因分流）。
-const credentialsMock = vi.hoisted(() => ({ refreshToken: 'refresh-token' as string | null }));
+const credentialsMock = vi.hoisted(() => ({
+  accessToken: 'test-token',
+  refreshToken: 'refresh-token' as string | null,
+  credentialFingerprint: 'a'.repeat(64),
+  authorizationRevision: 'test-revision-1',
+  guardState: 'current' as 'current' | 'changed',
+  guardStates: [] as Array<'current' | 'changed'>,
+  guardBeforeActions: [] as Array<(() => void) | null>,
+  guardCalls: 0,
+  absentGuardCalls: 0,
+  absentGuardBeforeActions: [] as Array<(() => void) | null>,
+  currentGuardCalls: 0,
+  currentGuardStates: [] as Array<'current' | 'changed'>,
+  currentGuardBeforeActions: [] as Array<(() => void) | null>,
+  currentGuardErrors: [] as Error[],
+  snapshotCurrentGuardCalls: 0,
+  snapshotCurrentGuardStates: [] as Array<'current' | 'changed'>,
+  snapshotCurrentGuardBeforeActions: [] as Array<(() => void) | null>,
+}));
 vi.mock('../claude-credentials-store.js', () => ({
+  CLAUDE_AI_OAUTH_UNATTRIBUTED_SESSION_REVISION: 'cindy-unattributed-v1',
   hasClaudeAiOAuth: () => authState.loggedIn,
   readClaudeAiOAuth: () =>
     authState.loggedIn
-      ? { accessToken: 'test-token', refreshToken: credentialsMock.refreshToken }
+      ? {
+          accessToken: credentialsMock.accessToken,
+          refreshToken: credentialsMock.refreshToken,
+          cindyAuthorizationRevision: credentialsMock.authorizationRevision,
+          __fingerprint: credentialsMock.credentialFingerprint,
+        }
       : null,
+  fingerprintClaudeAiOAuthCredentialIdentity: (identity: { __fingerprint?: unknown }) =>
+    typeof identity.__fingerprint === 'string'
+      ? identity.__fingerprint
+      : credentialsMock.credentialFingerprint,
+  getClaudeAiOAuthSessionAuthorizationRevision: (identity: {
+    cindyAuthorizationRevision?: unknown;
+  }) =>
+    typeof identity.cindyAuthorizationRevision === 'string'
+      ? identity.cindyAuthorizationRevision
+      : credentialsMock.authorizationRevision,
+  runWithClaudeAiOAuthCredentialNotReplaced: <T>(_expected: unknown, action: () => T) => {
+    credentialsMock.guardCalls += 1;
+    const state = credentialsMock.guardStates.shift() ?? credentialsMock.guardState;
+    credentialsMock.guardBeforeActions.shift()?.();
+    return state === 'changed' || credentialsMock.guardState === 'changed'
+      ? { state: 'changed' as const }
+      : { state: 'current' as const, value: action() };
+  },
+  runWithClaudeAiOAuthCredentialCurrent: <T>(_expected: unknown, action: () => T) => {
+    credentialsMock.currentGuardCalls += 1;
+    const error = credentialsMock.currentGuardErrors.shift();
+    if (error) throw error;
+    const state = credentialsMock.currentGuardStates.shift() ?? credentialsMock.guardState;
+    credentialsMock.currentGuardBeforeActions.shift()?.();
+    return state === 'changed' || credentialsMock.guardState === 'changed'
+      ? { state: 'changed' as const }
+      : { state: 'current' as const, value: action() };
+  },
+  runWithClaudeAiOAuthCredentialSnapshotCurrent: <T>(_expected: unknown, action: () => T) => {
+    credentialsMock.snapshotCurrentGuardCalls += 1;
+    const state =
+      credentialsMock.snapshotCurrentGuardStates.shift() ?? credentialsMock.guardState;
+    credentialsMock.snapshotCurrentGuardBeforeActions.shift()?.();
+    return state === 'changed' || credentialsMock.guardState === 'changed'
+      ? { state: 'changed' as const }
+      : { state: 'current' as const, value: action() };
+  },
+  runWithClaudeAiOAuthCredentialAbsent: <T>(action: () => T) => {
+    credentialsMock.absentGuardCalls += 1;
+    credentialsMock.absentGuardBeforeActions.shift()?.();
+    return authState.loggedIn
+      ? { state: 'changed' as const }
+      : { state: 'current' as const, value: action() };
+  },
 }));
 const oauthRefreshMock = vi.hoisted(() => ({
   getValidClaudeAiOAuth: vi.fn(async () => null as unknown),
@@ -53,13 +123,16 @@ import {
   isDegenerateModelListShrink,
   mapAnthropicSdkModels,
   mapAnthropicHttpModels,
-  noteAnthropicSdkSupportedModels,
+  noteAnthropicSdkSupportedModels as noteAnthropicSdkSupportedModelsFromSource,
+  observeAnthropicCredentialEpoch,
+  runWithAnthropicCredentialEpochProjection,
   loadAnthropicModelsFromDiskCache,
   refreshAnthropicModelsFromHttp,
   getAnthropicModelDiscoveryFailure,
   setAnthropicDiscoveryFailureListener,
   clearAnthropicDiscoveredModels,
   resetAnthropicDiscoveryForTest,
+  synchronizeAnthropicModelsWithCurrentCredential,
   waitForAnthropicDiscoveryIdleForTest,
 } from '../model-discovery/anthropic.js';
 import {
@@ -67,6 +140,26 @@ import {
   setActiveCatalog,
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
+
+function currentCredentialEpoch() {
+  return {
+    credentialFingerprint: credentialsMock.credentialFingerprint,
+    authorizationRevision: credentialsMock.authorizationRevision,
+  };
+}
+
+function currentSdkSource() {
+  return {
+    accessTokenFingerprint: createHash('sha256')
+      .update(credentialsMock.accessToken, 'utf8')
+      .digest('hex'),
+    authorizationRevision: credentialsMock.authorizationRevision,
+  };
+}
+
+function noteAnthropicSdkSupportedModels(raw: unknown): void {
+  noteAnthropicSdkSupportedModelsFromSource(raw, currentSdkSource());
+}
 
 function anthropicIds(): string[] {
   const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
@@ -76,6 +169,20 @@ function anthropicIds(): string[] {
 function anthropicModel(id: string) {
   const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
   return (p?.models['claude-code'] ?? []).find((m) => m.id === id);
+}
+
+function cachedAnthropicModel(id: string, name: string) {
+  return {
+    id,
+    name,
+    group: 'anthropic',
+    sortOrder: 0,
+    contextWindow: 1_000_000,
+    efforts: ['low', 'medium', 'high'],
+    defaultEffort: 'high',
+    supportsFastMode: false,
+    status: 'active',
+  };
 }
 
 afterAll(async () => {
@@ -93,6 +200,24 @@ function bundledWithoutRegistry(): Catalog {
 }
 
 beforeEach(() => {
+  authState.loggedIn = true;
+  credentialsMock.accessToken = 'test-token';
+  credentialsMock.refreshToken = 'refresh-token';
+  credentialsMock.credentialFingerprint = 'a'.repeat(64);
+  credentialsMock.authorizationRevision = 'test-revision-1';
+  credentialsMock.guardState = 'current';
+  credentialsMock.guardStates = [];
+  credentialsMock.guardBeforeActions = [];
+  credentialsMock.guardCalls = 0;
+  credentialsMock.absentGuardCalls = 0;
+  credentialsMock.absentGuardBeforeActions = [];
+  credentialsMock.currentGuardCalls = 0;
+  credentialsMock.currentGuardStates = [];
+  credentialsMock.currentGuardBeforeActions = [];
+  credentialsMock.currentGuardErrors = [];
+  credentialsMock.snapshotCurrentGuardCalls = 0;
+  credentialsMock.snapshotCurrentGuardStates = [];
+  credentialsMock.snapshotCurrentGuardBeforeActions = [];
   setActiveCatalog(bundledWithoutRegistry());
 });
 
@@ -182,11 +307,13 @@ describe('mapAnthropicSdkModels', () => {
           name: 'Remote Sonnet 4.5',
           contextWindow: 200_000,
           efforts: [],
-          routes: [{
-            providerId: 'anthropic',
-            modelId: 'claude-sonnet-4-5',
-            agents: ['claude-code'],
-          }],
+          routes: [
+            {
+              providerId: 'anthropic',
+              modelId: 'claude-sonnet-4-5',
+              agents: ['claude-code'],
+            },
+          ],
         },
         {
           id: 'anthropic/claude-opus-5',
@@ -194,11 +321,13 @@ describe('mapAnthropicSdkModels', () => {
           contextWindow: 1_000_000,
           efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
           defaultEffort: 'high',
-          routes: [{
-            providerId: 'anthropic',
-            modelId: 'claude-opus-5',
-            agents: ['claude-code'],
-          }],
+          routes: [
+            {
+              providerId: 'anthropic',
+              modelId: 'claude-opus-5',
+              agents: ['claude-code'],
+            },
+          ],
         },
       ],
     };
@@ -209,11 +338,13 @@ describe('mapAnthropicSdkModels', () => {
       { value: 'claude-opus-5', displayName: 'Opus 5' },
     ]);
 
-    expect(out.map(({ model }) => ({
-      id: model.id,
-      contextWindow: model.contextWindow,
-      efforts: model.efforts,
-    }))).toEqual([
+    expect(
+      out.map(({ model }) => ({
+        id: model.id,
+        contextWindow: model.contextWindow,
+        efforts: model.efforts,
+      })),
+    ).toEqual([
       { id: 'claude-sonnet-4-5', contextWindow: 200_000, efforts: [] },
       {
         id: 'claude-opus-5',
@@ -424,6 +555,8 @@ describe('evaluateHttpShrink(HTTP 骤减收敛,review P2)', () => {
   beforeEach(() => {
     resetAnthropicDiscoveryForTest();
     authState.loggedIn = true;
+    credentialsMock.guardState = 'current';
+    credentialsMock.guardCalls = 0;
   });
 
   afterEach(async () => {
@@ -443,7 +576,12 @@ describe('evaluateHttpShrink(HTTP 骤减收敛,review P2)', () => {
     expect(evaluateHttpShrink(7, ['claude-b'])).toBe('reject'); // 换了内容,streak 重回 1
     expect(evaluateHttpShrink(7, ['claude-b'])).toBe('reject');
     // 中间来了一次正常快照 → streak 清零,再骤减要重新累计。
-    expect(evaluateHttpShrink(7, ['1', '2', '3', '4', '5', '6', '7'].map((n) => `claude-${n}`))).toBe('accept');
+    expect(
+      evaluateHttpShrink(
+        7,
+        ['1', '2', '3', '4', '5', '6', '7'].map((n) => `claude-${n}`),
+      ),
+    ).toBe('accept');
     expect(evaluateHttpShrink(7, ['claude-b'])).toBe('reject');
   });
 
@@ -464,9 +602,14 @@ describe('evaluateHttpShrink(HTTP 骤减收敛,review P2)', () => {
     await fsp.mkdir(cacheDir, { recursive: true });
     await fsp.writeFile(
       cacheFile,
-      JSON.stringify({ fetchedAt: '2026-07-21T00:00:00.000Z', models: [cachedModel] }),
+      JSON.stringify({
+        fetchedAt: '2026-07-21T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
+        models: [cachedModel],
+      }),
       'utf-8',
     );
+    await loadAnthropicModelsFromDiskCache();
 
     // 进程 1:两次相同骤减被拒,记账落盘。
     expect(evaluateHttpShrink(7, ['claude-x'])).toBe('reject');
@@ -488,6 +631,47 @@ describe('evaluateHttpShrink(HTTP 骤减收敛,review P2)', () => {
     };
     expect(cleared.pendingShrink).toBeUndefined();
   });
+
+  it('pendingShrink 锁内重读:不覆盖另一进程刚发布的同账号新模型缓存', async () => {
+    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
+    const cacheFile = path.join(cacheDir, 'anthropic-models.json');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.writeFile(
+      cacheFile,
+      JSON.stringify({
+        fetchedAt: '2026-08-08T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
+        models: [cachedAnthropicModel('claude-account-a', 'Account A')],
+      }),
+      'utf-8',
+    );
+    await loadAnthropicModelsFromDiskCache();
+
+    const newerCache = JSON.stringify({
+      fetchedAt: '2026-08-08T00:01:00.000Z',
+      credentialEpoch: currentCredentialEpoch(),
+      models: [cachedAnthropicModel('claude-newer-same-account', 'Newer Same Account')],
+    });
+    credentialsMock.currentGuardCalls = 0;
+    credentialsMock.currentGuardBeforeActions.push(() => {
+      // Simulate process P2 publishing after P1 scheduled its pending-shrink
+      // patch but before P1 acquired the shared credential transaction.
+      fs.writeFileSync(cacheFile, newerCache, 'utf-8');
+    });
+
+    expect(evaluateHttpShrink(7, ['claude-x'])).toBe('reject');
+    await waitForAnthropicDiscoveryIdleForTest();
+
+    const persisted = JSON.parse(await fsp.readFile(cacheFile, 'utf-8')) as {
+      fetchedAt?: string;
+      models?: Array<{ id?: string }>;
+      pendingShrink?: { signature?: string; streak?: number };
+    };
+    expect(persisted.fetchedAt).toBe('2026-08-08T00:01:00.000Z');
+    expect(persisted.models?.map((model) => model.id)).toEqual(['claude-newer-same-account']);
+    expect(persisted.pendingShrink).toEqual({ signature: 'claude-x', streak: 1 });
+    expect(credentialsMock.currentGuardCalls).toBe(1);
+  });
 });
 
 describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () => {
@@ -500,6 +684,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
   });
 
   afterEach(async () => {
+    authState.loggedIn = false;
     await clearAnthropicDiscoveredModels();
     await waitForAnthropicDiscoveryIdleForTest();
     resetAnthropicDiscoveryForTest();
@@ -511,31 +696,500 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
   it('未登录 Claude.ai 时不注入(登出击穿 / 纯网关用户长清单,review P1 回归)', () => {
     authState.loggedIn = false;
     noteAnthropicSdkSupportedModels([
-      { value: 'claude-opus-4-8', displayName: 'Opus 4.8', supportsEffort: true, supportedEffortLevels: ['low', 'high'] },
+      {
+        value: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        supportsEffort: true,
+        supportedEffortLevels: ['low', 'high'],
+      },
     ]);
     expect(anthropicIds()).toEqual([]);
   });
 
   it('已登录时注入并生效到 active catalog', () => {
     noteAnthropicSdkSupportedModels([
-      { value: 'claude-opus-4-8', displayName: 'Opus 4.8', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] },
+      {
+        value: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        supportsEffort: true,
+        supportedEffortLevels: ['low', 'medium', 'high'],
+      },
     ]);
     expect(anthropicIds()).toEqual(['claude-opus-4-8']);
   });
 
-  it('直接换号边界先清旧账号清单与缓存,新账号发现失败也不继承(review P1 回归)', async () => {
+  it('最终账号锁发现已换号时不让旧 SDK 清单落进内存', () => {
+    credentialsMock.currentGuardBeforeActions.push(() => {
+      credentialsMock.accessToken = 'test-token-b';
+      credentialsMock.refreshToken = 'refresh-token-b';
+      credentialsMock.credentialFingerprint = 'b'.repeat(64);
+      credentialsMock.authorizationRevision = 'test-revision-2';
+      credentialsMock.guardState = 'changed';
+    });
+
     noteAnthropicSdkSupportedModels([
-      { value: 'claude-opus-4-8', displayName: 'Account A Opus' },
+      { value: 'claude-account-a-late', displayName: 'Late Account A' },
     ]);
+
+    expect(anthropicIds()).toEqual([]);
+    expect(credentialsMock.currentGuardCalls).toBe(1);
+  });
+
+  it('最终账号锁状态不可读时清空旧清单,不让账号 A 在换号争锁期间残留', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    credentialsMock.currentGuardErrors.push(
+      Object.assign(new Error('credential storage lock busy'), { code: 'ELOCKED' }),
+    );
+    noteAnthropicSdkSupportedModels([
+      { value: 'claude-account-a-new', displayName: 'Account A New' },
+    ]);
+
+    expect(anthropicIds()).toEqual([]);
+  });
+
+  it('缓存发布 I/O 失败不冒充换号,已验证的内存模型继续可用', async () => {
+    const realRename = fs.renameSync;
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+      if (String(to) === cache) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+
+    try {
+      noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(anthropicIds()).toEqual(['claude-account-a']);
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
+
+  it('账号 A 临时文件写完才发现 B 已提交时,最终 rename 不覆盖 B 缓存', async () => {
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    await fsp.mkdir(path.dirname(cache), { recursive: true });
+    const replacementCache = JSON.stringify({
+      fetchedAt: '2026-08-08T00:00:00.000Z',
+      credentialEpoch: {
+        credentialFingerprint: 'b'.repeat(64),
+        authorizationRevision: 'test-revision-2',
+      },
+      models: [cachedAnthropicModel('claude-account-b', 'Account B')],
+    });
+    await fsp.writeFile(cache, replacementCache, 'utf-8');
+    credentialsMock.currentGuardBeforeActions.push(null, () => {
+      credentialsMock.accessToken = 'test-token-b';
+      credentialsMock.refreshToken = 'refresh-token-b';
+      credentialsMock.credentialFingerprint = 'b'.repeat(64);
+      credentialsMock.authorizationRevision = 'test-revision-2';
+      credentialsMock.guardState = 'changed';
+    });
+
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+
+    expect(await fsp.readFile(cache, 'utf-8')).toBe(replacementCache);
+    expect(anthropicIds()).toEqual([]);
+    expect(credentialsMock.currentGuardCalls).toBe(2);
+  });
+
+  it('观察到替换凭证时同步退休 A,再只加载带 B 世代标签的缓存', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    await fsp.writeFile(
+      cache,
+      JSON.stringify({
+        fetchedAt: '2026-08-08T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
+        models: [cachedAnthropicModel('claude-account-b', 'Account B')],
+      }),
+      'utf-8',
+    );
+
+    const synchronization = synchronizeAnthropicModelsWithCurrentCredential();
+    expect(anthropicIds()).toEqual([]);
+    await synchronization;
+
+    expect(anthropicIds()).toEqual(['claude-account-b']);
+  });
+
+  it('普通 provider 查询观察到外部换号时也立即退休 A,不依赖 invalid_grant 回调', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
+
+    expect(observeAnthropicCredentialEpoch()).toBe(true);
+    expect(anthropicIds()).toEqual([]);
+    await waitForAnthropicDiscoveryIdleForTest();
+  });
+
+  it('同一 Cindy 授权轮换 token 时保留模型与磁盘缓存', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    await expect(fsp.access(cache)).resolves.toBeUndefined();
+
+    // A routine refresh rotates both token bytes, but the explicit browser
+    // authorization revision remains the stable account/grant boundary.
+    credentialsMock.accessToken = 'test-token-refreshed';
+    credentialsMock.refreshToken = 'refresh-token-rotated';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+
+    expect(observeAnthropicCredentialEpoch({ allowHydration: false })).toBe(true);
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    // The same stable authorization must also accept the pre-refresh LKG after
+    // a process restart instead of stranding the provider when /v1/models is down.
+    resetAnthropicDiscoveryForTest();
+    setAnthropicDiscoveredModels([]);
+    await loadAnthropicModelsFromDiskCache();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+  });
+
+  it('同一授权刷新期间迟到的 SDK 能力捕获仍可生效', async () => {
+    const preRefreshSource = currentSdkSource();
+    credentialsMock.accessToken = 'test-token-refreshed';
+    credentialsMock.refreshToken = 'refresh-token-rotated';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+
+    noteAnthropicSdkSupportedModelsFromSource(
+      [
+        {
+          value: 'claude-opus-same-account',
+          displayName: 'Same Account Opus',
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'high', 'xhigh'],
+        },
+      ],
+      preRefreshSource,
+    );
+
+    expect(anthropicIds()).toEqual(['claude-opus-same-account']);
+    expect(anthropicModel('claude-opus-same-account')?.efforts).toEqual([
+      'low',
+      'high',
+      'xhigh',
+    ]);
+  });
+
+  it('没有稳定授权 revision 的外部凭证仍以 token 指纹隔离账号', async () => {
+    credentialsMock.authorizationRevision = 'cindy-unattributed-v1';
+    const staleExternalSdkSource = currentSdkSource();
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+
+    credentialsMock.accessToken = 'external-token-b';
+    credentialsMock.refreshToken = 'external-refresh-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+
+    expect(observeAnthropicCredentialEpoch({ allowHydration: false })).toBe(false);
+    expect(anthropicIds()).toEqual([]);
+    noteAnthropicSdkSupportedModelsFromSource(
+      [{ value: 'claude-account-a-late', displayName: 'Late Account A' }],
+      staleExternalSdkSource,
+    );
+    expect(anthropicIds()).toEqual([]);
+  });
+
+  it('只读 provider 查询首次发现换号时 fail-closed 且不发上游请求,可信查询随后补拉', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    oauthRefreshMock.getValidClaudeAiOAuth.mockClear();
+
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
+
+    expect(observeAnthropicCredentialEpoch({ allowHydration: false })).toBe(false);
+    expect(anthropicIds()).toEqual([]);
+    expect(oauthRefreshMock.getValidClaudeAiOAuth).not.toHaveBeenCalled();
+    expect(observeAnthropicCredentialEpoch({ allowHydration: false })).toBe(true);
+    expect(oauthRefreshMock.getValidClaudeAiOAuth).not.toHaveBeenCalled();
+
+    expect(observeAnthropicCredentialEpoch()).toBe(true);
+    await vi.waitFor(() => expect(oauthRefreshMock.getValidClaudeAiOAuth).toHaveBeenCalled());
+  });
+
+  it('provider 最终投影在账号锁内重验换号并同步移除 A 清单', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    // 模拟 listProviders 的其它异步连接读取器尚未返回时，独立进程把 A 换成 B。
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
+    oauthRefreshMock.getValidClaudeAiOAuth.mockClear();
+    const mutationGuardCallsBeforeProjection = credentialsMock.currentGuardCalls;
+
+    let idsInsideProjection: string[] | null = null;
+    const connected = runWithAnthropicCredentialEpochProjection(
+      { allowHydration: false },
+      (finalConnected) => {
+        idsInsideProjection = anthropicIds();
+        return finalConnected;
+      },
+    );
+
+    expect(connected).toBe(false);
+    expect(idsInsideProjection).toEqual([]);
+    expect(anthropicIds()).toEqual([]);
+    expect(credentialsMock.snapshotCurrentGuardCalls).toBe(1);
+    expect(credentialsMock.currentGuardCalls).toBe(mutationGuardCallsBeforeProjection);
+    expect(oauthRefreshMock.getValidClaudeAiOAuth).not.toHaveBeenCalled();
+  });
+
+  it('直接换号边界先清旧账号清单与缓存,新账号发现失败也不继承(review P1 回归)', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-opus-4-8', displayName: 'Account A Opus' }]);
     await waitForAnthropicDiscoveryIdleForTest();
     const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
     await expect(fsp.access(cache)).resolves.toBeUndefined();
 
     // 模拟 OAuth 成功后凭证已被 B 覆盖、但 B 的 HTTP / SDK 尚未返回任何清单。
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
     await clearAnthropicDiscoveredModels();
 
     expect(anthropicIds()).toEqual([]);
     await expect(fsp.access(cache)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('无 proof 清理等待账号锁时若 C 已登录,不删除 C 刚发布的缓存', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    const accountCCache = JSON.stringify({
+      fetchedAt: '2026-08-08T00:02:00.000Z',
+      credentialEpoch: {
+        credentialFingerprint: 'c'.repeat(64),
+        authorizationRevision: 'test-revision-3',
+      },
+      models: [cachedAnthropicModel('claude-account-c', 'Account C')],
+    });
+    credentialsMock.currentGuardCalls = 0;
+    credentialsMock.currentGuardStates.push('changed');
+    credentialsMock.currentGuardBeforeActions.push(() => {
+      fs.writeFileSync(cache, accountCCache, 'utf-8');
+      credentialsMock.accessToken = 'test-token-c';
+      credentialsMock.refreshToken = 'refresh-token-c';
+      credentialsMock.credentialFingerprint = 'c'.repeat(64);
+      credentialsMock.authorizationRevision = 'test-revision-3';
+    });
+
+    await expect(clearAnthropicDiscoveredModels()).resolves.toBe(true);
+
+    expect(await fsp.readFile(cache, 'utf-8')).toBe(accountCCache);
+    expect(credentialsMock.currentGuardCalls).toBeGreaterThanOrEqual(1);
+    await vi.waitFor(() => expect(anthropicIds()).toEqual(['claude-account-c']));
+  });
+
+  it('登出清理的 absent guard 发现 B 已登录时恢复 B 缓存', async () => {
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    await fsp.mkdir(path.dirname(cache), { recursive: true });
+    authState.loggedIn = false;
+    credentialsMock.absentGuardBeforeActions.push(() => {
+      credentialsMock.accessToken = 'test-token-b';
+      credentialsMock.refreshToken = 'refresh-token-b';
+      credentialsMock.credentialFingerprint = 'b'.repeat(64);
+      credentialsMock.authorizationRevision = 'test-revision-2';
+      fs.writeFileSync(
+        cache,
+        JSON.stringify({
+          fetchedAt: '2026-08-08T00:03:00.000Z',
+          credentialEpoch: currentCredentialEpoch(),
+          models: [cachedAnthropicModel('claude-account-b', 'Account B')],
+        }),
+        'utf-8',
+      );
+      authState.loggedIn = true;
+    });
+
+    await expect(clearAnthropicDiscoveredModels()).resolves.toBe(true);
+    expect(credentialsMock.absentGuardCalls).toBe(1);
+    await vi.waitFor(() => expect(anthropicIds()).toEqual(['claude-account-b']));
+  });
+
+  it('invalid_grant 清理的最终 guard 发现 B 时恢复 B 缓存', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    credentialsMock.guardStates.push('changed');
+    credentialsMock.guardBeforeActions.push(() => {
+      credentialsMock.accessToken = 'test-token-b';
+      credentialsMock.refreshToken = 'refresh-token-b';
+      credentialsMock.credentialFingerprint = 'b'.repeat(64);
+      credentialsMock.authorizationRevision = 'test-revision-2';
+      fs.writeFileSync(
+        cache,
+        JSON.stringify({
+          fetchedAt: '2026-08-08T00:04:00.000Z',
+          credentialEpoch: currentCredentialEpoch(),
+          models: [cachedAnthropicModel('claude-account-b', 'Account B')],
+        }),
+        'utf-8',
+      );
+    });
+
+    await expect(
+      clearAnthropicDiscoveredModels({
+        accessToken: 'test-token',
+        refreshToken: 'refresh-token',
+        cindyAuthorizationRevision: 'test-revision-1',
+      }),
+    ).resolves.toBe(true);
+    expect(credentialsMock.guardCalls).toBe(1);
+    await vi.waitFor(() => expect(anthropicIds()).toEqual(['claude-account-b']));
+  });
+
+  it('无凭证世代标签的旧缓存一律忽略', async () => {
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    await fsp.mkdir(path.dirname(cache), { recursive: true });
+    await fsp.writeFile(
+      cache,
+      JSON.stringify({
+        fetchedAt: '2026-08-08T00:00:00.000Z',
+        models: [cachedAnthropicModel('claude-account-a', 'Account A')],
+      }),
+      'utf-8',
+    );
+
+    await loadAnthropicModelsFromDiskCache();
+
+    expect(anthropicIds()).toEqual([]);
+  });
+
+  it('账号 B 不加载账号 A 的缓存,并立即退休 A 的内存清单', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
+
+    await loadAnthropicModelsFromDiskCache();
+
+    expect(anthropicIds()).toEqual([]);
+  });
+
+  it('账号 A 迟到的 SDK 清单不能归到账号 B', async () => {
+    const accountASource = currentSdkSource();
+    noteAnthropicSdkSupportedModelsFromSource(
+      [{ value: 'claude-account-a', displayName: 'Account A' }],
+      accountASource,
+    );
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-account-a']);
+
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
+    noteAnthropicSdkSupportedModelsFromSource(
+      [{ value: 'claude-account-a-late', displayName: 'Late Account A' }],
+      accountASource,
+    );
+
+    expect(anthropicIds()).toEqual([]);
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    const persisted = JSON.parse(await fsp.readFile(cache, 'utf-8')) as {
+      credentialEpoch?: unknown;
+    };
+    expect(persisted.credentialEpoch).toEqual({
+      credentialFingerprint: 'a'.repeat(64),
+      authorizationRevision: 'test-revision-1',
+    });
+  });
+
+  it('账号 A 迟到的 HTTP 响应不能覆盖账号 B 或写成 B 的缓存', async () => {
+    noteAnthropicSdkSupportedModels([{ value: 'claude-account-a', displayName: 'Account A' }]);
+    await waitForAnthropicDiscoveryIdleForTest();
+
+    oauthRefreshMock.getValidClaudeAiOAuth.mockResolvedValue({
+      accessToken: 'test-token',
+      refreshToken: 'refresh-token',
+      cindyAuthorizationRevision: 'test-revision-1',
+      __fingerprint: 'a'.repeat(64),
+    });
+    let releaseFetch!: () => void;
+    let signalFetchStarted!: () => void;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const fetchStarted = new Promise<void>((resolve) => {
+      signalFetchStarted = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        signalFetchStarted();
+        await fetchGate;
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ id: 'claude-account-a-late', display_name: 'Late Account A', type: 'model' }],
+            has_more: false,
+          }),
+        };
+      }),
+    );
+
+    const refresh = refreshAnthropicModelsFromHttp();
+    await fetchStarted;
+    credentialsMock.accessToken = 'test-token-b';
+    credentialsMock.refreshToken = 'refresh-token-b';
+    credentialsMock.credentialFingerprint = 'b'.repeat(64);
+    credentialsMock.authorizationRevision = 'test-revision-2';
+    releaseFetch();
+
+    await expect(refresh).resolves.toBe(false);
+    expect(anthropicIds()).toEqual([]);
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    const persisted = JSON.parse(await fsp.readFile(cache, 'utf-8')) as {
+      credentialEpoch?: unknown;
+      models?: Array<{ id?: unknown }>;
+    };
+    expect(persisted.credentialEpoch).toEqual({
+      credentialFingerprint: 'a'.repeat(64),
+      authorizationRevision: 'test-revision-1',
+    });
+    expect(persisted.models?.map((model) => model.id)).toEqual(['claude-account-a']);
+  });
+
+  it('迟到的 invalid_grant 清理不删除新登录刚写回的模型缓存', async () => {
+    const cache = path.join(TEST_USER_DATA, 'model-discovery', 'anthropic-models.json');
+    await fsp.mkdir(path.dirname(cache), { recursive: true });
+    await fsp.writeFile(cache, JSON.stringify({ account: 'replacement' }), 'utf-8');
+    credentialsMock.guardState = 'changed';
+
+    await clearAnthropicDiscoveredModels({
+      accessToken: 'rejected-access',
+      refreshToken: 'rejected-refresh',
+      cindyAuthorizationRevision: 'rejected-revision',
+    });
+
+    await expect(fsp.readFile(cache, 'utf-8')).resolves.toContain('replacement');
+    expect(credentialsMock.guardCalls).toBe(1);
   });
 
   it('HTTP 刷新落盘期间换号时返回未应用,不向设置页误报成功', async () => {
@@ -554,8 +1208,12 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     const originalWriteFile = fsp.writeFile.bind(fsp);
     let releaseWrite!: () => void;
     let signalWriteStarted!: () => void;
-    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
-    const writeStarted = new Promise<void>((resolve) => { signalWriteStarted = resolve; });
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const writeStarted = new Promise<void>((resolve) => {
+      signalWriteStarted = resolve;
+    });
     const writeSpy = vi.spyOn(fsp, 'writeFile').mockImplementationOnce(async (...args) => {
       signalWriteStarted();
       await writeGate;
@@ -582,8 +1240,12 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     const originalWriteFile = fsp.writeFile.bind(fsp);
     let releaseWrite!: () => void;
     let signalWriteStarted!: () => void;
-    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
-    const writeStarted = new Promise<void>((resolve) => { signalWriteStarted = resolve; });
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const writeStarted = new Promise<void>((resolve) => {
+      signalWriteStarted = resolve;
+    });
     const writeSpy = vi.spyOn(fsp, 'writeFile').mockImplementationOnce(async (...args) => {
       signalWriteStarted();
       await writeGate;
@@ -628,6 +1290,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       path.join(cacheDir, 'anthropic-models.json'),
       JSON.stringify({
         fetchedAt: '2026-07-30T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           dirtyModel('claude-fable-5[1m]', 'Fable 5', 0),
           dirtyModel('claude-fable-5', 'Fable 5 dup', 1),
@@ -700,12 +1363,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     // 后续单条若不带能力字段,未知不能把刚精化的 xhigh 擦掉。
     noteAnthropicSdkSupportedModels([{ value: 'claude-fable-5', displayName: 'Fable' }]);
     expect(anthropicIds()).toHaveLength(4);
-    expect(anthropicModel('claude-fable-5')?.efforts).toEqual([
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-    ]);
+    expect(anthropicModel('claude-fable-5')?.efforts).toEqual(['low', 'medium', 'high', 'xhigh']);
     // 逐个下架(4→3)是合法演进,照常生效。
     noteAnthropicSdkSupportedModels([
       { value: 'claude-fable-5', displayName: 'Fable 5' },
@@ -713,12 +1371,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       { value: 'claude-sonnet-5', displayName: 'Sonnet 5' },
     ]);
     expect(anthropicIds()).toHaveLength(3);
-    expect(anthropicModel('claude-fable-5')?.efforts).toEqual([
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-    ]);
+    expect(anthropicModel('claude-fable-5')?.efforts).toEqual(['low', 'medium', 'high', 'xhigh']);
   });
 
   it('无能力信息的捕获不打回已精化条目的档位 / fast(合并纪律)', () => {
@@ -748,6 +1401,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       cacheFile,
       JSON.stringify({
         fetchedAt: '2026-07-22T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           {
             id: 'claude-fable-5',
@@ -816,6 +1470,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       cacheFile,
       JSON.stringify({
         fetchedAt: '2026-07-22T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           {
             id: 'claude-fable-5',
@@ -878,6 +1533,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       path.join(cacheDir, 'anthropic-models.json'),
       JSON.stringify({
         fetchedAt: '2026-07-19T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           {
             id: 'claude-sonnet-4-5',
@@ -907,6 +1563,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       path.join(cacheDir, 'anthropic-models.json'),
       JSON.stringify({
         fetchedAt: '2026-07-22T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           {
             id: 'claude-sonnet-5',
@@ -955,6 +1612,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       path.join(cacheDir, 'anthropic-models.json'),
       JSON.stringify({
         fetchedAt: '2026-07-19T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           {
             id: 'claude-opus-4-8',
@@ -975,7 +1633,12 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     await loadAnthropicModelsFromDiskCache();
     expect(anthropicModel('claude-opus-4-8')?.contextWindow).toBe(900_000);
     noteAnthropicSdkSupportedModels([
-      { value: 'claude-opus-4-8', displayName: 'Opus 4.8', supportsEffort: true, supportedEffortLevels: ['low', 'high'] },
+      {
+        value: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        supportsEffort: true,
+        supportedEffortLevels: ['low', 'high'],
+      },
     ]);
     // SDK 覆盖能力字段,但窗口保留 HTTP 明说的 900k,不回退 contextWindowFor 的 1M。
     expect(anthropicModel('claude-opus-4-8')).toMatchObject({
@@ -995,6 +1658,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       path.join(cacheDir, 'anthropic-models.json'),
       JSON.stringify({
         fetchedAt: '2026-07-19T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           {
             // 目录里没有这个 id、也没有 explicitWindows 记录 → 重载必须落到启发式。
@@ -1032,6 +1696,7 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       path.join(cacheDir, 'anthropic-models.json'),
       JSON.stringify({
         fetchedAt: '2026-07-19T00:00:00.000Z',
+        credentialEpoch: currentCredentialEpoch(),
         models: [
           {
             id: 'claude-brandnew-9',
@@ -1057,7 +1722,12 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     });
 
     noteAnthropicSdkSupportedModels([
-      { value: 'claude-brandnew-9', displayName: 'Brand New 9', supportsEffort: true, supportedEffortLevels: ['low', 'high'] },
+      {
+        value: 'claude-brandnew-9',
+        displayName: 'Brand New 9',
+        supportsEffort: true,
+        supportedEffortLevels: ['low', 'high'],
+      },
     ]);
     expect(anthropicModel('claude-brandnew-9')).toMatchObject({
       contextWindow: 640_000,
@@ -1100,6 +1770,10 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
   });
 
   afterEach(async () => {
+    // Clear as a logged-out snapshot. Otherwise clear() observes the still-live
+    // credential epoch and schedules an unawaited hydration/HTTP flight that can
+    // leak into the next test (most visible on slower Windows runners).
+    authState.loggedIn = false;
     vi.useRealTimers();
     await clearAnthropicDiscoveredModels();
     await waitForAnthropicDiscoveryIdleForTest();
@@ -1154,7 +1828,10 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
       vi
         .fn()
         .mockResolvedValue(
-          errorResponse(403, JSON.stringify({ error: { type: 'forbidden', message: 'Request not allowed' } })),
+          errorResponse(
+            403,
+            JSON.stringify({ error: { type: 'forbidden', message: 'Request not allowed' } }),
+          ),
         ),
     );
     await refreshAnthropicModelsFromHttp();
@@ -1273,7 +1950,11 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
     // 静默收尾会把「只翻了一页的前缀」当成完整清单交出去,而它完全可能小到刚好落进 shrink
     // 守卫的放行区间 —— 真清单被截断替换、失败态被清、也不排重试(PR #548 review)。
     const model = (id: string) => ({ id, display_name: id, type: 'model' });
-    for (const bad of [{ has_more: true }, { has_more: true, last_id: 42 }, { has_more: true, last_id: '' }]) {
+    for (const bad of [
+      { has_more: true },
+      { has_more: true, last_id: 42 },
+      { has_more: true, last_id: '' },
+    ]) {
       resetAnthropicDiscoveryForTest();
       setAnthropicDiscoveredModels([]);
       vi.stubGlobal(
@@ -1338,7 +2019,10 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
   it('401 后强制刷新自身故障归 upstream(不是 unauthorized),重试链继续', async () => {
     // token 端点超时 / 5xx / 拿不到刷新锁 ≠ 授权被拒。归 unauthorized 会取消全部重试、
     // 还叫用户去断开重连,而 refresh token 很可能完全有效(PR #548 review)。
-    const fetchMock = vi.fn().mockResolvedValueOnce(errorResponse(401)).mockResolvedValue(okResponse);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(errorResponse(401))
+      .mockResolvedValue(okResponse);
     vi.stubGlobal('fetch', fetchMock);
     oauthRefreshMock.getValidClaudeAiOAuth
       .mockResolvedValueOnce({ accessToken: 'test-token' }) // 首次取 token
@@ -1600,7 +2284,9 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
     const wide = {
       ok: true,
       json: async () => ({
-        data: ['claude-opus-4-8', 'claude-sonnet-4-8', 'claude-haiku-4-8', 'claude-opus-4-7'].map(model),
+        data: ['claude-opus-4-8', 'claude-sonnet-4-8', 'claude-haiku-4-8', 'claude-opus-4-7'].map(
+          model,
+        ),
         has_more: false,
       }),
     };

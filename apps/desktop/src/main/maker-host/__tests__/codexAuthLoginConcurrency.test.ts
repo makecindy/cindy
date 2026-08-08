@@ -12,7 +12,9 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }));
 
-vi.mock('@cindy/maker-core', () => ({}));
+vi.mock('@cindy/maker-core', () => ({
+  CINDY_CLAUDE_OAUTH_REVISION_ENV: 'CINDY_CLAUDE_OAUTH_REVISION',
+}));
 
 describe('DesktopCodexAuthAdapter login single-flight', () => {
   it('rolls back credentials when Cancel arrives during successful-login finalization', async () => {
@@ -21,9 +23,12 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
       typeof DesktopCodexAuthAdapter
     >;
     let finishLocalRead!: (state: AuthState) => void;
-    const readLocalCodexAuthState = vi.fn(() => new Promise<AuthState>((resolve) => {
-      finishLocalRead = resolve;
-    }));
+    const readLocalCodexAuthState = vi.fn(
+      () =>
+        new Promise<AuthState>((resolve) => {
+          finishLocalRead = resolve;
+        }),
+    );
     const disconnectCodexOAuth = vi.fn().mockResolvedValue(undefined);
     const pending = {
       mode: 'browser' as const,
@@ -90,7 +95,10 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
     const firstProgress = vi.fn();
     const duplicateProgress = vi.fn();
     const firstBrowser = adapter.triggerLogin({ mode: 'browser', onProgress: firstProgress });
-    const duplicateBrowser = adapter.triggerLogin({ mode: 'browser', onProgress: duplicateProgress });
+    const duplicateBrowser = adapter.triggerLogin({
+      mode: 'browser',
+      onProgress: duplicateProgress,
+    });
     browserOptions?.onProgress?.('stdout:Authorize at https://example.com/device');
     const deviceCode = adapter.triggerLogin({ mode: 'device-code' });
 
@@ -100,8 +108,11 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
     expect(runTriggerLogin).toHaveBeenCalledTimes(1);
     expect(cancelLogin).toHaveBeenCalledOnce();
     expect(
-      (adapter as unknown as { pendingLogin: { mode: AgentLoginMode; promise: Promise<AuthState> } })
-        .pendingLogin,
+      (
+        adapter as unknown as {
+          pendingLogin: { mode: AgentLoginMode; promise: Promise<AuthState> };
+        }
+      ).pendingLogin,
     ).toMatchObject({ mode: 'device-code', promise: deviceCode });
 
     finishBrowser({ authenticated: false, errorReason: 'login_cancelled' });
@@ -163,7 +174,8 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
     const firstRun = new Promise<AuthState>((resolve) => {
       finishFirst = resolve;
     });
-    const runTriggerLogin = vi.fn()
+    const runTriggerLogin = vi
+      .fn()
       .mockReturnValueOnce(firstRun)
       .mockResolvedValueOnce({ authenticated: true, authSource: 'oauth' });
     Object.defineProperty(adapter, 'runTriggerLogin', {

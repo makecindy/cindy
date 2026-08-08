@@ -36,9 +36,12 @@ export interface ConnectionReadOptions {
 export interface ProviderListOptions extends ConnectionReadOptions {
   /**
    * Internal catalog override for policy consumers that need the routing truth
-   * rather than the user-selectable projection. Never sourced from IPC input.
+   * rather than the user-selectable projection. It is deliberately a getter:
+   * connection readers can await, so capturing a catalog before this call can
+   * retain account A's model plane after a concurrent switch to account B.
+   * Never sourced from IPC input.
    */
-  catalog?: Catalog;
+  getCatalog?: () => Catalog;
 }
 
 /** 内置三家供应商「是否已连接」的判定器（由 host 注入，读各自凭证存储）。 */
@@ -86,6 +89,20 @@ export interface ProviderServiceDeps {
    * 消费方(renderer / IM / Orca 路由 / device-link)拿到同一份准入事实。缺省 = 全启用。
    */
   getModelAccess?: () => ModelDisableOverrides;
+  /**
+   * Optional synchronous guard around the final catalog projection.
+   *
+   * Connection readers may be asynchronous. A native credential can therefore
+   * change after its reader returned but before `getCatalog()` projects the
+   * provider snapshot. Desktop uses this hook to revalidate Anthropic's
+   * credential epoch and keep the synchronous catalog read/build inside the
+   * same cross-process credential transaction.
+   */
+  projectConnectionSnapshot?: (
+    opts: ConnectionReadOptions,
+    connected: ConnectionState,
+    project: (connected: ConnectionState) => ProviderView[],
+  ) => ProviderView[];
 }
 
 export interface ProviderService {
@@ -118,41 +135,55 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       Promise.resolve(deps.connection.openai(readOpts)),
       Promise.resolve(deps.connection.xai(readOpts)),
     ]);
-    const catalog = opts?.catalog ?? deps.getCatalog();
     const connected: ConnectionState = { xd, anthropic, openai, xai };
-    // 自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」替代「连接 / 断开」，
-    // 没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
-    for (const p of catalog.providers) {
-      // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
-      // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
-      if (p.auth.method === 'none') {
-        connected[p.id] = p.agents.some((agent) => {
-          const routing = p.routing[agent];
-          return routing !== undefined && routing.disabled !== true;
-        });
-      }
-      // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
-      // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
-      else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
-        connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
-      }
-      // API key 形态的自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」
-      // 替代「连接 / 断开」，没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
-      else if (p.source === 'user') connected[p.id] = true;
-      // 内置 API-key 供应商(如 Gemini 图像来源):连接 = key 已存。与自定义供应商
-      // 不同,内置条目常驻目录,「存在即连接」会让没配 key 的用户看到一个假连接行。
-      else if (p.auth.method === 'apiKey' && !(p.id in connected)) {
-        connected[p.id] = deps.builtinApiKeyConnected?.(p.id) ?? false;
-      }
-    }
-    const discoveryFailures: ModelDiscoveryFailureState = {};
-    if (deps.modelDiscoveryFailure) {
+    const project = (snapshotConnection: ConnectionState): ProviderView[] => {
+      const catalog = opts?.getCatalog?.() ?? deps.getCatalog();
+      const projectedConnection: ConnectionState = { ...snapshotConnection };
+      // 自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」替代「连接 / 断开」，
+      // 没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
       for (const p of catalog.providers) {
-        const failure = deps.modelDiscoveryFailure(p.id, connected[p.id] === true);
-        if (failure) discoveryFailures[p.id] = failure;
+        // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
+        // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
+        if (p.auth.method === 'none') {
+          projectedConnection[p.id] = p.agents.some((agent) => {
+            const routing = p.routing[agent];
+            return routing !== undefined && routing.disabled !== true;
+          });
+        }
+        // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
+        // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
+        else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in projectedConnection)) {
+          projectedConnection[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
+        }
+        // API key 形态的自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」
+        // 替代「连接 / 断开」，没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
+        else if (p.source === 'user') projectedConnection[p.id] = true;
+        // 内置 API-key 供应商(如 Gemini 图像来源):连接 = key 已存。与自定义供应商
+        // 不同,内置条目常驻目录,「存在即连接」会让没配 key 的用户看到一个假连接行。
+        else if (p.auth.method === 'apiKey' && !(p.id in projectedConnection)) {
+          projectedConnection[p.id] = deps.builtinApiKeyConnected?.(p.id) ?? false;
+        }
       }
-    }
-    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.());
+      const discoveryFailures: ModelDiscoveryFailureState = {};
+      if (deps.modelDiscoveryFailure) {
+        for (const p of catalog.providers) {
+          const failure = deps.modelDiscoveryFailure(
+            p.id,
+            projectedConnection[p.id] === true,
+          );
+          if (failure) discoveryFailures[p.id] = failure;
+        }
+      }
+      return buildRegistry(
+        catalog,
+        projectedConnection,
+        discoveryFailures,
+        deps.getModelAccess?.(),
+      );
+    };
+    return deps.projectConnectionSnapshot
+      ? deps.projectConnectionSnapshot(readOpts, connected, project)
+      : project(connected);
   }
 
   return { listProviders };

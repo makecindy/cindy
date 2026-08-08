@@ -182,6 +182,22 @@ describe('buildClaudeEnv', () => {
     expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
   });
 
+  it('host-only OAuth revision cannot leak from an outer shell into a markerless session', async () => {
+    expect(SENSITIVE_ANTHROPIC_ENV_KEYS).toContain('CINDY_CLAUDE_OAUTH_REVISION');
+    process.env.CINDY_CLAUDE_OAUTH_REVISION = 'inherited-fake-revision';
+    try {
+      const env = await buildClaudeEnv(
+        createAuthAdapter({ CLAUDE_CODE_OAUTH_TOKEN: 'markerless-token' }),
+        {},
+      );
+
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('markerless-token');
+      expect(env.CINDY_CLAUDE_OAUTH_REVISION).toBeUndefined();
+    } finally {
+      delete process.env.CINDY_CLAUDE_OAUTH_REVISION;
+    }
+  });
+
   it('null 决定要**删掉** behaviorFlags 带进来的同名键(只跳过赋值不够)', async () => {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL;
 
