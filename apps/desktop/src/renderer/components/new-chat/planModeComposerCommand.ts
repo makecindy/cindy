@@ -36,3 +36,7 @@ export function consumePlanModeComposerCommand(
   tr.delete(from, to);
   return true;
 }
+
+export function isPlanModeComposerCommandText(text: string, available: boolean): boolean {
+  return available && text.trim().toLowerCase() === `/${PLAN_MODE_COMPOSER_COMMAND}`;
+}

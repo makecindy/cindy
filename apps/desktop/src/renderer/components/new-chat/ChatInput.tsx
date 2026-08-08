@@ -143,6 +143,7 @@ import { PlanModeIndicator } from './PlanModeIndicator';
 import {
   addPlanModeComposerCommand,
   consumePlanModeComposerCommand,
+  isPlanModeComposerCommandText,
 } from './planModeComposerCommand';
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { SendButton } from './SendButton';
@@ -3894,7 +3895,14 @@ export function ChatInput({
   // ── Palette insertions ─────────────────────────────────────────────
   const insertSlashCommand = useCallback(
     (cmd: UnifiedCommand) => {
-      if (!editor || trigger.kind !== 'slash' || composerMutationLockedRef.current) return;
+      if (
+        !editor ||
+        editor.isDestroyed ||
+        trigger.kind !== 'slash' || composerMutationLockedRef.current ||
+        editor.view.composing
+      ) {
+        return;
+      }
       const { from } = trigger;
       // Replace the WHOLE slash-run, not just up-to-caret: the user may
       // have moved the caret back inside the run (e.g. `/compa|ct`) and
@@ -4219,6 +4227,24 @@ export function ChatInput({
         const commentsForSend = optimisticallyClearRemoteComposer
           ? commentsBeforeOptimisticClear
           : [...browserCommentsRef.current];
+        if (
+          attachmentsForSend.length === 0 &&
+          commentsForSend.length === 0 &&
+          isPlanModeComposerCommandText(editorText, planModeEntry !== undefined)
+        ) {
+          planModeEntry?.onToggle(!planModeEntry.enabled);
+          isRestoringRef.current = true;
+          try {
+            editor.commands.clearContent(true);
+          } finally {
+            isRestoringRef.current = false;
+          }
+          historyIndexRef.current = -1;
+          hydratedHistoryDocumentRef.current = null;
+          draftRef.current = null;
+          if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
+          return;
+        }
         // composerQuote 在其正文位置序列化成 markdown blockquote,支持引用与回复交错。
         // browser-comment-chip:页面评论序列化为 `# Browser comments:` 段拼在正文后
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
@@ -4719,6 +4745,7 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
+      planModeEntry,
     ],
   );
   useEffect(() => {

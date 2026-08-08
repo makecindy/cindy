@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addPlanModeComposerCommand,
   consumePlanModeComposerCommand,
+  isPlanModeComposerCommandText,
 } from '../components/new-chat/planModeComposerCommand';
 import type { UnifiedCommand } from '../lib/slashCommands';
 
@@ -62,5 +63,12 @@ describe('/plan composer command', () => {
     expect(unsupported.doc.textContent).toBe('/plan');
     expect(consumePlanModeComposerCommand(other, 1, 6, desktopCommand('help'), true)).toBe(false);
     expect(other.doc.textContent).toBe('/plan');
+  });
+
+  it('recognizes only an available standalone plan command on send', () => {
+    expect(isPlanModeComposerCommandText('/plan', true)).toBe(true);
+    expect(isPlanModeComposerCommandText('  /PLAN  ', true)).toBe(true);
+    expect(isPlanModeComposerCommandText('/plan explain this', true)).toBe(false);
+    expect(isPlanModeComposerCommandText('/plan', false)).toBe(false);
   });
 });
