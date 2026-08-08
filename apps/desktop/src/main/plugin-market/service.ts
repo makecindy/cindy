@@ -332,6 +332,17 @@ async function customMarketIconKey(
   let iconFingerprint: string;
   let projectionUncertain = false;
   try {
+    // plugin.dir 是发现阶段得到的 realpath。先解析完整图标路径并确认仍在该根内，
+    // 再做 lstat；否则父目录 symlink 会让投影阶段探测并摘要根外文件元数据。
+    const realIconPath = await fs.promises.realpath(iconPath);
+    const relativeToPlugin = path.relative(plugin.dir, realIconPath);
+    if (
+      relativeToPlugin === '..' ||
+      relativeToPlugin.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativeToPlugin)
+    ) {
+      return null;
+    }
     const stat = openedIconStat ?? (await fs.promises.lstat(iconPath, { bigint: true }));
     iconFingerprint = `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
   } catch (error) {

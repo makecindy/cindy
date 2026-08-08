@@ -838,6 +838,34 @@ describe('PluginMarketService 自定义市场图标', () => {
   });
 
   it.runIf(process.platform !== 'win32')(
+    'does not stat an icon through a parent-directory symlink outside the plugin directory',
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+      roots.push(root);
+      const dir = writeLocalMarket(root, 'team-lib', [
+        { rel: 'plugins/alpha', id: 'alpha', icon: 'assets/icon.png', iconBytes: 'ALPHA' },
+      ]);
+      const externalAssets = path.join(root, 'external-assets');
+      fs.mkdirSync(externalAssets);
+      fs.writeFileSync(path.join(externalAssets, 'icon.png'), 'PRIVATE');
+      const assetsDir = path.join(dir, 'plugins', 'alpha', 'assets');
+      fs.rmSync(assetsDir, { recursive: true });
+      fs.symlinkSync(externalAssets, assetsDir, 'dir');
+      const h = harness([], [{ name: 'team-lib', dir }]);
+      const lstatSpy = vi.spyOn(fs.promises, 'lstat');
+      try {
+        const item = (await h.service.snapshot()).items[0]!;
+        expect(item.customIconKey).toBeUndefined();
+        expect(
+          lstatSpy.mock.calls.some(([file]) => String(file) === path.join(assetsDir, 'icon.png')),
+        ).toBe(false);
+      } finally {
+        lstatSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
     'does not follow a marketplace icon symlink outside the plugin directory',
     async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
@@ -852,13 +880,11 @@ describe('PluginMarketService 自定义市场图标', () => {
       fs.symlinkSync(secret, iconPath);
       const h = harness([], [{ name: 'team-lib', dir }]);
       const item = (await h.service.snapshot()).items[0]!;
+      expect(item.customIconKey).toBeUndefined();
+      const request = { pluginId: item.pluginId, expectedIconKey: 'a'.repeat(64) };
 
-      const results = await h.service.localIcons([
-        { pluginId: item.pluginId, expectedIconKey: item.customIconKey! },
-      ]);
-      expect(results).toEqual([
-        { pluginId: item.pluginId, expectedIconKey: item.customIconKey, status: 'missing' },
-      ]);
+      const results = await h.service.localIcons([request]);
+      expect(results).toEqual([{ ...request, status: 'missing' }]);
       expect(JSON.stringify(results)).not.toContain(Buffer.from('PRIVATE').toString('base64'));
     },
   );
