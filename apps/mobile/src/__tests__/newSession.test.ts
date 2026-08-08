@@ -315,7 +315,8 @@ describe('pickAgentDefaultRuntime', () => {
       currentEffort: 'medium',
       catalogReady: true,
     });
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'high', providerId: null });
+    // 历史坏数据自愈(copilot P2):providerId 空但目录有同名行 → 补全为该行 provider
+    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'high', providerId: 'prov-gpt-5.4' });
   });
 
   it('reconciles the recent effort down to the model default when unsupported', () => {
@@ -326,7 +327,8 @@ describe('pickAgentDefaultRuntime', () => {
       currentEffort: 'medium',
       catalogReady: true,
     });
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: null });
+    // 历史坏数据自愈(copilot P2):providerId 空但目录有同名行 → 补全为该行 provider
+    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: 'prov-gpt-5.4' });
   });
 
   it('omits the effort when the catalog is ready but the model has no row (delisted → omit, codex P2)', () => {
@@ -566,7 +568,8 @@ describe('pickAgentDefaultRuntime', () => {
       deviceId: 'devA',
       catalogReady: true,
     });
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: null });
+    // 历史坏数据自愈(copilot P2):providerId 空但目录有同名行 → 补全为该行 provider
+    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: 'prov-gpt-5.4' });
   });
 
   it('never inherits a provider across devices (device filter wins before provider carry)', () => {

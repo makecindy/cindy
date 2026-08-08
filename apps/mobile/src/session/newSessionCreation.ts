@@ -885,6 +885,13 @@ async function runPipeline(task: InternalTask): Promise<void> {
       ...synthesizeSession(params, finalDraft),
       ...(createOutcome.workDir ? { workingDir: createOutcome.workDir } : {}),
     };
+    // fallback 路径把 reconciled 运行字段写回乐观行(codex review P1):鉴权后
+    // 联合终检改了 (model, providerId),但乐观行仍是旧 task.draft——getSession
+    // 失败时若不回写,会话 UI / 后续发送会继续用已删除来源,直到一次完整同步
+    // 才纠正;乐观行与 queued 同源,回写后展示与首条消息一致。
+    if (!freshSession && (draftPatch !== null)) {
+      remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, sessionForQueue);
+    }
     const queuedDraft = attachFirstMessageSessionReferences(buildQueuedTextMessage(
       sessionForQueue,
       finalDraft.firstMessage,

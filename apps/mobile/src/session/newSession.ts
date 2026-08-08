@@ -380,8 +380,16 @@ export function resolveRecentModelAndProvider(
   catalogReady: boolean,
 ): { model: string; providerId: string | null } {
   if (!catalogReady) return { model: recent.model, providerId: recent.providerId };
-  // providerId 为 null = 该会话本来就走被控端默认路由(合法来源),不做失效回退。
-  if (!recent.providerId) return { model: recent.model, providerId: null };
+  // providerId 为 null 分两种:①该会话本来就走被控端默认路由(合法来源);
+  // ②历史版本遗留的「自定义供应商模型 + providerId=NULL」坏数据(#1898 典型
+  // 现场)——目录就绪且 modelRows 存在同名模型行时补全为该行 provider,让自动
+  // 默认自愈旧数据,不再产出「裸 model + 默认网关」的必 400 组合(copilot P2);
+  // 无同名行(真内置默认模型)保持 null。
+  if (!recent.providerId) {
+    const alt = modelRows.find((row) => row.model.id === recent.model);
+    if (alt) return { model: recent.model, providerId: alt.provider.id };
+    return { model: recent.model, providerId: null };
+  }
   const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
   if (valid) return { model: recent.model, providerId: valid };
   const alt = modelRows.find((row) => row.model.id === recent.model);
