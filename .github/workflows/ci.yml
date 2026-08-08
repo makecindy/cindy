@@ -84,6 +84,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # @cindy/model-access-protocol exposes only generated dist artifacts.
+      # Build it before any consumer typecheck or test collection resolves the
+      # workspace package.
+      - name: Build model-access protocol
+        run: pnpm --filter @cindy/model-access-protocol build
+
       # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
       # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
       # 会让 apps/desktop 单测在收集阶段全挂——ripgrep 必须单独装回来。
@@ -191,6 +197,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build model-access protocol
+        run: pnpm --filter @cindy/model-access-protocol build
 
       - name: Install bundled ripgrep
         env:
