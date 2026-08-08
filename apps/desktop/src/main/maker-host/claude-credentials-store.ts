@@ -24,6 +24,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lockSync } from 'proper-lockfile';
 
+import { renameSyncWithRetry } from '../utils/atomicWriteFile.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   blobRoundtrips,
@@ -466,7 +467,7 @@ function writeBlobFile(blob: Record<string, unknown>, mode: BlobWriteMode): void
       // copy, which would recreate the partial-final failure mode.
       fs.linkSync(tmp, file);
     } else {
-      fs.renameSync(tmp, file);
+      renameSyncWithRetry(tmp, file);
     }
   } finally {
     try {

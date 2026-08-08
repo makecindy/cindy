@@ -81,6 +81,65 @@ describe('native provider auth legacy binding', () => {
   });
 });
 
+describe('native provider auth atomic write retries', () => {
+  it.each(['EBUSY', 'EACCES', 'ENOTEMPTY'])(
+    'recovers from transient %s while publishing an owner fence',
+    (code) => {
+      const realRename = fs.renameSync;
+      let failures = 2;
+      let attempts = 0;
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+        if (String(from).endsWith('.tmp') && String(to) === bindingFile) {
+          attempts += 1;
+          if (failures > 0) {
+            failures -= 1;
+            throw Object.assign(new Error(code), { code });
+          }
+        }
+        return realRename(from, to);
+      }) as typeof fs.renameSync);
+
+      try {
+        expect(() =>
+          migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true }),
+        ).not.toThrow();
+      } finally {
+        renameSpy.mockRestore();
+      }
+      expect(attempts).toBe(3);
+      expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+        anthropic: 'owner-a',
+        legacyClaimOwner: 'owner-a',
+      });
+    },
+  );
+
+  it('preserves the old owner fence and removes its temp after persistent contention', () => {
+    migrateLegacyNativeProviderAuthBindings('owner-a', { anthropic: true });
+    const before = fs.readFileSync(bindingFile, 'utf8');
+    const realRename = fs.renameSync;
+    let attempts = 0;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+      if (String(from).endsWith('.tmp') && String(to) === bindingFile) {
+        attempts += 1;
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      }
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+
+    try {
+      expect(() => unbindNativeProviderAuth('anthropic')).toThrow(/EBUSY/);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(attempts).toBe(4);
+    expect(fs.readFileSync(bindingFile, 'utf8')).toBe(before);
+    expect(
+      fs.readdirSync(userDataDir).filter((name) => name.startsWith('native-provider-auth.json.')),
+    ).toEqual([]);
+  });
+});
+
 describe('claimDetectedNativeProviderAuth', () => {
   it('repairs the binding when the one-shot migration consumed the claim before the credential appeared', () => {
     // 复现主 bug:legacy 迁移在 reconcile 硬链建立之前跑掉,openai 名额以 false 被消费。

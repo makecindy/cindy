@@ -1004,12 +1004,47 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     expect(fs.existsSync(`${file}.tmp`)).toBe(false);
   });
 
-  it('removes its unique temporary file when an update rename fails', async () => {
+  it.each(['EBUSY', 'EACCES', 'ENOTEMPTY'])(
+    'retries a transient %s while publishing a credential update',
+    async (code) => {
+      const root = makeRoot();
+      const file = path.join(root, '.credentials.json');
+      fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: { accessToken: 'old-token' } }));
+      const { writeClaudeAiOAuth } = await importStore({ platform: 'win32', configDir: root });
+      const realRename = fs.renameSync;
+      let failures = 2;
+      let attempts = 0;
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from, to) => {
+        if (String(from).endsWith('.tmp') && String(to) === file) {
+          attempts += 1;
+          if (failures > 0) {
+            failures -= 1;
+            throw Object.assign(new Error(code), { code });
+          }
+        }
+        return realRename(from, to);
+      }) as typeof fs.renameSync);
+
+      try {
+        expect(() => writeClaudeAiOAuth(oauth)).not.toThrow();
+      } finally {
+        renameSpy.mockRestore();
+      }
+      expect(attempts).toBe(3);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ claudeAiOauth: oauth });
+      expect(fs.readdirSync(root)).toEqual(['.credentials.json']);
+    },
+  );
+
+  it('preserves the old credential and removes its temp after persistent update contention', async () => {
     const root = makeRoot();
     const file = path.join(root, '.credentials.json');
-    fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: { accessToken: 'old-token' } }));
-    const { writeClaudeAiOAuth } = await importStore({ platform: 'linux', configDir: root });
+    const before = { claudeAiOauth: { accessToken: 'old-token' } };
+    fs.writeFileSync(file, JSON.stringify(before));
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'win32', configDir: root });
+    let attempts = 0;
     const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      attempts += 1;
       throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
     });
 
@@ -1018,6 +1053,8 @@ describe('file-backed Claude credential store fail-closed reads', () => {
     } finally {
       renameSpy.mockRestore();
     }
+    expect(attempts).toBe(4);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(before);
     expect(fs.readdirSync(root)).toEqual(['.credentials.json']);
   });
 

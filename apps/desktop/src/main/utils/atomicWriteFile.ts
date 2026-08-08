@@ -16,7 +16,7 @@ function sleepSync(ms: number): void {
 }
 
 /** rename 遇瞬时锁短退避重试;EPERM/EEXIST 与其余错误立即上抛。 */
-function renameSyncWithRetry(from: string, to: string): void {
+export function renameSyncWithRetry(from: string, to: string): void {
   for (let attempt = 0; ; attempt += 1) {
     try {
       fs.renameSync(from, to);

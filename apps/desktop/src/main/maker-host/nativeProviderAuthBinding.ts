@@ -5,6 +5,7 @@ import path from 'node:path';
 import { lockSync } from 'proper-lockfile';
 
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { renameSyncWithRetry } from '../utils/atomicWriteFile.js';
 
 type NativeProviderId = 'anthropic' | 'openai' | 'xai';
 const NATIVE_PROVIDER_IDS = [
@@ -200,7 +201,7 @@ function atomicWriteJson(file: string, value: unknown): void {
       flag: 'wx',
       mode: 0o600,
     });
-    fs.renameSync(tmp, file);
+    renameSyncWithRetry(tmp, file);
     try {
       fs.chmodSync(file, 0o600);
     } catch {
