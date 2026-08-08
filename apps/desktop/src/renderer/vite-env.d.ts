@@ -3478,6 +3478,11 @@ interface ElectronAPI {
       cb: (payload: { deviceId: string; unresponsive: boolean }) => void,
     ) => () => void;
     /**
+     * 同机单持有者仲裁角色变化。standby=true = 本机另一个 Cindy 实例正持有 device-link,
+     * 本实例不连 relay(远程设备会全部显示离线,远程调用一律 DEVICE_LINK_STANDBY)。
+     */
+    onOwnershipChanged: (cb: (payload: { standby: boolean }) => void) => () => void;
+    /**
      * 控制端:远程会话镜像的本地冷缓存(main 落 userData,见
      * main/device-link/mirrorCacheStore.ts)。只做首屏加速、非权威 —— 缓存里没有 live 态,
      * fresh 数据一到由 renderer 整体接管。
