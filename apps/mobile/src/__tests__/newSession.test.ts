@@ -2206,6 +2206,25 @@ describe('submit guard catalog wiring (source locks)', () => {
     const between = goalSlice.slice(iCreate, iGoal);
     expect(between).not.toMatch(/isCurrentOwner\(\)\) return;|ensureDeviceAlive|abortIfDeviceSwitched/);
   });
+
+  it('goal settle 段:goal.set 之后每处中止都是 owner + 设备双复核,切设备中止 settle(greptile P1)', () => {
+    // goal.set 等待期间同账号可能切换设备:owner 检查拦不住,settle 若继续用旧
+    // selectedDeviceId 会把设备 A 的会话写进当前页面并跳转设备 A 会话页,用户
+    // 还会在设备 B 上重复创建——settle 每处中止必须并列设备复核(greptile P1)。
+    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const settleStart = goalSlice.indexOf('── settle 段');
+    expect(settleStart).toBeGreaterThan(0);
+    const settleSlice = goalSlice.slice(settleStart, goalSlice.indexOf('router.replace({'));
+    // settle 段不再有裸 owner 中止
+    expect(settleSlice).not.toMatch(/if \(!isCurrentOwner\(\)\) return;/);
+    const dualChecks = settleSlice.match(/!isCurrentOwner\(\) \|\| !ensureDeviceAlive\(\)\) return;/g) ?? [];
+    // subscribe / getSession(前+后) / catch / upsert / waitForPendingUploads 后 = 7 处
+    expect(dualChecks.length).toBeGreaterThanOrEqual(7);
+    // 跳转是 settle 最后一步:最后一个复核点之后无 await(无设备切换窗口)
+    const lastCheck = settleSlice.lastIndexOf('!ensureDeviceAlive()) return;');
+    expect(lastCheck).toBeGreaterThan(0);
+    expect(settleSlice.slice(lastCheck)).not.toMatch(/await /);
+  });
 });
 
 describe('fast memory restore wiring (source locks)', () => {

@@ -165,6 +165,25 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(f2).toHaveBeenCalledTimes(1);
   });
 
+  it('多 peer 故障隔离:dev-1 fresh 拉取失败,dev-2 缓存零感知(fault-radius 三问)', async () => {
+    // 故障半径三问的多 peer 用例:恢复路径改动必须带「≥2 控制端共享同一被控端,
+    // 一个 peer 静默/失败,其它 peer 零感知」——dev-1 fresh 失败只作用于 dev-1
+    // 自身(不覆盖缓存、不推进代际),dev-2 的缓存命中与代际不受波及。
+    const mod = await import('@/device-link/deviceProvidersCache');
+    const dev2Fetcher = vi.fn(async () => result('dev-2'));
+    await mod.fetchDeviceProviders('dev-2', dev2Fetcher);
+    const dev2Gen = mod.getDeviceProvidersGen('dev-2');
+    // dev-1 fresh 拉取失败(网络/工作站问题):不覆盖 dev-1 缓存,抛错由调用方回退
+    await expect(mod.fetchDeviceProvidersFresh('dev-1', vi.fn(async () => {
+      throw new Error('NETWORK_DOWN');
+    }))).rejects.toThrow('NETWORK_DOWN');
+    // dev-2 零感知:缓存仍命中(不发新请求)、代际未被 dev-1 的失败推进
+    await mod.fetchDeviceProviders('dev-2', vi.fn(async () => result('dev-2-should-not-be-used')));
+    expect(dev2Fetcher).toHaveBeenCalledTimes(1);
+    expect(mod.getCachedDeviceProviders('dev-2')).toEqual({ providers: [{ id: 'dev-2-xd' }] });
+    expect(mod.getDeviceProvidersGen('dev-2')).toBe(dev2Gen);
+  });
+
   it('驱逐:evict 后同设备重新拉取;只清该设备(dev-2 仍命中缓存)', async () => {
     const mod = await import('@/device-link/deviceProvidersCache');
     const f1 = vi.fn(async () => result('dev-1'));

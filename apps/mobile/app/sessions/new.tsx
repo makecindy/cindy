@@ -4928,27 +4928,32 @@ export default function NewRemoteSessionScreen() {
       } catch (goalErr) {
         goalSetError = formatRemoteError(goalErr);
       }
-      // ── settle 段(可降级):本地同步/UI,owner 检查恢复正常语义 ──
-      if (!isCurrentOwner()) return;
+      // ── settle 段(可降级):本地同步/UI,owner + 设备检查恢复正常语义 ──
+      // 设备复核(greptile P1):goal.set 等待期间同账号可能切换设备——owner 检查
+      // 拦不住,settle 若继续用旧 selectedDeviceId 会把设备 A 的会话写进当前
+      // (设备 B)页面并跳转到设备 A 会话页,还可能让用户在 B 上重复创建;
+      // 设备已切换则直接中止 settle(不跳转、不写错设备),createSession 已认领
+      // worktree,无需 abortIfDeviceSwitched 补偿。
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       await subscribe(`session:${result.sessionId}`, selectedDeviceId, ['sessions', `session:${result.sessionId}`]).catch(() => undefined);
-      if (!isCurrentOwner()) return;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       let session: RemoteSession;
       try {
-        if (!isCurrentOwner()) return;
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
         session = await maker.getSession(result.sessionId);
-        if (!isCurrentOwner()) return;
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       } catch {
-        if (!isCurrentOwner()) return;
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
         session = sessionFromCreateResult(result, finalDraft);
       }
-      if (!isCurrentOwner()) return;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
-      if (!isCurrentOwner()) return;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       // 目标流不带 composer 附件(与桌面一致),跳转即丢引用:已上传的中转对象在此
       // best-effort 回收,否则成为 OSS 孤儿直到桶生命周期清理(codex review #504)。
       // 先等在途乐观上传落定,否则「回收后才落地」的图会漏出这轮清理。
       await waitForPendingUploads();
-      if (!isCurrentOwner()) return;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       for (const attachment of attachmentsRef.current) {
         discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
       }

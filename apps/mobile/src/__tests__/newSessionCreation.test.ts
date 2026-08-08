@@ -158,6 +158,7 @@ describe('newSessionCreation pipeline', () => {
       's18',
       's19',
       's20',
+      's21',
     ]) dismissNewSessionCreation(id);
   });
 
@@ -277,6 +278,50 @@ describe('newSessionCreation pipeline', () => {
       expect.anything(),
     );
     expect(getNewSessionCreationTask('s11')).toBeNull();
+  });
+
+  it('started 写盘后二次重验修正草稿 + getSession 失败 → 乐观行回写修正版(codex P1)', async () => {
+    // 首次 auth 刷新 fail-open(fresh:null → 管线内 draftPatch 保持 null),但
+    // started 写盘后二次重验拿到 fresh 并修正 (model, providerId);getSession
+    // 失败走合成 fallback——若乐观行回写只认 draftPatch,此处会跳过,UI/后续
+    // 发送仍用已删除来源;排队 lazy-create 材料与乐观行同源,必须一并修正。
+    let authCalls = 0;
+    const maker = makeMaker();
+    startNewSessionCreation(makeParams('s21', maker, {
+      draft: {
+        ...DRAFT,
+        workingDir: '/repo/.cindy-worktrees/auto-one',
+        providerId: 'provider-a',
+        model: 'model-a',
+      },
+      precreatedWorktree: {
+        path: '/repo/.cindy-worktrees/auto-one',
+        recoveryKey: 'recovery-key-1234567890',
+        originalWorkingDir: '/repo',
+      },
+      precreatedWorktreeAccountId: 'owner-a',
+      confirmUnauthenticated: async () => {
+        authCalls += 1;
+        return authCalls === 1
+          ? { unauthenticated: false, fresh: null }
+          : { unauthenticated: false, fresh: { providers: [] } };
+      },
+      revalidateDraftAfterAuth: async () => ({ providerId: 'provider-b', model: 'model-b' }),
+    }));
+    await flushPipeline();
+    expect(authCalls).toBe(2);
+    // 乐观行回写修正版(不修则 UI 显示 provider-a)
+    const row = remoteSessionStore.getSessions().find((s) => s.id === 's21');
+    expect(row?.providerId).toBe('provider-b');
+    expect(row?.model).toBe('model-b');
+    // 排队 lazy-create 材料与乐观行同源
+    expect(maker.input.enqueue).toHaveBeenCalledWith(
+      's21',
+      expect.objectContaining({
+        createOpts: expect.objectContaining({ providerId: 'provider-b', model: 'model-b' }),
+      }),
+      expect.anything(),
+    );
   });
 
   it('createSession 返回的 id 与预生成 id 不一致 → 确定性 create-failed,不把首条消息发进错误会话', async () => {

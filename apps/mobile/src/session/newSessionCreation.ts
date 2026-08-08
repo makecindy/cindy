@@ -927,7 +927,12 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 联合终检改了 (model, providerId),但乐观行仍是旧 task.draft——getSession
     // 失败时若不回写,会话 UI / 后续发送会继续用已删除来源,直到一次完整同步
     // 才纠正;乐观行与 queued 同源,回写后展示与首条消息一致。
-    if (!freshSession && (draftPatch !== null)) {
+    // 条件覆盖两路修正(codex review P1):①draftPatch 非 null = 首次 auth fresh
+    // 重验修正;②effectiveFinalDraft !== finalDraft = started 写盘后二次重验
+    // 修正(首次 auth 刷新 fail-open 时 draftPatch 为 null,但 createOutcome
+    // 已按 started 后目录修正)——任一发生都必须回写,否则 UI/后续发送仍用
+    // 已删除来源。
+    if (!freshSession && (draftPatch !== null || effectiveFinalDraft !== finalDraft)) {
       remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, sessionForQueue);
     }
     const queuedDraft = attachFirstMessageSessionReferences(buildQueuedTextMessage(
