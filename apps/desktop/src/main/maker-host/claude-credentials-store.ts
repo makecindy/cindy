@@ -198,6 +198,12 @@ function isErrno(error: unknown, code: string): boolean {
   );
 }
 
+function errnoCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error
+    ? String((error as NodeJS.ErrnoException).code)
+    : 'unknown';
+}
+
 function unreadableStoreError(cause: unknown): Error {
   return new Error('claude credential store read failed; refusing to modify shared credentials', {
     cause,
@@ -254,8 +260,9 @@ function withCredentialWriteLock<T>(mutation: () => T): T {
 /**
  * Read-only counterpart to the mutation lock. Contention and lock/read errors
  * are a normal fail-closed `null` for status/spawn callers, never a UI or agent
- * startup exception. A missing config directory is a confirmed absence supplied
- * by the caller; the lock target/order still matches writers exactly.
+ * startup exception. A missing config directory confirms absence for file-backed
+ * stores; macOS still checks the independent legacy Keychain item without
+ * creating the directory. The lock target/order still matches writers exactly.
  */
 function withCredentialSnapshotLock<T>(snapshot: () => T, directoryAbsent: T): T | null {
   const dir = claudeConfigDir();
@@ -265,9 +272,34 @@ function withCredentialSnapshotLock<T>(snapshot: () => T, directoryAbsent: T): T
     // every other stat failure remains fail-closed.
     if (!fs.statSync(dir).isDirectory()) return null;
   } catch (error) {
-    if (isErrno(error, 'ENOENT')) return directoryAbsent;
+    if (isErrno(error, 'ENOENT')) {
+      if (process.platform !== 'darwin') return directoryAbsent;
+
+      // Historical macOS writers stored credentials only in Keychain, so the
+      // absence of ~/.claude does not prove the Keychain item is absent. Read
+      // without creating the directory, then reject the result if a current
+      // cooperating writer created the lock directory while the read ran.
+      let value: T | null = null;
+      try {
+        value = snapshot();
+      } catch (snapshotError) {
+        log.warn('claude credential snapshot failed closed', {
+          error: snapshotError instanceof Error ? snapshotError.message : String(snapshotError),
+        });
+      }
+      try {
+        fs.statSync(dir);
+        return null;
+      } catch (recheckError) {
+        if (isErrno(recheckError, 'ENOENT')) return value;
+        log.warn('claude credential snapshot directory recheck unavailable', {
+          code: errnoCode(recheckError),
+        });
+        return null;
+      }
+    }
     log.warn('claude credential snapshot directory unavailable', {
-      error: error instanceof Error ? error.message : String(error),
+      code: errnoCode(error),
     });
     return null;
   }
@@ -350,9 +382,14 @@ function readBlobRawMac(): RawBlobReadResult {
 function writeBlobMac(blob: Record<string, unknown>, mode: BlobWriteMode): void {
   const json = JSON.stringify(blob);
   const hex = Buffer.from(json, 'utf-8').toString('hex');
+  const account = keychainAccount();
   const updateFlag = mode === 'update' ? ' -U' : '';
-  const interactiveCmd = `add-generic-password${updateFlag} -a "${keychainAccount()}" -s "${KEYCHAIN_SERVICE}" -X "${hex}"\n`;
-  if (decideKeychainWriteMode(interactiveCmd.length) === 'stdin') {
+  const interactiveCmd = `add-generic-password${updateFlag} -a "${account}" -s "${KEYCHAIN_SERVICE}" -X "${hex}"\n`;
+  // `security -i` parses a command string rather than an argv array. Restrict
+  // it to account names that need no escaping; unusual names stay a single,
+  // literal argv element and cannot alter the command structure.
+  const interactiveAccountSafe = /^[A-Za-z0-9._@+-]+$/.test(account);
+  if (interactiveAccountSafe && decideKeychainWriteMode(interactiveCmd.length) === 'stdin') {
     execFileSync('security', ['-i'], {
       env: securityEnvironment(),
       input: interactiveCmd,
@@ -362,7 +399,7 @@ function writeBlobMac(blob: Record<string, unknown>, mode: BlobWriteMode): void 
   } else {
     const args = ['add-generic-password'];
     if (mode === 'update') args.push('-U');
-    args.push('-a', keychainAccount(), '-s', KEYCHAIN_SERVICE, '-X', hex);
+    args.push('-a', account, '-s', KEYCHAIN_SERVICE, '-X', hex);
     execFileSync('security', args, {
       env: securityEnvironment(),
       stdio: ['ignore', 'ignore', 'pipe'],

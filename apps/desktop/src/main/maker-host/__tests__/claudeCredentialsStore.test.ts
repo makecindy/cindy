@@ -179,23 +179,20 @@ describe('Claude credential shared write lock', () => {
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
-  it.each(['linux', 'darwin'] as const)(
+  it.each(['linux', 'win32'] as const)(
     'treats a missing config directory as absent without creating it on %s',
     async (platform) => {
       const root = makeRoot();
       const missing = path.join(root, 'missing-claude-dir');
       const execFileSync = vi.fn(() => JSON.stringify({ claudeAiOauth: oauth }));
       const lockSync = vi.fn(() => vi.fn());
-      const {
-        readClaudeAiOAuth,
-        hasClaudeAiOAuth,
-        getClaudeAiOAuthCredentialMatchState,
-      } = await importStore({
-        platform,
-        configDir: missing,
-        execFileSync,
-        lockSync,
-      });
+      const { readClaudeAiOAuth, hasClaudeAiOAuth, getClaudeAiOAuthCredentialMatchState } =
+        await importStore({
+          platform,
+          configDir: missing,
+          execFileSync,
+          lockSync,
+        });
 
       expect(readClaudeAiOAuth()).toBeNull();
       expect(hasClaudeAiOAuth()).toBe(false);
@@ -205,6 +202,154 @@ describe('Claude credential shared write lock', () => {
       expect(execFileSync).not.toHaveBeenCalled();
     },
   );
+
+  it('reads a legacy macOS Keychain credential when the config directory is missing', async () => {
+    const root = makeRoot();
+    const missing = path.join(root, 'missing-claude-dir');
+    const execFileSync = vi.fn(() => JSON.stringify({ claudeAiOauth: oauth }));
+    const lockSync = vi.fn(() => vi.fn());
+    const { readClaudeAiOAuth, hasClaudeAiOAuth, getClaudeAiOAuthCredentialMatchState } =
+      await importStore({
+        platform: 'darwin',
+        configDir: missing,
+        execFileSync,
+        lockSync,
+      });
+
+    expect(readClaudeAiOAuth()).toEqual(oauth);
+    expect(hasClaudeAiOAuth()).toBe(true);
+    expect(getClaudeAiOAuthCredentialMatchState(oauth)).toBe('same');
+    expect(fs.existsSync(missing)).toBe(false);
+    expect(lockSync).not.toHaveBeenCalled();
+    expect(execFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('treats a missing macOS config directory and Keychain item as absent', async () => {
+    const root = makeRoot();
+    const missing = path.join(root, 'missing-claude-dir');
+    const execFileSync = vi.fn(() => {
+      throw macNotFoundError();
+    });
+    const lockSync = vi.fn(() => vi.fn());
+    const { readClaudeAiOAuth, hasClaudeAiOAuth, getClaudeAiOAuthCredentialMatchState } =
+      await importStore({
+        platform: 'darwin',
+        configDir: missing,
+        execFileSync,
+        lockSync,
+      });
+
+    expect(readClaudeAiOAuth()).toBeNull();
+    expect(hasClaudeAiOAuth()).toBe(false);
+    expect(getClaudeAiOAuthCredentialMatchState(oauth)).toBe('absent');
+    expect(fs.existsSync(missing)).toBe(false);
+    expect(lockSync).not.toHaveBeenCalled();
+    expect(execFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('discards an unlocked macOS Keychain snapshot when a writer creates the lock directory', async () => {
+    const root = makeRoot();
+    const missing = path.join(root, 'missing-claude-dir');
+    const execFileSync = vi.fn(() => {
+      fs.mkdirSync(missing, { recursive: true });
+      return JSON.stringify({ claudeAiOauth: oauth });
+    });
+    const lockSync = vi.fn(() => vi.fn());
+    const { readClaudeAiOAuth } = await importStore({
+      platform: 'darwin',
+      configDir: missing,
+      execFileSync,
+      lockSync,
+    });
+
+    expect(readClaudeAiOAuth()).toBeNull();
+    expect(fs.existsSync(missing)).toBe(true);
+    expect(lockSync).not.toHaveBeenCalled();
+    expect(execFileSync).toHaveBeenCalledOnce();
+  });
+
+  it('reports an unreadable credential match when a writer creates the missing macOS directory', async () => {
+    const root = makeRoot();
+    const missing = path.join(root, 'missing-claude-dir');
+    const execFileSync = vi.fn(() => {
+      fs.mkdirSync(missing, { recursive: true });
+      return JSON.stringify({ claudeAiOauth: oauth });
+    });
+    const lockSync = vi.fn(() => vi.fn());
+    const { getClaudeAiOAuthCredentialMatchState } = await importStore({
+      platform: 'darwin',
+      configDir: missing,
+      execFileSync,
+      lockSync,
+    });
+
+    expect(getClaudeAiOAuthCredentialMatchState(oauth)).toBe('unreadable');
+    expect(lockSync).not.toHaveBeenCalled();
+    expect(execFileSync).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed without logging a local path when the macOS directory recheck fails', async () => {
+    const root = makeRoot();
+    const missing = path.join(root, 'missing-claude-dir');
+    const secretPath = '/private/secret-user-path/.claude';
+    const execFileSync = vi.fn(() => JSON.stringify({ claudeAiOauth: oauth }));
+    const lockSync = vi.fn(() => vi.fn());
+    const { readClaudeAiOAuth } = await importStore({
+      platform: 'darwin',
+      configDir: missing,
+      execFileSync,
+      lockSync,
+    });
+    const statSpy = vi
+      .spyOn(fs, 'statSync')
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      })
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error(`permission denied: ${secretPath}`), { code: 'EACCES' });
+      });
+
+    try {
+      expect(readClaudeAiOAuth()).toBeNull();
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(logger.warn).toHaveBeenCalledWith(
+      'claude credential snapshot directory recheck unavailable',
+      { code: 'EACCES' },
+    );
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(secretPath);
+    expect(lockSync).not.toHaveBeenCalled();
+    expect(execFileSync).toHaveBeenCalledOnce();
+  });
+
+  it('does not log a local path when snapshot directory access fails', async () => {
+    const root = makeRoot();
+    const secretPath = '/private/secret-user-path/.claude';
+    const execFileSync = vi.fn();
+    const lockSync = vi.fn(() => vi.fn());
+    const { readClaudeAiOAuth } = await importStore({
+      platform: 'linux',
+      configDir: root,
+      execFileSync,
+      lockSync,
+    });
+    const statSpy = vi.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw Object.assign(new Error(`permission denied: ${secretPath}`), { code: 'EACCES' });
+    });
+
+    try {
+      expect(readClaudeAiOAuth()).toBeNull();
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(logger.warn).toHaveBeenCalledWith('claude credential snapshot directory unavailable', {
+      code: 'EACCES',
+    });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(secretPath);
+    expect(lockSync).not.toHaveBeenCalled();
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
 
   it('holds storage before both binding checks and the token read', async () => {
     let held = false;
@@ -404,6 +549,81 @@ describe('macOS Claude credential store fail-closed reads', () => {
     expect(createArgs).toEqual(['-i']);
     expect(createOptions.input).toContain('add-generic-password');
     expect(createOptions.input).not.toMatch(/(?:^|\s)-U(?:\s|$)/);
+  });
+
+  it.each([
+    ['quote/backslash', 'quoted"user\\name -U'],
+    ['newline', 'line\nbreak'],
+    ['carriage return', 'line\rbreak'],
+    ['semicolon', 'user; delete-generic-password'],
+    ['shell syntax', 'user`cmd`$(cmd)'],
+    ['unicode', '用户'],
+  ])('uses literal argv for an unsafe Keychain account containing %s', async (_case, account) => {
+    const expected = { claudeAiOauth: oauth };
+    const execFileSync = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw macNotFoundError();
+      })
+      .mockImplementationOnce(() => '')
+      .mockImplementationOnce(() => JSON.stringify(expected));
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'darwin', execFileSync });
+    process.env.USER = account;
+
+    writeClaudeAiOAuth(oauth);
+
+    const createArgs = execFileSync.mock.calls[1]?.[1] as string[];
+    const createOptions = execFileSync.mock.calls[1]?.[2] as { input?: string };
+    expect(createArgs[0]).toBe('add-generic-password');
+    expect(createArgs).toContain(account);
+    expect(createArgs.filter((arg) => arg === '-U')).toHaveLength(0);
+    expect(createOptions.input).toBeUndefined();
+    const hex = createArgs.at(-1);
+    expect(JSON.parse(Buffer.from(hex!, 'hex').toString('utf8'))).toEqual(expected);
+  });
+
+  it('keeps a safe boundary Keychain account on the private interactive path', async () => {
+    const safeAccount = 'a.b_c+tag@test-user';
+    const expected = { claudeAiOauth: oauth };
+    const execFileSync = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw macNotFoundError();
+      })
+      .mockImplementationOnce(() => '')
+      .mockImplementationOnce(() => JSON.stringify(expected));
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'darwin', execFileSync });
+    process.env.USER = safeAccount;
+
+    writeClaudeAiOAuth(oauth);
+
+    const createArgs = execFileSync.mock.calls[1]?.[1] as string[];
+    const createOptions = execFileSync.mock.calls[1]?.[2] as { input?: string };
+    expect(createArgs).toEqual(['-i']);
+    expect(createOptions.input).toContain(`-a "${safeAccount}"`);
+  });
+
+  it('uses exactly one real update flag when an unsafe Keychain account is updated', async () => {
+    const unsafeAccount = 'quoted"user -U';
+    const before = { claudeAiOauth: { accessToken: 'old-token' } };
+    const expected = { claudeAiOauth: oauth };
+    const execFileSync = vi
+      .fn()
+      .mockImplementationOnce(() => JSON.stringify(before))
+      .mockImplementationOnce(() => JSON.stringify(before))
+      .mockImplementationOnce(() => '')
+      .mockImplementationOnce(() => JSON.stringify(expected));
+    const { writeClaudeAiOAuth } = await importStore({ platform: 'darwin', execFileSync });
+    process.env.USER = unsafeAccount;
+
+    writeClaudeAiOAuth(oauth);
+
+    const updateArgs = execFileSync.mock.calls[2]?.[1] as string[];
+    const updateOptions = execFileSync.mock.calls[2]?.[2] as { input?: string };
+    expect(updateArgs[0]).toBe('add-generic-password');
+    expect(updateArgs.filter((arg) => arg === '-U')).toHaveLength(1);
+    expect(updateArgs).toContain(unsafeAccount);
+    expect(updateOptions.input).toBeUndefined();
   });
 
   it('creates a large explicitly absent item through argv without -U', async () => {
