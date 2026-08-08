@@ -91,6 +91,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | `/start` | **无** | **有** | Telegram 私聊首次交互必发 `/start`（START 按钮）；官方 bot 的首次交互走服务端 deep-link 绑定流程，不需要这条命令。见注册表 `parityNote`——这是**唯一一条个人侧独有**的命令 |
 | typing 保活总上限 | 10 分钟 + 设备在线门控 | 5 分钟（`typingKeepaliveMaxMs`） | 超过即停发，turn 异常悬挂时不无限打 API。官方那档带设备在线门控，跨服务端，本仓兑现不了——已在 `presentationCapabilities.ts` 声明为车道差异 |
 | lane 模型 | per-principal | per-chat | 已在 `presentationCapabilities.ts` 声明 |
+| `message_thread_id` 的**归属判据在哪一侧** | 在**服务端**：桌面这半拿不到 `is_topic_message`（协议 payload 里没有这个字段），只按服务端下发的 threadId 分桶 | 在**客户端**：入站消息走 `laneThreadIdOf`、卡片回调走 `parseCallbackQuery`，都用 `is_topic_message === true` 门控——不是 forum topic 就记进主群流（threadId 空串） | 这个字段有**两个含义**，混用会出真故障：Telegram 对**普通群的 reply 链**也会给 `message_thread_id`（值 = reply root）。**投递位置**用裸值（带上它消息就投对地方，个人侧的出站与 typing 即如此；服务端 `topicThreadIdOf` 的注释也明写「不要拿归属标识替换投递位置参数」）；**归属**必须靠 `is_topic_message` 门控。而这个门控字段**只有持有 Telegram 连接的那一侧拿得到**——个人 bot 直连拿得到，官方 bot 的桌面这半只拿服务端下发的 payload，所以判据只能在服务端。这是架构决定的车道差异，不是谁漏做，已在 `presentationCapabilities.ts` 声明为 `threadIdDualSemantics`。**曾经的实机故障**：服务端早期把普通群 reply 链的 `message_thread_id` 当 topic 下发，那些发言散进一个个 reply-root 桶，agent 在群里答「我看不到群里的历史消息」（2026-08-03 实测：172 条在主群流、另有若干 reply-root 桶）。服务端现已按 `is_topic_message` 门控（`controller.ts` 的 `topicThreadIdOf`；**是否已上生产未核**），客户端保留一层兜底救存量错桶行——`buildGroupContextPrefix` 的 `fallbackThreadFilter` 让**主群流**额外读所有非空 threadId 的行（宁可多读同群发言、不可漏读），**topic lane 不读兜底集**：topic 之间严格隔离的优先级高于补读，代价是存量错桶行在 topic lane 里仍看不到 |
 | 终稿特效 `messageEffectId` | 有 | 无 | 官方装饰位，已声明 |
 
 ## 四、缺口（待办）
