@@ -392,12 +392,13 @@ function projectInvokeResultForTunnel(
 let activeClient: DeviceLinkClient | null = null;
 
 /**
- * presence「显式离线」判据(index.ts 接线,那里持有权威 presence 视图):
- * 返回 true 仅当 presence 明确宣告该设备离线;presence 未知(如 relay 重连后
- * 视图刚清空)必须返回 false——fail-open,否则会把重连后的恢复窗口一并拦死。
- * outbox 全量 flush 据此跳过注定 DEVICE_OFFLINE 的盲发(2026-08-08 线上:
- * ws-online 全量 flush 对离线目标逐帧弹回,叠进当晚的 relay 聚合背压);
- * 条目保留不丢,恢复由该控制端回归后的 link-open / subscribe 定向 flush 接棒。
+ * presence「显式离线」判据(index.ts 接线,那里持有权威 presence 视图 + 跨重连
+ * 保留的上一代离线事实):返回 true 仅当 presence 明确宣告该设备离线;从未观察到
+ * 离线一律返回 false——fail-open,不把恢复窗口的首发拦死。
+ * outbox **全量** flush 据此跳过注定 DEVICE_OFFLINE 的盲发(2026-08-08 线上:
+ * ws-online 全量 flush 对离线目标逐帧弹回,叠进当晚的 relay 聚合背压);条目
+ * 保留不丢,恢复由该控制端 link-open 触发的定向 flush(flushRemoteInvokeResultOutbox(src),
+ * 不受本门禁约束)与周期性 flush 接棒。
  */
 let presenceOfflineCheck: ((deviceId: string) => boolean) | null = null;
 
@@ -1697,10 +1698,12 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     // 离线轮只做上面的 TTL 出清:trySend 必然 NOT_CONNECTED,不空转、不刷日志。
     if (!relayOnline) continue;
     if (blockedPeers.has(queued.src)) continue;
-    // presence 已明确宣告该控制端离线:本轮跳过盲发(逐帧必弹 DEVICE_OFFLINE,
+    // presence 已明确宣告该控制端离线:全量轮跳过盲发(逐帧必弹 DEVICE_OFFLINE,
     // 只喂 relay 聚合背压),条目保留、TTL 照常;presence 未知不拦(fail-open)。
-    // 恢复:控制端回归必先 link-open / subscribe,两者都有定向 flush。
-    if (presenceOfflineCheck?.(queued.src)) {
+    // 门禁只作用于全量轮(onlySrc 为空):定向轮由 link-open 触发,「对端刚主动
+    // 建链」是比 presence 更强、更新的在线证据,presence 短暂滞后/误报不得把这条
+    // 恢复事件一并拦死(review P2)。
+    if (!onlySrc && presenceOfflineCheck?.(queued.src)) {
       blockedPeers.add(queued.src);
       continue;
     }

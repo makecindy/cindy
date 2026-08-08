@@ -285,6 +285,33 @@ describe('[5] outbox flush 的 presence 显式离线门禁', () => {
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
   });
 
+  it('定向 flush(link-open 触发)不受门禁约束:对端已主动建链是更强的在线证据', () => {
+    // review P2:presence 短暂滞后/误报为 offline 时,不得把「对端刚 link-open」
+    // 这条恢复事件一并拦死——定向轮(onlySrc)必须照常投递。
+    setDispatchPresenceOfflineCheck(() => true); // 极端:判据说所有设备都离线
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 全量轮:被门禁挡住(条目保留)
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 定向轮(link-open 路径):不看门禁,直接投递
+    __testing.flushRemoteInvokeResultOutbox('ctrl-a');
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
   it('presence 判据未接线(null)时 fail-open:行为与门禁不存在时一致', () => {
     // __testing.reset() 已把判据清空;不接线直接 flush,验证默认路径不受影响
     const sendInvokeResult = vi.fn().mockImplementationOnce(() => {

@@ -58,6 +58,7 @@ import {
 } from './settings-store';
 import { keepAwakeController } from './power-blocker';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
+import { createPresenceOfflineGate } from './presenceOfflineGate';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
@@ -247,14 +248,17 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
 const presenceOnlineByDevice = new Map<string, boolean>();
 
 /**
- * presence「显式离线」判据(接线给 dispatch 的 outbox flush,与本文件订阅重放
- * fan-out 共用):只有权威 presence 明确说过 offline 才为 true;视图里没有该
- * 设备(teardown 清空 / relay 重连后尚未收到首帧 presence)一律 fail-open——
- * 恢复窗口的首发允许盲发,由既有终止/恢复事件收敛(重试前置门 + presence
- * 翻转重放 + link-open 定向 flush)。
+ * 发送门禁用的「presence 显式离线」判据(订阅重放 fan-out 与 dispatch 的 outbox
+ * 全量 flush 共用)。当代视图是单一真相,gate 只叠加「跨重连保留上一代离线事实」
+ * 那一层——重连的 ws-online 全量重放跑在本代首帧 presence 之前,只查当代视图会
+ * 让门禁在主路径上失效(不变量与理由见 presenceOfflineGate.ts)。
  */
+const presenceOfflineGate = createPresenceOfflineGate(
+  (deviceId) => presenceOnlineByDevice.get(deviceId),
+);
+
 function isPresenceExplicitlyOffline(deviceId: string): boolean {
-  return presenceOnlineByDevice.get(deviceId) === false;
+  return presenceOfflineGate.isExplicitlyOffline(deviceId);
 }
 
 const presenceNameByDevice = new Map<string, string>();
@@ -477,6 +481,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 上线时 wasAvailable 仍是 true,「不可用→可用」翻转永远不发生,推送流一直
     // 缺到下次无关恢复事件(review P1)。
     if (status !== 'online') {
+      // 清空前转存本代已知的 offline 事实:重连后的 ws-online 全量重放跑在本代
+      // 首帧 presence 之前,发送门禁需要它才不至于对已知离线目标整批盲发。
+      presenceOfflineGate.carryOverGenerationEnd(presenceOnlineByDevice);
       presenceOnlineByDevice.clear();
       presenceAvailableByDevice.clear();
     }
@@ -519,6 +526,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
+    // 当代权威事实已到:上一代的离线结论让位(无论本帧 online / offline,
+    // 判据都改由当代视图回答)。
+    presenceOfflineGate.observePresence(snap.deviceId);
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
     // `!== false` 与重放侧的 `!== true` 对称:视图清空后重连的首帧不可用 presence
@@ -903,6 +913,8 @@ function teardownActiveLink(): void {
   // 同步在降级过一次之后永久失效。清空 presence 就够了 —— 没有对端就不会发送,
   // client 为 null 时 sendPush 也是 no-op。
   presenceOnlineByDevice.clear();
+  // 离线事实是链路 / 账号作用域的:登出或失去持有权后翻篇,不串到下一段链路。
+  presenceOfflineGate.reset();
   clearControllerPlatforms();
   presenceNameByDevice.clear();
   resetSubscriptionRefs();
