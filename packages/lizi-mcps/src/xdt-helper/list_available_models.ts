@@ -15,11 +15,30 @@ export interface ModelDescriptor {
   label: string;
 }
 
+export interface ModelRouteDescriptor {
+  modelId: string;
+  label: string;
+  providerId: string;
+  providerName: string;
+  isDefault: boolean;
+}
+
 /** tier: 'budget' = codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
 type ModelTier = 'budget' | 'standard';
 
 interface TaggedModel extends ModelDescriptor {
   tier: ModelTier;
+}
+
+function tagRoutes(routes: ModelRouteDescriptor[] | undefined) {
+  return routes?.map((route) => ({
+    model_id: route.modelId,
+    label: route.label,
+    tier: route.modelId.startsWith('codex/') ? 'budget' as const : 'standard' as const,
+    provider_id: route.providerId,
+    provider_name: route.providerName,
+    is_default: route.isDefault,
+  }));
 }
 
 /**
@@ -46,6 +65,11 @@ export interface ListAvailableModelsDeps {
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
     pi?: ModelDescriptor[];
+    routes?: {
+      codex?: ModelRouteDescriptor[];
+      claude_code?: ModelRouteDescriptor[];
+      pi?: ModelRouteDescriptor[];
+    };
   }>>;
 }
 
@@ -59,6 +83,8 @@ const DESCRIPTION = [
   '返回值:',
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier}]',
+  '- routes: 按 agent 列出可用 provider 路由 [{model_id, label, tier, provider_id, provider_name, is_default}]',
+  '- 同一 model_id 可有多条 route; create_worker 可传 provider_id 精确选择, is_default 表示省略 provider_id 时的当前默认来源',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
   "- tier='budget': codex/ 前缀的 gateway 折扣路由 (如 codex/gpt-5.5)",
@@ -95,6 +121,15 @@ export function registerListAvailableModelsTool(
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
         pi: tagTier(result.pi),
+        ...(result.routes
+          ? {
+              routes: {
+                codex: tagRoutes(result.routes.codex),
+                claude_code: tagRoutes(result.routes.claude_code),
+                pi: tagRoutes(result.routes.pi),
+              },
+            }
+          : {}),
       });
     },
   });

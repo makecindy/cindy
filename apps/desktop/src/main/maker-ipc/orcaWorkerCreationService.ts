@@ -159,6 +159,8 @@ export type OrcaWorkerCreationResult =
         effort: string | null;
         fastMode: boolean;
         providerId: string | null;
+        /** 实际执行路由；即使持久化 providerId 为 null，也回显解析后的来源。 */
+        routeProviderId: string | null;
         role: string;
         label: string;
       };
@@ -1064,6 +1066,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           effort: resolved.effort,
           fastMode: resolved.fastMode,
           providerId: resolved.providerId,
+          routeProviderId,
           role: role.value,
           label: label.value,
         },

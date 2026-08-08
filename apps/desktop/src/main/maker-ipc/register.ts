@@ -606,6 +606,7 @@ import {
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
 } from './orcaWorkerCreationService.js';
+import { buildOrcaModelRoutes, type OrcaModelRoute } from './orcaModelRoutes.js';
 import {
   resolveSendToSessionExecutionConfig,
   type SendToSessionExecutionOverrides,
@@ -1480,6 +1481,7 @@ interface OrcaCollabService {
     role: string;
     agent: AgentKind;
     model?: string;
+    providerId?: string | null;
     effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     fast?: boolean;
     workerPermissionMode?: OrcaWorkerPermissionMode;
@@ -1493,6 +1495,9 @@ interface OrcaCollabService {
         softLimitExceeded?: boolean;
         dispatched?: boolean;
         dispatchOutcome?: CollabDispatchOutcome;
+        resolvedModel: string;
+        providerId: string | null;
+        routeProviderId: string | null;
       }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -1641,6 +1646,11 @@ interface OrcaCollabService {
         codex?: Array<{ id: string; label: string }>;
         claude_code?: Array<{ id: string; label: string }>;
         pi?: Array<{ id: string; label: string }>;
+        routes: {
+          codex?: OrcaModelRoute[];
+          claude_code?: OrcaModelRoute[];
+          pi?: OrcaModelRoute[];
+        };
       }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -9589,7 +9599,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createWorker: async (params) => {
       try {
         await assertLeadCollabProjectEnabled(params.leadSessionId);
-        return await orcaLifecycleService.createWorker(params);
+        const created = await orcaLifecycleService.createWorker(params);
+        if (!created.ok) return created;
+        return {
+          ...created,
+          resolvedModel: created.resolved.model,
+          providerId: created.resolved.providerId,
+          routeProviderId: created.resolved.routeProviderId,
+        };
       } catch (err) {
         return {
           ok: false,
@@ -9768,13 +9785,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       try {
         const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
         const result: Record<string, Array<{ id: string; label: string }>> = {};
+        const routes: Record<string, OrcaModelRoute[]> = {};
+        const routing = await getProviderRoutingContext();
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
           // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
           const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code';
           result[key] = caps.availableModels.map((m) => ({ id: m.id, label: m.displayName }));
+          routes[key] = buildOrcaModelRoutes({
+            agent: a,
+            models: caps.availableModels,
+            routing,
+          });
         }
-        return { ok: true, ...result };
+        return { ok: true, ...result, routes };
       } catch (err) {
         return {
           ok: false,

@@ -53,6 +53,9 @@ interface CreatedWorkerResult {
   status: 'created';
   worker_id: string;
   worker_session_id: string;
+  resolved_model?: string;
+  provider_id?: string | null;
+  route_provider_id?: string | null;
   dispatched?: boolean;
   dispatch_outcome?: unknown;
   queued_message_id?: string;
@@ -148,6 +151,7 @@ export function registerCreateWorkersTool(
           role: worker.role,
           agent: worker.agent,
           model: worker.model,
+          providerId: worker.provider_id,
           effort: worker.effort,
           fast: worker.fast,
           label: worker.label,
@@ -162,6 +166,9 @@ export function registerCreateWorkersTool(
             status: 'created',
             worker_id: result.workerId,
             worker_session_id: result.workerSessionId,
+            ...(result.resolvedModel !== undefined ? { resolved_model: result.resolvedModel } : {}),
+            ...(result.providerId !== undefined ? { provider_id: result.providerId } : {}),
+            ...(result.routeProviderId !== undefined ? { route_provider_id: result.routeProviderId } : {}),
             ...(result.dispatched !== undefined ? { dispatched: result.dispatched } : {}),
             ...(result.dispatchOutcome ? { dispatch_outcome: result.dispatchOutcome } : {}),
             ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
