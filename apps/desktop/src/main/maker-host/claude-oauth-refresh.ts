@@ -813,6 +813,12 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       }
       return null;
     }
+    let lockReleased = false;
+    const releaseRefreshLock = (): void => {
+      if (lockReleased) return;
+      lockReleased = true;
+      lock.release();
+    };
     try {
       if (!sameCommittedOwner(owner, deps.readOwnerScope())) return null;
       const fresh = deps.readOAuth();
@@ -870,7 +876,11 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
         // process exit with only the in-memory fence would revive the rejected
         // grant on restart. Permanent storage failure therefore keeps this
         // exceptional refresh pending with a capped retry delay (fail closed).
+        // The token endpoint verdict is already final, so the shared refresh
+        // lock no longer protects useful work. Release it before the unbounded
+        // durability retry so another process can refresh or reauthorize.
         if (!invalidGrantDurabilityEstablished) {
+          releaseRefreshLock();
           invalidGrantDurabilityEstablished =
             await persistRejectedCredentialRecoveryAcrossRetries(rejectedCredential);
         }
@@ -959,7 +969,7 @@ export function createClaudeOAuthRefresher(deps: ClaudeOAuthRefresherDeps): {
       }
       return next;
     } finally {
-      lock.release();
+      releaseRefreshLock();
     }
   }
 

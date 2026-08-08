@@ -998,8 +998,9 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     );
   });
 
-  it('grant recovery 与 handler 都未建立耐久性时继续等待,直到 recovery 真正落盘', async () => {
+  it('grant recovery 与 handler 都未建立耐久性时释放共享锁并等待 recovery 真正落盘', async () => {
     const current = fixtureOAuth({ expiresAt: NOW - 1 });
+    const lockDir = makeLockDir();
     let releaseFinalRecovery!: () => void;
     const finalRecoveryGate = new Promise<void>((resolve) => {
       releaseFinalRecovery = resolve;
@@ -1020,6 +1021,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
         throw Object.assign(new Error('credential store unavailable'), { code: 'EACCES' });
       },
       onInvalidGrant,
+      lockDir: () => lockDir,
       sleep: async () => {
         if (recoveryAttempts >= 11) await finalRecoveryGate;
       },
@@ -1037,6 +1039,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(onInvalidGrant).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(lockDir, '.oauth_refresh.lock'))).toBe(false);
 
     releaseFinalRecovery();
     await expect(pending).resolves.toBeNull();
