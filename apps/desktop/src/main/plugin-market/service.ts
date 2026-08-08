@@ -632,10 +632,10 @@ export class PluginMarketService {
           await manager.withDiscoveredSource(marketName, async (discovered) => {
             if (!discovered.result.ok) {
               for (const entry of group) {
-                results[entry.index] =
-                  discovered.result.code === 'MARKET_MANIFEST_MISSING'
-                    ? localIconMissing(entry.request)
-                    : localIconRetryable(entry.request);
+                // 该 key 来自此前成功的快照；二次发现失败时无法可靠区分清单被删
+                // 与 exists/stat 的暂时不可访问。只有来源配置已移除的 NOT_FOUND 才在
+                // 外层 catch 固化为 missing，其余发现失败都交给 Renderer 重试。
+                results[entry.index] = localIconRetryable(entry.request);
               }
               return;
             }
@@ -651,9 +651,17 @@ export class PluginMarketService {
                     : localIconMissing(entry.request);
                 continue;
               }
+              const currentIconKey = await customMarketIconKey(
+                owner,
+                discovered.config,
+                plugin,
+              );
+              if (currentIconKey?.startsWith('1')) {
+                results[entry.index] = localIconRetryable(entry.request);
+                continue;
+              }
               if (
-                (await customMarketIconKey(owner, discovered.config, plugin)) !==
-                  entry.request.expectedIconKey &&
+                currentIconKey !== entry.request.expectedIconKey &&
                 !entry.request.expectedIconKey.startsWith('1')
               ) {
                 results[entry.index] = localIconMissing(entry.request);

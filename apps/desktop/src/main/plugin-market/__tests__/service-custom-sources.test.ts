@@ -542,7 +542,7 @@ describe('PluginMarketService 自定义市场图标', () => {
     );
   });
 
-  it('returns retryable for uncertain icon I/O and missing when the marketplace manifest is gone', async () => {
+  it('returns retryable for uncertain icon I/O and failed marketplace rediscovery', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [
@@ -573,7 +573,7 @@ describe('PluginMarketService 自定义市场图标', () => {
 
     fs.rmSync(path.join(dir, '.agents', 'plugins', 'marketplace.json'));
     await expect(h.service.localIcons([request])).resolves.toEqual([
-      { ...request, status: 'missing' },
+      { ...request, status: 'retryable' },
     ]);
   });
 
@@ -664,6 +664,24 @@ describe('PluginMarketService 自定义市场图标', () => {
       { ...request, status: 'retryable' },
     ]);
     discoverSpy.mockRestore();
+
+    const realLstat = fs.promises.lstat;
+    const currentProjectionSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation((async (
+      target: fs.PathLike,
+      options?: fs.StatOptions,
+    ) => {
+      if (String(target).endsWith(path.join('plugins', 'alpha', 'assets', 'icon.png'))) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return realLstat(target, options as never);
+    }) as typeof fs.promises.lstat);
+    try {
+      await expect(h.service.localIcons([request])).resolves.toEqual([
+        { ...request, status: 'retryable' },
+      ]);
+    } finally {
+      currentProjectionSpy.mockRestore();
+    }
 
     const lstatSpy = vi
       .spyOn(fs.promises, 'lstat')
