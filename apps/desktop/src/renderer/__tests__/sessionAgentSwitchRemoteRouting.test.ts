@@ -13,6 +13,8 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
+import { resolveManualCompactChannel } from '@/hooks/useAgentCapabilities';
+import { createSessionScopedRequestGuard } from '@/features/cc-agent/sessionScopedRequestGuard';
 
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
@@ -898,5 +900,169 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain(
       'cancelled: cancelled || !isSessionScopeCurrent(sessionId, currentSessionIdRef.current),',
     );
+  });
+});
+
+describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#1927)', () => {
+  const viewSource = readFileSync(
+    resolve(process.cwd(), 'src/renderer/features/cc-agent/CCAgentSessionView.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  it('onCompact 门控:通道存在 + pi 排除 SSH 远程(remoteHostId) + pi running 禁用,codex 无通道不开放', () => {
+    // 门控不再硬编码 agentKind 排除列表:以 compactChannel(能力判定)为准;
+    // pi 的 SSH 远程会话(remoteHostId)无 compact-session 路由 → 显式排除
+    // (与 SessionContentHeader 压缩菜单仅本地/device-link 一致,Copilot P2)。
+    expect(viewSource).toContain('compactChannel !== null');
+    expect(viewSource).toContain("!(realAgentKind === 'pi' && !!session?.remoteHostId)");
+    // pi 回合运行中会拒绝压缩 → compact-session 通道 running 时禁用(与
+    // SessionContentHeader 的 runningSessionIds 一致,codex P1);claude-input 保留旧行为。
+    expect(viewSource).toContain(
+      "!(compactChannel === 'compact-session' && agentStatus.isRunning)",
+    );
+    // codex(无 manualCompact)→ compactChannel null → 不开放(纯展示)。
+  });
+
+  it('compact-session 分支:粘滞路由 + 确认框后重新分流 + 失败反馈', () => {
+    // 分流以当前 render 的 compactChannel 判定(channelNow),确认框返回后重新解析——
+    // 同会话在其它窗口/远程被切换 agent 时捕获值会过期(codex P1)。
+    expect(viewSource).toContain("if (channelNow === 'compact-session') {");
+    // workingDir 只对 claude-input 是硬前提:compact-session(pi 原生压缩)不依赖它。
+    expect(viewSource).toContain(
+      "if (sourceCompactChannel === 'claude-input' && !sourceSession.workingDir) return;",
+    );
+    // device-link 远程 pi:粘滞归属路由到被控端,relay 重连窗口内不退回本机(greptile P1)。
+    expect(viewSource).toContain('const sourceSessionId = sourceSession.id;');
+    expect(viewSource).toContain('const maker = makerApiForSticky(sourceSessionId);');
+    expect(viewSource).toContain('await maker.compactSession(sourceSessionId)');
+    // 在途期间切换会话 / 登出 / 切回(换代):旧响应不得在当前视图弹 toast(并发收口)。
+    expect(viewSource).toContain('const committedSessionId = sessionId ?? null;');
+    expect(viewSource).toContain('compactRequestGuard.setCurrentSession(committedSessionId)');
+    // 代校验:sessionId 当前 + 请求代一致;finally 里 release(不再按 sessionId finish)。
+    expect(viewSource).toContain('const begun = compactRequestGuard.tryBegin(sourceSessionId);');
+    expect(viewSource).toContain('if (!begun) return;');
+    expect(viewSource).toContain('compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)');
+    expect(viewSource).toContain('begun.release();');
+    // 真实 reject 必须 catch 并显示 compactFailed(与 SessionContentHeader 一致)。
+    expect(viewSource).toContain("toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'))");
+  });
+
+  it('claude-code 分支保持 inputCoordinator compactSession(model,...),不误入 compact-session', () => {
+    // compact-session 分支以 return 结束;return 之前只有 makerApiForSticky 通道,
+    // 不调用 inputCoordinator 的 compactSession(model, effort, ...)(即 maker:input:compact)。
+    const csStart = viewSource.indexOf("if (channelNow === 'compact-session')");
+    expect(csStart).toBeGreaterThan(-1); // 定位必须命中,否则断言形同虚设(copilot review)
+    const csEnd = viewSource.indexOf('return;', csStart);
+    const csBranch = viewSource.slice(csStart, csEnd);
+    expect(csBranch).not.toContain('await compactSession(');
+    // 确认框返回后若 channel 已消失(能力被撤/agent 切换)则放弃,不静默误调。
+    // 关键:重分流必须读 compactChannelRef.current(useCallback 闭包固定捕获旧值,
+    // 旧 async 函数 await 期间重新 render 也不会更新闭包——greptile review)。
+    expect(viewSource).toContain('const compactChannelRef = useRef(compactChannel);');
+    expect(viewSource).toContain('compactChannelRef.current = compactChannel;');
+    expect(viewSource).toContain('const channelNow = compactChannelRef.current;');
+    expect(viewSource).toContain('if (channelNow === null) return;');
+    // claude 通道执行前才校验 workingDir(输入协调器硬前提),且参数必须来自**最新**
+    // session 快照——同会话切换 agent 后 model/effort/permission/workingDir 已变化,
+    // 旧快照会按错误配置执行(greptile P1 / codex P2)。
+    expect(viewSource).toContain('const sessionRef = useRef(session);');
+    expect(viewSource).toContain('sessionRef.current = session;');
+    expect(viewSource).toContain('const sessionNow = sessionRef.current;');
+    expect(viewSource).toContain("if (channelNow !== 'claude-input') return;");
+    expect(viewSource).toContain('if (!sessionNow?.workingDir) return;');
+    expect(viewSource).toContain('sessionNow.model,');
+    // 确认框期间 turn 可能已从其它窗口/远程启动:render 时 isRunning 守卫失效,重读
+    // 最新 running ref,活跃 turn 的 pi 拒绝压缩 → 放弃(codex P2);claude-input 保留旧行为。
+    expect(viewSource).toContain('const isRunningRef = useRef(agentStatus.isRunning);');
+    expect(viewSource).toContain('isRunningRef.current = agentStatus.isRunning;');
+    expect(viewSource).toContain(
+      "if (channelNow === 'compact-session' && isRunningRef.current) return;",
+    );
+  });
+});
+
+describe('上下文环压缩请求按 sessionId 隔离(#1927 并发/生命周期回归)', () => {
+  it('A 在途时 B 可独立开始，A 的迟到 release 不会清掉 B 的锁', () => {
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    const beginA = guard.tryBegin('A');
+    expect(beginA).not.toBeNull();
+    expect(guard.tryBegin('A')).toBeNull(); // 同代同会话防重
+
+    guard.setCurrentSession('B');
+    expect(guard.isCurrent('A')).toBe(false);
+    const beginB = guard.tryBegin('B');
+    expect(beginB).not.toBeNull();
+
+    beginA!.release();
+    expect(guard.tryBegin('B')).toBeNull(); // B 的锁还在
+    beginB!.release();
+    expect(guard.tryBegin('B')).not.toBeNull();
+  });
+
+  it('A 在途切 B 再切回 A(换代):旧请求失效,且新点击不被旧锁挡住', () => {
+    // greptile P1:守卫只按 sessionId 判断时,切回 A 后旧 A 请求会重新通过 isCurrent
+    // (迟到 toast),旧锁还会让新点击被静默丢弃。代(epoch)语义修复两者。
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    const oldA = guard.tryBegin('A');
+    expect(oldA).not.toBeNull();
+    const oldEpoch = oldA!.epoch;
+
+    guard.setCurrentSession('B');
+    guard.setCurrentSession('A'); // 切回 A → 换代
+
+    // 旧 A 请求:sessionId 当前但代不匹配 → 失效(不弹迟到 toast)。
+    expect(guard.isCurrent('A', oldEpoch)).toBe(false);
+    expect(guard.isCurrent('A')).toBe(true); // 无代校验时仍视为当前展示会话
+    // 新点击:同会话但新代 → 不被旧锁挡住,可独立开始。
+    const newA = guard.tryBegin('A');
+    expect(newA).not.toBeNull();
+    expect(newA!.epoch).not.toBe(oldEpoch);
+    newA!.release();
+    oldA!.release();
+  });
+
+  it('切换会话或登出会让确认框/迟到响应的旧 scope 失效', () => {
+    const guard = createSessionScopedRequestGuard();
+    guard.setCurrentSession('A');
+    const beginA = guard.tryBegin('A');
+    expect(beginA).not.toBeNull();
+    const epochA = beginA!.epoch;
+    guard.setCurrentSession('B');
+    expect(guard.isCurrent('A', epochA)).toBe(false);
+    expect(guard.isCurrent('B')).toBe(true);
+    guard.setCurrentSession(null);
+    expect(guard.isCurrent('B')).toBe(false);
+  });
+});
+
+describe('resolveManualCompactChannel(#1927 压缩通道判定,行为测试)', () => {
+  // zqchris 要求按行为覆盖而非源码字符串匹配:共享判定收敛成纯函数,直接测语义。
+  it('真实 Claude Code → claude-input(maker:input:compact),与 capability 无关', () => {
+    expect(resolveManualCompactChannel('claude-code', null)).toBe('claude-input');
+    expect(
+      resolveManualCompactChannel('claude-code', {
+        manualCompact: { supported: false, reason: 'sdk-missing' },
+      }),
+    ).toBe('claude-input');
+  });
+
+  it('声明 manualCompact.supported(当前仅 pi)→ compact-session(capability-aware 通道)', () => {
+    expect(resolveManualCompactChannel('pi', { manualCompact: { supported: true } })).toBe(
+      'compact-session',
+    );
+  });
+
+  it('无能力(Codex / 能力快照缺失)→ 无入口,不按 agentKind 扩排除列表', () => {
+    expect(resolveManualCompactChannel('codex', null)).toBeNull();
+    expect(
+      resolveManualCompactChannel('codex', {
+        manualCompact: { supported: false, reason: 'sdk-missing' },
+      }),
+    ).toBeNull();
+    // 能力快照未命中(缓存未就绪)保守关闭入口,而不是猜能力。
+    expect(resolveManualCompactChannel('pi', null)).toBeNull();
+    expect(resolveManualCompactChannel(undefined, null)).toBeNull();
   });
 });

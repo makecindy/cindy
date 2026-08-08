@@ -29,6 +29,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:resolve-interaction',
       'maker:get-pending-interactions',
       'maker:input:compact',
+      'maker:compact-session',
       'maker:set-model',
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
@@ -368,6 +369,13 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
+  });
+
+  it('maker:compact-session 隧道超时必须大于 pi 压缩执行预算(10min + 回程余量,不 30s 截断)', () => {
+    // 被控端在请求穿过 relay 后才开始跑 PI_COMPACT_TIMEOUT_MS(10min);控制端若只给
+    // 相同预算,压缩恰好到上限时会先 INVOKE_TIMEOUT 并被误判为设备无响应(codex P2)。
+    // 严格大于 10min,锁住「带余量」的语义,防止回退成无余量的同值。
+    expect(INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session']).toBeGreaterThan(10 * 60_000);
   });
 });
 
