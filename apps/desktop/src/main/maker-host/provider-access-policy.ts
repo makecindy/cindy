@@ -128,6 +128,15 @@ export function isProviderSelectable(providerId: string, context: ProviderAccess
   return !(providerId === CINDY_AI_PROVIDER_ID && context.canUseCindyGateway === false);
 }
 
+/** Whether the projected account catalog can route a Cindy-managed embedding model. */
+export function isCindyEmbeddingModelAvailable(catalog: Catalog, modelId: string): boolean {
+  return (
+    catalog.providers
+      .find((provider) => provider.id === CINDY_AI_PROVIDER_ID)
+      ?.embeddingModels?.some((model) => model.id === modelId) ?? false
+  );
+}
+
 /**
  * Return the catalog projection exposed to provider lists and availableModels.
  * Preserve the original object when no gate applies so gated sessions are the
