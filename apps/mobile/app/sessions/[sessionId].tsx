@@ -3134,19 +3134,27 @@ export default function SessionScreen() {
       const activeSessions = await maker.listActiveSessions().catch(() => []);
       return { activeSessions, activityEpochAtFetchStart };
     };
+    const fetchProjection = async () => {
+      // Capture immediately before every request. Because this helper is invoked inside
+      // withTransientRemoteRetry, each retry receives a fresh projection authority fence.
+      const authorityEpochAtStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
+      const projection = await maker.input.getProjection(sessionId);
+      return { projection, authorityEpochAtStart };
+    };
     if (syncRun.isStale()) return;
     setLoading(true);
     setError(null);
     try {
       if (!isReopen) {
         // 首开 / 强制替换:A1 全量并行(含整窗 listMessages),不回退。
-        const [sessionMeta, history, pendingInteractions, projection, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
+        const [sessionMeta, history, pendingInteractions, projectionResult, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
           await openAndSubscribe();
           return Promise.all([
             maker.getSession(sessionId),
             listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit })),
             maker.getPendingInteractions(sessionId),
-            maker.input.getProjection(sessionId),
+            fetchProjection(),
             fetchActiveSessionSnapshot(),
           ]);
         });
@@ -3172,15 +3180,19 @@ export default function SessionScreen() {
         remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
         setHasOlderMessages(moreBeyondWindow);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
-        remoteSessionStore.setInputProjection(sessionId, projection);
+        remoteSessionStore.setInputProjectionIfCurrent(
+          sessionId,
+          projectionResult.projection,
+          projectionResult.authorityEpochAtStart,
+        );
       } else {
         // 重开:便宜并行(不含整窗 listMessages)拿 meta + pending + projection + active。
-        const [sessionMeta, pendingInteractions, projection, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
+        const [sessionMeta, pendingInteractions, projectionResult, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
           await openAndSubscribe();
           return Promise.all([
             maker.getSession(sessionId),
             maker.getPendingInteractions(sessionId),
-            maker.input.getProjection(sessionId),
+            fetchProjection(),
             fetchActiveSessionSnapshot(),
           ]);
         });
@@ -3224,7 +3236,11 @@ export default function SessionScreen() {
         }
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
-        remoteSessionStore.setInputProjection(sessionId, projection);
+        remoteSessionStore.setInputProjectionIfCurrent(
+          sessionId,
+          projectionResult.projection,
+          projectionResult.authorityEpochAtStart,
+        );
       }
       // 不变量:上面 setHasOlderMessages 的校正(:806/:841/:846)与这里的 setLastSyncedAt 之间必须保持
       // 同步尾、无 await —— 否则乐观点亮 effect(依赖 lastSyncedAt===null)会在 await 间隙把刚校正成 false
@@ -5018,6 +5034,8 @@ export default function SessionScreen() {
     markQueueItemSending(queued.clientId);
     try {
       // 弱网重试与写序边界同 send() 原路径(仅明确可安全重发的瞬时传输错误)。
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
       let projection: InputProjection | undefined;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -5032,14 +5050,25 @@ export default function SessionScreen() {
           await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));
         }
       }
-      remoteSessionStore.setInputProjection(item.sessionId, projection);
+      remoteSessionStore.setInputProjectionIfCurrent(
+        item.sessionId,
+        projection,
+        projectionEpochAtRequestStart,
+      );
     } catch (err) {
       // 与原路径同口径:先对账分辨「确实没应用」vs「已应用但响应丢了」。
       const applied = await (async () => {
         try {
+          const projectionEpochAtRequestStart =
+            remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
           const fresh = await maker.input.getProjection(item.sessionId);
-          remoteSessionStore.setInputProjection(item.sessionId, fresh);
-          return fresh.pendingQueue.some((entry) => entry.clientId === queued.clientId);
+          const accepted = remoteSessionStore.setInputProjectionIfCurrent(
+            item.sessionId,
+            fresh,
+            projectionEpochAtRequestStart,
+          );
+          const current = accepted ? fresh : remoteSessionStore.getInputProjection(item.sessionId);
+          return current.pendingQueue.some((entry) => entry.clientId === queued.clientId);
         } catch {
           return remoteSessionStore.getInputProjection(item.sessionId).pendingQueue
             .some((entry) => entry.clientId === queued.clientId);
@@ -5543,8 +5572,10 @@ export default function SessionScreen() {
           lockReady = true;
           editSaved = await commitQueueEdit(lockOwner, async () => {
             try {
+              const projectionEpochAtRequestStart =
+                remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
               const projection = await maker.input.updateContent(sessionId, editingQueueItem.clientId, updated);
-              applyProjection(projection);
+              applyProjectionIfCurrent(projection, projectionEpochAtRequestStart);
             } catch (err) {
               if (
                 isChannelNotAllowedError(err)
@@ -5558,6 +5589,8 @@ export default function SessionScreen() {
                 // RPC 之间断连)与其余失败分支对称:先还原编辑文本再抛,不许静默丢字
                 // (review P1)。
                 try {
+                  const projectionEpochAtRequestStart =
+                    remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
                   const projection = await maker.input.updateText(
                     sessionId,
                     editingQueueItem.clientId,
@@ -5565,7 +5598,7 @@ export default function SessionScreen() {
                     updated.sessionRefs,
                     updated.trustedSessionReferenceContexts,
                   );
-                  applyProjection(projection);
+                  applyProjectionIfCurrent(projection, projectionEpochAtRequestStart);
                 } catch (fallbackErr) {
                   restoreQueueEditDraftAfterFailure();
                   throw fallbackErr;
@@ -5755,6 +5788,8 @@ export default function SessionScreen() {
         // 不在 pendingQueue 里),盲重会双入队;这类歧义失败直接交给下方 catch
         // 的回滚/报错路径。BACKPRESSURE 在本地发送前或被控端 admission 拒绝
         // 执行时产生,可安全重发。被控端 enqueue 侧另有 clientId 幂等去重兜底。
+        const projectionEpochAtRequestStart =
+          remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
         let projection: InputProjection | undefined;
         for (let attempt = 0; ; attempt++) {
           try {
@@ -5769,7 +5804,11 @@ export default function SessionScreen() {
             await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));
           }
         }
-        remoteSessionStore.setInputProjection(sessionId, projection);
+        remoteSessionStore.setInputProjectionIfCurrent(
+          sessionId,
+          projection,
+          projectionEpochAtRequestStart,
+        );
       } catch (err) {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:弱网下 enqueue 的 invoke
         // 响应可能超时丢失而桌面端已入队——此时摘除气泡会让手机隐藏一条桌面将处理的
@@ -5777,9 +5816,18 @@ export default function SessionScreen() {
         // refetch 也失败再退回本地 store(订阅推送在此窗口内可能已带回该 clientId)。
         const applied = await (async () => {
           try {
+            const projectionEpochAtRequestStart =
+              remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
             const fresh = await maker.input.getProjection(sessionId);
-            remoteSessionStore.setInputProjection(sessionId, fresh);
-            return fresh.pendingQueue.some((item) => item.clientId === queued.clientId);
+            const accepted = remoteSessionStore.setInputProjectionIfCurrent(
+              sessionId,
+              fresh,
+              projectionEpochAtRequestStart,
+            );
+            // If a newer push/terminal boundary won the fence, the fetched value is
+            // stale for both the mirror and the applied decision; consult current state.
+            const current = accepted ? fresh : remoteSessionStore.getInputProjection(sessionId);
+            return current.pendingQueue.some((item) => item.clientId === queued.clientId);
           } catch {
             return remoteSessionStore.getInputProjection(sessionId).pendingQueue
               .some((item) => item.clientId === queued.clientId);
@@ -5852,8 +5900,8 @@ export default function SessionScreen() {
     sendLatestRef.current = send;
   });
 
-  const applyProjection = useCallback((projection: InputProjection) => {
-    remoteSessionStore.setInputProjection(sessionId, projection);
+  const applyProjectionIfCurrent = useCallback((projection: InputProjection, expectedEpoch: number) => {
+    remoteSessionStore.setInputProjectionIfCurrent(sessionId, projection, expectedEpoch);
   }, [sessionId]);
 
   const runQueueAction = useCallback(async (
@@ -5862,15 +5910,19 @@ export default function SessionScreen() {
     if (queueBusy) return;
     setQueueBusy(true);
     setError(null);
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
     try {
       const result = await action();
-      if (typeof result !== 'boolean') applyProjection(result);
+      if (typeof result !== 'boolean') {
+        applyProjectionIfCurrent(result, projectionEpochAtRequestStart);
+      }
     } catch (err) {
       setError(formatRemoteError(err));
     } finally {
       setQueueBusy(false);
     }
-  }, [applyProjection, queueBusy]);
+  }, [applyProjectionIfCurrent, queueBusy, sessionId]);
 
   /**
    * 乐观队列操作(remove / move 这类纯队列变换):先本地改 pendingQueue 当帧给反馈,
@@ -5890,9 +5942,13 @@ export default function SessionScreen() {
       sessionId,
       opts.optimistic(remoteSessionStore.getInputProjection(sessionId)),
     );
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
     try {
       const result = await opts.action();
-      if (typeof result !== 'boolean') applyProjection(result);
+      if (typeof result !== 'boolean') {
+        applyProjectionIfCurrent(result, projectionEpochAtRequestStart);
+      }
     } catch (err) {
       remoteSessionStore.setInputProjection(
         sessionId,
@@ -5902,7 +5958,7 @@ export default function SessionScreen() {
     } finally {
       setQueueBusy(false);
     }
-  }, [applyProjection, queueBusy, sessionId]);
+  }, [applyProjectionIfCurrent, queueBusy, sessionId]);
 
   // stop 的视觉状态派生自 run status / projection,只有往返后才变;这里补一个本地
   // pending 态让按钮当帧转圈,消除「点了没反应」的歧义。
@@ -6067,22 +6123,30 @@ export default function SessionScreen() {
         deviceId,
       );
       const accepted = await maker.input.steer(sessionId, prepared, { removeFromQueue: true, touchUserSend: true });
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
       const projection = await maker.input.getProjection(sessionId);
-      applyProjection(projection);
+      remoteSessionStore.setInputProjectionIfCurrent(
+        sessionId,
+        projection,
+        projectionEpochAtRequestStart,
+      );
       return accepted;
     });
   };
 
   const setQueueEditLock = useCallback((clientId: string, locked: boolean) => {
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
     return maker.input.setEditLock(sessionId, clientId, locked)
-      .then(applyProjection)
+      .then((projection) => applyProjectionIfCurrent(projection, projectionEpochAtRequestStart))
       .catch((err) => {
         if (queueEditingRef.current?.clientId === clientId) {
           setError(formatRemoteError(err));
         }
         throw err;
       });
-  }, [applyProjection, maker, sessionId]);
+  }, [applyProjectionIfCurrent, maker, sessionId]);
 
   const removeQueueItem = (clientId: string) => {
     const before = remoteSessionStore.getInputProjection(sessionId);
@@ -6407,8 +6471,14 @@ export default function SessionScreen() {
     try {
       const queued = buildQueuedTextMessage(sessionAtSend, prompt);
       queued.createOpts = { ...queued.createOpts, planMode: false };
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
       const projection = await maker.input.enqueue(sessionId, queued, { sendAtMs: Date.now() });
-      remoteSessionStore.setInputProjection(sessionId, projection);
+      remoteSessionStore.setInputProjectionIfCurrent(
+        sessionId,
+        projection,
+        projectionEpochAtRequestStart,
+      );
     } catch (err) {
       if (state.kind === 'error-tail') {
         setRetryHiddenTailClientId((current) => (current === state.clientId ? null : current));
@@ -8098,6 +8168,11 @@ export default function SessionScreen() {
                     focusedRequestKey={focusedMessageRequestKey}
                     followLatestRequestKey={messageListFollowLatestRequestKey}
                     isSessionStreaming={isSessionStreaming}
+                    makerTurnRunning={makerTurnRunning}
+                    continuationTurnClientId={inputProjection.continuationTurnClientId}
+                    continuationInFlightProjectionCapability={
+                      inputProjection.continuationInFlightProjectionCapability
+                    }
                     items={messageListItems}
                     pendingSend={pendingSendActions}
                     loadingEarlier={loadingEarlier}

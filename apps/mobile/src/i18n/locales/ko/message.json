@@ -183,7 +183,12 @@
       "neutral": "다시 연결",
       "pending": "다시 연결하는 중…",
       "pendingWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}…",
-      "details": "이번 재시도 {{attempt}}/{{total}} · 이 세션에서 재연결 {{count}}회"
+      "details": "이번 재시도 {{attempt}}/{{total}} · 이 세션에서 재연결 {{count}}회",
+      "detail": {
+        "reason": "중단 원인",
+        "attempt": "이번 재시도 {{attempt}}/{{total}}",
+        "sessionTotal": "이 세션에서 재연결 {{count}}회"
+      }
     },
     "modelLabel": "모델",
     "sessionLabel": "세션",
