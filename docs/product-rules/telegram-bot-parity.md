@@ -73,14 +73,18 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 过程中 | **第一帧真实内容用 `sendMessage` 建消息（这一条会推送），之后持续 `editMessageText` 覆盖（编辑不推送）**，用户看着它长大：过程区在上、正文在下 | **私聊**：进 Telegram **草稿**（`sendDraft`）——在输入框那个位置，**不在消息流里**；**群**：一条进度消息，`editMessageText` 覆盖 |
 | 终稿内容（**成功收口**） | **只有正文**（`composeStreamingView` 在 `turn.done` 时直接 `return body`，不再合成过程区） | **只有正文**（`presenter.finalText()` 取 body 引擎的缓冲，不经过 `composeProgressView`） |
 | 终稿落在哪 | **单段且原位编辑成功时**留在那条消息里。**会新发消息的只有两种**：终稿超长被切成多段（第 1 段仍原位，第 2 段起逐段 `send`）；原位编辑失败后整条 repost 承载终稿，再尽力删掉停在过程态的旧消息——**删不掉就两条并存**。**受管图片不算**：它只让终稿跳过 rich 一次性定稿（`editFinal`），后面照样算 `inPlaceText` 走 `finalizeInPlaceOrRepost` 编辑原消息，图片随后由 `uploadImages` 另发 | **私聊**：新发一条正文消息，草稿随之消失；**群**：编辑那条进度消息 |
-| **失败收口** | **过程区保留**：错误路径不置 `turn.done`，`composeStreamingView` 仍走运行中合成——卡片定稿成「过程区 + 正文 + ❌ 错误：…」，用户能看到失败前干到了哪一步 | 终稿正文为**空**，错误信息走独立的 `errorMessage` 字段，由服务端按语言渲染成「任务失败：…」——**不带过程区** |
+| **失败收口**（普通轮次） | **过程区保留**：错误路径不置 `turn.done`，`composeStreamingView` 仍走运行中合成——卡片定稿成「过程区 + 正文 + ❌ 错误：…」，用户能看到失败前干到了哪一步 | 终稿正文为**空**，错误信息走独立的 `errorMessage` 字段，由服务端按语言渲染成「任务失败：…」——**不带过程区** |
+| **失败收口**（群开了 `always` 的 **ambient 轮次**） | **和普通轮次一样**照吐 `❌ 错误：…`——`turnRunner` 不认识 ambient。惰性占位这时会被真建出来，群里凭空多一条错误消息，而这一轮本来连话都不打算说。**这是缺口 2f，不是裁决** | **静默**：不发失败通知（`finalFailureNoticeSent !== true && !entry.ambient`），删掉过程消息、记一句「completed silently」。删不掉时标 `retainAmbientCleanup` 留给下一拍重试 |
 
 **成功收口的终稿两侧都只有正文**——这一点没有差异，不要登记成缺口。但它带两条限定，
 少写一条就会变成假不变量：
 
-- **只对成功成立**。失败收口两侧形态不同（上表末行），个人 bot 保留故障现场、官方 bot
-  只给一句错误。改收口逻辑时不要拿「终稿只有正文」去删失败路径的过程信息——那是用户
-  排障的唯一线索。
+- **只对成功成立**。失败收口两侧形态不同（上表最后两行），个人 bot 保留故障现场、官方
+  bot 只给一句错误。改收口逻辑时不要拿「终稿只有正文」去删失败路径的过程信息——那是
+  用户排障的唯一线索。
+- **失败收口本身还要分普通轮次与 ambient 轮次**，两侧的差别正好反过来：普通轮次是
+  「个人留现场 / 官方一句错误」，ambient 轮次是「个人照样吐错误 / 官方全静默」。所以
+  上表把失败拆成两行——一个无条件的「失败怎么收口」结论会同时说错其中一半（缺口 2f）。
 - **「过程区消失」也不是无条件的**。原位编辑成功时，终稿覆盖掉同一条消息，过程区确实
   没了；走 repost 那条路时，旧的过程消息是**尽力删**——`deleteMessage` 失败被吞掉
   （权限、已被删、API 报错），于是聊天里会同时留着一条停在「⚙️ 工作中 · …」的旧消息和
@@ -136,7 +140,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 2c | **链接预览关闭两边各写一套，覆盖面还不一样** | 个人侧读契约 `linkPreviewDisabled: true`，driver 在**答案这条路**上全部消费——正文/过程消息的发送、分段发送、编辑，以及 HTML 解析失败后的纯文本回落；**卡片消息、陌生人提示、主人通知不带**。官方侧**不读这个契约**（在服务端仓 `telegram/client.ts` 里写死 `{ is_disabled: true }`），且只写在两处：`sendAdaptiveMessage` / `editAdaptiveMessage` 的 **HTML 回落**分支；纯文本的 `sendMessage` / `editMessageText`（权限卡、通知、附件转发、续跑提示，以及 adaptive 最后一层纯文本回落）都不带，链接预览按 Telegram 默认开着。两侧的 rich 主路径（`rich_message` payload）都不带这个参数，其预览行为**未核**——非公开 API | 待判：要么把参数补进官方的纯文本出站，要么把这条策略升进 `cindy-protocol` 两侧共用。跨仓 |
 | 2d | **行为配置（表情、回复引用、群参与模式）两边各写一套** | 档位形状与默认值两侧**逐字相同**：`emojiReactions` off/minimal/expressive 默认 minimal、`replyQuoteGroup` off/first/all 默认 first、`replyQuoteDm` off/first 默认 off、`groupActivation` per-chat mention/always **默认 mention**（个人 `?? 'mention'`；官方的协议注释写「只列偏离默认值的群，缺席 = mention」）。但声明与正本有两份——官方读 `cindy-protocol` 的 `DEFAULT_TELEGRAM_BEHAVIOR`，**正本存服务端**，桌面只负责写 override（`hook-control/manager.ts` 把 `mention` 表达成 `null` 清除）与投影设置卡的群清单（`hook-control/groupWindow.ts` 把已知群与 activation 合并），且 hydrate 失败时**故意留「未知」而不套基线**；个人读 `@cindy/im` 的 `TELEGRAM_DEFAULT_BEHAVIOR`，正本是本地 owner-scoped JSON（`im/telegram/behaviorStore.ts`）。**判 ambient 的也是不同一侧**：个人在客户端判（`packages/lizi-im/src/telegram/index.ts` 读 activation 打 ambient 标），官方在服务端判（`controller.ts` 算出 `ambient` 再下发）。值现在一样，但没有任何东西拦着它们分叉。注意：`turnPresenter.ts` / `presentationCapabilities.ts` 里「不含 replyQuote」的裁决说的是**不进共享能力契约**，不是「两个 bot 该长得不一样」——别把它读成有意差异 | 待判：个人侧能否直接改读 `cindy-protocol` 的 `DEFAULT_TELEGRAM_BEHAVIOR`（值一样，是最省事的一次真统一），先核 `@cindy/im` 对 `cindy-protocol` 的依赖方向允不允许（`docs/dev-rules/architecture-invariants.md`）。**与第 6 行分工**：那行是「何时打表情」的判据，这行是「档位的声明、默认值与正本存哪」 |
 | 2e | **私聊里能不能跨群检索：个人有、官方没有** | **群轮次两侧一致**（都 lane-only，只查当前群/topic）。差别只在私聊。个人：`groupHistoryAccessFor` 在无 lane（即 DM）时给 `access: 'owner'`，owner 可以显式指定别的 lane，跨群查这个 bot 名下全部群历史。官方：私聊的 externalKey 不是群 lane，`groupHistoryAccessForExternalKey` 返回 `undefined`，MCP 直接以 `NO_ACTIVE_TELEGRAM_SCOPE` 拒绝——**官方 bot 私聊里这个工具根本不可用**（MCP 工具自己的说明也写着「只有主人触发的个人 Telegram 轮次可显式指定其它精确 lane」）。个人侧「群轮次一律 lane-only」有 2026-07-30 的明确裁决（群里的可控文本能借 owner 轮次把别的 lane 检索出来回帖泄漏，而检索类调用没有确认卡兜底）；**官方私聊这一档没有对应裁决**——是没接，不是判过，所以归缺口不归第三节 | 待判，**不在本 PR 改代码**。补之前先答一个产品问题：官方 bot 绑的是一个主账号，它的私聊该不该看到该账号名下全部群的历史。答「该」才是接线问题（DM 的 externalKey 里有 principal，能推出 `telegram:<principalId>` 的 owner 档）；答「不该」就把这行升进第三节当有意差异 |
-| 2f | **群里开了「全响应」后，一轮失败：个人 bot 会往群里吐错误，官方静默** | 全响应（`always`）本身两侧行为一致：未被召唤的消息也进 turn 并打 ambient 标、**不 typing、不表情**、模型可用 NO_REPLY 闭嘴、纯媒体/无正文消息不进（个人 `if (!plain) return`，官方 `plain.length > 0`）；连 ambient 提示词都逐字相同（各写一份，跨仓无校验）。**分歧只在这一轮失败的时候**：官方不发失败通知（`controller.ts` 的 `finalFailureNoticeSent !== true && !entry.ambient`），并把过程消息删掉、记一句「completed silently」；个人侧的 `im/shared/turnRunner.ts` **完全不认识 ambient**（全文没有这个词），错误一律走 `❌ 错误：…`——惰性占位这时会被真建出来，于是群里凭空多一条错误消息，而这一轮本来连话都不打算说 | 待判，**不在本 PR 改代码**。倾向跟官方一致做静默（与「ambient 不打扰群」的既有取舍同一个方向），但要保证错误不因此彻底消失——至少落桌面端日志与该会话，不能只是吞掉 |
+| 2f | **群里开了「全响应」后，一轮失败：个人 bot 会往群里吐错误，官方静默** | 全响应（`always`）本身两侧行为一致：未被召唤的消息也进 turn 并打 ambient 标、**不 typing、不表情**、模型可用 NO_REPLY 闭嘴、纯媒体/无正文消息不进（个人 `if (!plain) return`，官方 `plain.length > 0`）；连 ambient 提示词都逐字相同（各写一份，跨仓无校验）。**分歧只在这一轮失败的时候**：官方不发失败通知（`controller.ts` 的 `finalFailureNoticeSent !== true && !entry.ambient`），并把过程消息删掉、记一句「completed silently」；个人侧的 `im/shared/turnRunner.ts` **完全不认识 ambient**（全文没有这个词），错误一律走 `❌ 错误：…`——惰性占位这时会被真建出来，于是群里凭空多一条错误消息，而这一轮本来连话都不打算说。第二节的生命周期表已按「普通轮次 / ambient 轮次」拆成两行，别再写回一条无条件的失败收口结论 | 待判，**不在本 PR 改代码**。倾向跟官方一致做静默（与「ambient 不打扰群」的既有取舍同一个方向），但要保证错误不因此彻底消失——至少落桌面端日志与该会话，不能只是吞掉 |
 | 3 | **终稿必达只有官方有** | 官方侧终稿先落盘、失败重试到送达或有界放弃（`xindong/cindy-server#348`）。个人 bot 的 `streamingText.finalize` 是进程内尽力而为，桌面进程挂掉那条终稿就没了 | 待判：个人侧是否需要等价保障，还是接受「桌面挂了本来就没人在跑」 |
 | 4 | 受保护群内容的隐私边界 | 个人侧已做（出站回流 fail-closed，任一分片带保护标即整条不回流）。官方侧是否等价**待核** | 待核 |
 | 5 | 相册失败逐张回落 | 两侧都有实现，判据是否等价**待核** | 待核 |
