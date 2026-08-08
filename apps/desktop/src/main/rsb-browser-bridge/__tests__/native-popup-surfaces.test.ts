@@ -234,7 +234,7 @@ describe('main-owned RSB native popup surfaces', () => {
     });
   });
 
-  it('sets and reapplies tab zoom for a native popup surface', async () => {
+  it('sets and reapplies tab zoom only while a native popup surface is visible', async () => {
     const host = makeContents(1);
     const popup = makeContents(42);
     electronMocks.windows.set(host, makeWindow());
@@ -247,6 +247,21 @@ describe('main-owned RSB native popup surfaces', () => {
       { sender: host },
       { surfaceId, command: 'set-zoom-factor', zoomFactor: 1.25 },
     )).toEqual({ ok: true });
+    expect(popup.setZoomFactor).not.toHaveBeenCalled();
+
+    popup.emit('did-navigate');
+    expect(popup.setZoomFactor).not.toHaveBeenCalled();
+
+    const setBounds = electronMocks.handlers.get(RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL)!;
+    setBounds(
+      { sender: host },
+      {
+        surfaceId,
+        bounds: { x: 10, y: 50, width: 600, height: 400 },
+        visible: true,
+      },
+    );
+    expect(popup.setZoomFactor).toHaveBeenCalledTimes(1);
     expect(popup.setZoomFactor).toHaveBeenLastCalledWith(1.25);
 
     popup.emit('did-navigate');

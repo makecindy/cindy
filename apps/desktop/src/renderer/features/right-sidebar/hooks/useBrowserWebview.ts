@@ -148,8 +148,10 @@ export function useBrowserWebview(
   const [entryEpoch, setEntryEpoch] = useState(0);
   const visibleRef = useRef(visible === true);
   visibleRef.current = visible === true;
+  zoomFactorRef.current = zoomFactor;
 
   const applyZoomFactor = useCallback(() => {
+    if (!visibleRef.current) return;
     try {
       webviewRef.current?.setZoomFactor(zoomFactorRef.current);
     } catch {
@@ -533,6 +535,10 @@ export function useBrowserWebview(
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
   const currentEntry = enabled ? browserWebviewPool.peek(tabId) : undefined;
   const currentWebview = currentEntry?.wrapper === wrapper ? currentEntry.webview : null;
+
+  useEffect(() => {
+    if (visible === true) applyZoomFactor();
+  }, [applyZoomFactor, currentWebview, visible, zoomFactor]);
 
   return {
     // 隐藏 tab 不首次 acquire（见上方 existing/visible 守门），也不会触发首次导航；
