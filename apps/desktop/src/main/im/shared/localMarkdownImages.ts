@@ -23,7 +23,10 @@ import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { materializeSshRemoteFile } from '../../file-browser/ssh-media';
 import { readBoundedFileFollowLinks } from '../../utils/readBoundedFile';
 
-const LOCAL_MARKDOWN_IMAGE_RE = /!\[([^\]\r\n]{0,512})\]\(([^)\r\n]{1,4096})\)/g;
+// Destination scanning permits escaped characters and one balanced parenthesis
+// level, so a parenthesized Markdown title is captured before the outer `)`.
+const LOCAL_MARKDOWN_IMAGE_RE =
+  /!\[([^\]\r\n]{0,512})\]\(((?:\\[^\r\n]|[^()\r\n]|\((?:\\[^\r\n]|[^()\r\n])*\)){1,4096})\)/g;
 const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;

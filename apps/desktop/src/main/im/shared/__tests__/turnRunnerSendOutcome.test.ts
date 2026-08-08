@@ -857,6 +857,54 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
   });
 
+  it('does not resend media confirmed before an interaction finalize failure', async () => {
+    const firstHandle = {
+      messageId: 'stream-before-partial-failure',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(async () => {
+        throw new Error('later image batch failed');
+      }),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => ['/tmp/partially-delivered.png']),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockRejectedValueOnce(new Error('second card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/partially-delivered.png',
+      mimeType: 'image/png',
+    });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-partial' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: 'before ask', isFinal: true } });
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://partial.png' }) },
+    });
+    await flushMicrotasks();
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-partial-media',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'after ask', {
+        threadTs: undefined,
+      });
+    });
+    expect(firstHandle.finalize).toHaveBeenCalledWith('before ask');
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+  });
+
   it('keeps unconfirmed interaction media in the fallback ledger', async () => {
     const firstHandle = {
       messageId: 'stream-before-failed-media',

@@ -101,6 +101,25 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
   });
 
+  it('captures a balanced parenthesized Markdown title without leaving a trailing bracket', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'generated.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `![preview](${sourcePath} (caption))`,
+          workingDir,
+          sessionId: 'session-parenthesized-title',
+        },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
+  });
+
   it('materializes SSH Markdown images through the remote file service', async () => {
     const cacheRoot = await makeTempRoot();
     const cachePath = path.join(cacheRoot, 'remote-image.png');
@@ -405,5 +424,11 @@ describe('sanitizeLocalMarkdownImageRefs', () => {
     ].join('\n');
 
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe('unix\nwindows\nfile url');
+  });
+
+  it('removes a plain local target with a parenthesized title as one complete image', () => {
+    expect(sanitizeLocalMarkdownImageRefs('![preview](/Users/private/a.png (caption))')).toBe(
+      'preview',
+    );
   });
 });
