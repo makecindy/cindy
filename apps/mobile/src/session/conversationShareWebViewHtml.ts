@@ -80,6 +80,7 @@ export function buildConversationShareHtml({
     "<head>",
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">',
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none';\">",
     `<style id="share-style">${markdownCss}${buildConversationShareCss({ background, surfaceElevated: colors.surfaceElevated, textPrimary: colors.textPrimary, textSecondary: colors.textSecondary, textTertiary: colors.textTertiary, width })}</style>`,
     "</head>",
     "<body>",
@@ -258,6 +259,7 @@ function buildConversationShareCss({
 function buildExportScript(): string {
   return `<script>
 (function () {
+  var maxOutputPixels = 12000000;
   function post(payload) {
     if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(payload));
   }
@@ -286,27 +288,31 @@ function buildExportScript(): string {
       post({ type: 'conversation-share-export', id: id, ok: false, error: 'stage-not-found' });
       return;
     }
+    removeExternalImages(stage);
     waitForImages().then(function () {
-      removeExternalImages(stage);
       var rect = stage.getBoundingClientRect();
       var width = Math.max(stage.scrollWidth, Math.ceil(rect.width));
       var height = Math.max(stage.scrollHeight, Math.ceil(rect.height));
+      var requestedScale = Math.max(Number(scale) || 1, 0.25);
+      var maxScale = Math.sqrt(maxOutputPixels / Math.max(1, width * height));
+      var effectiveScale = Math.min(requestedScale, maxScale);
+      var outputWidth = Math.max(1, Math.ceil(width * effectiveScale));
+      var outputHeight = Math.max(1, Math.ceil(height * effectiveScale));
       var style = document.getElementById('share-style');
       var markup = new XMLSerializer().serializeToString(stage);
-      var svg = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">' +
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="' + outputWidth + '" height="' + outputHeight + '" viewBox="0 0 ' + width + ' ' + height + '">' +
         '<foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:' + width + 'px;background:' + stage.getAttribute('data-share-background') + '"><style>' + (style ? style.textContent : '') + '</style>' + markup + '</div></foreignObject></svg>';
       var image = new Image();
       image.onload = function () {
         try {
           var canvas = document.createElement('canvas');
-          canvas.width = Math.ceil(width * scale);
-          canvas.height = Math.ceil(height * scale);
+          canvas.width = outputWidth;
+          canvas.height = outputHeight;
           var context = canvas.getContext('2d');
           if (!context) throw new Error('canvas-context-missing');
-          context.scale(scale, scale);
           context.fillStyle = stage.getAttribute('data-share-background') || '#ffffff';
-          context.fillRect(0, 0, width, height);
-          context.drawImage(image, 0, 0, width, height);
+          context.fillRect(0, 0, outputWidth, outputHeight);
+          context.drawImage(image, 0, 0, outputWidth, outputHeight);
           var dataUrl = canvas.toDataURL('image/png');
           post({ type: 'conversation-share-export', id: id, ok: true, base64: dataUrl.slice('data:image/png;base64,'.length) });
         } catch (error) {

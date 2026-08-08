@@ -111,7 +111,11 @@ export function ShareSelectionBar({
         ) : null}
       </View>
       <Text style={styles.selectAllLabel}>
-        {t("session.shareImage.selectAll")}
+        {t(
+          allSelected
+            ? "session.shareImage.clearAll"
+            : "session.shareImage.selectAll",
+        )}
       </Text>
     </Pressable>
   );

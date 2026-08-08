@@ -892,10 +892,12 @@ export default function SessionScreen() {
   const shareSelectionActiveRef = useRef(shareSelectionActive);
   shareSelectionActiveRef.current = shareSelectionActive;
   const lastScreenshotActivationAtRef = useRef(0);
+  const shareOperationSeqRef = useRef(0);
   const [conversationShareBusy, setConversationShareBusy] = useState(false);
   const [shareSelectionTriggeredByScreenshot, setShareSelectionTriggeredByScreenshot] = useState(false);
   const [shareCharacterSrc, setShareCharacterSrc] = useState<string | null>(null);
   const [shareLogoSrc, setShareLogoSrc] = useState<string | null>(null);
+  const shareLogoModeRef = useRef<string | null>(null);
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
@@ -912,10 +914,13 @@ export default function SessionScreen() {
     visibleShareableMessageIdsReaderRef.current = reader;
   }, []);
   useEffect(() => {
+    shareOperationSeqRef.current += 1;
     lastScreenshotActivationAtRef.current = 0;
+    setConversationShareBusy(false);
     setShareSelectionTriggeredByScreenshot(false);
     shareSelectionStore.exitIfNotSession(sessionId);
     return () => {
+      shareOperationSeqRef.current += 1;
       if (shareSelectionStore.getActiveSessionId() === sessionId) shareSelectionStore.exit();
     };
   }, [sessionId]);
@@ -955,18 +960,22 @@ export default function SessionScreen() {
     }, [sessionId]),
   );
   useEffect(() => {
-    if (!shareSelectionActive || (shareCharacterSrc && shareLogoSrc)) return undefined;
+    if (!shareSelectionActive) return undefined;
     let cancelled = false;
+    const logoNeedsLoad = shareLogoModeRef.current !== mode || !shareLogoSrc;
     void Promise.all([
       shareCharacterSrc
         ? Promise.resolve(shareCharacterSrc)
         : bundledAssetToDataUri(shareCharacterAsset, 'image/jpeg'),
-      bundledAssetToDataUri(
-        mode === 'dark' ? shareLogoDarkAsset : shareLogoLightAsset,
-        'image/png',
-      ),
+      logoNeedsLoad
+        ? bundledAssetToDataUri(
+            mode === 'dark' ? shareLogoDarkAsset : shareLogoLightAsset,
+            'image/png',
+          )
+        : Promise.resolve(shareLogoSrc),
     ]).then(([character, logo]) => {
       if (cancelled) return;
+      shareLogoModeRef.current = mode;
       setShareCharacterSrc(character);
       setShareLogoSrc(logo);
     });
@@ -5438,12 +5447,13 @@ export default function SessionScreen() {
         textTertiary: colors.textTertiary,
       },
       contentWidth: windowDimensions.width,
-      logoSrc: shareLogoSrc ?? undefined,
+      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
       selectedMessages: selectedShareMessages,
     });
   }, [
     allShareableIds,
     colors,
+    mode,
     selectedShareMessages,
     shareCharacterSrc,
     shareLogoSrc,
@@ -5456,6 +5466,8 @@ export default function SessionScreen() {
     shareSelectionStore.enter(sessionId, clientId);
   }, [sessionId]);
   const cancelShareSelection = useCallback(() => {
+    shareOperationSeqRef.current += 1;
+    setConversationShareBusy(false);
     setShareSelectionTriggeredByScreenshot(false);
     shareSelectionStore.exit();
   }, []);
@@ -5477,20 +5489,30 @@ export default function SessionScreen() {
       || !shareSelectionActive
       || selectedShareMessages.length === 0
     ) return;
+    const operationSeq = shareOperationSeqRef.current + 1;
+    shareOperationSeqRef.current = operationSeq;
+    const isShareOperationActive = () =>
+      shareOperationSeqRef.current === operationSeq && shareSelectionActiveRef.current;
     setConversationShareBusy(true);
     try {
+      if (!isShareOperationActive()) return;
       const base64 = await exportConversationSharePng();
+      if (!isShareOperationActive()) return;
       const localUri = await writeConversationSharePngTemp(base64);
+      if (!isShareOperationActive()) return;
       if (!localUri) throw new Error(t('session.screen.shareNoLocalImage'));
       const sharing = await import('expo-sharing');
+      if (!isShareOperationActive()) return;
       await sharing.shareAsync(localUri, { mimeType: 'image/png' });
+      if (!isShareOperationActive()) return;
       setShareSelectionTriggeredByScreenshot(false);
       shareSelectionStore.exit();
     } catch (error) {
+      if (!isShareOperationActive()) return;
       console.warn('[conversation-share] failed to generate or open share image', error);
       Alert.alert(t('session.screen.shareFailedTitle'), t('session.screen.shareImageFailed'));
     } finally {
-      setConversationShareBusy(false);
+      if (shareOperationSeqRef.current === operationSeq) setConversationShareBusy(false);
     }
   }, [conversationShareBusy, exportConversationSharePng, selectedShareMessages.length, shareSelectionActive, t]);
   // 解禁唤醒:会话参数就绪(fresh 元数据到达 / 新建管线收口)的那一帧重新 pump,把
@@ -9632,7 +9654,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.surface,
     bottom: 0,
     left: 0,
-    overflow: 'visible',
+    overflow: 'hidden',
     position: 'absolute',
     right: 0,
     zIndex: 10,

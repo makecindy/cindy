@@ -4,6 +4,7 @@ import WebKit
 
 private let onScreenshot = "onScreenshot"
 private let conversationShareRenderTimeout: TimeInterval = 15
+private let conversationShareMaxOutputPixels: CGFloat = 12_000_000
 
 public class XdtScreenshotMonitorModule: Module {
   private var screenshotObserver: NSObjectProtocol?
@@ -154,9 +155,14 @@ private final class ConversationShareHtmlRenderer: NSObject, WKNavigationDelegat
       webView.frame = CGRect(x: 0, y: 0, width: captureWidth, height: captureHeight)
       webView.setNeedsLayout()
       webView.layoutIfNeeded()
+      let requestedScale = max(0.25, self.scale)
+      let maxScale = sqrt(
+        conversationShareMaxOutputPixels / max(1, captureWidth * captureHeight)
+      )
+      let effectiveScale = min(requestedScale, maxScale)
       let snapshot = WKSnapshotConfiguration()
       snapshot.rect = CGRect(x: 0, y: 0, width: captureWidth, height: captureHeight)
-      snapshot.snapshotWidth = NSNumber(value: Double(captureWidth * self.scale))
+      snapshot.snapshotWidth = NSNumber(value: Double(captureWidth * effectiveScale))
       snapshot.afterScreenUpdates = true
       webView.takeSnapshot(with: snapshot) { image, error in
         if let error {
