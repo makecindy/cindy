@@ -25,7 +25,7 @@ interface ParsedXdtRef extends XdtImageRef {
   kind: 'image' | 'file';
 }
 
-interface TextRange {
+export interface MarkdownCodeRange {
   start: number;
   end: number;
 }
@@ -41,9 +41,24 @@ function lineEndAfterNewline(text: string, start: number): number {
   return newline === -1 ? text.length : newline + 1;
 }
 
-/** Locate fenced and inline Markdown code without copying/masking large model output. */
-function markdownCodeRanges(text: string): TextRange[] {
-  const fences: TextRange[] = [];
+function isIndentedCodeLine(text: string, start: number, end: number): boolean {
+  let columns = 0;
+  for (let cursor = start; cursor < end; cursor += 1) {
+    if (text[cursor] === ' ') columns += 1;
+    else if (text[cursor] === '\t') columns += 4 - (columns % 4);
+    else break;
+    if (columns >= 4) return true;
+  }
+  return false;
+}
+
+function isBlankLine(text: string, start: number, end: number): boolean {
+  return text.slice(start, end).trim() === '';
+}
+
+/** Locate fenced, indented, and inline Markdown code without copying large model output. */
+export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
+  const fences: MarkdownCodeRange[] = [];
   let lineStart = 0;
   while (lineStart < text.length) {
     const openingLineEnd = lineEndAfterNewline(text, lineStart);
@@ -80,14 +95,47 @@ function markdownCodeRanges(text: string): TextRange[] {
     lineStart = fenceEnd;
   }
 
-  const ranges = [...fences];
-  let fenceIndex = 0;
+  const blocks = [...fences];
+  lineStart = 0;
+  while (lineStart < text.length) {
+    const fence = codeRangeAt(fences, lineStart);
+    if (fence) {
+      lineStart = fence.end;
+      continue;
+    }
+    const lineEnd = lineEndAfterNewline(text, lineStart);
+    if (!isIndentedCodeLine(text, lineStart, lineEnd)) {
+      lineStart = lineEnd;
+      continue;
+    }
+    const blockStart = lineStart;
+    let blockEnd = lineEnd;
+    lineStart = lineEnd;
+    while (lineStart < text.length) {
+      const nextFence = codeRangeAt(fences, lineStart);
+      if (nextFence) break;
+      const nextLineEnd = lineEndAfterNewline(text, lineStart);
+      if (
+        !isIndentedCodeLine(text, lineStart, nextLineEnd) &&
+        !isBlankLine(text, lineStart, nextLineEnd)
+      ) {
+        break;
+      }
+      blockEnd = nextLineEnd;
+      lineStart = nextLineEnd;
+    }
+    blocks.push({ start: blockStart, end: blockEnd });
+  }
+  blocks.sort((a, b) => a.start - b.start);
+
+  const ranges = [...blocks];
+  let blockIndex = 0;
   let cursor = 0;
   while (cursor < text.length) {
-    const fence = fences[fenceIndex];
-    if (fence && cursor >= fence.start) {
-      cursor = fence.end;
-      fenceIndex += 1;
+    const block = blocks[blockIndex];
+    if (block && cursor >= block.start) {
+      cursor = block.end;
+      blockIndex += 1;
       continue;
     }
     if (text[cursor] !== '`') {
@@ -97,9 +145,9 @@ function markdownCodeRanges(text: string): TextRange[] {
     const openingRun = runLength(text, cursor, '`');
     let search = cursor + openingRun;
     let closingEnd = -1;
-    while (search < text.length && (!fence || search < fence.start)) {
+    while (search < text.length && (!block || search < block.start)) {
       const next = text.indexOf('`', search);
-      if (next === -1 || (fence && next >= fence.start)) break;
+      if (next === -1 || (block && next >= block.start)) break;
       const closingRun = runLength(text, next, '`');
       if (closingRun === openingRun) {
         closingEnd = next + closingRun;
@@ -117,7 +165,10 @@ function markdownCodeRanges(text: string): TextRange[] {
   return ranges.sort((a, b) => a.start - b.start);
 }
 
-function codeRangeAt(ranges: readonly TextRange[], position: number): TextRange | null {
+function codeRangeAt(
+  ranges: readonly MarkdownCodeRange[],
+  position: number,
+): MarkdownCodeRange | null {
   let low = 0;
   let high = ranges.length - 1;
   while (low <= high) {
@@ -128,6 +179,13 @@ function codeRangeAt(ranges: readonly TextRange[], position: number): TextRange 
     else return range;
   }
   return null;
+}
+
+export function isMarkdownCodePosition(
+  ranges: readonly MarkdownCodeRange[],
+  position: number,
+): boolean {
+  return codeRangeAt(ranges, position) !== null;
 }
 
 function angleReferenceEnd(text: string, closingAngle: number): number {
@@ -161,7 +219,11 @@ function angleReferenceEnd(text: string, closingAngle: number): number {
  * "直接"很关键: alt 里再出现 '[' 时返回 false —— 那个更内层的 '[' 才可能是
  * 起点, 外层的恢复循环会继续迭代到它。
  */
-function refStartsAt(text: string, openBracket: number, codeRanges: readonly TextRange[]): boolean {
+function refStartsAt(
+  text: string,
+  openBracket: number,
+  codeRanges: readonly MarkdownCodeRange[],
+): boolean {
   if (codeRangeAt(codeRanges, openBracket)) return false;
   const image = openBracket > 0 && text[openBracket - 1] === '!';
   let altEnd = openBracket + 1;

@@ -50,33 +50,37 @@ function fitCardToLimit(
   text: string,
   fullCard: unknown,
   buildCard: (visibleText: string) => unknown,
-): { card: unknown; droppedMedia: boolean } {
+): { card: unknown; droppedMedia: boolean; visibleText: string | null } {
   if (cardRequestBytes(fullCard) <= FEISHU_CARD_REQUEST_MAX_BYTES) {
-    return { card: fullCard, droppedMedia: false };
+    return { card: fullCard, droppedMedia: false, visibleText: text };
   }
 
   const chars = Array.from(text);
   const suffix = transportMessages.streaming.replyTruncated;
   let low = 0;
   let high = chars.length;
-  let fitted = buildCard(suffix);
+  let visibleText: string = suffix;
+  let fitted = buildCard(visibleText);
   if (cardRequestBytes(fitted) > FEISHU_CARD_REQUEST_MAX_BYTES) {
     return {
       card: buildMarkdownCardV2(transportMessages.streaming.deliveryFailed),
       droppedMedia: true,
+      visibleText: null,
     };
   }
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
-    const candidate = buildCard(`${chars.slice(0, middle).join('')}${suffix}`);
+    const candidateText = `${chars.slice(0, middle).join('')}${suffix}`;
+    const candidate = buildCard(candidateText);
     if (cardRequestBytes(candidate) <= FEISHU_CARD_REQUEST_MAX_BYTES) {
       fitted = candidate;
+      visibleText = candidateText;
       low = middle + 1;
     } else {
       high = middle - 1;
     }
   }
-  return { card: fitted, droppedMedia: false };
+  return { card: fitted, droppedMedia: false, visibleText };
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
@@ -215,7 +219,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     // 内联进正文、又经 tool_result 账本 sidechannel 送来时(ghost 读文档
     // xdt_media_inline 内联场景),只保留正文内联位,不在卡片尾部再挂一份。
     const bodyImageAbsPaths = new Set<string>();
-    const deliveredBodyImageAbsPaths = new Set<string>();
+    const deliveredBodyImageAbsPathByUrl = new Map<string, string>();
     if (imageUrls.length > 0) {
       log.debug(`[feishu/streamingText] uploading ${imageUrls.length} xdt-image(s)`);
       const results = await Promise.all(
@@ -247,7 +251,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       for (const r of results) {
         if (!r) continue;
         imageMap.set(r.url, r.key);
-        deliveredBodyImageAbsPaths.add(r.absPath);
+        deliveredBodyImageAbsPathByUrl.set(r.url, r.absPath);
       }
     }
 
@@ -330,10 +334,15 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       );
       await patchCardRaw(this.messageId, fitted.card);
       if (!fitted.droppedMedia) {
+        const visibleBodyImageAbsPaths = new Set(
+          collectXdtImageUrls(fitted.visibleText ?? '')
+            .map((url) => deliveredBodyImageAbsPathByUrl.get(url))
+            .filter((absPath): absPath is string => absPath !== undefined),
+        );
         this.deliveredExtraImageAbsPaths = this.extraImageAbsPaths.filter(
           (absPath) =>
             uploadedExtraImageAbsPaths.includes(absPath) ||
-            deliveredBodyImageAbsPaths.has(absPath),
+            visibleBodyImageAbsPaths.has(absPath),
         );
       }
       this.flushed = this.buffer;

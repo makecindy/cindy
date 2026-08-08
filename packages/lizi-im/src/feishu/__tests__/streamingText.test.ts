@@ -96,6 +96,19 @@ describe('feishu streaming text', () => {
     expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(['/tmp/shared.png']);
   });
 
+  it('does not acknowledge a matching body image removed by card truncation', async () => {
+    mocks.uploadImage.mockResolvedValue('image-key');
+    const handle = await start('ou_owner');
+    handle.addExtraImageAbsPath?.('/tmp/shared.png');
+
+    await handle.finalize(
+      `${'超长正文'.repeat(10_000)}\n![shared](cindy-media://blobs/shared.png)`,
+    );
+
+    expect(markdownContent(mocks.patchCardRaw.mock.calls[0][1])).not.toContain('shared');
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
+  });
+
   it('patches a short user-visible notice when the final card shape is rejected', async () => {
     mocks.patchCardRaw.mockRejectedValueOnce(new Error('unsupported card shape'));
     const handle = await start('ou_owner');

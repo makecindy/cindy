@@ -14,7 +14,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { collectXdtFileRefs, normalizeXdtAbsPath, transformXdtRefs } from '@cindy/im';
+import {
+  collectXdtFileRefs,
+  isMarkdownCodePosition,
+  markdownCodeRanges,
+  normalizeXdtAbsPath,
+  transformXdtRefs,
+} from '@cindy/im';
 
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
 import { ingestMedia } from '../../cindy-media/ingest';
@@ -30,6 +36,13 @@ const LOCAL_MARKDOWN_IMAGE_RE =
 const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+function localMarkdownImageMatches(text: string): RegExpMatchArray[] {
+  const codeRanges = markdownCodeRanges(text);
+  return Array.from(text.matchAll(LOCAL_MARKDOWN_IMAGE_RE)).filter(
+    (match) => match.index !== undefined && !isMarkdownCodePosition(codeRanges, match.index),
+  );
+}
 
 interface LocalMarkdownImageDeps {
   realpath(value: string): Promise<string>;
@@ -242,7 +255,7 @@ function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
 
 /** Remove unresolved host-local image targets before a plain-text IM fallback. */
 export function sanitizeLocalMarkdownImageRefs(text: string): string {
-  const matches = Array.from(text.matchAll(LOCAL_MARKDOWN_IMAGE_RE));
+  const matches = localMarkdownImageMatches(text);
   let sanitized = text;
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const match = matches[index];
@@ -269,7 +282,7 @@ export async function materializeLocalMarkdownImages(
   },
   deps: LocalMarkdownImageDeps = defaultDeps,
 ): Promise<MaterializedLocalMarkdownImages> {
-  const matches = Array.from(params.text.matchAll(LOCAL_MARKDOWN_IMAGE_RE));
+  const matches = localMarkdownImageMatches(params.text);
   if (matches.length === 0) return { absPaths: [], text: params.text };
 
   const maxImages = Math.max(0, params.maxImages ?? DEFAULT_MAX_IMAGES);

@@ -120,6 +120,31 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
   });
 
+  it('leaves local image examples inside Markdown code untouched and unsent', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+    const text = [
+      `\`![inline](${sourcePath})\``,
+      '```md',
+      `![fenced](${sourcePath})`,
+      '```',
+      '',
+      `    ![indented](${sourcePath})`,
+    ].join('\n');
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-code-example' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe(text);
+    expect(deps.ingest).not.toHaveBeenCalled();
+  });
+
   it('materializes SSH Markdown images through the remote file service', async () => {
     const cacheRoot = await makeTempRoot();
     const cachePath = path.join(cacheRoot, 'remote-image.png');

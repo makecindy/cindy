@@ -202,6 +202,13 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(collectXdtFileRefs(text)).toEqual([]);
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
   });
+
+  it('ignores file references inside four-space indented code blocks', () => {
+    const text = '正文\n\n    [报告](xdt-file:///tmp/indented.pdf)\n\n结尾';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
 });
 
 describe('transformXdtRefs(收口正文改写共享原语)', () => {
