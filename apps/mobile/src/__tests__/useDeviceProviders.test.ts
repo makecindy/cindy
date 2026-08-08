@@ -171,6 +171,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     // 挂载会采信断线前缓存,断线期间改过的供应商永远不被刷新(codex review P1)。
     const src = readTextLf(resolve(process.cwd(), 'src/device-link/useDeviceProviders.ts'), 'utf8');
     const cacheSrc = readTextLf(resolve(process.cwd(), 'src/device-link/deviceProvidersCache.ts'), 'utf8');
+    const ctxSrc = readTextLf(resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'), 'utf8');
     // hook 从模块级缓存读取/标记代际(不持有组件本地 ref)
     expect(src).toContain('const prevEpoch = getDeviceFetchEpoch(deviceId);');
     expect(src).toContain('const reconnected = prevEpoch !== undefined && prevEpoch !== connectionEpoch;');
@@ -182,6 +183,17 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       src.indexOf('const prevEpoch = getDeviceFetchEpoch(deviceId);') + 300,
     );
     expect(reconnectedBlock).not.toContain('markDeviceFetchEpoch');
+    // 无挂载 hook 的后台缓存写入路径(DeviceLinkContext provider:changed)也必须
+    // mark epoch——否则断线前旧目录被当「首次挂载缓存命中」采信、永不刷新
+    // (codex review P1)。捕获 epoch 在 fetch 前、mark 在成功后(失败不 mark)。
+    expect(ctxSrc).toContain('const epochAtWrite = connectionEpoch;');
+    expect(ctxSrc).toContain('markDeviceFetchEpoch(deviceId, epochAtWrite);');
+    const ctxBlock = ctxSrc.slice(
+      ctxSrc.indexOf('onProviderChanged: (deviceId) => {'),
+      ctxSrc.indexOf('onProviderChanged: (deviceId) => {') + 1400,
+    );
+    expect(ctxBlock).toContain('.then(() => {');
+    expect(ctxBlock).toContain('markDeviceFetchEpoch(deviceId, epochAtWrite);');
     // 模块级 Map + 导出存取(跨组件卸载存活)
     expect(cacheSrc).toContain('const deviceFetchEpoch = new Map<string, number>();');
     expect(cacheSrc).toContain('export function markDeviceFetchEpoch(deviceId: string, epoch: number): void');
