@@ -496,7 +496,7 @@ export function resolveNativeProviderAuthCredentialRejection(
   authorizationRevision?: string | null,
 ): NativeProviderCredentialRejectionDecision {
   try {
-    return withBindingMutationLock(() =>
+    return withBindingSnapshotLock(() =>
       resolveNativeProviderAuthCredentialRejectionUnlocked(
         provider,
         fingerprint,

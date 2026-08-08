@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -143,6 +144,58 @@ describe('Claude credential + ownership recovery integration', () => {
 
     renameSpy.mockRestore();
   });
+
+  it.each(['rejection', 'recovery'] as const)(
+    'read-only credential snapshots leave backup-only %s state untouched',
+    async (kind) => {
+      const binding = await import('../nativeProviderAuthBinding.js');
+      const store = await import('../claude-credentials-store.js');
+      const revision = 'login-revision-1';
+      const credential = {
+        accessToken: 'at-owner-a',
+        refreshToken: 'rt-owner-a',
+        cindyAuthorizationRevision: revision,
+      };
+
+      expect(binding.bindNativeProviderAuth('anthropic')).toBe(true);
+      store.writeClaudeAiOAuth(credential);
+      const fingerprint = store.fingerprintClaudeAiOAuthCredentialIdentity(credential);
+      let stateFile: string;
+      if (kind === 'rejection') {
+        expect(store.persistClaudeAiOAuthCredentialRejection(credential)).toBe(true);
+        stateFile = path.join(
+          h.userDataDir,
+          'native-provider-auth.rejected',
+          'anthropic',
+          `${fingerprint}.json`,
+        );
+      } else {
+        expect(store.persistClaudeAiOAuthCredentialRejectionRecovery(credential)).toBe(true);
+        const revisionKey = crypto
+          .createHash('sha256')
+          .update(JSON.stringify(revision), 'utf8')
+          .digest('hex');
+        stateFile = path.join(
+          h.userDataDir,
+          'native-provider-auth.rejected-recovery',
+          'anthropic',
+          fingerprint,
+          `${revisionKey}.json`,
+        );
+      }
+      const backupFile = `${stateFile}.bak`;
+      const backupContents = fs.readFileSync(stateFile, 'utf8');
+      fs.renameSync(stateFile, backupFile);
+      const renameSpy = vi.spyOn(fs, 'renameSync');
+
+      expect(store.hasClaudeAiOAuth()).toBe(false);
+      expect(renameSpy).not.toHaveBeenCalled();
+      expect(fs.existsSync(stateFile)).toBe(false);
+      expect(fs.readFileSync(backupFile, 'utf8')).toBe(backupContents);
+
+      renameSpy.mockRestore();
+    },
+  );
 
   it('pending revocation survives module reload and blocks another owner from claiming a residual token', async () => {
     let binding = await import('../nativeProviderAuthBinding.js');
