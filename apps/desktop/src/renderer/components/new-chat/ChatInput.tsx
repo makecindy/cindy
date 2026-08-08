@@ -144,6 +144,7 @@ import {
   addPlanModeComposerCommand,
   consumePlanModeComposerCommand,
   isPlanModeComposerCommandText,
+  shouldPreservePlanModeComposerDraft,
 } from './planModeComposerCommand';
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { SendButton } from './SendButton';
@@ -4267,8 +4268,6 @@ export function ChatInput({
           ? commentsBeforeOptimisticClear
           : [...browserCommentsRef.current];
         if (
-          attachmentsForSend.length === 0 &&
-          commentsForSend.length === 0 &&
           isPlanModeComposerCommandText(
             editorText,
             planModeEntry !== undefined,
@@ -4285,7 +4284,28 @@ export function ChatInput({
           historyIndexRef.current = -1;
           hydratedHistoryDocumentRef.current = null;
           draftRef.current = null;
-          if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
+          if (sourceStorageKey) {
+            if (
+              shouldPreservePlanModeComposerDraft(
+                attachmentsForSend.length,
+                commentsForSend.length,
+              )
+            ) {
+              const existingDraft = getComposerDraft(sourceStorageKey);
+              saveComposerDraft(
+                sourceStorageKey,
+                {
+                  text: editor.getJSON(),
+                  attachments: attachmentsForSend,
+                  quotes: existingDraft?.quotes ?? [],
+                  browserComments: commentsForSend,
+                },
+                { silent: true },
+              );
+            } else {
+              clearComposerDraft(sourceStorageKey);
+            }
+          }
           return;
         }
         // composerQuote 在其正文位置序列化成 markdown blockquote,支持引用与回复交错。

@@ -6,6 +6,7 @@ import {
   addPlanModeComposerCommand,
   consumePlanModeComposerCommand,
   isPlanModeComposerCommandText,
+  shouldPreservePlanModeComposerDraft,
 } from '../components/new-chat/planModeComposerCommand';
 import type { UnifiedCommand } from '../lib/slashCommands';
 
@@ -76,5 +77,11 @@ describe('/plan composer command', () => {
         { kind: 'agent-skill', name: 'PLAN', source: 'skill' },
       ]),
     ).toBe(false);
+  });
+
+  it('preserves supplementary draft content when consuming plan mode', () => {
+    expect(shouldPreservePlanModeComposerDraft(1, 0)).toBe(true);
+    expect(shouldPreservePlanModeComposerDraft(0, 1)).toBe(true);
+    expect(shouldPreservePlanModeComposerDraft(0, 0)).toBe(false);
   });
 });

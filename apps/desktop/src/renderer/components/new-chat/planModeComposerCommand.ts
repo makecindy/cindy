@@ -49,3 +49,10 @@ export function isPlanModeComposerCommandText(
     text.trim().toLowerCase() === `/${PLAN_MODE_COMPOSER_COMMAND}`
   );
 }
+
+export function shouldPreservePlanModeComposerDraft(
+  attachmentCount: number,
+  browserCommentCount: number,
+): boolean {
+  return attachmentCount > 0 || browserCommentCount > 0;
+}
