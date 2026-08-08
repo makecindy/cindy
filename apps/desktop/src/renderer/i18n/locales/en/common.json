@@ -7114,6 +7114,31 @@
       "promptHeading": "No Automations yet",
       "promptDescription": "Create a cron Automation to let Claude Code or Codex run your prompt on a schedule."
     },
+    "codexImport": {
+      "title": "Import Codex automations",
+      "description": "Review your Codex scheduled tasks and choose which ones to create in Cindy.",
+      "loading": "Reading Codex automations…",
+      "empty": "No Codex automations found.",
+      "loadFailed": "Could not read Codex automations: {{error}}",
+      "available": "{{count}} can be imported",
+      "selectAll": "Select all",
+      "clearAll": "Clear all",
+      "importSelected": "Import selected ({{count}})",
+      "importable": "Ready to import",
+      "manualRequired": "Needs manual adjustment",
+      "duplicate": "Already exists",
+      "status": "Status",
+      "model": "Model",
+      "workingDir": "Working directory",
+      "expandPrompt": "Show prompt",
+      "collapsePrompt": "Hide prompt",
+      "confirmTitle": "Import selected automations?",
+      "confirmDescription": "This will create {{count}} Cindy automations: {{names}}. They may consume model tokens and incur usage costs.",
+      "confirm": "Import",
+      "resultTitle": "Import finished",
+      "resultSummary": "Created {{created}}, skipped {{skipped}}, failed {{failed}}.",
+      "selectionSummary": "{{selected}} selected · {{total}} available"
+    },
     "usageLimitRecovery": {
       "name": "Continue Task After Usage Resets",
       "prompt": "Continue the current task from where it stopped."
@@ -7148,6 +7173,7 @@
     },
     "button": {
       "newAutomation": "New Automation",
+      "importCodex": "Import from Codex",
       "runNow": "Run now",
       "close": "Close",
       "edit": "Edit",

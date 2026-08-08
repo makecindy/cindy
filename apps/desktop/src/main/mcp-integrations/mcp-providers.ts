@@ -19,6 +19,7 @@ import { feishuIm, wechatIm } from '../im';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { getScheduler } from '../scheduler-host/index.js';
+import { createCodexAutomationReader } from '../scheduler-host/codex-automation-reader.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { searchSessionsFn } from '../maker-host/session-search.js';
 import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
@@ -188,6 +189,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     },
     scheduler: {
       getScheduler: () => getScheduler(),
+      // 只读扫描系统 Codex CLI 的 ~/.codex/automations；不要使用 Cindy
+      // 隔离的 CODEX_HOME，那里只服务于 Cindy 自己启动的 Codex。
+      codexAutomation: createCodexAutomationReader(),
       // 前置检查脚本统一安装服务:落盘路径/协议/自测与 UI「AI 生成」共用同一实现
       // (hook-script-generator)。lazy import:该链上有 electron app 依赖,且 maker
       // 仅 description 生成模式需要,tool-call 时才解引用。

@@ -7102,6 +7102,31 @@
       "promptHeading": "自動化がまだありません",
       "promptDescription": "cron 自動化を作成して、Claude Code または Codex にプロンプトをスケジュール実行させましょう。"
     },
+    "codexImport": {
+      "title": "Codex の自動化をインポート",
+      "description": "Codex の定期タスクを確認し、Cindy に作成するものを選択します。",
+      "loading": "Codex の自動化を読み込み中…",
+      "empty": "Codex の自動化が見つかりません。",
+      "loadFailed": "Codex の自動化を読み込めませんでした：{{error}}",
+      "available": "{{count}} 件をインポート可能",
+      "selectAll": "すべて選択",
+      "clearAll": "すべて解除",
+      "importSelected": "選択項目をインポート（{{count}}）",
+      "importable": "インポート可能",
+      "manualRequired": "手動調整が必要",
+      "duplicate": "既に存在します",
+      "status": "ステータス",
+      "model": "モデル",
+      "workingDir": "作業ディレクトリ",
+      "expandPrompt": "プロンプトを表示",
+      "collapsePrompt": "プロンプトを隠す",
+      "confirmTitle": "選択した自動化をインポートしますか？",
+      "confirmDescription": "{{count}} 件を作成します：{{names}}。実行によりモデルのトークンと利用料金が発生する場合があります。",
+      "confirm": "インポート",
+      "resultTitle": "インポート完了",
+      "resultSummary": "作成 {{created}}、スキップ {{skipped}}、失敗 {{failed}}。",
+      "selectionSummary": "{{selected}} 件を選択 · {{total}} 件が利用可能"
+    },
     "usageLimitRecovery": {
       "name": "利用上限リセット後にタスクを続行",
       "prompt": "中断したところから現在のタスクを続行してください。"
@@ -7136,6 +7161,7 @@
     },
     "button": {
       "newAutomation": "新しい自動化",
+      "importCodex": "Codex からインポート",
       "runNow": "今すぐ実行",
       "close": "閉じる",
       "edit": "編集",

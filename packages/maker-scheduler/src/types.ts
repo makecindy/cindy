@@ -173,6 +173,9 @@ export interface Schedule {
   jobConfig?: string;
   source?: 'user' | 'project';
   projectConfigId?: string;
+  /** Stable external source identity used for durable one-time imports. */
+  originKind?: 'codex-automation';
+  originId?: string;
   kind: ScheduleKind;
   cronExpr: string;
   timezone: string;
@@ -315,6 +318,9 @@ export interface CreateScheduleInput {
   jobType?: JobType;
   /** Release-compat tombstone：老 issue-triage 的 JSON 配置；新代码不读不写。 */
   jobConfig?: string;
+  /** Stable external source identity used for durable one-time imports. */
+  originKind?: 'codex-automation';
+  originId?: string;
   kind: ScheduleKind;
   cronExpr: string;
   timezone: string;

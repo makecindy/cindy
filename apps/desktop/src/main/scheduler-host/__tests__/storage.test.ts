@@ -67,6 +67,8 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     jobConfig: undefined,
     source: 'user',
     projectConfigId: undefined,
+    originKind: undefined,
+    originId: undefined,
     kind: 'cron',
     cronExpr: '0 9 * * 1-5',
     timezone: 'Asia/Shanghai',
@@ -173,6 +175,8 @@ describe('scheduleCreateToRow', () => {
       workspaceKind: 'dialogue',
       workingDir: '/repo',
       targetSessionId: 'sess-x',
+      originKind: 'codex-automation',
+      originId: 'daily-standup',
       notify: { desktop: true, feishu: true },
       lastFiredAt: 1_700_000_900_000,
       expireAt: 1_800_000_000_000,
@@ -226,6 +230,16 @@ describe('schedulePatchToRow — patch 清空语义', () => {
   it('workspaceKind patch 写 workspace_kind 列', () => {
     const out = schedulePatchToRow({ workspaceKind: 'dialogue' });
     expect(out.workspaceKind).toBe('dialogue');
+  });
+
+  it('origin patch preserves or clears the durable import identity', () => {
+    expect(
+      schedulePatchToRow({ originKind: 'codex-automation', originId: 'daily-standup' }),
+    ).toMatchObject({ originKind: 'codex-automation', originId: 'daily-standup' });
+    expect(schedulePatchToRow({ originKind: undefined, originId: undefined })).toMatchObject({
+      originKind: null,
+      originId: null,
+    });
   });
 
   it('多字段 patch 只输出列出的字段', () => {

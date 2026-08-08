@@ -7102,6 +7102,31 @@
       "promptHeading": "자동화가 아직 없습니다",
       "promptDescription": "cron 자동화를 만들어 Claude Code 또는 Codex로 프롬프트를 일정에 따라 실행하세요."
     },
+    "codexImport": {
+      "title": "Codex 자동화 가져오기",
+      "description": "Codex 예약 작업을 검토하고 Cindy에 만들 작업을 선택하세요.",
+      "loading": "Codex 자동화를 읽는 중…",
+      "empty": "Codex 자동화를 찾지 못했습니다.",
+      "loadFailed": "Codex 자동화를 읽지 못했습니다: {{error}}",
+      "available": "{{count}}개 가져오기 가능",
+      "selectAll": "모두 선택",
+      "clearAll": "모두 해제",
+      "importSelected": "선택 항목 가져오기 ({{count}})",
+      "importable": "가져올 수 있음",
+      "manualRequired": "수동 조정 필요",
+      "duplicate": "이미 존재함",
+      "status": "상태",
+      "model": "모델",
+      "workingDir": "작업 디렉터리",
+      "expandPrompt": "프롬프트 표시",
+      "collapsePrompt": "프롬프트 숨기기",
+      "confirmTitle": "선택한 자동화를 가져올까요?",
+      "confirmDescription": "{{count}}개 Cindy 자동화를 만듭니다: {{names}}. 실행 시 모델 토큰과 사용 요금이 발생할 수 있습니다.",
+      "confirm": "가져오기",
+      "resultTitle": "가져오기 완료",
+      "resultSummary": "생성 {{created}}, 건너뜀 {{skipped}}, 실패 {{failed}}.",
+      "selectionSummary": "{{selected}}개 선택 · {{total}}개 가능"
+    },
     "usageLimitRecovery": {
       "name": "사용량 제한 재설정 후 작업 계속",
       "prompt": "중단된 지점부터 현재 작업을 계속하세요."
@@ -7136,6 +7161,7 @@
     },
     "button": {
       "newAutomation": "새 자동화",
+      "importCodex": "Codex에서 가져오기",
       "runNow": "지금 실행",
       "close": "닫기",
       "edit": "편집",

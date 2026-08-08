@@ -60,6 +60,8 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     jobConfig: undefined,
     source: 'user',
     projectConfigId: undefined,
+    originKind: undefined,
+    originId: undefined,
     kind: 'cron',
     cronExpr: '0 9 * * 1-5',
     timezone: 'Asia/Shanghai',
@@ -130,6 +132,8 @@ const SCHEDULER_DDL = [
       script_config TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
+      origin_kind TEXT,
+      origin_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
       kind TEXT NOT NULL DEFAULT 'cron',
       cron_expr TEXT NOT NULL,
@@ -165,6 +169,7 @@ const SCHEDULER_DDL = [
   `,
   'CREATE INDEX idx_schedules_active_next ON schedules(status, next_fire_at)',
   'CREATE INDEX idx_schedules_target_session ON schedules(target_session_id)',
+  'CREATE UNIQUE INDEX uniq_schedules_origin ON schedules(origin_kind, origin_id)',
   `
     CREATE TABLE schedule_runs (
       id TEXT PRIMARY KEY,
@@ -223,6 +228,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       nextFireAt: 1_700_000_120_000,
       // providerId 钉到非原生来源,断言往返保真(insert → get 都带回 'anthropic')。
       providerId: 'anthropic',
+      originKind: 'codex-automation',
+      originId: 'storage-smoke',
     });
     const run: ScheduleRun = {
       id: 'run-storage',
@@ -315,6 +322,35 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           costAttribution: 'exact',
         }),
       ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('enforces unique origin identity at the SQLite boundary', async () => {
+    const harness = createStorageHarness();
+    const first = baseSchedule({
+      id: 'sch-origin-first',
+      originKind: 'codex-automation',
+      originId: 'codex-1',
+    });
+    const duplicate = baseSchedule({
+      id: 'sch-origin-duplicate',
+      originKind: 'codex-automation',
+      originId: 'codex-1',
+    });
+
+    try {
+      await harness.storage.insert(first);
+      await expect(harness.storage.insert(duplicate)).rejects.toThrow(
+        /UNIQUE constraint failed.*origin/i,
+      );
+      await expect(harness.storage.get(first.id)).resolves.toMatchObject({
+        id: first.id,
+        originKind: 'codex-automation',
+        originId: 'codex-1',
+      });
+      await expect(harness.storage.get(duplicate.id)).resolves.toBeNull();
     } finally {
       harness.close();
     }
