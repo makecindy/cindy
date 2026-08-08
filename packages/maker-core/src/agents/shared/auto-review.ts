@@ -729,7 +729,10 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
  */
 const ENV_VARS_EXECUTING_THEIR_VALUE = 'LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+'
   + '|(?:[A-Z][A-Z0-9_]*)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL'
-  + '|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV'
+  // `GIT_CONFIG_VALUE_<n>` 配合 `GIT_CONFIG_KEY_<n>=diff.external`(或 core.pager /
+  // sequence.editor …)注入的配置值会被 git 当外部程序启动 —— 不能遮蔽成 DATA,否则
+  // `GIT_CONFIG_VALUE_0="sudo …" git diff` 会连红线带审阅一起绕过、直接放行(review 报)。
+  + '|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM|VALUE_\\d+)|BASH_ENV'
   + '|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS'
   // 编辑器族与分页器同理:值是 git / 其它 CLI 会**启动的程序**
   // (`GIT_EDITOR="sudo …" git commit`),不是数据。**按整族登记**,与 PAGER 同写法 ——
@@ -1338,6 +1341,16 @@ function splitExecutableSegments(command: string): ExecutableSegment[] {
     if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
     if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
     if (singleQuoted || doubleQuoted) continue;
+    // shell 注释:词首的 `#` 到行尾都被忽略。**必须在引号状态更新之后处理** —— 注释里的
+    // 未闭合引号(`echo ok # "`)否则会把后续换行吞进 quoted 状态,令下一行命令不再单独
+    // 切分、整段按第一行放行(review 报)。只在词边界(行首 / 空白 / `;|&(` 之后)才算注释,
+    // `foo#bar` 里的 `#` 是普通字符。
+    if (char === '#' && (i === 0 || /[\s;|&(]/.test(command[i - 1] ?? ''))) {
+      const newline = command.indexOf('\n', i);
+      if (newline === -1) break;      // 注释一直到命令末尾:后面没有可执行内容
+      i = newline - 1;                // 跳过注释体,让循环下一步照常把 `\n` 当分隔符处理
+      continue;
+    }
     // `$(` 命令替换、`<(`/`>(` 进程替换都成组,组内的 `|`/`;` 不是顶层分隔符 → 一并按深度跳过
     // (自审补:此前漏了输出进程替换 `>(`,`>(cmd1; cmd2)` 里的 `;` 会被误当顶层分隔)。
     if ((char === '$' || char === '<' || char === '>') && command[i + 1] === '(') {

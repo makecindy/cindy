@@ -241,6 +241,14 @@ const MUST_ASK_EACH_TIME: Record<string, string[]> = {
     'ag --pager "sudo cat /etc/shadow" foo .',
     // 输出进程替换在双引号内同样会执行
     'git commit -m "x >(sudo tee /etc/x) y"',
+    // git 运行时配置注入:值被 git 当外部程序启动
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0="sudo cat /etc/shadow" git diff HEAD^ HEAD',
+    'GIT_CONFIG_VALUE_0="sudo cat /etc/shadow" git diff',
+  ],
+
+  'shell 注释里的未闭合引号不得吞掉后续命令': [
+    // 注释到行尾就结束,第二行仍是真实命令,必须单独判定
+    'echo ok # "\nprintf \'touch /tmp/pwn\' | sh',
   ],
 };
 
