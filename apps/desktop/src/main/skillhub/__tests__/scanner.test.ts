@@ -463,15 +463,40 @@ describe('skill file access', () => {
   it('rejects renaming a skill directory symlink without mutating its target', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-pi-rename-link-'));
     tempRoots.push(root);
-    const skillRoot = path.join(root, 'project', '.pi', 'skills');
+    const projectRoot = path.join(root, 'project');
+    const skillRoot = path.join(projectRoot, '.pi', 'skills');
     const targetSkill = path.join(skillRoot, 'target');
     const aliasSkill = path.join(skillRoot, 'alias');
     fs.mkdirSync(targetSkill, { recursive: true });
     fs.writeFileSync(path.join(targetSkill, 'SKILL.md'), '---\nname: target\n---\n# Target\n', 'utf-8');
     fs.symlinkSync(targetSkill, aliasSkill, process.platform === 'win32' ? 'junction' : 'dir');
 
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'pi',
+          kind: 'skill',
+          scope: 'repo',
+          name: 'target',
+          absolutePath: aliasSkill,
+          mdPath: path.join(aliasSkill, 'SKILL.md'),
+          workingDir: projectRoot,
+          runtimeStatus: 'discovered',
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+    const scanned = await scanAllSkills({
+      projects: [{ projectRoot, hash: 'pi-alias' }],
+    }, maker);
+    expect(scanned.skills[0]).toMatchObject({
+      absolutePath: fs.realpathSync(targetSkill),
+      discoveredPath: aliasSkill,
+    });
+
     await expect(renameLocalSkill({
-      absolutePath: aliasSkill,
+      absolutePath: scanned.skills[0].discoveredPath,
       newName: 'renamed-alias',
     })).resolves.toMatchObject({ success: false });
     expect(fs.existsSync(aliasSkill)).toBe(true);

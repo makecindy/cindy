@@ -5853,6 +5853,8 @@ interface SkillhubSkill {
   name: string;
   description?: string;
   absolutePath: string;
+  /** Lexical path reported by discovery before canonical realpath deduplication. */
+  discoveredPath?: string;
   mdPath: string;
   files: SkillhubFileEntry[];
   frontmatter?: Record<string, unknown>;

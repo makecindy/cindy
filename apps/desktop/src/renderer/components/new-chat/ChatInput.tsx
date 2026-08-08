@@ -2724,6 +2724,21 @@ export function ChatInput({
         return;
       }
 
+      // This window capture listener runs before Tiptap's palette bridge. While
+      // listening, preserve the editor's normal priority: Enter first selects
+      // or dismisses the open palette instead of stopping voice and sending the
+      // unresolved slash query.
+      if (
+        currentState === 'listening' &&
+        isComposerEnterTarget(event.target) &&
+        (enterIntent === 'queue' || enterIntent === 'steer') &&
+        panelBridgeRef.current?.captureKey(event)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (
         currentState === 'listening' &&
         voiceInputCanStopAndSendRef.current &&

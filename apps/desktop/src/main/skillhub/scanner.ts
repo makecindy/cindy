@@ -79,6 +79,8 @@ export interface Skill {
    * the file's parent dir, computed renderer-side via path utilities).
    */
   absolutePath: string;
+  /** Lexical path reported by discovery before canonical realpath deduplication. */
+  discoveredPath: string;
   /** Full path to the .md file we render (SKILL.md for skill, the file itself for command/agent). */
   mdPath: string;
   /** Sibling files / subfolders inside the skill folder. Always empty for command/agent. */
@@ -314,6 +316,7 @@ export async function scanAllSkills(
       name: canonicalName,
       description: c.description,
       absolutePath: realPath,
+      discoveredPath: c.absolutePath,
       mdPath: c.mdPath ?? realPath,
       files: c.kind === 'skill'
         ? filterSkillPackageFileEntries(realPath, (c.files ?? []) as SkillFileEntry[])
