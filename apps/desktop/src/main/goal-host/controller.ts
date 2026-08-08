@@ -1825,11 +1825,16 @@ export class GoalController {
     // 成功后发出——getAccountLimit pending 期间 Stop/clear 会让 finalizeTurn 提前
     // return,若事件在 await 前发,审计会报告未提交的假收口。用最终 status/lastReason
     // (含 quota 改判),state-transition 条件自然覆盖 active→usageLimited 改判场景。
-    this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
-      from: state.status,
-      to: status,
-      reason: lastReason,
-    });
+    // reviewer P1:非 goal turn(用户 turn 打断,origin==='other')不是 goal 的回合,
+    // 决策为 paused 且不递增 turnsUsed——不记录 turn-finalized(无对应 turn-dispatched,
+    // turnIndex 会与上一轮重复),只发状态迁移与停滞/预算类事件(它们仍真实发生)。
+    if (origin === 'goal') {
+      this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: status,
+        reason: lastReason,
+      });
+    }
     if (status !== state.status) {
       this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
         from: state.status,
@@ -1839,6 +1844,7 @@ export class GoalController {
     }
     // 连续空轮撞 noProgressLimit → paused(lastReason 带 no tool use 标记)
     if (
+      origin === 'goal' &&
       status === 'paused' &&
       state.noProgressLimit != null &&
       state.noProgressStreak + 1 >= state.noProgressLimit &&
@@ -1851,7 +1857,7 @@ export class GoalController {
       });
     }
     // 预算撞线 → budget-consumed + terminal(与 complete 并列的唯二终态)
-    if (status === 'budgetLimited') {
+    if (origin === 'goal' && status === 'budgetLimited') {
       this.recordRunEvent('budget-consumed', sessionId, postDecisionCounts, {
         from: state.status,
         to: 'budgetLimited',
