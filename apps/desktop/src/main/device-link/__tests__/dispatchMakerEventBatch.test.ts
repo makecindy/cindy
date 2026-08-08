@@ -40,6 +40,22 @@ const deviceLinkSettings = vi.hoisted(() => ({
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
+/**
+ * 只替换 createLogger(其余导出保留真实实现):降级路径的「≤64 条 WARN 收敛成一条」
+ * 是 review P1 的核心承诺,得能被断言,否则下次有人去掉 quiet 也不会有测试变红。
+ */
+const logSpy = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+vi.mock('../../logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../logger')>()),
+  createLogger: () => ({
+    trace: vi.fn(),
+    debug: logSpy.debug,
+    info: vi.fn(),
+    warn: logSpy.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+  }),
+}));
 
 import {
   __testing,
@@ -89,6 +105,8 @@ function batchesIn(sent: SentPush[]): MakerEventBatchPayload[] {
 beforeEach(() => {
   vi.useFakeTimers();
   deviceLinkSettings.value = { remoteControlEnabled: true, revokedControllers: [] };
+  logSpy.warn.mockClear();
+  logSpy.debug.mockClear();
   __testing.reset();
 });
 
@@ -269,10 +287,11 @@ describe('[4] 生命周期与背压', () => {
     expect(sendPush.mock.calls.length).toBe(before);
   });
 
-  it('逐帧降级在第一次失败处停下:一次背压不再重放成 N 条失败与 N 条日志', () => {
-    // review P1:降级本身不得复刻本 PR 要消掉的洪峰。批被拒后逐帧若第一帧也进不去,
-    // 同步循环内可靠窗口不会被 ACK 腾空,后续帧必然同样失败 —— 停在第一次失败处,
-    // 交付集合完全不变,省掉的只是注定失败的尝试与逐条 WARN。
+  it('持续背压:逐帧每条都试(不因失败提前停手),但告警只有聚合的一条', () => {
+    // review 三轮收敛的结论:洪峰本质是**日志**问题,不是尝试问题。背压判据是尺寸
+    // 相关的(ws 容量含 additionalBytes、pending 容量含字节维度),大帧被拒时后面的
+    // 小帧仍可能通过 —— 按错误码整片放弃会误丢本可送达的事件。所以每条都试,
+    // 逐帧日志静默、成败聚合成一条。
     const sendPush = vi.fn((
       _dst: string,
       _channel: string,
@@ -290,11 +309,18 @@ describe('[4] 生命周期与背压', () => {
     }
     vi.advanceTimersByTime(WINDOW_MS);
 
-    // 一次批帧尝试 + 一次逐帧尝试(而不是 1 + 5)
+    // 一次批帧尝试 + 5 条逐帧尝试:交付机会一条都不放弃
     expect(sendPush.mock.calls.filter((c) => c[1] === MAKER_EVENT_BATCH_CHANNEL)).toHaveLength(1);
-    expect(sendPush.mock.calls.filter((c) => c[1] === 'maker:event')).toHaveLength(1);
+    expect(sendPush.mock.calls.filter((c) => c[1] === 'maker:event')).toHaveLength(5);
+    // 但告警只有聚合的那一条(而不是 5 条逐帧 WARN)——这是 review P1 的核心承诺
+    const degradeWarns = logSpy.warn.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes('degraded to per-frame'));
+    expect(degradeWarns).toHaveLength(1);
+    expect(degradeWarns[0]).toContain('0 sent, 5 dropped');
+    expect(logSpy.warn.mock.calls.filter((c) => String(c[0]).includes('forwardPush'))).toHaveLength(0);
 
-    // 缓冲仍然为空:强不变量不因提前停止而破
+    // 缓冲仍然为空:强不变量不因逐帧全失败而破
     const before = sendPush.mock.calls.length;
     vi.advanceTimersByTime(10_000);
     expect(sendPush.mock.calls.length).toBe(before);

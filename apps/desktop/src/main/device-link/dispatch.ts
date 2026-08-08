@@ -606,8 +606,9 @@ const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
  * 整族消失,而不是每轮补一个新场景。
  *
  * 降级本身也要收敛,否则它就是本 PR 要消掉的那个洪峰的复刻(review P1):逐帧
- * 只在**可能成功**时才做(判据见 shouldDegradeBatchToPerFrame),且在第一次失败处
- * 停下、剩余事件计入一条聚合日志(账本见 MakerEventBatchFlushOutcome)。
+ * 只在**可能成功**时才做(判据见 shouldDegradeBatchToPerFrame——只有 relay 离线是
+ * 恒不可能),切片内每条都试但逐帧日志静默,成败聚合成一条(账本见
+ * MakerEventBatchFlushOutcome,那里记了这个洪峰判据三轮收敛的全过程)。
  *
  * 代价与为什么可接受:拥塞时不再保留事件等窗口恢复。但那本来不是本 PR 的目标
  * (常态减帧才是),而拥塞时的取舍是 #2167 的职责——降级后的逐帧发送正好落回
@@ -761,52 +762,70 @@ function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage):
 }
 
 /**
- * 一次 flush 内的降级账本。存在的理由是**降级不能自己变成新的洪峰**(review P1):
- * 批帧被拒后逐帧重放最多 64 次,每次一条 WARN,正好把本 PR 要消掉的逐事件
- * admission 与告警洪峰原样重建。两条收敛:
- *  - 一旦确认「这个 peer 现在发不出去」,本轮后续切片与会话只清空、不再尝试发送
- *    (本轮是同步的,可靠传输窗口不会在循环中间被 ACK 腾空,后续尝试必然同样失败);
- *  - 被跳过的事件数聚合成**一条**日志,而不是每帧一条。
+ * 一次 flush 内的降级账本。它解决的是「降级不能自己变成本 PR 要消掉的那个洪峰」
+ * (review 三轮收敛的最终形态)。收敛过程值得记下来,免得再来一遍:
+ *
+ *  1. 最初逐帧降级无条件重放整个切片 → 队头不可驱逐时 ≤64 次失败、≤64 条 WARN,
+ *     正是要消灭的逐事件 admission 与告警洪峰(greptile P1)。
+ *  2. 改成「第一次失败就停」→ 又把「这一帧自己不合格」和「管子堵了」混为一谈,
+ *     误丢本可送达的批尾(greptile P1 第二轮)。
+ *  3. 于是按错误码区分 → 但 `BACKPRESSURE` **也是尺寸相关**的:ws 容量判据是
+ *     `bufferedAmount + additionalBytes > cap`,pending 容量判据也含字节维度,
+ *     所以大帧被拒时小帧仍可能通过(codex P1)。按错误码停手同样会误丢。
+ *
+ * 结论:**洪峰本质上是日志问题,不是尝试问题。** 一次 `sendPush` 失败的代价只是一次
+ * 函数调用加一次 throw,而少发一条本可送达的事件是用户可见的缺流。所以:
+ *  - 切片内**每一条都尝试**,不因任何失败提前停手(尺寸相关的失败下后面的小帧还有戏);
+ *  - 降级路径的逐帧日志静默(`quiet`),成败计数聚合成**一条**日志;
+ *  - 唯一的例外是 relay 离线:`client.sendPush` 在非 online 时本就静默早退、成功率
+ *    恒为 0,整轮直接不尝试(也不必逐条 throw)。
  */
 interface MakerEventBatchFlushOutcome {
-  /** 本轮已确认发不出去:只清空缓冲,不再尝试发送。 */
-  sendingBlocked: boolean;
   /**
-   * 为什么发不出去。日志级别按它分档 —— 否则这条聚合日志自己就是新的洪峰:
-   *  - `offline`:relay 不在线,**这是常态且预期**(client.sendPush 在非 online 时本就
-   *    静默早退,push 的恢复语义一直是重连后 resync 补偿、不是重放)。断线期间事件
-   *    仍在产生,每 120ms 窗口一条 WARN 就是 8 条/秒的噪声 → 记 debug。
-   *  - `send-failed`:relay 在线却连逐帧都进不去(窗口满且队头不可驱逐),是**异常**
-   *    信号,值得 WARN。
+   * relay 离线:本轮后续切片与会话只清空缓冲、不再尝试发送。
+   *
+   * 这是常态且预期的一档(push 的恢复语义一直是重连后 resync 补偿、不是重放),断线
+   * 期间事件仍在产生,每 120ms 窗口一条 WARN 就是 8 条/秒的噪声 → 记 debug 而非 warn。
    */
-  blockedReason: 'offline' | 'send-failed' | null;
-  /** 本轮未尝试发送而直接丢弃的事件数(用于聚合日志)。 */
+  offline: boolean;
+  /** 因离线而未尝试发送、直接丢弃的事件数。 */
   droppedEvents: number;
+  /** 降级逐帧的成功条数。 */
+  degradedSent: number;
+  /** 降级逐帧中失败(背压 / 超限无解等)的条数;>0 才值得一条 WARN。 */
+  degradedFailed: number;
 }
 
 function createMakerEventBatchFlushOutcome(): MakerEventBatchFlushOutcome {
-  return { sendingBlocked: false, blockedReason: null, droppedEvents: 0 };
+  return { offline: false, droppedEvents: 0, degradedSent: 0, degradedFailed: 0 };
 }
 
 function reportMakerEventBatchFlushOutcome(
   dst: string,
   outcome: MakerEventBatchFlushOutcome,
 ): void {
-  if (outcome.droppedEvents === 0) return;
-  const line = `maker:event batch flush to ${shortId(dst)}: `
-    + `${outcome.blockedReason === 'offline' ? 'relay offline' : 'peer send unavailable'}, `
-    + `dropped ${outcome.droppedEvents} event(s) without retry`;
-  if (outcome.blockedReason === 'offline') log.debug(line);
-  else log.warn(line);
+  if (outcome.droppedEvents > 0) {
+    // 离线丢弃是预期常态,debug 级(理由见 outcome.offline 注释)。
+    log.debug(
+      `maker:event batch flush to ${shortId(dst)}: relay offline, `
+      + `dropped ${outcome.droppedEvents} event(s) without retry`,
+    );
+  }
+  if (outcome.degradedFailed > 0) {
+    // relay 在线却有帧进不去:异常信号,一次 flush 一条(不是每帧一条)。
+    log.warn(
+      `maker:event batch degraded to per-frame for ${shortId(dst)}: `
+      + `${outcome.degradedSent} sent, ${outcome.degradedFailed} dropped`,
+    );
+  }
 }
 
 /**
- * 批帧发送失败后,逐帧重放**有没有可能成功**。
- *  - `NOT_CONNECTED`(含本模块在 relay 离线时自造的那条):整条链路发不出去,逐帧
- *    只是把同一次失败重放 ≤64 次 —— 纯日志洪峰、零收益,直接丢。
- *  - `BACKPRESSURE`:大批被拒 ≠ 小帧被拒(#2167 的可驱逐档:一帧小 maker:event 能靠
- *    驱逐队头腾出槽位,256KB 的批不行),逐帧确实有机会,值得降级。
- *  - `PAYLOAD_TOO_LARGE` / 其它:逐帧是唯一出路(且逐帧还带 compact 兜底),降级。
+ * 批帧发送失败后,逐帧重放**有没有可能成功**。唯一说「没有」的是 relay 不在线:
+ * `client.sendPush` 在非 online 时第一行就静默早退,逐帧成功率恒为 0。其余一切失败
+ * (`BACKPRESSURE` / `PAYLOAD_TOO_LARGE` / 未知)都尺寸相关或帧相关——大帧被拒时小帧
+ * 仍可能通过(ws 容量判据是 `bufferedAmount + additionalBytes`,pending 判据也含字节
+ * 维度),所以必须逐帧试,不能按错误码整片放弃(codex P1)。
  */
 function shouldDegradeBatchToPerFrame(err: unknown): boolean {
   return !(err instanceof DeviceLinkError && err.code === 'NOT_CONNECTED');
@@ -844,8 +863,8 @@ function flushMakerEventBatchSession(
     while (segment.events.length > 0) {
       const slice = takeMakerEventBatchSlice(segment);
       if (slice.length === 0) break;
-      // 本轮已确认发不出去:只把缓冲取空(维持强不变量),不再制造注定失败的帧。
-      if (outcome.sendingBlocked) {
+      // relay 已确认离线:只把缓冲取空(维持强不变量),不再制造成功率恒为 0 的帧。
+      if (outcome.offline) {
         outcome.droppedEvents += slice.length;
         continue;
       }
@@ -861,29 +880,21 @@ function flushMakerEventBatchSession(
         }
       } catch (err) {
         if (!shouldDegradeBatchToPerFrame(err)) {
-          outcome.sendingBlocked = true;
-          outcome.blockedReason = 'offline';
+          outcome.offline = true;
           outcome.droppedEvents += slice.length;
           continue;
         }
-        // 降级为逐帧:sendPushBestEffort 吞掉每条的失败并保留超大帧裁剪,顺序仍是
-        // 原顺序。批不因失败滞留 —— 那正是顺序问题的唯一来源。
-        for (let i = 0; i < slice.length; i += 1) {
-          const frameOutcome = sendPushBestEffort(
-            dst,
-            MAKER_PUSH.EVENT,
-            slice[i],
-            segment.ownerStamp,
-          );
-          // 这一帧自身被拒(超限且 compact 也没救回等):与链路无关,继续发后面的,
-          // 否则本可送达的文本 / 状态增量会被连坐丢掉(review P1)。它自己已记过日志。
-          if (frameOutcome !== 'peer-blocked') continue;
-          // 管子堵了或断了:同步循环内窗口不会被 ACK 腾空,后续帧必然同样失败。停在
-          // 这里,把没尝试过的计入丢弃 —— 失败的那一帧自己已经记过一条日志。
-          outcome.sendingBlocked = true;
-          outcome.blockedReason = 'send-failed';
-          outcome.droppedEvents += slice.length - i - 1;
-          break;
+        // 降级为逐帧:**每一条都试**,不因任何失败提前停手 —— 失败大多与帧尺寸相关
+        // (ws 容量判据含 additionalBytes、pending 判据含字节维度),大帧被拒时后面的
+        // 小帧仍可能通过;少发一条本可送达的事件是用户可见的缺流,而多一次失败的
+        // sendPush 只是一次 throw。逐帧日志静默,成败计数聚合成一条(见 outcome 注释)。
+        // 顺序仍是原顺序;批不因失败滞留 —— 那正是顺序问题的唯一来源。
+        for (const event of slice) {
+          if (sendPushBestEffort(dst, MAKER_PUSH.EVENT, event, segment.ownerStamp, { quiet: true })) {
+            outcome.degradedSent += 1;
+          } else {
+            outcome.degradedFailed += 1;
+          }
         }
       }
     }
@@ -1182,64 +1193,48 @@ export function pushToTopicSubscribers(
 }
 
 /**
- * 一帧 push 的发送结果。`peer-blocked` 与 `frame-rejected` 必须分开,否则批降级会把
- * 「这一条帧自己不合格」误判成「整条链路堵了」而丢掉本可送达的批尾(review P1):
- *  - `peer-blocked`:BACKPRESSURE / NOT_CONNECTED / 无 client —— 管子本身满了或断了,
- *    同一同步循环内后续帧必然同样失败(窗口不会被 ACK 腾空),应当停手;
- *  - `frame-rejected`:这一帧自身的问题(超限且 compact 兜底也没救回、payload 不可
- *    序列化等)—— 与链路状态无关,后续帧照发。
- */
-type PushSendOutcome = 'sent' | 'frame-rejected' | 'peer-blocked';
-
-function classifyPushSendFailure(err: unknown): PushSendOutcome {
-  if (
-    err instanceof DeviceLinkError
-    && (err.code === 'BACKPRESSURE' || err.code === 'NOT_CONNECTED')
-  ) {
-    return 'peer-blocked';
-  }
-  return 'frame-rejected';
-}
-
-/**
  * best-effort 转发一帧 push:失败只记日志、不抛。
- * @returns 见 PushSendOutcome。绝大多数调用方忽略返回值;批降级路径靠它区分「停手」
- *   与「跳过这一条继续」,既不把一次链路失败重放成 ≤64 条 WARN,也不误丢批尾。
+ * @param opts.quiet 静默逐帧日志(调用方自己做聚合)。批降级路径用它:一次 flush
+ *   最多 ≤64 帧,逐条 WARN 就是本 PR 要消掉的那个告警洪峰。
+ * @returns 帧是否已交给可靠传输(含 compact 兜底后成功)。绝大多数调用方忽略返回值。
  */
 function sendPushBestEffort(
   dst: string,
   channel: string,
   payload: unknown,
   ownerStamp?: PushOwnerStamp,
-): PushSendOutcome {
-  if (!activeClient) return 'peer-blocked';
+  opts?: { quiet?: boolean },
+): boolean {
+  if (!activeClient) return false;
+  const warn = (message: string): void => {
+    if (!opts?.quiet) log.warn(message);
+  };
   try {
     if (ownerStamp === undefined) activeClient.sendPush(dst, channel, payload);
     else activeClient.sendPush(dst, channel, payload, ownerStamp);
-    return 'sent';
+    return true;
   } catch (err) {
     if (!isPayloadTooLargeError(err)) {
-      log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      return classifyPushSendFailure(err);
+      warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
+      return false;
     }
 
     const compactPayload = compactOversizedPushPayload(channel, payload);
     if (!compactPayload) {
-      log.warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
-      // 超限且没有 compact 兜底:是这一帧自己的问题,不是管子的问题。
-      return 'frame-rejected';
+      warn(`forwardPush to ${shortId(dst)} failed (${channel}): ${String(err)}`);
+      return false;
     }
 
     try {
       if (ownerStamp === undefined) activeClient.sendPush(dst, channel, compactPayload);
       else activeClient.sendPush(dst, channel, compactPayload, ownerStamp);
-      log.warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
-      return 'sent';
+      warn(`forwardPush to ${shortId(dst)} sent compact payload after oversized ${channel} frame`);
+      return true;
     } catch (retryErr) {
-      log.warn(
+      warn(
         `forwardPush to ${shortId(dst)} failed after compact retry (${channel}): ${String(retryErr)}`,
       );
-      return classifyPushSendFailure(retryErr);
+      return false;
     }
   }
 }
