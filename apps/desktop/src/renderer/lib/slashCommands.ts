@@ -224,7 +224,10 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
     (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
   );
   const current = findCommand(params.commands);
-  if (params.agentKind !== 'pi' || !params.sessionId || current?.kind !== 'desktop') {
+  const shouldReload = !current
+    || current.kind === 'desktop'
+    || isSlashCommandUnavailable(current);
+  if (params.agentKind !== 'pi' || !params.sessionId || !shouldReload) {
     return { command: current, commands: params.commands };
   }
   try {

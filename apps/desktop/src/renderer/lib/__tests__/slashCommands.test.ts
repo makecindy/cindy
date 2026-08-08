@@ -175,6 +175,67 @@ describe('Pi project skill availability', () => {
     })).resolves.toEqual({ command: loaded, commands: [loaded] });
   });
 
+  it('refreshes a stale discovered Pi skill before rewriting a typed alias', async () => {
+    const discovered = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+
+    await expect(reconcilePiRuntimeCommandForDispatch({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [discovered],
+      reload: async () => [loaded],
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+  });
+
+  it('refreshes an unknown Pi alias in case the runtime catalog arrived late', async () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+
+    await expect(reconcilePiRuntimeCommandForDispatch({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [],
+      reload: async () => [loaded],
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+  });
+
+  it('does not refresh an already available Pi skill', async () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+    let reloaded = false;
+
+    await expect(reconcilePiRuntimeCommandForDispatch({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [loaded],
+      reload: async () => {
+        reloaded = true;
+        return [];
+      },
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(reloaded).toBe(false);
+  });
+
   it('does not refresh a non-Pi desktop hit', async () => {
     const desktop: UnifiedCommand = { kind: 'desktop', name: 'help', description: 'Help' };
     let reloaded = false;
