@@ -220,6 +220,45 @@ describe('readBoundedFileNoFollow', () => {
     }
   });
 
+  it('开启内容稳定性校验时,同 stat 的同长度改写会在复读时返回可重试错误', async () => {
+    const file = path.join(workDir, 'same-stat-changed.json');
+    await fs.promises.writeFile(file, 'AAAA');
+    const stableStat = await fs.promises.stat(file, { bigint: true });
+    const realOpen = fs.promises.open;
+    let rewritten = false;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') return async () => stableStat;
+          if (key === 'read') {
+            return async (buffer: Buffer, offset: number, length: number, position: number) => {
+              const result = await realRead(buffer, offset, length, position);
+              if (!rewritten) {
+                await fs.promises.writeFile(file, 'BBBB');
+                rewritten = true;
+              }
+              return result;
+            };
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      await expect(
+        readBoundedFileNoFollow(file, 1024, { verifyContentStability: true }),
+      ).rejects.toBeInstanceOf(BoundedFileReadChangedError);
+      expect(rewritten).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it.runIf(process.platform !== 'win32')(
     '回退闸:dev/ino 为 0(网络盘/无标识 FS)时拒绝,不退化成只看 isSymbolicLink',
     async () => {

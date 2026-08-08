@@ -93,6 +93,44 @@ describe('usePluginMarketIcon', () => {
     expect(localIcons).toHaveBeenCalledTimes(1);
   });
 
+  it('reloads cached bytes when Main publishes a new icon projection generation', async () => {
+    const first = customItem('alpha', `${'2'}${'a'.repeat(16)}${'1'.repeat(47)}`);
+    const next = customItem('alpha', `${'3'}${'b'.repeat(16)}${'2'.repeat(47)}`);
+    localIcons
+      .mockResolvedValueOnce([
+        {
+          pluginId: first.pluginId,
+          expectedIconKey: first.customIconKey!,
+          status: 'loaded',
+          dataUrl: 'data:image/png;base64,OLD',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          pluginId: next.pluginId,
+          expectedIconKey: next.customIconKey!,
+          status: 'loaded',
+          dataUrl: 'data:image/png;base64,NEW',
+        },
+      ]);
+
+    const hook = renderHook(
+      ({ item }: { item: PluginMarketItem }) =>
+        usePluginMarketIcon(item, { deferUntilVisible: false }),
+      { initialProps: { item: first } },
+    );
+    await waitFor(() => expect(hook.result.current.iconDataUrl).toContain('OLD'));
+    expect(localIcons).toHaveBeenCalledTimes(1);
+
+    hook.rerender({ item: next });
+    await waitFor(() => expect(hook.result.current.iconDataUrl).toContain('NEW'));
+    expect(localIcons).toHaveBeenCalledTimes(2);
+    expect(localIcons.mock.calls[1]?.[0]).toEqual([
+      { pluginId: next.pluginId, expectedIconKey: next.customIconKey },
+    ]);
+    hook.unmount();
+  });
+
   it('does not read a card icon until its container approaches the viewport', async () => {
     let callback: IntersectionObserverCallback | null = null;
     const observe = vi.fn();
@@ -367,6 +405,57 @@ describe('usePluginMarketIcon', () => {
     expect(localIcons).toHaveBeenCalledTimes(2);
     first.unmount();
     second.unmount();
+  });
+
+  it('wakes transport-blocked icons when a slot settles without consuming retry budget', async () => {
+    vi.useFakeTimers();
+    const pending: Array<{
+      requests: PluginMarketLocalIconRequest[];
+      resolve: (results: PluginMarketLocalIconResult[]) => void;
+    }> = [];
+    localIcons.mockImplementation(
+      (requests: PluginMarketLocalIconRequest[]) =>
+        new Promise<PluginMarketLocalIconResult[]>((resolve) => {
+          pending.push({ requests, resolve });
+        }),
+    );
+
+    const first = renderHook(() =>
+      usePluginMarketIcon(customItem('blocked-a'), { deferUntilVisible: false }),
+    );
+    await act(async () => Promise.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    const second = renderHook(() =>
+      usePluginMarketIcon(customItem('blocked-b'), { deferUntilVisible: false }),
+    );
+    await act(async () => Promise.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    const thirdItem = customItem('blocked-c');
+    const third = renderHook(() => usePluginMarketIcon(thirdItem, { deferUntilVisible: false }));
+    await act(async () => Promise.resolve());
+
+    expect(localIcons).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(localIcons).toHaveBeenCalledTimes(2);
+
+    await act(async () => pending[0]!.resolve([]));
+    expect(localIcons).toHaveBeenCalledTimes(3);
+    const recovery = pending[2]!;
+    expect(recovery.requests.some((request) => request.pluginId === thirdItem.pluginId)).toBe(true);
+    await act(async () =>
+      recovery.resolve(
+        recovery.requests.map((request) => ({
+          ...request,
+          status: 'loaded',
+          dataUrl: `data:image/png;base64,${request.pluginId}`,
+        })),
+      ),
+    );
+    expect(third.result.current.iconDataUrl).toContain(thirdItem.pluginId);
+
+    first.unmount();
+    second.unmount();
+    third.unmount();
   });
 
   it('bounds unmounted record metadata and cancels pending retries', async () => {

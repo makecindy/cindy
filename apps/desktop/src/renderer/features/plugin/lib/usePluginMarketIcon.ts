@@ -48,6 +48,7 @@ const MAX_UNSETTLED_LOCAL_ICON_REQUESTS = 2;
 const RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const;
 const records = new Map<string, LocalIconRecord>();
 const queuedKeys = new Set<string>();
+const transportBlockedKeys = new Set<string>();
 const unsettledLocalIconRequests = new Set<object>();
 let flushScheduled = false;
 let flushInFlight = false;
@@ -98,6 +99,7 @@ function removeRecord(record: LocalIconRecord): void {
     record.retryTimer = null;
   }
   queuedKeys.delete(requestKey(record.request));
+  transportBlockedKeys.delete(requestKey(record.request));
   if (record.dataSize > 0) {
     totalDataSize -= record.dataSize;
     record.dataSize = 0;
@@ -161,6 +163,7 @@ function queueRecord(record: LocalIconRecord): void {
     return;
   }
   if (record.retryTimer !== null) return;
+  transportBlockedKeys.delete(requestKey(record.request));
   publish(record, { status: 'queued' });
   queuedKeys.add(requestKey(record.request));
   scheduleFlush();
@@ -185,6 +188,22 @@ function markRetryable(record: LocalIconRecord): void {
   scheduleRetry(record);
 }
 
+function parkForTransportCapacity(record: LocalIconRecord): void {
+  publish(record, { status: 'retryable' });
+  transportBlockedKeys.add(requestKey(record.request));
+}
+
+function wakeTransportBlockedRecords(): void {
+  for (const key of [...transportBlockedKeys]) {
+    const record = records.get(key);
+    transportBlockedKeys.delete(key);
+    if (record?.pinCount && record.snapshot.status === 'retryable' && record.retryTimer === null) {
+      queueRecord(record);
+    }
+  }
+  pruneRecords();
+}
+
 function localIconsWithinTimeoutFromPromise(
   request: Promise<PluginMarketLocalIconResult[]>,
 ): Promise<PluginMarketLocalIconResult[]> {
@@ -205,9 +224,13 @@ function localIconsWithinTimeoutFromPromise(
 function trackUnsettledLocalIconRequest(request: Promise<PluginMarketLocalIconResult[]>): void {
   const token = {};
   unsettledLocalIconRequests.add(token);
+  const release = () => {
+    if (!unsettledLocalIconRequests.delete(token)) return;
+    wakeTransportBlockedRecords();
+  };
   void request.then(
-    () => unsettledLocalIconRequests.delete(token),
-    () => unsettledLocalIconRequests.delete(token),
+    () => release(),
+    () => release(),
   );
 }
 function applyResult(record: LocalIconRecord, result: PluginMarketLocalIconResult): void {
@@ -235,8 +258,11 @@ async function flushQueue(): Promise<void> {
       queuedKeys.delete(key);
       const record = records.get(key);
       if (!record || record.snapshot.status !== 'queued') continue;
-      markRetryable(record);
+      // 这批还没有发出 IPC，不能消耗内容读取的重试预算。旧请求
+      // settle 释放槽位后会唤醒仍在可视区的记录。
+      parkForTransportCapacity(record);
     }
+    pruneRecords();
     return;
   }
   const pendingKeys = [...queuedKeys];
@@ -412,6 +438,7 @@ export function __resetPluginMarketIconStoreForTest(): void {
   }
   records.clear();
   queuedKeys.clear();
+  transportBlockedKeys.clear();
   unsettledLocalIconRequests.clear();
 
   flushScheduled = false;

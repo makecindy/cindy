@@ -76,7 +76,7 @@ import {
   customMarketReleaseId,
   marketSourceKey,
 } from '../../../shared/pluginMarket';
-import { GHOST_ICON_MAX_BYTES } from '../../../shared/ghost';
+import { GHOST_ICON_MAX_BYTES, type GhostManifest } from '../../../shared/ghost';
 import { PluginMarketLedger, ghostManifestDigest } from '../ledger';
 import { PluginMarketService } from '../service';
 import { MarketSourceManager } from '../sources';
@@ -382,6 +382,73 @@ describe('PluginMarketService 自定义市场聚合', () => {
 });
 
 describe('PluginMarketService 自定义市场图标', () => {
+  it('rejects an unsafe icon path before stat or byte read even if discovery validation is bypassed', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const pluginDir = path.join(root, 'plugin');
+    const outsideIcon = path.join(root, 'outside.png');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(outsideIcon, 'PRIVATE');
+    const h = harness([], []);
+    const config = {
+      name: 'team-lib',
+      addedAt: '2026-07-30T00:00:00.000Z',
+      lastSyncedAt: '2026-07-30T01:00:00.000Z',
+      lastRevision: null,
+      source: { type: 'local' as const, path: root },
+    };
+    const discovered = {
+      config,
+      result: {
+        ok: true as const,
+        marketplace: {
+          name: 'team-lib',
+          displayName: null,
+          skippedCount: 0,
+          unreadableCount: 0,
+          plugins: [
+            {
+              ghostId: 'alpha',
+              version: '1.0.0',
+              dir: pluginDir,
+              manifest: ghostManifest('alpha', '1.0.0', {
+                icon: '../outside.png',
+              }) as GhostManifest,
+            },
+          ],
+        },
+      },
+    };
+    const forEachSpy = vi
+      .spyOn(MarketSourceManager.prototype, 'forEachDiscoveredSource')
+      .mockImplementation(async (visitor) => visitor(discovered));
+    const withSourceSpy = vi
+      .spyOn(MarketSourceManager.prototype, 'withDiscoveredSource')
+      .mockImplementation(async (_name, visitor) => visitor(discovered));
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat');
+    const openSpy = vi.spyOn(fs.promises, 'open');
+    try {
+      const item = (await h.service.snapshot()).items[0]!;
+      expect(item.ghostId).toBe('alpha');
+      expect(item.customIconKey).toBeUndefined();
+
+      const request = {
+        pluginId: item.pluginId,
+        expectedIconKey: 'a'.repeat(64),
+      };
+      await expect(h.service.localIcons([request])).resolves.toEqual([
+        { ...request, status: 'missing' },
+      ]);
+      expect(lstatSpy.mock.calls.some(([file]) => String(file) === outsideIcon)).toBe(false);
+      expect(openSpy.mock.calls.some(([file]) => String(file) === outsideIcon)).toBe(false);
+    } finally {
+      openSpy.mockRestore();
+      lstatSpy.mockRestore();
+      withSourceSpy.mockRestore();
+      forEachSpy.mockRestore();
+    }
+  });
+
   it('projects opaque icon keys and batches one discovery per marketplace', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
@@ -397,6 +464,10 @@ describe('PluginMarketService 自定义市场图标', () => {
     expect(alpha?.icon).toBeNull();
     expect(alpha?.customIconKey).toMatch(/^[a-f0-9]{64}$/);
     expect(beta?.customIconKey).toMatch(/^[a-f0-9]{64}$/);
+    const detail = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    expect(detail.customIconKey).toBe(alpha?.customIconKey);
+    const repeatedDetail = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    expect(repeatedDetail.customIconKey).toBe(detail.customIconKey);
 
     const discoverSpy = vi.spyOn(MarketSourceManager.prototype, 'withDiscoveredSource');
     try {
@@ -451,6 +522,65 @@ describe('PluginMarketService 自定义市场图标', () => {
     runtime.session = { ...runtime.session, generation: 2 };
     const nextOwner = (await h.service.snapshot()).items[0]!;
     expect(nextOwner.customIconKey).not.toBe(second.customIconKey);
+  });
+
+  it('changes the projection key when same-length icon bytes change but stats collide', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/alpha', id: 'alpha', icon: 'assets/icon.png', iconBytes: 'AAAA' },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const first = (await h.service.snapshot()).items[0]!;
+    const iconPath = path.join(dir, 'plugins', 'alpha', 'assets', 'icon.png');
+    const stableStat = await fs.promises.stat(iconPath, { bigint: true });
+    await fs.promises.writeFile(iconPath, 'BBBB');
+
+    const realLstat = fs.promises.lstat;
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation((async (
+      target: fs.PathLike,
+      options?: fs.StatOptions,
+    ) => {
+      if (String(target).endsWith(path.join('plugins', 'alpha', 'assets', 'icon.png'))) {
+        return stableStat;
+      }
+      return realLstat(target, options as never);
+    }) as typeof fs.promises.lstat);
+    const realOpen = fs.promises.open;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      if (!String(args[0]).endsWith(path.join('plugins', 'alpha', 'assets', 'icon.png'))) {
+        return handle;
+      }
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') return async () => stableStat;
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      const second = (await h.service.snapshot()).items[0]!;
+      expect(second.customIconKey).not.toBe(first.customIconKey);
+      await expect(
+        h.service.localIcons([
+          { pluginId: second.pluginId, expectedIconKey: second.customIconKey! },
+        ]),
+      ).resolves.toEqual([
+        {
+          pluginId: second.pluginId,
+          expectedIconKey: second.customIconKey,
+          status: 'loaded',
+          dataUrl: `data:image/png;base64,${Buffer.from('BBBB').toString('base64')}`,
+        },
+      ]);
+    } finally {
+      openSpy.mockRestore();
+      lstatSpy.mockRestore();
+    }
   });
 
   it('does not attach bytes from a raced file handle to an older icon key', async () => {

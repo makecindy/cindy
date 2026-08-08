@@ -34,7 +34,7 @@ export interface ReadBoundedFileOptions {
   containWithin?: string;
   /** 特殊文件场景使用非阻塞打开，避免 FIFO 在 Main 中永久等待。 */
   nonBlocking?: boolean;
-  /** 读取前后句柄版本变化时抛出可重试错误，而不是把瞬态变化降级为 null。 */
+  /** 复读同一句柄并比较字节；内容或版本变化时抛出可重试错误。 */
   verifyContentStability?: boolean;
 }
 
@@ -186,6 +186,18 @@ export async function readBoundedFileNoFollowWithStat(
     if (!sameHandleVersion(stat, finalStat)) {
       if (options?.verifyContentStability) throw new BoundedFileReadChangedError();
       return null;
+    }
+    if (options?.verifyContentStability) {
+      const verificationBytes = await readToLength(handle, Number(stat.size));
+      const verificationStat = await handle.stat({ bigint: true });
+      if (
+        !sameHandleVersion(finalStat, verificationStat) ||
+        bytes.length !== verificationBytes.length ||
+        !bytes.equals(verificationBytes)
+      ) {
+        throw new BoundedFileReadChangedError();
+      }
+      return { bytes, stat: verificationStat };
     }
     return { bytes, stat: finalStat };
   } finally {

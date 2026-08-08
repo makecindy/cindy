@@ -16,6 +16,7 @@ import {
   GHOST_ICON_MAX_BYTES,
   ghostPermissionBaselineKey,
   ghostIconMimeType,
+  isSafeGhostRelativePath,
   isOfficialGhostId,
   validateGhostManifest,
   type GhostManifest,
@@ -106,6 +107,9 @@ class SilentUpgradeStaleBaselineError extends Error {}
  * 放宽正确性的理由。
  */
 const SOURCE_MUTATION_KEY = 'market-sources';
+const CUSTOM_ICON_PROJECTION_TOKEN_LENGTH = 16;
+const CUSTOM_ICON_PROJECTION_TOKEN_RE = /^[a-f0-9]{16}$/;
+const CUSTOM_ICON_KEY_RE = /^[1-9a-f][a-f0-9]{63}$/;
 
 /**
  * 扩权批准的原子复核:Renderer 的 allowPermissionExpansion 只代表「用户对
@@ -303,17 +307,26 @@ function installedGhostRawManifestDigest(dir: string): string | null {
 }
 
 /**
- * 自定义市场图标的不可逆身份键。Renderer 只拿摘要，不拿来源路径；来源被移除
- * 后重加、Git revision、文件内容或 manifest 同版改写都会产生新键。
+ * 自定义市场图标的不可逆身份键。Renderer 只拿摘要，不拿来源路径；每次新的
+ * 市场快照都会换 projection token，文件代际仍由同一安全读取句柄的 stat 复核。
  */
+function customMarketIconPath(plugin: DiscoveredMarketPlugin): string | null {
+  const icon = plugin.manifest.icon;
+  if (!isSafeGhostRelativePath(icon)) return null;
+  return path.join(plugin.dir, ...icon.split('/'));
+}
+
 async function customMarketIconKey(
   owner: ActiveAppSession,
   config: MarketSourceConfig,
   plugin: DiscoveredMarketPlugin,
+  projectionToken: string,
   openedIconStat?: fs.BigIntStats,
 ): Promise<string | null> {
-  if (plugin.manifest.icon === undefined) return null;
-  const iconPath = path.join(plugin.dir, ...plugin.manifest.icon.split('/'));
+  const iconPath = customMarketIconPath(plugin);
+  if (iconPath === null || !CUSTOM_ICON_PROJECTION_TOKEN_RE.test(projectionToken)) {
+    return null;
+  }
   let iconFingerprint: string;
   let projectionUncertain = false;
   try {
@@ -338,6 +351,7 @@ async function customMarketIconKey(
         plugin.version,
         ghostManifestDigest(plugin.manifest),
         iconFingerprint,
+        projectionToken,
       ]),
     )
     .digest('hex');
@@ -347,7 +361,12 @@ async function customMarketIconKey(
     : digestHead === '0' || digestHead === '1'
       ? '2'
       : digestHead;
-  return `${stableHead}${digest.slice(1)}`;
+  return `${stableHead}${projectionToken}${digest.slice(0, 47)}`;
+}
+
+function customMarketIconProjectionToken(expectedIconKey: string): string | null {
+  if (!CUSTOM_ICON_KEY_RE.test(expectedIconKey)) return null;
+  return expectedIconKey.slice(1, 1 + CUSTOM_ICON_PROJECTION_TOKEN_LENGTH);
 }
 
 function localIconMissing(request: PluginMarketLocalIconRequest): PluginMarketLocalIconResult {
@@ -440,6 +459,13 @@ export class PluginMarketService {
   private ledgerMutation: Promise<void> = Promise.resolve();
   private readonly pendingRemovalNotices = new Map<string, PluginRemovalUserNotice>();
   private readonly pendingUpgradeNotices = new Map<string, PluginUpgradeUserNotice>();
+  /**
+   * Renderer 把 customIconKey 当不可变缓存 generation。每次重新投影市场都换代，
+   * 使低精度文件系统上的同长度、同 stat 原地改写也会在刷新后重新按需读取。
+   */
+  private customIconProjectionGeneration = crypto
+    .randomBytes(CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
+    .toString('hex');
 
   constructor(
     private readonly api = new PluginMarketApi(undefined, () => app.getVersion()),
@@ -475,7 +501,8 @@ export class PluginMarketService {
         customSourceNames: [],
       };
     }
-    const customEntries = await this.discoverCustomEntriesSafe(owner);
+    const iconProjectionGeneration = this.nextCustomIconProjectionGeneration();
+    const customEntries = await this.discoverCustomEntriesSafe(owner, iconProjectionGeneration);
     const customSourceNames = this.customSourceNamesSafe(owner);
     requireSameMarketOwner(owner);
     if (!getClientEndpoint('pluginApiBaseUrl')) {
@@ -651,10 +678,18 @@ export class PluginMarketService {
                     : localIconMissing(entry.request);
                 continue;
               }
+              const expectedProjectionToken = customMarketIconProjectionToken(
+                entry.request.expectedIconKey,
+              );
+              if (expectedProjectionToken === null) {
+                results[entry.index] = localIconMissing(entry.request);
+                continue;
+              }
               const currentIconKey = await customMarketIconKey(
                 owner,
                 discovered.config,
                 plugin,
+                expectedProjectionToken,
               );
               if (currentIconKey?.startsWith('1')) {
                 results[entry.index] = localIconRetryable(entry.request);
@@ -668,29 +703,31 @@ export class PluginMarketService {
                 continue;
               }
               const icon = plugin.manifest.icon;
+              const iconPath = customMarketIconPath(plugin);
               const mime = icon === undefined ? null : ghostIconMimeType(icon);
-              if (icon === undefined || mime === null) {
+              if (iconPath === null || mime === null) {
                 results[entry.index] = localIconMissing(entry.request);
                 continue;
               }
               try {
-                const read = await readBoundedFileNoFollowWithStat(
-                  path.join(plugin.dir, ...icon.split('/')),
-                  GHOST_ICON_MAX_BYTES,
-                  {
-                    containWithin: plugin.dir,
-                    nonBlocking: true,
-                    verifyContentStability: true,
-                  },
-                );
+                const read = await readBoundedFileNoFollowWithStat(iconPath, GHOST_ICON_MAX_BYTES, {
+                  containWithin: plugin.dir,
+                  nonBlocking: true,
+                  verifyContentStability: true,
+                });
                 if (read === null) {
                   results[entry.index] =
                     discovered.result.marketplace.unreadableCount > 0
                       ? localIconRetryable(entry.request)
                       : localIconMissing(entry.request);
                 } else if (
-                  (await customMarketIconKey(owner, discovered.config, plugin, read.stat)) !==
-                  entry.request.expectedIconKey
+                  (await customMarketIconKey(
+                    owner,
+                    discovered.config,
+                    plugin,
+                    expectedProjectionToken,
+                    read.stat,
+                  )) !== entry.request.expectedIconKey
                 ) {
                   results[entry.index] = entry.request.expectedIconKey.startsWith('1')
                     ? localIconRetryable(entry.request)
@@ -937,6 +974,7 @@ export class PluginMarketService {
     ghostId: string;
   }): Promise<PluginMarketDetail> {
     return this.runForOwner(async (owner) => {
+      const iconProjectionGeneration = this.customIconProjectionGeneration;
       const manager = this.sourceManagerForOwner(owner);
       return manager.withDiscoveredSource(ref.marketName, async (discovered) => {
         if (!discovered.result.ok) {
@@ -956,7 +994,12 @@ export class PluginMarketService {
             {
               config: discovered.config,
               plugin,
-              iconKey: await customMarketIconKey(owner, discovered.config, plugin),
+              iconKey: await customMarketIconKey(
+                owner,
+                discovered.config,
+                plugin,
+                iconProjectionGeneration,
+              ),
             },
             this.localInstallSnapshot(this.ledgerForOwner(owner)),
           ),
@@ -1148,7 +1191,16 @@ export class PluginMarketService {
   }
 
   /** 快照聚合用：发现全部自定义市场条目。任何失败都降级为空，不拖垮快照。 */
-  private async discoverCustomEntriesSafe(owner: ActiveAppSession): Promise<CustomMarketEntry[]> {
+  private nextCustomIconProjectionGeneration(): string {
+    return (this.customIconProjectionGeneration = crypto
+      .randomBytes(CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
+      .toString('hex'));
+  }
+
+  private async discoverCustomEntriesSafe(
+    owner: ActiveAppSession,
+    iconProjectionGeneration: string,
+  ): Promise<CustomMarketEntry[]> {
     try {
       const manager = this.sourceManagerForOwner(owner);
       const entries: CustomMarketEntry[] = [];
@@ -1171,7 +1223,7 @@ export class PluginMarketService {
           entries.push({
             config,
             plugin,
-            iconKey: await customMarketIconKey(owner, config, plugin),
+            iconKey: await customMarketIconKey(owner, config, plugin, iconProjectionGeneration),
           });
         }
       });
