@@ -2041,6 +2041,7 @@
         "project": "Switch project workspace",
         "model": "Show or switch the model",
         "permission": "Show or switch the permission mode",
+        "settings": "Show project and agent settings",
         "ctr": "Remotely control a desktop session",
         "exctr": "Exit remote control"
       },

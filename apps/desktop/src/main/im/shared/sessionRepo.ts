@@ -56,6 +56,15 @@ export interface ImSessionRow {
    * IM turn 启动前 hydrate 进 session-provider-store,保证按选中供应商路由。
    */
   providerId: string | null;
+  /**
+   * 该会话的归属分组。`dialogue` = 托管目录里的临时对话, 它的目录末段是内部
+   * 名字(UUID / `telegram-<botId>`), **不是项目名**。
+   *
+   * schema 里 workspaceKind 与路径是解耦的 —— 只比对目录等于不等于渠道托管目录
+   * 判不出来(接管一条 desktop 的 dialogue 会话时路径根本不是渠道自己那条)。
+   * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
+   */
+  workspaceKind?: 'project' | 'dialogue' | null;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -72,6 +81,25 @@ export interface ImSessionRepo {
     userId: string,
     scopeKey?: string,
   ): Promise<ImSessionRow | null>;
+  /**
+   * 纯只读地看一眼这对身份的通道行 —— **不创建、不复活、不广播**。
+   *
+   * findActiveSession 会把软删行翻回 active 并广播 created(用户从 IM 侧继续
+   * 发消息就该恢复对话)。那对「发消息」是对的, 对只读查询就是副作用: 问一句
+   * 「我现在什么配置」不该把用户已删的会话拉回列表。
+   *
+   * 软删行照样返回它的配置 —— 用户下次发消息复活的正是这一行、沿用的正是这份
+   * 设置, 报默认值反而误导。
+   */
+  peekSession(botContextId: string, userId: string, scopeKey?: string): Promise<ImSessionRow | null>;
+  /**
+   * 按 session id 只读一行 —— `/ctr` 接管期间要读的是**被接管的 desktop 会话**,
+   * 它的 id 不由 `sessionIdFor` 推得出来。同样不创建、不复活、不广播。
+   *
+   * `workingDir` 为空视为无效(binding 指向的行已被删/数据异常), 返回 null 让
+   * 调用方回落到渠道自身的会话 —— 与 turnRunner 命中无效 binding 时的落点一致。
+   */
+  peekSessionById(sessionId: string): Promise<ImSessionRow | null>;
   prepareNewSession(
     botContextId: string,
     userId: string,
@@ -115,6 +143,26 @@ export function createImSessionRepo(
      * (上下文)与模型/权限等全部设置。若把软删行当"不存在"返回 null,caller
      * 会用同 id INSERT 撞 UNIQUE(sessions.id),IM 消息从此全部报错(#748)。
      */
+    async peekSession(botContextId, userId, scopeKey) {
+      const id = ns.sessionIdFor(botContextId, userId, scopeKey);
+      const db = getDbClient().drizzle;
+      const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        agentKind: toCoreAgentKind(row.agentKind),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        model: row.model,
+        effort: row.effort,
+        permissionMode: row.permissionMode,
+        fastMode: row.fastMode,
+        sdkSessionId: row.sdkSessionId,
+        providerId: row.providerId ?? null,
+        workspaceKind: row.workspaceKind ?? null,
+      };
+    },
+
     async findActiveSession(botContextId, userId, scopeKey) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
       const db = getDbClient().drizzle;
@@ -151,6 +199,26 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
+        workspaceKind: row.workspaceKind ?? null,
+      };
+    },
+
+    async peekSessionById(sessionId) {
+      const db = getDbClient().drizzle;
+      const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+      const row = rows[0];
+      if (!row?.workingDir) return null;
+      return {
+        id: row.id,
+        agentKind: toCoreAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        model: row.model,
+        effort: row.effort,
+        permissionMode: row.permissionMode,
+        fastMode: row.fastMode,
+        sdkSessionId: row.sdkSessionId,
+        providerId: row.providerId ?? null,
+        workspaceKind: row.workspaceKind ?? null,
       };
     },
 
