@@ -13,6 +13,8 @@ import type {
   UserMessage,
 } from '@cindy/maker-core';
 
+import type { GoalRunEvent } from './runEvents';
+
 /**
  * 目标状态机:
  *  - active        续跑中
@@ -239,4 +241,9 @@ export interface GoalControllerDeps {
     sessionId: string,
     kind: 'usage-resumed' | 'capacity-resumed',
   ) => Promise<void>;
+  /**
+   * Goal run 结构化观测事件(#2105 P0)。可选依赖:不注入则 goal 运行不产生观测事件
+   * (现有测试与调用方零侵入);注入端负责记录(内存环 / 持久化 / push renderer)。
+   */
+  recordRunEvent?: (evt: GoalRunEvent) => void | Promise<void>;
 }
