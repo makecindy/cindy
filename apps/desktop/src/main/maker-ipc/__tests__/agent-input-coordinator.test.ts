@@ -14,6 +14,7 @@ import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn.js';
+import { PI_IMAGE_INPUT_UNSUPPORTED_MARKER } from '../../../shared/inputError.js';
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -161,6 +162,15 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
   return (
     'unexpected status 400 Bad Request: Responses feature is not supported by the ' +
     `Chat Completions bridge: ${feature}, url: http://127.0.0.1/v1/responses`
+  );
+}
+
+function litellmGatewayImageError(): string {
+  return (
+    'litellm.BadRequestError: DeepseekException - ' +
+    '{"error":{"message":"Failed to deserialize the JSON body into the target type: ' +
+    'messages[63]: unknown variant `image_url`, expected `text` at line 1 column 336145",' +
+    '"type":"invalid_request_error","param":null,"code":"invalid_request_error"}}'
   );
 }
 
@@ -2411,7 +2421,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestProjection(h.projections).error).toBe(error);
+    expect(latestProjection(h.projections).error).toBe(PI_IMAGE_INPUT_UNSUPPORTED_MARKER);
     expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
 
     h.coordinator.enqueue(sid, makeItem('q-next', 'continue in text'));
@@ -2449,6 +2459,126 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
+  });
+
+  it('retries a litellm gateway image rejection with a friendly marker', async () => {
+    const h = createHarness();
+    const sid = 'retry-litellm-gateway-image-error';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'describe this');
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+    ];
+    item.persistedContent = JSON.stringify({
+      text: item.text,
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+      ],
+      files: [],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+      ],
+    };
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = litellmGatewayImageError();
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
+    const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(retried?.files).toBeUndefined();
+    expect(retried?.chatMessage.images).toBeUndefined();
+  });
+
+  it('keeps an image-only litellm gateway rejection recoverable without fabricating text', async () => {
+    const h = createHarness();
+    const sid = 'retry-litellm-gateway-image-only';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', '');
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+    ];
+    item.persistedContent = JSON.stringify({
+      text: '',
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+      ],
+      files: [],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
+      ],
+    };
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = litellmGatewayImageError();
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    // The first projection must already carry the friendly marker instead of the raw gateway
+    // rejection: the renderer localizes it before the user ever reaches the Retry button.
+    expect(latestProjection(h.projections).error).toBe(
+      '[PI_IMAGE_INPUT_UNSUPPORTED] Failed to deserialize the JSON body into the target type: ' +
+        'messages[63]: unknown variant `image_url`, expected `text` at line 1 column 336145',
+    );
+
+    const result = await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(result.recovery?.kind).toBe('active-turn');
+    expect(result.error).toBe(
+      '[PI_IMAGE_INPUT_UNSUPPORTED] Failed to deserialize the JSON body into the target type: ' +
+        'messages[63]: unknown variant `image_url`, expected `text` at line 1 column 336145',
+    );
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
