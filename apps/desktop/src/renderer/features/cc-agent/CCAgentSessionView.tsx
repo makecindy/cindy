@@ -133,6 +133,7 @@ import {
   useControlledBy,
 } from '@/features/remote-device/ControlledBanner';
 import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { loadAllCommands, dispatchCommand, type UnifiedCommand } from '@/lib/slashCommands';
 import * as sessionService from '@/lib/sessionService';
 import { emitRefresh } from '@/lib/sessionsBus';
@@ -4306,6 +4307,7 @@ function RunningStatusBar({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const reducedMotion = useReducedMotion();
   // `showContent` controls whether real content is rendered. During the short
   // linger/fade window we keep the row's height stable; once it is fully idle the
   // component returns null below so the composer does not retain an empty line.
@@ -4386,9 +4388,10 @@ function RunningStatusBar({
     }
   }, []);
   useEffect(() => {
-    // suppressContent 期间 shimmer 类被摘、动画不会启动,onAnimationEnd 不来 ——
-    // 一并清零,避免播放标记卡死后整轮 turn 不再呼吸。
-    if (!visible || suppressContent) {
+    // suppressContent 或 reduced-motion 期间 shimmer 类/动画被摘，
+    // onAnimationEnd 不会到来。立即清零播放态，确保运行期关闭减弱动效后
+    // 下一次真实动静能重新触发呼吸，不必等 visible 先变 false。
+    if (!visible || suppressContent || reducedMotion) {
       // 运行结束把播放态清零,下一轮 turn 的首次动静立即触发而不是误判在播。
       shimmerPlayingRef.current = false;
       shimmerPendingRef.current = false;
@@ -4400,7 +4403,7 @@ function RunningStatusBar({
     }
     shimmerPlayingRef.current = true;
     setShimmerCycle((n) => n + 1);
-  }, [visible, suppressContent, status, tokenUsage]);
+  }, [visible, suppressContent, reducedMotion, status, tokenUsage]);
 
   // Animate the token counter so live mid-turn updates (from message_delta in
   // agentManager) feel like a smoothly-incrementing number, the same way claude

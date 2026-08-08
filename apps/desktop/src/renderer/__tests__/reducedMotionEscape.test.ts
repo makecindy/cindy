@@ -24,6 +24,12 @@ const css = readFileSync(
   fileURLToPath(new URL('../styles/globals.css', import.meta.url)),
   'utf8',
 );
+const sessionViewSource = readFileSync(
+  fileURLToPath(
+    new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
+  ),
+  'utf8',
+);
 
 /** 提取 @media (prefers-reduced-motion: reduce) 的所有块体(brace 平衡扫描)。 */
 function collectReducedMotionBlocks(source: string): string[] {
@@ -83,6 +89,19 @@ describe('prefers-reduced-motion 覆盖面(globals.css)', () => {
     // duration 归零。这里钉住 confirm 类的降级方式不被改成 none。
     expect(reduceCss).toMatch(
       /\.animate-confirm-overlay-in[\s\S]*?animation-duration:\s*0ms\s*!important/,
+    );
+  });
+});
+
+describe('RunningStatusBar cadenced shimmer 的运行期 reduced-motion 切换', () => {
+  it('动画被摘时清空 playing/pending，并把 reducedMotion 纳入 effect 依赖', () => {
+    expect(sessionViewSource).toContain("import { useReducedMotion } from '@/hooks/useReducedMotion'");
+    expect(sessionViewSource).toContain('const reducedMotion = useReducedMotion();');
+    expect(sessionViewSource).toContain('if (!visible || suppressContent || reducedMotion) {');
+    expect(sessionViewSource).toContain('shimmerPlayingRef.current = false;');
+    expect(sessionViewSource).toContain('shimmerPendingRef.current = false;');
+    expect(sessionViewSource).toContain(
+      '}, [visible, suppressContent, reducedMotion, status, tokenUsage]);',
     );
   });
 });
