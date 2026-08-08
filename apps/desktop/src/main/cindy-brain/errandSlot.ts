@@ -145,6 +145,13 @@ export class GhostErrandSlot {
     this.runner = runner;
   }
 
+  /** clearGhost 只删 jobs，不删 inFlightGhosts；收口前两者可能短暂不一致。 */
+  hasActiveErrandFor(ghostId: string): boolean {
+    return this.inFlightGhosts.has(ghostId) || [...this.jobs.values()].some(
+      (job) => job.ghostId === ghostId && job.status === 'running',
+    );
+  }
+
   /** 插件停用/卸载时清除节流状态与任务记录,防止权限/信息残留。 */
   clearGhost(ghostId: string): void {
     this.lastRunAt.delete(ghostId);

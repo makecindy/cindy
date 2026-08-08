@@ -136,14 +136,25 @@ function createHost(tmpDir: string): { host: IMHost; broadcasts: unknown[]; secr
   return { host, broadcasts, secrets, handlers };
 }
 
-function privateMessage(text: string, fromId: number, messageId = 1): TgUpdate {
+/**
+ * 固件消息默认「刚刚到达」。
+ *
+ * 写死一个过去的时间戳会让每条固件消息都撞上离线积压判据(STALE_MESSAGE_MS);
+ * 这些固件模拟的本来就是实时到达的 update, 时间戳按当下取。要造陈旧消息的
+ * 用例显式传 `ageSec`。
+ */
+function nowSec(ageSec = 0): number {
+  return Math.floor(Date.now() / 1_000) - ageSec;
+}
+
+function privateMessage(text: string, fromId: number, messageId = 1, ageSec = 0): TgUpdate {
   return {
     update_id: messageId,
     message: {
       message_id: messageId,
       from: { id: fromId, is_bot: false, first_name: 'U' },
       chat: { id: fromId, type: 'private' },
-      date: 1_753_000_000,
+      date: nowSec(ageSec),
       text,
     },
   };
@@ -155,6 +166,7 @@ function groupMessage(args: {
   messageId: number;
   mentionBot?: boolean;
   threadId?: number;
+  ageSec?: number;
 }): TgUpdate {
   const text = args.mentionBot ? `@${BOT.username} ${args.text}` : args.text;
   return {
@@ -163,7 +175,7 @@ function groupMessage(args: {
       message_id: args.messageId,
       from: { id: args.fromId, is_bot: false, first_name: 'U' },
       chat: { id: -100200, type: 'supergroup', title: 'Ops' },
-      date: 1_753_000_000,
+      date: nowSec(args.ageSec),
       text,
       ...(args.mentionBot
         ? { entities: [{ type: 'mention', offset: 0, length: BOT.username.length + 1 }] }
@@ -370,7 +382,7 @@ describe('TelegramIM', () => {
       message_id: answerId,
       from: { id: BOT.id, is_bot: true, first_name: 'Cindy' },
       chat: { id: -100200, type: 'supergroup' as const },
-      date: 1_753_000_050,
+      date: nowSec(150),
       text: '这是 Cindy 呀',
     };
     // 成员回复 bot → 同一条群 lane
@@ -381,7 +393,7 @@ describe('TelegramIM', () => {
           message_id: 41,
           from: { id: 222, is_bot: false, first_name: 'F' },
           chat: { id: -100200, type: 'supergroup', title: 'Ops' },
-          date: 1_753_000_100,
+          date: nowSec(100),
           text: '再多讲讲',
           reply_to_message: replyTo,
         },
@@ -397,7 +409,7 @@ describe('TelegramIM', () => {
           message_id: 42,
           from: { id: 111, is_bot: false, first_name: 'U' },
           chat: { id: -100200, type: 'supergroup', title: 'Ops' },
-          date: 1_753_000_200,
+          date: nowSec(0),
           text: '我来补充',
           reply_to_message: replyTo,
         },
@@ -742,7 +754,7 @@ describe('TelegramIM', () => {
         message_id: 50,
         from: { id: 111, is_bot: false, first_name: 'U' },
         chat: { id: 111, type: 'private' },
-        date: 1_753_000_000,
+        date: nowSec(200),
         caption: '慢附件',
         photo: [{ file_id: 'slow', file_unique_id: 'slow-u', width: 10, height: 10 }],
       },
@@ -1087,7 +1099,7 @@ describe('TelegramIM', () => {
         message_id: messageId,
         from: { id: 111, is_bot: false, first_name: 'U' },
         chat: { id: 111, type: 'private' },
-        date: 1_753_000_000,
+        date: nowSec(200),
         media_group_id: 'album-ord',
         ...(caption ? { caption } : {}),
         photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
@@ -1120,7 +1132,7 @@ describe('TelegramIM', () => {
         message_id: messageId,
         from: { id: 111, is_bot: false, first_name: 'U' },
         chat: { id: 111, type: 'private' },
-        date: 1_753_000_000,
+        date: nowSec(200),
         media_group_id: 'album-cap',
         ...(messageId === 45 ? { caption: '慢速相册' } : {}),
         photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
@@ -1151,7 +1163,7 @@ describe('TelegramIM', () => {
         message_id: messageId,
         from: { id: 111, is_bot: false, first_name: 'U' },
         chat: { id: 111, type: 'private' },
-        date: 1_753_000_000,
+        date: nowSec(200),
         media_group_id: 'album-1',
         ...(caption ? { caption } : {}),
         photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
@@ -1179,13 +1191,13 @@ describe('TelegramIM', () => {
           message_id: 51,
           from: { id: 111, is_bot: false, first_name: 'U' },
           chat: { id: 111, type: 'private' },
-          date: 1_753_000_000,
+          date: nowSec(200),
           text: '按这个继续',
           reply_to_message: {
             message_id: 40,
             from: { id: BOT.id, is_bot: true, first_name: 'Cindy' },
             chat: { id: 111, type: 'private' },
-            date: 1_752_999_000,
+            date: nowSec(1_000),
             text: '方案 A: 先改 transport',
           },
         },
@@ -2295,7 +2307,7 @@ describe('TelegramIM', () => {
           message: {
             message_id: 55,
             chat: { id: args.fromId, type: 'private' },
-            date: 1_753_000_000,
+            date: nowSec(200),
             ...(args.keyboard
               ? {
                   reply_markup: {
@@ -2460,6 +2472,72 @@ describe('TelegramIM', () => {
       expect(edits).toHaveLength(2);
       expect(edits[1].params.parse_mode).toBeUndefined();
       expect(edits[1].params.reply_markup).toEqual({ inline_keyboard: [] });
+    });
+  });
+
+  describe('离线期积压消息(stale update)', () => {
+    // Telegram 会替离线的 bot 保留最长 24h 的 update, 一上线整批推来。桌面端
+    // 天天关机开机, 这是个人 bot 的常态而非异常 —— 官方 bot 服务端早有这道闸
+    // (2026-07-27 实踩: 整批历史消息被诈尸回复), 个人侧此前一道都没有。
+
+    it('隔夜私聊消息不再起 turn', async () => {
+      const events: IMMessageEvent[] = [];
+      im.onMessage((e) => events.push(e));
+      await connect();
+      api.pushUpdates([
+        privateMessage('昨晚发的', Number(OWNER_ID), 80, 8 * 3_600),
+        privateMessage('刚发的', Number(OWNER_ID), 81),
+      ]);
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      // 只有新鲜那条进了 turn; 陈旧那条静默消费。
+      expect(events[0]).toMatchObject({ text: '刚发的' });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(events).toHaveLength(1);
+    });
+
+    it('陌生人的陈旧私聊不再收到「我不认识你」', async () => {
+      await connect();
+      const before = api.calls.filter((c) => c.method === 'sendMessage').length;
+      api.pushUpdates([privateMessage('在吗', 999, 82, 8 * 3_600)]);
+      await new Promise((r) => setTimeout(r, 300));
+      // 隔夜再回一句拒绝语同样是诈尸 —— 一条出站都不该有。
+      expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before);
+    });
+
+    it('陈旧群消息仍进历史池, 但不再唤起回答', async () => {
+      const events: IMMessageEvent[] = [];
+      const windowEntries: TelegramGroupWindowEntry[] = [];
+      im.onMessage((e) => events.push(e));
+      im.onGroupWindowMessage((e) => windowEntries.push(e));
+      await connect();
+      api.pushUpdates([
+        groupMessage({ text: '昨晚问的', fromId: 111, messageId: 83, mentionBot: true, ageSec: 8 * 3_600 }),
+        groupMessage({ text: '刚问的', fromId: 111, messageId: 84, mentionBot: true }),
+      ]);
+      // 群消息的历史价值与「该不该现在回答」是两件事: 两条都入窗, 只有一条起 turn。
+      await vi.waitFor(() => expect(windowEntries).toHaveLength(2));
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      expect(events[0]).toMatchObject({ text: '刚问的' });
+    });
+
+    it('阈值内的离线积压照常处理 —— 短暂离线不误杀', async () => {
+      const events: IMMessageEvent[] = [];
+      im.onMessage((e) => events.push(e));
+      await connect();
+      // 用户合上电脑二十分钟再打开, 那条正等回复的消息仍然该被处理。
+      api.pushUpdates([privateMessage('二十分钟前发的', Number(OWNER_ID), 85, 20 * 60)]);
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      expect(events[0]).toMatchObject({ text: '二十分钟前发的' });
+    });
+
+    it('时间戳缺失按新鲜处理 —— 拦错比多回一条严重', async () => {
+      const events: IMMessageEvent[] = [];
+      im.onMessage((e) => events.push(e));
+      await connect();
+      const update = privateMessage('没有时间戳', Number(OWNER_ID), 86);
+      update.message!.date = 0;
+      api.pushUpdates([update]);
+      await vi.waitFor(() => expect(events).toHaveLength(1));
     });
   });
 

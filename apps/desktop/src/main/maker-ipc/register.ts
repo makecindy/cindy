@@ -78,6 +78,7 @@ import {
   type GhostSetupInteractionSnapshot,
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -1845,30 +1846,15 @@ initGhostSetupCoordinator({
   bridge: ghostSetupInteractionBridge,
   assess: (ghostId) => getGhostSetupAssessment(ghostId),
   validateTarget: (ghostId, tool, workingDir) => {
-    const ghost = getGhostManager()
-      .list()
-      .find((candidate) => candidate.manifest.id === ghostId);
-    if (!ghost || !isGhostAvailableForActiveSession(ghostId)) {
-      return {
-        ok: false,
-        errorCode: 'GHOST_NOT_FOUND',
-        message: t('newChat.pluginSetup.targetNotFound'),
-      };
-    }
-    if (!ghost.enabled) {
-      return {
-        ok: false,
-        errorCode: 'GHOST_ASLEEP',
-        message: t('newChat.pluginSetup.targetDisabled'),
-      };
-    }
-    if (isGhostDisabledForWorkdir(ghostId, workingDir)) {
-      return {
-        ok: false,
-        errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-        message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-      };
-    }
+    // Coordinator 的 UI 只消费 TARGET_UNAVAILABLE 状态；这里的 message 会随
+    // ensureReady 结果回到模型，因此与 ghost_info / ghost_call 共用同一口径。
+    const visibility = classifyGhostVisibility(ghostId, workingDir ?? null, {
+      listGhosts: () => getGhostManager().list(),
+      isAvailableForActiveSession: isGhostAvailableForActiveSession,
+      isDisabledForWorkdir: isGhostDisabledForWorkdir,
+    });
+    if (!visibility.ok) return visibility;
+    const ghost = visibility.ghost;
     if (tool && !(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
       return {
         ok: false,

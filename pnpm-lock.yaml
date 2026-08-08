@@ -421,6 +421,9 @@ importers:
       ws:
         specifier: ^8.18.3
         version: 8.21.1
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
     devDependencies:
       '@electron-forge/cli':
         specifier: ^7.11.1
@@ -884,6 +887,9 @@ importers:
 
   packages/cindy-tools:
     dependencies:
+      '@cindy/plugin-protocol':
+        specifier: workspace:*
+        version: link:../../cindy-protocol/packages/plugin-protocol
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -1097,12 +1103,12 @@ importers:
       '@cindy/maker-shared':
         specifier: workspace:*
         version: link:../maker-shared
-      diff:
-        specifier: ^8.0.4
-        version: 8.0.4
       better-sqlite3:
         specifier: '*'
         version: 12.11.1
+      diff:
+        specifier: ^8.0.4
+        version: 8.0.4
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3

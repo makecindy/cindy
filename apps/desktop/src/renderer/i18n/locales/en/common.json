@@ -3241,6 +3241,14 @@
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "upgradeNotice": {
+          "single": "Automatically updated organization plugin “{{name}}”.",
+          "multiple_one": "Automatically updated {{count}} organization plugin.",
+          "multiple_other": "Automatically updated {{count}} organization plugins.",
+          "singleWithPermissions": "Automatically updated organization plugin “{{name}}”; new permissions: {{permissions}}.",
+          "multipleWithPermissions_one": "Automatically updated {{count}} organization plugin; it includes new permissions.",
+          "multipleWithPermissions_other": "Automatically updated {{count}} organization plugins; some plugins include new permissions."
+        },
         "removalNotice": {
           "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
           "multiple_one": "The organization removed {{count}} plugin. Its local copy and data on this device have been cleaned up.",

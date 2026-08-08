@@ -6,6 +6,8 @@ import {
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
+  mobileMarkdownImageAltChipText,
+  MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH,
   mobileMarkdownInlineImageSize,
   parseMobileMarkdown,
   parseMobileMarkdownInlines,
@@ -1346,6 +1348,124 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
       const isComplex = group.block.type === 'code' || group.block.type === 'table' || group.block.type === 'mermaid';
       expect(hasImage || isComplex).toBe(true);
     }
+  });
+
+  it('can bound text runs by block count for tall native selectable text views', () => {
+    const blocks = parseMobileMarkdown([
+      '# 标题',
+      '',
+      '第一段',
+      '',
+      '- 列表项 A',
+      '- 列表项 B',
+      '',
+      '第二段',
+    ].join('\n'));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunBlocks: 2 });
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
+    expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([2, 2, 1]);
+  });
+
+  it('can bound text runs by rendered inline text length', () => {
+    const blocks = parseMobileMarkdown([
+      '短段',
+      '',
+      '这是一段超过阈值的正文',
+      '',
+      '尾段',
+    ].join('\n'));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
+    expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([1, 1, 2]);
+  });
+
+  it('counts rendered block separators when bounding text runs by text length', () => {
+    const blocks = parseMobileMarkdown(['aaaa', '', 'bbbb'].join('\n'));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run']);
+    expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([1, 1]);
+  });
+
+  it('splits a single oversized text block by rendered inline text length', () => {
+    const blocks = parseMobileMarkdown('a'.repeat(21));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
+
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+    expect(chunks.map((block) => (
+      block.inlines.map((inline) => (inline.type === 'image' ? inline.alt : inline.text)).join('')
+    ))).toEqual([
+      'a'.repeat(8),
+      'a'.repeat(8),
+      'a'.repeat(5),
+    ]);
+    expect(chunks.map((block) => block.textRunContinuation === true)).toEqual([false, true, true]);
+    expect(groups.map((group) => (
+      group.type === 'text_run' && group.textRunContinuation === true
+    ))).toEqual([false, true, true]);
+  });
+
+  it('does not split surrogate pairs when a limit falls before an emoji', () => {
+    const text = `${'a'.repeat(7)}😀b`;
+    const blocks = parseMobileMarkdown(text);
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+
+    const chunkText = chunks.map((block) => (
+      block.inlines.map((inline) => (inline.type === 'image' ? inline.alt : inline.text)).join('')
+    ));
+    expect(chunkText).toEqual(['a'.repeat(7), '😀b']);
+    expect(chunkText.join('')).toBe(text);
+  });
+
+  it('keeps oversized non-direct image alt text in one image inline while bounding rendered chip text', () => {
+    const alt = 'a'.repeat(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH + 21);
+    const blocks = parseMobileMarkdown(`![${alt}](docs/local-image.png)`);
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 1800 });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+    const imageInlines = chunks.flatMap((block) => block.inlines.filter((inline) => inline.type === 'image'));
+
+    expect(groups.map((group) => group.type)).toEqual(['text_run']);
+    expect(imageInlines).toHaveLength(1);
+    expect(imageInlines[0]).toMatchObject({ alt, url: 'docs/local-image.png' });
+    expect(mobileMarkdownImageAltChipText(imageInlines[0].alt)).toHaveLength(
+      MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH,
+    );
+    expect(mobileMarkdownImageAltChipText(imageInlines[0].alt).endsWith('…')).toBe(true);
+  });
+
+  it('does not split surrogate pairs when truncating oversized image alt chip text', () => {
+    const alt = `${'a'.repeat(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH - 1)}😀b`;
+    const chipText = mobileMarkdownImageAltChipText(alt);
+
+    expect(chipText).toHaveLength(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH);
+    expect(chipText).toBe(`${'a'.repeat(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH - 1)}…`);
+    expect(chipText).not.toContain('\uD83D');
+    expect(chipText).not.toContain('\uDE00');
+  });
+
+  it('counts rendered list marker spaces when splitting long list items', () => {
+    const blocks = parseMobileMarkdown('- abcdefghij');
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+
+    expect(chunks.map((block) => (
+      block.inlines.map((inline) => (inline.type === 'image' ? inline.alt : inline.text)).join('')
+    ))).toEqual(['abcdef', 'ghij']);
+    expect(chunks.map((block) => block.textRunContinuation === true)).toEqual([false, true]);
+  });
+
+  it('treats fractional text run limits below one as disabled', () => {
+    const blocks = parseMobileMarkdown(['first', '', 'second'].join('\n'));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunBlocks: 0.5,
+      maxTextRunUtf16Length: 0.5,
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].type).toBe('text_run');
+    if (groups[0].type !== 'text_run') throw new Error('expected text_run');
+    expect(groups[0].blocks).toHaveLength(2);
   });
 });
 
