@@ -229,10 +229,12 @@ export function clearAllDeviceProviders(): void {
   for (const id of ids) {
     deviceGen.set(id, (deviceGen.get(id) ?? 0) + 1);
     notifyDeviceProvidersGen(id);
-    // 登出/切号也要清空 payload 订阅者(copilot review P2):只清 module 缓存 + 代际
-    // 通知,已挂载的 useDeviceProviders 仍保留旧 payload 在 React state——推送空
-    // payload 让 hook 立即清空,消除登出后短窗口残留上一账号供应商信息。
-    notifyDeviceProviders(id, { providers: [] });
+    // 注意:不再推送空 payload(codex review P2:清空账号缓存时不要把空载荷标为
+    // 就绪)——payload 订阅回调把任何 payload 视为已确认快照,会重新置位
+    // readyFor/readyGen,最终暴露为 ready:true 的 loaded-empty 目录;且
+    // [deviceId, maker] effect 不因重新登录重跑,新账号目录永不重拉。清空展示
+    // 与未就绪由 hook 的 gen 失效订阅承担(清 payload + 保持未就绪 + 主动重拉),
+    // 见 useDeviceProviders。登出后短窗口残留由该订阅的清空兜底(copilot P2 意图)。
   }
   cache.clear();
   inflight.clear();

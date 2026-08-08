@@ -83,9 +83,15 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     // 代际变更(evict/clearAll)主动推送:模块级 Map 变化不触发渲染,光靠渲染期
     // 代际比对,ready 失效要等下一次碰巧渲染(codex review P2)——收到通知立即失效,
     // 重拉完成经上面的 payload 订阅恢复。
+    // codex review P2:清理事件(clearAll 登出/切号)必须**清空展示但保持未就绪**——
+    // 否则 payload 残留旧账号 + readyFor 被误置,暴露为 ready:true 的 loaded-empty;
+    // 且 [deviceId, maker] effect 不因重新登录重跑,需显式重拉新账号目录。
     const unsubscribeGen = subscribeDeviceProvidersGen(deviceId, () => {
       if (cancelled) return;
       setReadyFor(null);
+      setPayload(EMPTY_PAYLOAD);
+      void fetchDeviceProviders(deviceId, () => maker.listProviders())
+        .catch(() => undefined); // fire-and-forget;失败保持未就绪(readyFor 已清)
     });
     const cached = getCachedDeviceProviders(deviceId);
     if (cached) {

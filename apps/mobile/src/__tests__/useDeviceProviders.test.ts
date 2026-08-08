@@ -129,15 +129,16 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getCachedDeviceProviders('dev-1')).toBeUndefined();
   });
 
-  it('clearAll:向已挂载 payload 订阅者推送空 payload,清掉登出残留(copilot P2)', async () => {
+  it('clearAll:不向 payload 订阅者推送空载荷(防误标就绪),仅代际失效(codex review P2)', async () => {
     const mod = await import('@/device-link/deviceProvidersCache');
     const f1 = vi.fn(async () => result('dev-1'));
     await mod.fetchDeviceProviders('dev-1', f1);
     const subscriber = vi.fn();
     const unsub = mod.subscribeDeviceProviders('dev-1', subscriber);
     mod.clearAllDeviceProviders();
-    // 订阅者收到空 payload(登出后不再残留上一账号的供应商信息)
-    expect(subscriber).toHaveBeenCalledWith({ providers: [] });
+    // payload 订阅是「确认快照」通道:推送空载荷会把 readyFor 误置为就绪。
+    // 清空展示与未就绪改由 gen 失效订阅承担(hook 侧),此处不得再推送。
+    expect(subscriber).not.toHaveBeenCalled();
     unsub();
   });
 
