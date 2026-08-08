@@ -2680,6 +2680,40 @@ const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
 /**
+ * #2194: clientIds of user messages sent from THIS renderer's composer.
+ * sendMessageCore / steerMessageCore are the choke points every local send
+ * (composer send, edit-resend, steer, device-link send initiated on this
+ * desktop) passes through, so every local user message is recorded there.
+ * MessageStream uses this to tell an explicit local send — which force-pins
+ * the viewport to the tail — apart from user messages injected by other
+ * entries (IM channels, a mobile client driving the session remotely,
+ * scheduler runs), which must not steal the reading position. Memory-only
+ * by design: the force-pin only matters at send time; after a renderer
+ * restart the restore path owns the viewport anchor.
+ */
+const localSentUserMessageIds = new Map<string, Set<string>>();
+/** Generous per-session cap — the lookup only matters right after sending. */
+const LOCAL_SENT_IDS_CAP = 200;
+
+function markLocalSentUserMessage(sessionId: string, clientId: string): void {
+  let ids = localSentUserMessageIds.get(sessionId);
+  if (!ids) {
+    ids = new Set();
+    localSentUserMessageIds.set(sessionId, ids);
+  }
+  if (ids.size >= LOCAL_SENT_IDS_CAP) {
+    const oldest = ids.values().next().value;
+    if (oldest !== undefined) ids.delete(oldest);
+  }
+  ids.add(clientId);
+}
+
+/** Whether the given user message was sent from this renderer's composer. */
+function isLocalSentUserMessage(sessionId: string, clientId: string): boolean {
+  return localSentUserMessageIds.get(sessionId)?.has(clientId) ?? false;
+}
+
+/**
  * F-SB-7: Global listeners — notified whenever ANY session's state changes.
  * Used by Sidebar to track running status across all sessions without needing
  * to subscribe to each session individually.
@@ -3060,6 +3094,7 @@ function _purgeSession(sessionId: string): void {
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
   sessions.delete(sessionId);
+  localSentUserMessageIds.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
   _stopTransitions.delete(sessionId);
@@ -11308,6 +11343,10 @@ async function sendMessageCore(
     opts,
     identity,
   );
+  // #2194: 登记本端发送——MessageStream 的强 pin 只认这个集合，外部入口
+  // （IM / 手机端 / 定时任务）注入的 user 消息不抢视口。后续路径 return false
+  // （如 beforeEnqueue 回滚）会留下一个永不渲染的 id，无害。
+  markLocalSentUserMessage(sessionId, queued.clientId);
 
   const deviceLinkRemote = remoteScopeAtStart !== null;
   const remoteRecord = remoteScopeAtStart
@@ -11692,6 +11731,8 @@ async function steerMessageCore(
     opts,
     identity,
   );
+  // #2194: 与 sendMessageCore 相同——本端 steer 也是明确的本地发送意图。
+  markLocalSentUserMessage(sessionId, queued.clientId);
   const deviceLinkRemote = remoteScopeAtStart !== null;
   const remoteDeviceId = remoteScopeAtStart?.deviceId;
   const remoteRecord = remoteScopeAtStart
@@ -12134,10 +12175,21 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
+  // #2194 (review P1): 人工 Retry 是本地意图，但重试项由 main 在
+  // performRetryLastError 以**新 clientId** 生成，发送侧登记不到。权威归属：
+  // 人工 retry 的零产出克隆项自带 `supersedesUserClientId`（仅 manual 非 auto
+  // 路径设置，见 agent-input-coordinator.ts），直接按字段辨认——不猜队首差分
+  // （异步窗口内可能混入外部入队）、不做文本猜测（维护者口径，#2222）。
+  // 有产出分支的隐藏续跑指令不带该字段也不产生可见气泡，无需标记。
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
-  ).then(() => undefined);
+  ).then(() => {
+    // superseded / no-op 时队列里没有克隆项，自然不标记。
+    for (const item of getOrCreateState(sessionId).pendingQueue) {
+      if (item.supersedesUserClientId) markLocalSentUserMessage(sessionId, item.clientId);
+    }
+  });
 }
 
 /**
@@ -13653,6 +13705,8 @@ export const makerChatStore = {
   loadAroundMessage,
   loadAroundMessageClientId,
   sendMessage,
+  /** #2194: MessageStream 强 pin 门控——区分本端发送与外部注入的 user 消息。 */
+  isLocalSentUserMessage,
   beginRemoteOptimisticComposerTransition,
   cancelRemoteOptimisticSendsForDataOwnerBoundary,
   // /goal 从首页新建的会话不经普通发送路径,自动起名漏触发 —— 暴露此动作让调用方用目标文案补起名。

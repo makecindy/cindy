@@ -3270,6 +3270,11 @@ export function CCAgentSessionView({
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
+      // #2194: 只有本端 composer 发出的 user 消息才强制回底；IM / 手机端 /
+      // 定时任务注入的按普通新内容处理（贴底才跟随）。
+      isLocalUserSend={(clientId) =>
+        sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : false
+      }
     />
   );
 
