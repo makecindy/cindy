@@ -42,14 +42,14 @@ export function FilterResultList({
 
   if (isLoading && files.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center px-4 py-6 text-[11px] text-sidebar-muted">
+      <div className="flex flex-1 items-center justify-center px-4 py-6 text-11 text-sidebar-muted">
         {t('rightSidebar.fileBrowser.filterIndexing')}
       </div>
     );
   }
   if (files.length === 0 && indexError) {
     return (
-      <div className="flex flex-1 items-center justify-center px-4 py-6 text-center text-[11px] text-sidebar-muted">
+      <div className="flex flex-1 items-center justify-center px-4 py-6 text-center text-11 text-sidebar-muted">
         {indexError === 'RG_UNAVAILABLE'
           ? t('rightSidebar.fileBrowser.filterRgUnavailable')
           : t('rightSidebar.fileBrowser.filterIndexFailed')}
@@ -58,7 +58,7 @@ export function FilterResultList({
   }
   if (files.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center px-4 py-6 text-[11px] text-sidebar-muted">
+      <div className="flex flex-1 items-center justify-center px-4 py-6 text-11 text-sidebar-muted">
         {t('rightSidebar.fileBrowser.filterNoMatch')}
       </div>
     );
@@ -88,14 +88,14 @@ export function FilterResultList({
               <span className="flex min-w-0 flex-1 flex-col leading-tight">
                 <span className="truncate">{basename}</span>
                 {dirname && (
-                  <span className="truncate text-[10px] text-sidebar-muted">{dirname}</span>
+                  <span className="truncate text-10 text-sidebar-muted">{dirname}</span>
                 )}
               </span>
             </button>
           );
         })}
         {truncated && (
-          <div className="px-2 py-2 text-[10px] text-sidebar-muted">
+          <div className="px-2 py-2 text-10 text-sidebar-muted">
             {t('rightSidebar.fileBrowser.filterTruncated', { limit: FILTER_RESULT_LIMIT })}
           </div>
         )}

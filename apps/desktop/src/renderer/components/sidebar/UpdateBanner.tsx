@@ -468,7 +468,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             aria-label={t('update.banner.preparingAria')}
             className={cn(
               'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-              'text-[13px] font-medium',
+              'text-13 font-medium',
               'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
               'cursor-default opacity-70',
             )}
@@ -483,7 +483,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
               aria-label={t('update.banner.confirmAria')}
               className={cn(
                 'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-                'text-[13px] font-medium transition-colors',
+                'text-13 font-medium transition-colors',
                 'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
                 'hover:bg-[var(--update-btn-hover)]',
               )}
@@ -496,7 +496,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
               aria-label={t('update.banner.cancelAria')}
               className={cn(
                 'flex w-full items-center justify-center rounded-full py-1.5',
-                'text-[13px] font-medium text-sidebar-muted transition-colors',
+                'text-13 font-medium text-sidebar-muted transition-colors',
                 'hover:bg-sidebar-item-hover',
               )}
             >
@@ -510,7 +510,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             aria-label={t('update.banner.ariaExpanded', { version: version ?? '' })}
             className={cn(
               'flex w-full items-center justify-center gap-2 rounded-full border py-2',
-              'text-[13px] font-medium transition-colors',
+              'text-13 font-medium transition-colors',
               'bg-[var(--update-btn-bg)] border-[var(--update-btn-border)] text-[var(--update-btn-text)]',
               'hover:bg-[var(--update-btn-hover)]',
             )}

@@ -340,42 +340,50 @@ function DetailHeader({
             不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
         <div className="flex flex-wrap items-center gap-3 gap-y-2">
           <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-            style={{
-              backgroundColor: 'var(--settings-integration-avatar-bg)',
-              border: '1px solid var(--settings-integration-avatar-border)',
-              color: 'var(--settings-integration-avatar-icon)',
-            }}
+            data-testid="provider-detail-identity"
+            className="flex min-w-0 flex-auto items-center gap-3"
           >
-            {icon}
-          </div>
-
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div className="flex items-center gap-2">
-              <span
-                className="min-w-0 truncate text-14 font-medium leading-tight"
-                style={{ color: 'var(--settings-section-title)' }}
-              >
-                {title}
-              </span>
-              {modelCount !== null && <ModelCountChip count={modelCount} />}
-              {subscriptionProduct && (
-                <CustomTag
-                  label={t('settings.providers.models.subscriptionProduct', {
-                    product: subscriptionProduct,
-                  })}
-                />
-              )}
-              {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
-              {badge}
-            </div>
-            <span
-              className="truncate text-13 leading-tight"
-              style={{ color: 'var(--settings-integration-subtitle)' }}
+            <div
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+              style={{
+                backgroundColor: 'var(--settings-integration-avatar-bg)',
+                border: '1px solid var(--settings-integration-avatar-border)',
+                color: 'var(--settings-integration-avatar-icon)',
+              }}
             >
-              {subtitle}
-              {singleAgentNote ? ` · ${singleAgentNote}` : ''}
-            </span>
+              {icon}
+            </div>
+
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div
+                data-testid="provider-detail-metadata"
+                className="flex min-w-0 flex-wrap items-center gap-2"
+              >
+                <span
+                  className="min-w-0 truncate text-14 font-medium leading-tight"
+                  style={{ color: 'var(--settings-section-title)' }}
+                >
+                  {title}
+                </span>
+                {modelCount !== null && <ModelCountChip count={modelCount} />}
+                {subscriptionProduct && (
+                  <CustomTag
+                    label={t('settings.providers.models.subscriptionProduct', {
+                      product: subscriptionProduct,
+                    })}
+                  />
+                )}
+                {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
+                {badge}
+              </div>
+              <span
+                className="truncate text-13 leading-tight"
+                style={{ color: 'var(--settings-integration-subtitle)' }}
+              >
+                {subtitle}
+                {singleAgentNote ? ` · ${singleAgentNote}` : ''}
+              </span>
+            </div>
           </div>
 
           {trailing}
@@ -583,17 +591,8 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       await refresh();
       return;
     }
-    if (credentialScope === 'system-shared') {
-      try {
-        const result = await window.electronAPI.openChatGPTApp();
-        if (!result.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
-      } catch {
-        toast.error(t('chatgptAuthRecovery.openAppFailed'));
-      }
-      return;
-    }
     await handleLogin();
-  }, [credentialScope, handleLogin, loggingIn, recoveryCheck, refresh, t]);
+  }, [handleLogin, loggingIn, recoveryCheck, refresh]);
 
   const recoveryDetail = reconnectRequired ? (
     <p className="text-12 leading-relaxed text-[var(--settings-integration-subtitle)]">
@@ -624,9 +623,7 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
             ? 'chatgptAuthRecovery.checking'
             : recoveryCheck === 'failed'
               ? 'chatgptAuthRecovery.recheck'
-              : credentialScope === 'system-shared'
-                ? 'chatgptAuthRecovery.openApp'
-                : 'chatgptAuthRecovery.relogin',
+              : 'chatgptAuthRecovery.relogin',
         )}
         onClick={() => void handleRecovery()}
         disabled={recoveryCheck === 'checking' || loggingIn}
@@ -1519,7 +1516,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
       </span>
       {/* 徽标不大写不加字距:224px 窄栏里 en「RECOMMENDED」会把行名挤成「Cin…」。 */}
       <span
-        className="shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium"
+        className="shrink-0 rounded-full border px-1.5 py-px text-10 font-medium"
         style={{ borderColor: 'var(--border-default)', color: 'var(--text-tertiary)' }}
       >
         {t('settings.providers.xdSignin.badge')}

@@ -102,6 +102,12 @@ export interface TurnState {
    * 见过 assistant 消息时不参与判定)。
    */
   lastAssistantMsgHadSubstance: boolean;
+  /**
+   * 本 turn 最近一条 assistant API message id。Vertex 路由用 `msg_vrtx_`
+   * 前缀作为输出 token 延迟结算的确定性证据；result 本身不携带该 id，
+   * 因此必须在 assistant 消息到达时按 turn 暂存，再随 done 交给 host。
+   */
+  lastAssistantRequestId?: string;
 }
 
 export interface RuntimeState {
@@ -157,6 +163,7 @@ function resetTurnState(turn: TurnState): void {
   turn.pendingApiError = null;
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
+  turn.lastAssistantRequestId = undefined;
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
 
@@ -989,6 +996,12 @@ function handleAssistant(
   // (mid-turn text_delta / message_delta 没有自己的 uuid, 落库时取最近一条 assistant
   // 的 meta 作为 fallback, 让 messages.agent_meta 行能被 fork/rewind 反查到)。
   const assistantMeta = extractAssistantMeta(msg);
+  if (
+    typeof assistantMeta.requestId === 'string' &&
+    assistantMeta.requestId.startsWith('msg_vrtx_')
+  ) {
+    ctx.turn.lastAssistantRequestId = assistantMeta.requestId;
+  }
 
   // SDK API-error envelope: msg.error 是 SDKAssistantMessageError tag
   // (invalid_request / authentication_failed / rate_limit / server_error /
@@ -1752,18 +1765,19 @@ function handleResult(
   // silentStop 标记随 done 透传给 host: main 的自动续跑守卫据此决策(补发「继续」或
   // surface 耗尽提示)。data 为 unknown 形状、既有消费方(记账 / IM / orca)均按需
   // typeof 读字段, 加字段零影响; 不命中时 done 与现状逐字节一致。
+  const safeResult =
+    msg.is_error && typeof msg.result === 'string'
+      ? { ...msg, result: redactSensitiveText(msg.result) }
+      : msg;
+  const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
+    ? { ...safeResult, assistant_message_id: ctx.turn.lastAssistantRequestId }
+    : safeResult;
   queue.push({
     type: 'done',
     data:
-      msg.is_error && typeof msg.result === 'string'
-        ? {
-            ...msg,
-            result: redactSensitiveText(msg.result),
-            ...(isSilentStopTurn ? { silentStop: true } : {}),
-          }
-        : isSilentStopTurn
-          ? { ...msg, silentStop: true }
-          : msg,
+      isSilentStopTurn
+        ? { ...resultWithAssistantMessageId, silentStop: true }
+        : resultWithAssistantMessageId,
     source: 'claude-code',
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)

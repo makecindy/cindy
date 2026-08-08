@@ -57,9 +57,16 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
     expect(block).not.toContain('workingDir: null');
   });
 
-  it('显式「新建对话」入口 handleCreateDialogue 仍清空 workingDir(不受本次修复影响)', () => {
+  it('显式「新建对话」入口仍清空 workingDir,但由创建页集中迁移目标', () => {
     const block = extractHandlerBlock(sidebarUpperSource, 'handleCreateDialogue');
-    expect(block).toContain('resetDraftWorkspaceTargets();');
+    expect(block).toContain(
+      'makeDialogueNewMakerRouteState(selectedDialogueDeviceResolution.target)',
+    );
+    expect(block).toContain("selectedDialogueDeviceResolution.status === 'pending'");
+    expect(block).not.toContain('resetDraftWorkspaceTargets');
+    expect(draftRouteSource).toMatch(
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+    );
   });
 
   // 保留与清空的分界(2026-07-25 用户定稿):workingDir / 文本 / 模型是便利性

@@ -53,7 +53,7 @@ describe('sidebar remote project icon', () => {
 
   it('keeps remote session icons next to titles instead of in the right-side time slots', () => {
     expect(sessionItemSource).toMatch(
-      /<span className="min-w-0 flex flex-1 items-center gap-1\.5">[\s\S]*?<SidebarTitleMarquee[\s\S]*?\{remoteIconKind && \([\s\S]*?<RemoteProjectIcon/,
+      /<span[\s\S]*?className=\{cn\(\s*'min-w-0 flex flex-1 items-center gap-1\.5'[\s\S]*?<SidebarTitleMarquee[\s\S]*?\{remoteIconKind && \([\s\S]*?<RemoteProjectIcon/,
     );
     expect(sessionItemSource).toMatch(
       /<div className="group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end min-w-14">[\s\S]*?<WorktreeBadge[\s\S]*?<time/,

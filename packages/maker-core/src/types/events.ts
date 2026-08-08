@@ -363,6 +363,13 @@ export interface ForkSdkSessionOptions {
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */
   sourceSdkSessionId: string;
   /**
+   * 源原生 session 的模型与供应商来源。Codex 的隔离 fork host 需要用相同上下文
+   * 解析 credential mode；否则 provider-oauth 源任务在本机没有 fallback 凭证时会
+   * 被误判为未登录。Claude/PI 不消费这两个字段。
+   */
+  model?: string;
+  providerId?: string | null;
+  /**
    * 截断锚点 — 必须是 SDK assistant 消息的 uuid (调用方反查 + 跳 subagent)。
    * Claude 必填; Codex 协议无 message uuid, 此字段被 CodexAgent 忽略,
    * 调用方传 undefined 即可。

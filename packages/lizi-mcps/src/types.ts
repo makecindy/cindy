@@ -733,6 +733,15 @@ export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
   /**
+   * 当前 tool-call 的权威 session ctx accessor。
+   *
+   * Claude in-process 路径返回闭包绑定的当前 session；Codex / Pi bridge
+   * 路径从请求作用域恢复当前 session。只要提供了本 accessor，它就是唯一可信
+   * 来源：返回 undefined 表示本次调用无法确认归属，调用方必须 fail closed，
+   * 不能再回落到构建 server 时捕获的 ctx 或环境中的其它 AsyncLocalStorage store。
+   */
+  getSessionContext?: () => LiziMcpSessionContext | undefined;
+  /**
    * SSH remote 会话的 host id (本地会话缺省)。workingDir 此时是远端机器上的
    * 路径字符串 — cindy_memory 等按 workdir 分区的工具必须用
    * buildMemoryScopeKey(workingDir, remoteHostId) 定位 store, 不得把远端路径

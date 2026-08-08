@@ -255,6 +255,7 @@ export interface XdtHelperMcpDeps {
 export interface XdtHelperMcpSessionCtx {
   agentKind: 'claude-code' | 'codex' | 'pi';
   workingDir: string;
+  getSessionContext?: () => import('./types.js').LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
 }

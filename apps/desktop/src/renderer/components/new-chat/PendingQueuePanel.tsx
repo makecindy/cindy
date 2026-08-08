@@ -366,7 +366,7 @@ export function PendingQueuePanel({
             : hasStructuredAtoms ? (
                 <SentInlineAtomBody
                   agentReferences={agentReferences}
-                  className="relative top-px inline-flex min-w-0 max-w-full items-center gap-1 text-[13px] leading-[1.25]"
+                  className="relative top-px inline-flex min-w-0 max-w-full items-center gap-1 text-13 leading-[1.25]"
                   content={chatMessageContent}
                   pastedTextRanges={entry.chatMessage.pastedTextRanges}
                   quotesEncoded={entry.chatMessage.quotesEncoded}
@@ -502,7 +502,7 @@ export function PendingQueuePanel({
                   rows={1}
                   aria-label={t('newChat.pendingQueue.editAria', { index: originalIdx + 1 })}
                   className={cn(
-                    'min-h-[18px] min-w-0 flex-1 resize-none rounded-[6px] bg-transparent text-[13px] leading-[1.25]',
+                    'min-h-[18px] min-w-0 flex-1 resize-none rounded-[6px] bg-transparent text-13 leading-[1.25]',
                     'max-h-[120px] overflow-y-auto text-[var(--msg-assistant-text)] outline-none',
                     '[field-sizing:content]',
                   )}
@@ -532,12 +532,12 @@ export function PendingQueuePanel({
                       className="shrink-0 text-[var(--msg-assistant-text)]"
                     />
                   )}
-                  <span className="min-w-0 max-w-[120px] shrink truncate text-[13px] font-semibold leading-[1.25] text-[var(--msg-assistant-text)]">
+                  <span className="min-w-0 max-w-[120px] shrink truncate text-13 font-semibold leading-[1.25] text-[var(--msg-assistant-text)]">
                     {rowPresentation.senderLabel}
                   </span>
                   <span
                     className={cn(
-                      'min-w-0 flex-1 truncate text-[13px] leading-[1.25]',
+                      'min-w-0 flex-1 truncate text-13 leading-[1.25]',
                       isRowActive
                         ? 'text-[var(--msg-assistant-text)]'
                         : 'text-[var(--settings-section-desc)]',
@@ -556,7 +556,7 @@ export function PendingQueuePanel({
                 <p
                   className={cn(
                     // top-px: 在居中基础上把文字再压低 1px, 抵消字体 metrics, 与 drag handle 光学对齐
-                    'relative top-px min-w-0 flex-1 truncate text-[13px] leading-[1.25]',
+                    'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]',
                     isRowActive
                       ? 'text-[var(--msg-assistant-text)]'
                       : 'text-[var(--settings-section-desc)]',
@@ -664,7 +664,7 @@ export function PendingQueuePanel({
       {showFooter && (
         <div
           className={cn(
-            'grid w-full select-none grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-t px-2 py-1.5 text-[12px] leading-none',
+            'grid w-full select-none grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-t px-2 py-1.5 text-12 leading-none',
             'border-[var(--chat-input-border)]',
           )}
         >
@@ -704,7 +704,7 @@ export function PendingQueuePanel({
                 className={cn(
                   'flex h-5 min-w-[64px] items-center justify-center rounded-full border px-2',
                   'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
-                  'text-[12px] leading-none text-[var(--msg-assistant-text)]',
+                  'text-12 leading-none text-[var(--msg-assistant-text)]',
                   'hover:bg-[var(--chat-input-chip-bg)]',
                 )}
               >

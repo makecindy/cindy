@@ -31,7 +31,7 @@ export function AutomationOriginBadge({
 
   if (navigationMode === 'sidebar-embedded') {
     return (
-      <span className="inline-flex max-w-full items-center gap-1 text-[11px] text-[var(--cmd-palette-item-meta)]">
+      <span className="inline-flex max-w-full items-center gap-1 text-11 text-[var(--cmd-palette-item-meta)]">
         {content}
       </span>
     );
@@ -45,7 +45,7 @@ export function AutomationOriginBadge({
       onClick={() => navigate(scheduleFocusPath(automationOrigin.scheduleId))}
       className={cn(
         'inline-flex max-w-full items-center gap-1 cursor-pointer',
-        'text-[11px] text-[var(--cmd-palette-item-meta)]',
+        'text-11 text-[var(--cmd-palette-item-meta)]',
         'hover:text-foreground transition-colors focus:outline-none',
       )}
     >

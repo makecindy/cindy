@@ -74,7 +74,7 @@ describe('SentInlineAtomBody', () => {
     expect(bodyBlock).not.toContain('whitespace-pre-wrap');
     expect(bodyBlock).not.toContain('truncate');
     expect(pendingQueueSource).toContain(
-      "'relative top-px min-w-0 flex-1 truncate text-[13px] leading-[1.25]'",
+      "'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]'",
     );
   });
 });
