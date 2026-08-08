@@ -732,12 +732,21 @@ function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage):
 interface MakerEventBatchFlushOutcome {
   /** 本轮已确认发不出去:只清空缓冲,不再尝试发送。 */
   sendingBlocked: boolean;
+  /**
+   * 为什么发不出去。日志级别按它分档 —— 否则这条聚合日志自己就是新的洪峰:
+   *  - `offline`:relay 不在线,**这是常态且预期**(client.sendPush 在非 online 时本就
+   *    静默早退,push 的恢复语义一直是重连后 resync 补偿、不是重放)。断线期间事件
+   *    仍在产生,每 120ms 窗口一条 WARN 就是 8 条/秒的噪声 → 记 debug。
+   *  - `send-failed`:relay 在线却连逐帧都进不去(窗口满且队头不可驱逐),是**异常**
+   *    信号,值得 WARN。
+   */
+  blockedReason: 'offline' | 'send-failed' | null;
   /** 本轮未尝试发送而直接丢弃的事件数(用于聚合日志)。 */
   droppedEvents: number;
 }
 
 function createMakerEventBatchFlushOutcome(): MakerEventBatchFlushOutcome {
-  return { sendingBlocked: false, droppedEvents: 0 };
+  return { sendingBlocked: false, blockedReason: null, droppedEvents: 0 };
 }
 
 function reportMakerEventBatchFlushOutcome(
@@ -745,10 +754,11 @@ function reportMakerEventBatchFlushOutcome(
   outcome: MakerEventBatchFlushOutcome,
 ): void {
   if (outcome.droppedEvents === 0) return;
-  log.warn(
-    `maker:event batch flush to ${shortId(dst)}: peer send unavailable, `
-    + `dropped ${outcome.droppedEvents} event(s) without retry`,
-  );
+  const line = `maker:event batch flush to ${shortId(dst)}: `
+    + `${outcome.blockedReason === 'offline' ? 'relay offline' : 'peer send unavailable'}, `
+    + `dropped ${outcome.droppedEvents} event(s) without retry`;
+  if (outcome.blockedReason === 'offline') log.debug(line);
+  else log.warn(line);
 }
 
 /**
@@ -813,6 +823,7 @@ function flushMakerEventBatchSession(
       } catch (err) {
         if (!shouldDegradeBatchToPerFrame(err)) {
           outcome.sendingBlocked = true;
+          outcome.blockedReason = 'offline';
           outcome.droppedEvents += slice.length;
           continue;
         }
@@ -823,6 +834,7 @@ function flushMakerEventBatchSession(
           // 逐帧也进不去:同步循环内窗口不会被 ACK 腾空,后续帧必然同样失败。停在
           // 这里,把没尝试过的计入丢弃 —— 失败的那一帧自己已经记过一条日志。
           outcome.sendingBlocked = true;
+          outcome.blockedReason = 'send-failed';
           outcome.droppedEvents += slice.length - i - 1;
           break;
         }
