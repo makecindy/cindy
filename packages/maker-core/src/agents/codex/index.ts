@@ -521,6 +521,9 @@ const ASK_USER_DYNAMIC_TOOL: DynamicToolSpec = {
     'Use a later follow-up call only when the next question depends on the user answer to an earlier question.',
     'Do not use it for routine implementation details; choose a reasonable default.',
     'This tool does not replace authorization for destructive or external actions.',
+    'Codex code-mode returns the awaited result as a JSON string shaped like {"question-id":{"answers":["Choice"]}}; it is not an MCP CallToolResult object.',
+    'In functions.exec, use: const raw = await tools.cindy__ask_user_question({ questions: [...] }); const answers = JSON.parse(raw); text(JSON.stringify(answers));',
+    'Do not read .content or .structuredContent from the result; expose the raw or parsed answer with text(...) before the exec cell ends.',
   ].join(' '),
   inputSchema: {
     type: 'object',

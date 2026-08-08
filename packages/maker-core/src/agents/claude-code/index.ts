@@ -1957,6 +1957,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     // SSE idle watchdog 触发时也会主动清, 防止 SDK drain 期间又起 timer。
     // rewind preview/commit 业务层用 isTurnRunning() 前置守卫, 不在 turn 跑时操作 SDK。
     let turnInFlight = false;
+    // send() 处于 beginNewTurn→userInputAccepted 之间时置 true。
+    // abort() 在此期间跳过 turnInFlight 清除:并发 send 负责在错误路径上
+    // (finishSendBeforeUserInput) 自行清 turnInFlight 并 emit boundary,
+    // abort 抢清会让 boundary 丢失、acceptingRebuiltSend 残留(review #485)。
+    let sendInAcceptPhase = false;
     /**
      * "桥接 turn"计数器: rebuild 尾部注入的 /compact 是 SDK 独立 turn, 但产品层视角
      * 它是"用户 turn 的一部分" — 该 /compact 的 done / end-status 不能让上层做 turn
@@ -4602,6 +4607,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             canceledBridgeQueries.add(q);
             recordCanceledQueryClose(q, 'bridge send abandoned');
             turnInFlight = false;
+            sendInAcceptPhase = false;
             turnState.interruptRequested = false;
             pendingToolIds.clear();
             acceptingRebuiltSend = false;
@@ -4615,6 +4621,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             error: error === undefined ? undefined : String(error),
           });
           turnInFlight = false;
+          sendInAcceptPhase = false;
           turnState.interruptRequested = false;
           pendingToolIds.clear();
           acceptingRebuiltSend = false;
@@ -4723,6 +4730,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         toolLoopGuard?.resetTurn();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
+        sendInAcceptPhase = true;
         turnInFlight = true;
         // 对齐老 agentManager.ts:1623 — send 入口立刻 emit "Thinking...", 让 renderer 的
         // RunningStatusBar 一发就亮; 否则从 send 到 SDK message_start 之间的几百 ms~几秒 gap
@@ -4808,6 +4816,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
           setAutoReviewIntent(message.content);
           replayableUserInput = sdkInput;
+          sendInAcceptPhase = false;
           // upstream-response-idle watchdog 起表 — 放在 inputQueue.push 之后, 避免把
           // client 端的 toClaudeSdkContent (多模态 image-resizer 同步等几秒) 算进上游
           // 响应配额。否则 warn 日志里 lastEventType=null + msSinceLast=null 会指错方向
@@ -4947,15 +4956,35 @@ export class ClaudeCodeAgent extends BaseAgent {
           turnState.interruptRequested = true;
           turnState.interruptGeneration = turnState.generation;
         }
+        // 先关 turn-in-flight 再 interrupt：SDK retry backoff 期间不响应 interrupt
+        // (2026-08 实踩 OAuth 全池冷却 503 持续重试)，等它返回会让后续 send 被
+        // SESSION_RUNNING 永拒。generation 守卫(translator handleResult)保证旧 q
+        // 的迟到 error_during_execution result 被丢弃、不污染新 turn。
+        // sendInAcceptPhase 守卫: 并发 send 处于 accept 阶段时, 由 send 自己的
+        // finishSendBeforeUserInput 负责清 turnInFlight + emit boundary,
+        // abort 不能抢清, 否则 boundary 丢失(review 3541310178)。
+        // 快照 turnInFlight 用于后续 close-query 分支判定(下方 foregroundNeedsTerminal
+        // 需要旧值)。
+        const foregroundWasInFlight = turnInFlight;
+        if (!sendInAcceptPhase) {
+          turnInFlight = false;
+          pendingToolIds.clear();
+        }
         // 用户 Stop 的产品语义 = 本会话所有模型调用停止:先发 stopTask 再 interrupt
-        // (同一控制通道按序处理),封掉「interrupt 后任务恰好完成 → task_notification
-        // 自动续跑新 turn」的竞态窗口。fire-and-forget,不阻塞 interrupt。
+        // (同一控制通道按序处理)。interrupt 用 5s 超时防止 SDK retry backoff 死等；
+        // 超时或失败时关 query 让下次 send 走 lazy rebuild。
         const stopRequests = stopRunningWakeBackgroundTasks('user_stop');
+        const ABORT_INTERRUPT_TIMEOUT_MS = 5_000;
         try {
-          await q.interrupt();
+          await Promise.race([
+            q.interrupt(),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('INTERRUPT_TIMEOUT')), ABORT_INTERRUPT_TIMEOUT_MS),
+            ),
+          ]);
           // stopTask and interrupt share an ordered control channel: an
           // interrupt ACK guarantees these earlier stop requests have settled,
-          // so allSettled intentionally has no timeout or extra watchdog.
+          // so allSettled intentionally has no extra timeout here.
           const settledStops = await Promise.allSettled(stopRequests.map(({ promise }) => promise));
           const hasRejectedStops = settledStops.some((stop) => stop.status === 'rejected');
           const fulfilledWakeIds = stopRequests
@@ -4982,7 +5011,9 @@ export class ClaudeCodeAgent extends BaseAgent {
             // the per-query marker, then the next send/rewind installs a fresh
             // Query.
             const cancelledQuery = q;
-            const foregroundNeedsTerminal = turnInFlight;
+            // 用 Stop 之前的 turnInFlight 快照判定 foreground 是否需要终态。
+            // turnInFlight 已被上方立即清除(防 SESSION_RUNNING 死锁)，但
+            // close-query 分支仍需要旧值决定是否补 boundary。
             canceledBridgeQueries.add(cancelledQuery);
             // Query retirement always leaves a rebuild tombstone, even if the
             // synthetic boundary is rejected because the event queue is
@@ -5002,8 +5033,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               // close() prevents the interrupted result from arriving. If the
               // foreground turn has not already produced a terminal, replace
               // it with one synthetic boundary; a raced natural result leaves
-              // turnInFlight=false and therefore does not get a duplicate.
-              if (foregroundNeedsTerminal) emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              // foregroundWasInFlight=false and therefore does not get a duplicate.
+              if (foregroundWasInFlight) emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
             }
             inputQueue.clear();
             try {
@@ -5017,9 +5048,36 @@ export class ClaudeCodeAgent extends BaseAgent {
             turnInFlight = false;
           }
         } catch (e) {
-          // interrupt 失败 → 无 result 消费标记, 回收防误抑制(同 watchdog)。
-          turnState.interruptRequested = false;
-          log.warn('abort threw', { error: String(e) });
+          const errMsg = e instanceof Error ? e.message : String(e);
+          if (errMsg === 'INTERRUPT_TIMEOUT') {
+            // SDK 长时间不响应 interrupt(在 retry backoff 中) → 关 query 让
+            // 下次 send 走 lazy rebuild。
+            log.warn('interrupt timed out during user stop — closing query', {
+              sdkSessionId,
+            });
+            const cancelledContinuation = cancelActiveContinuation('user_stop');
+            if (cancelledContinuation) {
+              retireContinuationTasks(cancelledContinuation);
+              emitCancelledContinuationBoundary(cancelledContinuation, 'user_stop');
+            }
+            continuationCancellationGeneration = turnState.generation;
+            continuationCancellationRequiresQueryRebuild = true;
+            canceledBridgeQueries.add(q);
+            inputQueue.clear();
+            try {
+              inputQueue.end();
+            } catch (ee) {
+              log.warn('user_stop cancellation: inputQueue.end threw', { error: String(ee) });
+            }
+            recordCanceledQueryClose(q, 'user_stop interrupt timeout');
+            runningBackgroundTasks.clear();
+            terminalBackgroundTaskIds.clear();
+            turnInFlight = false;
+          } else {
+            // interrupt 真正抛错(非超时)，回收标记防误抑制(同 watchdog)。
+            turnState.interruptRequested = false;
+            log.warn('abort threw', { error: String(e) });
+          }
         }
       },
 
