@@ -41,7 +41,7 @@ export interface SubagentLiveCardUpdate {
   agentPath?: string;
   /** Observed child-thread model, or Cindy's explicit display fallback. `null` clears a stale badge. */
   model?: string | null;
-  /** 本卡全部子线程从各自本次 spawn 开始的累计 token 之和;未知为 0。 */
+  /** 本卡全部子线程 token 快照之和;现代载荷按 spawn 增量,旧 total-only 载荷保留绝对值。 */
   totalTokens: number;
   /** 本卡全部子线程内的工具类 item 数;未知为 0。 */
   toolUses: number;
@@ -152,18 +152,20 @@ const MAX_PENDING_THREAD_MODELS = MAX_PENDING_LINEAGE_PARENTS * MAX_PENDING_LINE
  * 后台 item/completed,提前清会让迟到的 completed 重复计数),所以只能按条数封顶。
  */
 const MAX_COUNTED_ITEM_IDS = 4096;
+/** 基线建立前保留的 live turn id 上限,用于识别跨 turn 延迟到达的首帧 usage。 */
+const MAX_OBSERVED_LIVE_TURN_IDS = 64;
 
 interface ThreadState {
   status: SubagentLiveCardStatus;
-  /** 该子线程从本次 spawn 开始实际消耗的累计 token。 */
+  /** 现代载荷为本次 spawn 后增量;旧 total-only 载荷保留宿主提供的绝对快照。 */
   totalTokens: number;
   /**
    * app-server 在 fork / resume 连接建立时会先重放一帧恢复后的 tokenUsage；其中 total
    * 含父线程继承历史，不能直接展示。保存该绝对水位，后续 live 快照只显示相对增量。
    */
   tokenUsageBaseline?: number;
-  /** 最近一次真实 live turn id；由 turn/started 或 item 通知确认，用于区分恢复帧。 */
-  liveTurnId?: string;
+  /** 基线建立前已确认的 live turn id；usage 可能晚于下一轮 turn/started 才到。 */
+  observedLiveTurnIds: Set<string>;
   /** Model observed from thread metadata or a spawn item. */
   model?: string;
   /** A failed nested spawn remains terminal despite late lifecycle events. */
@@ -369,6 +371,15 @@ export function createSubagentLiveCardTracker(opts: {
     children.add(childThreadId);
   };
 
+  const noteObservedLiveTurn = (thread: ThreadState, turnId: string | undefined): void => {
+    if (!turnId || thread.tokenUsageBaseline !== undefined || thread.observedLiveTurnIds.has(turnId)) return;
+    if (thread.observedLiveTurnIds.size >= MAX_OBSERVED_LIVE_TURN_IDS) {
+      const oldest = thread.observedLiveTurnIds.values().next();
+      if (!oldest.done) thread.observedLiveTurnIds.delete(oldest.value);
+    }
+    thread.observedLiveTurnIds.add(turnId);
+  };
+
   /** 应用一条通知到卡上;返回是否产生了变化(无变化不必发帧)。 */
   const applyNotification = (
     card: TrackedCard,
@@ -387,7 +398,7 @@ export function createSubagentLiveCardTracker(opts: {
         const itemTurnId = typeof itemParams?.turnId === 'string' ? itemParams.turnId : undefined;
         // app-server 不会把历史 item 重放成 live 通知；即使 turn/started 丢失，item 也能
         // 证明这个 turn 已经真实开跑，避免把随后到来的 live usage 误判成恢复帧。
-        if (itemTurnId) thread.liveTurnId = itemTurnId;
+        noteObservedLiveTurn(thread, itemTurnId);
         const item = itemParams?.item;
         const itemType = typeof item?.type === 'string' ? item.type : '';
         const itemId = typeof item?.id === 'string' ? item.id : '';
@@ -430,13 +441,14 @@ export function createSubagentLiveCardTracker(opts: {
         // 所以只把它记成基线而不产可见帧。无 turnId 的旧宿主载荷沿用原来的绝对快照口径。
         if (
           usageTurnId
-          && usageTurnId !== thread.liveTurnId
+          && !thread.observedLiveTurnIds.has(usageTurnId)
           && thread.tokenUsageBaseline === undefined
         ) {
           thread.tokenUsageBaseline = total;
+          thread.observedLiveTurnIds.clear();
           return false;
         }
-        if (!usageTurnId && !thread.liveTurnId) {
+        if (!usageTurnId && thread.observedLiveTurnIds.size === 0) {
           if (thread.totalTokens === total) return false;
           thread.totalTokens = total;
           return true;
@@ -451,6 +463,7 @@ export function createSubagentLiveCardTracker(opts: {
             && last <= total
             ? total - last
             : total;
+          thread.observedLiveTurnIds.clear();
         }
         const relativeTotal = Math.max(0, total - thread.tokenUsageBaseline);
         // total 是累计快照，乱序旧帧或重复恢复帧都不能让卡片数字回退。
@@ -461,7 +474,7 @@ export function createSubagentLiveCardTracker(opts: {
       case 'turn/started': {
         if (thread.spawnFailed) return false;
         const turnId = (params as { turn?: { id?: unknown } } | null)?.turn?.id;
-        if (typeof turnId === 'string' && turnId) thread.liveTurnId = turnId;
+        noteObservedLiveTurn(thread, typeof turnId === 'string' ? turnId : undefined);
         thread.status = 'running';
         return true;
       }
@@ -514,6 +527,7 @@ export function createSubagentLiveCardTracker(opts: {
       card.threads.set(childThreadId, {
         status: card.spawnFailed || latchSpawnFailure ? 'failed' : 'running',
         totalTokens: 0,
+        observedLiveTurnIds: new Set<string>(),
         ...(initialModel ? { model: initialModel } : {}),
         spawnFailed: latchSpawnFailure,
       });
@@ -702,7 +716,12 @@ export function createSubagentLiveCardTracker(opts: {
         if (card.threads.size === 0) {
           // 一个线程都还没登记上的卡(spawn 刚认出、子线程尚未 started):补一个占位线程,
           // 否则 aggregateStatus 对空集合返回 running,这张卡还是会留在转圈状态。
-          card.threads.set('__shutdown__', { status: 'stopped', totalTokens: 0, spawnFailed: false });
+          card.threads.set('__shutdown__', {
+            status: 'stopped',
+            totalTokens: 0,
+            observedLiveTurnIds: new Set<string>(),
+            spawnFailed: false,
+          });
         }
         out.push(snapshot(card));
       }

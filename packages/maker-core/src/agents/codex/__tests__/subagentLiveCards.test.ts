@@ -162,6 +162,38 @@ describe('createSubagentLiveCardTracker', () => {
     ).toBe(250);
   });
 
+  it('counts delayed first usage from an earlier observed live turn without a restored snapshot', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-1' },
+    });
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-2' },
+    });
+
+    // turn 1 的首帧 usage 可以晚于 turn 2 started；它仍是已观测的 live turn，必须用
+    // last 反推 spawn 基线，而不能把整帧误认成 fork / resume 的恢复快照。
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: {
+          total: { totalTokens: 8_250 },
+          last: { totalTokens: 250 },
+        },
+      })?.totalTokens,
+    ).toBe(250);
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-2',
+        tokenUsage: {
+          total: { totalTokens: 8_400 },
+          last: { totalTokens: 150 },
+        },
+      })?.totalTokens,
+    ).toBe(400);
+  });
+
   it('keeps legacy total-only token payloads as absolute snapshots', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
