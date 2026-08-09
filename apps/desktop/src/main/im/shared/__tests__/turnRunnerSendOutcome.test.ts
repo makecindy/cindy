@@ -1001,6 +1001,61 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
+  it('tracks and cancels terminal materialization after the turn leaves the queue', async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'cindy-im-terminal-race-'));
+    let resolveMaterialization!: (
+      value: Awaited<ReturnType<typeof mocks.materializeLocalMarkdownFiles>>,
+    ) => void;
+    try {
+      mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+      mocks.materializeLocalMarkdownFiles.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveMaterialization = resolve;
+          }),
+      );
+      const h = setupSession(async () => ({ accepted: true }));
+
+      await runDefaultTurn();
+      h.emit({
+        type: 'text',
+        data: { text: '[secret](xdt-file:///F:/XDMaker/secret.pdf)', isFinal: true },
+      });
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() =>
+        expect(mocks.materializeLocalMarkdownFiles).toHaveBeenCalledOnce(),
+      );
+
+      await runDefaultTurn(vi.fn(), {
+        userMessageId: 'msg-after-terminal',
+        text: 'must wait for terminal delivery',
+      });
+      expect(h.send).toHaveBeenCalledTimes(1);
+
+      let disposed = false;
+      const disposing = runner!.disposeAllSessions().then(() => {
+        disposed = true;
+      });
+      runner = null;
+      await flushMicrotasks();
+      expect(disposed).toBe(false);
+
+      resolveMaterialization({
+        files: [{ absPath: path.join(tempDir, 'secret.pdf'), displayName: 'secret.pdf' }],
+        tempDirs: [tempDir],
+        text: 'secret.pdf',
+      });
+      await disposing;
+
+      expect(existsSync(tempDir)).toBe(false);
+      expect(h.abort).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not resend media already delivered before an interaction boundary', async () => {
     const firstHandle = {
       messageId: 'stream-before-interaction',
@@ -2412,6 +2467,20 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       kind: 'done',
       text: 'durable answer',
     });
+
+    const nextDispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-external-next',
+      text: 'next durable task',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart: async () => undefined,
+    });
+    expect(nextDispatch.kind).toBe('accepted');
+    expect(h.send).toHaveBeenCalledTimes(2);
+    h.emit({ type: 'done', data: {} });
+    if (nextDispatch.kind === 'accepted') await nextDispatch.terminal;
   });
 
   it('reports the attached Desktop route only after provider startup is accepted', async () => {

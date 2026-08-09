@@ -152,6 +152,7 @@ import {
 } from './permissionModeControl';
 
 const PRE_DISPATCH_ACK_CLEANUP_TIMEOUT_MS = 1500;
+const TERMINAL_FINALIZATION_CLEANUP_TIMEOUT_MS = 5_000;
 /** SESSION_RUNNING 竞态 / desktop turn 仍在跑时的兜底重试间隔。 */
 const DISPATCH_RETRY_MS = 500;
 
@@ -274,6 +275,8 @@ interface SessionState {
   workingDir: string;
   /** FIFO of turns. Events route to queue[0]; done/error shifts. */
   queue: TurnState[];
+  /** Turns shifted from the event queue but still finishing terminal delivery/cleanup. */
+  finalizingTurns: Map<TurnState, Promise<void>>;
   /** 等待当前 turn 结束后再 send 的消息 — FIFO, 见模块头"消息排队"。 */
   sendQueue: QueuedSend[];
   /** thread = session 模型下该 session 对应的 thread root ts;feishu undefined。 */
@@ -798,6 +801,7 @@ export function createTurnRunner(
     // 不再以 SESSION_RUNNING pre-dispatch failure 报错打回(对齐 desktop 排队体验)。
     if (
       state.queue.length > 0 ||
+      state.finalizingTurns.size > 0 ||
       state.sendQueue.length > 0 ||
       state.makerSession.isTurnRunning()
     ) {
@@ -811,7 +815,7 @@ export function createTurnRunner(
       // done/error 触发;若该事件在 enqueue 前已送达(isTurnRunning 释放略晚于
       // 事件 fanout 的窄竞态)或被错过, 队列会永久卡住。挂兜底 timer 自愈 —
       // maybeDispatchNextQueued 发现仍在跑会自动续挂, 直到队列排空。
-      if (state.queue.length === 0) {
+      if (state.queue.length === 0 && state.finalizingTurns.size === 0) {
         armDispatchRetry(state, userId);
       }
       await notifyQueuedPosition(userId, item, state.sendQueue.length);
@@ -1198,6 +1202,7 @@ export function createTurnRunner(
   function maybeDispatchNextQueued(state: SessionState, userId: string): void {
     if (state.sendQueue.length === 0) return;
     if (state.queue.length > 0) return;
+    if (state.finalizingTurns.size > 0) return;
     if (state.makerSession.isTurnRunning()) {
       armDispatchRetry(state, userId);
       return;
@@ -1392,6 +1397,7 @@ export function createTurnRunner(
       workingDir: row.workingDir,
       scopeKey: target.scopeKey,
       queue: [],
+      finalizingTurns: new Map(),
       sendQueue: [],
       dispatchRetryTimer: null,
       unsubscribers: [],
@@ -2500,9 +2506,39 @@ export function createTurnRunner(
     }
   }
 
-  async function handleTurnDoneAsync(state: SessionState, userId: string): Promise<void> {
+  function handleTurnDoneAsync(state: SessionState, userId: string): Promise<void> {
     const turn = state.queue.shift();
-    if (!turn) return;
+    if (!turn) return Promise.resolve();
+    const finalization = finalizeTurnDoneAsync(state, userId, turn);
+    return trackFinalizingTurn(state, turn, finalization);
+  }
+
+  function trackFinalizingTurn(
+    state: SessionState,
+    turn: TurnState,
+    finalization: Promise<void>,
+  ): Promise<void> {
+    state.finalizingTurns.set(turn, finalization);
+    const onSettled = () => {
+      state.finalizingTurns.delete(turn);
+      settleTurnTerminal(turn);
+      if (!finishDeferredDetachIfIdle(state)) {
+        maybeDispatchNextQueued(state, state.userId);
+      }
+    };
+    void finalization.then(onSettled, onSettled);
+    return finalization;
+  }
+
+  async function stopCancelledFinalization(turn: TurnState): Promise<void> {
+    await cleanupFallbackMedia(turn);
+  }
+
+  async function finalizeTurnDoneAsync(
+    state: SessionState,
+    userId: string,
+    turn: TurnState,
+  ): Promise<void> {
     clearSilentStopSettleWait(turn);
     turn.done = true;
     clearActivityTicker(turn);
@@ -2517,12 +2553,20 @@ export function createTurnRunner(
     // tool_use / tool_result / thinking 过程消息,desktop 重开历史能完整回放)。
     // 这里再写一份会产生重复记录。
     await materializeTurnLocalImages(state, turn);
+    if (turn.cleanupRequested) {
+      await stopCancelledFinalization(turn);
+      return;
+    }
     if (!turn.streamingHandle && turn.streamingHandlePromise) {
       try {
         await turn.streamingHandlePromise;
       } catch {
         // The terminal branch below handles the missing output surface.
       }
+    }
+    if (turn.cleanupRequested) {
+      await stopCancelledFinalization(turn);
+      return;
     }
     if (turn.streamingHandle) {
       try {
@@ -2543,7 +2587,15 @@ export function createTurnRunner(
       // text API instead of silently dropping a non-empty final response.
       if (output.kind === 'rich-card') {
         await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
         await materializeTurnLocalFiles(state, turn);
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
       }
       const fallbackText = composeStreamingView(turn) || '✅ (本轮无文本输出)';
       try {
@@ -2580,7 +2632,6 @@ export function createTurnRunner(
         }
       }
     }
-    settleTurnTerminal(turn);
     log.info(
       `turn done for session=...${(state.makerSession.id ?? '').slice(-8)}, queueDepth=${state.queue.length}`,
     );
@@ -2597,6 +2648,7 @@ export function createTurnRunner(
   ): Promise<void> {
     const delivered = new Set<string>();
     for (const absPath of turn.mediaAbsPaths) {
+      if (turn.cleanupRequested) break;
       try {
         const result = await output.im.sendFile(
           userId,
@@ -2650,12 +2702,22 @@ export function createTurnRunner(
     }
   }
 
-  async function handleTurnErrorAsync(
+  function handleTurnErrorAsync(
     state: SessionState,
     userId: string,
     errData: unknown,
   ): Promise<void> {
     const turn = state.queue.shift();
+    const finalization = finalizeTurnErrorAsync(state, userId, errData, turn);
+    return turn ? trackFinalizingTurn(state, turn, finalization) : finalization;
+  }
+
+  async function finalizeTurnErrorAsync(
+    state: SessionState,
+    userId: string,
+    errData: unknown,
+    turn: TurnState | undefined,
+  ): Promise<void> {
     const rawMsg =
       errData && typeof errData === 'object' && 'message' in errData
         ? String((errData as { message: unknown }).message)
@@ -2678,7 +2740,13 @@ export function createTurnRunner(
     // 而下面 composeStreamingView 会把它一起写进 finalize 的正文——最终卡片会在
     // 失败说明的正上方永久显示"仍在重试"（review #844 codex P1）。
     if (turn) setActivityNotice(turn.presenter.activity, null);
-    if (turn) await materializeTurnLocalImages(state, turn);
+    if (turn) {
+      await materializeTurnLocalImages(state, turn);
+      if (turn.cleanupRequested) {
+        await stopCancelledFinalization(turn);
+        return;
+      }
+    }
     // 建卡请求可能还在飞: 过载重试提示会惰性建一张进度卡(handleRetryNoticeEvent),
     // 而终态错误可能恰好在 startStreamingText 回来之前到达。此时 streamingHandle
     // 还是 null → 走下面"另发一条错误消息"的分支并把 turn 出队, 随后那个 promise
@@ -2692,6 +2760,10 @@ export function createTurnRunner(
         // 建卡失败 → 下面按"没有输出面"处理(另发一条消息)。
       }
     }
+    if (turn?.cleanupRequested) {
+      await stopCancelledFinalization(turn);
+      return;
+    }
     if (turn?.streamingHandle) {
       try {
         const view = composeStreamingView(turn);
@@ -2703,7 +2775,15 @@ export function createTurnRunner(
     } else {
       if (turn && output.kind === 'rich-card') {
         await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
         await materializeTurnLocalFiles(state, turn);
+        if (turn.cleanupRequested) {
+          await stopCancelledFinalization(turn);
+          return;
+        }
       }
       const view = turn ? composeStreamingView(turn) : '';
       const fallbackText = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
@@ -2741,7 +2821,6 @@ export function createTurnRunner(
         }
       }
     }
-    if (turn) settleTurnTerminal(turn);
     if (finishDeferredDetachIfIdle(state)) return;
     // error 收口同样要继续放行排队消息 — 一条失败不能卡死后面的队列。
     maybeDispatchNextQueued(state, userId);
@@ -3127,7 +3206,7 @@ export function createTurnRunner(
   function detachFromSession(sessionId: string): void {
     const state = sessionStates.get(sessionId);
     if (!state?.attached) return;
-    if (state.queue.length > 0) {
+    if (state.queue.length > 0 || state.finalizingTurns.size > 0) {
       clearPendingSends(state);
       if (!state.detachDrainPromise) {
         state.detachDrainPromise = new Promise<DetachDrainOutcome>((resolve) => {
@@ -3143,7 +3222,13 @@ export function createTurnRunner(
   }
 
   function finishDeferredDetachIfIdle(state: SessionState): boolean {
-    if (!state.detachDrainPromise || state.queue.length > 0) return false;
+    if (
+      !state.detachDrainPromise ||
+      state.queue.length > 0 ||
+      state.finalizingTurns.size > 0
+    ) {
+      return false;
+    }
     detachSessionStateNow(state.makerSession.id, state);
     return true;
   }
@@ -3261,7 +3346,8 @@ export function createTurnRunner(
       }
     }
     const mediaCleanups: Promise<void>[] = [];
-    for (const turn of state.queue) {
+    const turns = new Set([...state.queue, ...state.finalizingTurns.keys()]);
+    for (const turn of turns) {
       turn.cleanupRequested = true;
       releaseTurnInteractionRoute(turn, 'session_cleanup');
       turn.terminalKind = 'aborted';
@@ -3269,7 +3355,40 @@ export function createTurnRunner(
       settleTurnTerminal(turn);
       mediaCleanups.push(cleanupFallbackMedia(turn));
     }
-    return Promise.all(mediaCleanups).then(() => undefined);
+    const finalizations = [...state.finalizingTurns.values()].map((finalization) =>
+      finalization.catch(() => undefined),
+    );
+    return Promise.all(mediaCleanups)
+      .then(() => waitForTerminalFinalizationsBounded(finalizations))
+      .then(() => undefined);
+  }
+
+  async function waitForTerminalFinalizationsBounded(
+    finalizations: Promise<void>[],
+  ): Promise<void> {
+    if (finalizations.length === 0) return;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    try {
+      await Promise.race([
+        Promise.all(finalizations),
+        new Promise<void>((resolve) => {
+          timeoutId = setTimeout(() => {
+            timedOut = true;
+            resolve();
+          }, TERMINAL_FINALIZATION_CLEANUP_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+    if (timedOut) {
+      log.warn(`${channel} terminal finalization cleanup timed out`, {
+        kind: 'terminal-media-cleanup',
+        source: 'session-dispose',
+        pending: finalizations.length,
+      });
+    }
   }
 
   return {

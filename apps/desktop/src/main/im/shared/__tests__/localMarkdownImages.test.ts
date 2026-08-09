@@ -607,4 +607,41 @@ describe('sanitizeLocalMarkdownImageRefs', () => {
       ['private', 'angle', '`![inline](/Users/alice/private/inline.png`'].join('\n'),
     );
   });
+
+  it('redacts a complete local image destination beyond the materialization limit', () => {
+    const localPath = `/Users/alice/private/${'a'.repeat(5_000)}.png`;
+
+    expect(sanitizeLocalMarkdownImageRefs(`before ![private](${localPath}) after`)).toBe(
+      'before private after',
+    );
+  });
+
+  it('redacts the whole line for an incomplete local destination beyond the materialization limit', () => {
+    const localPath = `/Users/alice/private/${'b'.repeat(5_000)}.png`;
+
+    expect(sanitizeLocalMarkdownImageRefs(`before ![private](${localPath}`)).toBe(
+      'before private',
+    );
+  });
+
+  it('redacts local image targets after labels beyond the materialization limit', () => {
+    const label = `private-${'c'.repeat(600)}`;
+    const localPath = '/Users/alice/private/output.png';
+
+    expect(sanitizeLocalMarkdownImageRefs(`![${label}](${localPath})`)).toBe(label);
+  });
+
+  it('redacts file URL schemes case-insensitively', () => {
+    expect(
+      sanitizeLocalMarkdownImageRefs('![private](FILE:///Users/alice/private/output.png)'),
+    ).toBe('private');
+  });
+
+  it('does not let an outer remote target hide a nested local image', () => {
+    expect(
+      sanitizeLocalMarkdownImageRefs(
+        '![outer](https://invalid ![private](/Users/alice/private/output.png))',
+      ),
+    ).not.toContain('/Users/alice/private/output.png');
+  });
 });

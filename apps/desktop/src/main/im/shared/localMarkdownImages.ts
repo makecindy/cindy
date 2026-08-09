@@ -50,10 +50,7 @@ function isEscapedMarkdownMarker(text: string, markerIndex: number): boolean {
   return backslashes % 2 === 1;
 }
 
-function localMarkdownImageMatches(
-  text: string,
-  options: { includeEscaped?: boolean } = {},
-): LocalMarkdownImageMatch[] {
+function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
   const codeRanges = markdownCodeRanges(text);
   const matches: LocalMarkdownImageMatch[] = [];
   let cursor = 0;
@@ -62,7 +59,7 @@ function localMarkdownImageMatches(
     if (start === -1) break;
     cursor = start + 2;
     if (isMarkdownCodePosition(codeRanges, start)) continue;
-    if (options.includeEscaped !== true && isEscapedMarkdownMarker(text, start)) continue;
+    if (isEscapedMarkdownMarker(text, start)) continue;
 
     let labelEnd = start + 2;
     const labelLimit = Math.min(text.length, labelEnd + MAX_MARKDOWN_IMAGE_LABEL_LENGTH + 1);
@@ -112,7 +109,7 @@ function localMarkdownImageMatches(
   return matches;
 }
 
-function incompleteLocalMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
+function localMarkdownImageSanitizationMatches(text: string): LocalMarkdownImageMatch[] {
   const codeRanges = markdownCodeRanges(text);
   const matches: LocalMarkdownImageMatch[] = [];
   let cursor = 0;
@@ -123,34 +120,40 @@ function incompleteLocalMarkdownImageMatches(text: string): LocalMarkdownImageMa
     if (isMarkdownCodePosition(codeRanges, start)) continue;
 
     let labelEnd = start + 2;
-    const labelLimit = Math.min(text.length, labelEnd + MAX_MARKDOWN_IMAGE_LABEL_LENGTH + 1);
-    while (labelEnd < labelLimit) {
+    while (labelEnd < text.length) {
       const char = text[labelEnd];
       if (char === '\r' || char === '\n') break;
       if (char === '\\') {
-        labelEnd += 2;
+        labelEnd = Math.min(labelEnd + 2, text.length);
         continue;
       }
       if (char === ']' && text[labelEnd + 1] === '(') break;
       labelEnd += 1;
     }
-    if (text[labelEnd] !== ']' || text[labelEnd + 1] !== '(') continue;
+    if (text[labelEnd] !== ']' || text[labelEnd + 1] !== '(') {
+      // Nothing later on this line can close this candidate without crossing
+      // the same scan range. Advance monotonically instead of rescanning a
+      // long malformed line once for every literal `![` it contains.
+      cursor = labelEnd < text.length ? labelEnd + 1 : text.length;
+      continue;
+    }
 
     const targetStart = labelEnd + 2;
     const lineBreak = text.indexOf('\n', targetStart);
     const lineEnd = lineBreak === -1 ? text.length : lineBreak;
-    const targetLimit = Math.min(
-      lineEnd,
-      targetStart + MAX_MARKDOWN_IMAGE_DESTINATION_LENGTH + 1,
-    );
     let targetEnd = targetStart;
     let depth = 1;
-    while (targetEnd < targetLimit) {
+    let nestedImageStart = -1;
+    while (targetEnd < lineEnd) {
       const char = text[targetEnd];
       if (char === '\r') break;
       if (char === '\\') {
-        targetEnd += 2;
+        targetEnd = Math.min(targetEnd + 2, lineEnd);
         continue;
+      }
+      if (char === '!' && text[targetEnd + 1] === '[') {
+        nestedImageStart = targetEnd;
+        break;
       }
       if (char === '(') depth += 1;
       else if (char === ')') {
@@ -159,13 +162,19 @@ function incompleteLocalMarkdownImageMatches(text: string): LocalMarkdownImageMa
       }
       targetEnd += 1;
     }
-    if (depth === 0 || targetEnd === targetStart) continue;
+    if (nestedImageStart >= 0) {
+      cursor = nestedImageStart;
+      continue;
+    }
+    if (targetEnd === targetStart) continue;
+    const end = depth === 0 ? targetEnd + 1 : targetEnd;
     matches.push({
       start,
-      end: targetEnd,
+      end,
       label: text.slice(start + 2, labelEnd),
       target: text.slice(targetStart, targetEnd),
     });
+    cursor = Math.max(cursor, end);
   }
   return matches;
 }
@@ -399,8 +408,9 @@ export async function materializeLocalMarkdownFiles(
 
 function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
   const target = markdownImageDestination(rawTarget);
+  const targetLower = target.toLowerCase();
   return (
-    target.startsWith('file://') ||
+    targetLower.startsWith('file://') ||
     target.startsWith('/') ||
     /^[A-Za-z]:[\\/]/.test(target) ||
     /^\\\\[^\\]/.test(target)
@@ -411,10 +421,10 @@ function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
 export function sanitizeLocalMarkdownImageRefs(text: string): string {
   // Escaped image syntax is not materialized, but local paths still must not
   // cross the IM boundary in a plain-text fallback.
-  const matches = [
-    ...localMarkdownImageMatches(text, { includeEscaped: true }),
-    ...incompleteLocalMarkdownImageMatches(text),
-  ].sort((a, b) => a.start - b.start);
+  // Sanitization deliberately has no materialization length cap: oversized
+  // model-authored syntax is not eligible for upload, but its entire local
+  // destination still has to be removed before crossing the IM boundary.
+  const matches = localMarkdownImageSanitizationMatches(text);
   let sanitized = text;
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const match = matches[index];
