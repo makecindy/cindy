@@ -1115,9 +1115,10 @@ export class GoalController {
       }
     }
     await this.awaitPendingLifecycle(clearBoundary);
-    if (this.turns.get(sessionId) !== clearBoundary) return;
+    // dispose 后不得构造 storage.clear / emit null(旧账号动作落到新账号,Codex P1)。
+    if (this.disposed || this.turns.get(sessionId) !== clearBoundary) return;
     await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
-    if (this.turns.get(sessionId) !== clearBoundary) return;
+    if (this.disposed || this.turns.get(sessionId) !== clearBoundary) return;
     this.deps.emitStatus({ sessionId, goal: null });
     this.turns.delete(sessionId);
   }
@@ -1146,11 +1147,13 @@ export class GoalController {
     );
     this.turns.set(sessionId, pauseBoundary);
     await this.awaitPendingPersistence(pauseBoundary);
-    if (this.turns.get(sessionId) !== pauseBoundary) return;
+    // dispose 后不得构造 storage.update / emit(旧账号动作落到新账号,Codex P1)。
+    if (this.disposed || this.turns.get(sessionId) !== pauseBoundary) return;
     const state = await this.deps.storage.get(sessionId);
-    if (this.turns.get(sessionId) !== pauseBoundary) return;
+    if (this.disposed || this.turns.get(sessionId) !== pauseBoundary) return;
     if (!state) return;
     if (state.status === 'usageLimited') {
+      if (this.disposed) return;
       const updated = await this.trackPersistence(
         pauseBoundary,
         this.deps.storage.update(sessionId, {
@@ -1160,11 +1163,12 @@ export class GoalController {
           updatedAt: this.now(),
         }),
       );
-      if (this.turns.get(sessionId) !== pauseBoundary) return;
+      if (this.disposed || this.turns.get(sessionId) !== pauseBoundary) return;
       if (updated) this.emit(updated);
       return;
     }
     if (state.status !== 'active') return;
+    if (this.disposed) return;
     const updated = await this.trackPersistence(
       pauseBoundary,
       this.deps.storage.update(sessionId, {
@@ -1173,7 +1177,7 @@ export class GoalController {
         updatedAt: this.now(),
       }),
     );
-    if (this.turns.get(sessionId) !== pauseBoundary) return;
+    if (this.disposed || this.turns.get(sessionId) !== pauseBoundary) return;
     if (updated) this.emit(updated);
   }
 
@@ -1923,6 +1927,8 @@ export class GoalController {
               this.deps.logger.warn('[goal] persistGoalCompletion failed', { sessionId, error: String(e) });
             }
           }
+          // await 期间可能已登出/切账号:不得 clear 行 / emit null 到新账号(Codex P1)。
+          if (this.disposed) return;
           await this.deps.storage.clear(sessionId);
           // null emit 属于同一顺序提交；后续新目标必须在它之后再 emit active，
           // 否则旧 completion 的迟到 null 会把新 chip 隐藏。
