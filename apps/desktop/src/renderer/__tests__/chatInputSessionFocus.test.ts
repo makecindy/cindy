@@ -55,7 +55,7 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(restoreNextDraftBlock).toContain('if (!isCurrentTransition()) return;');
     expect(restoreNextDraftBlock).toContain(
-      'if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;',
+      'if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;',
     );
     expect(restoreNextDraftBlock).toContain("editor.commands.focus('end');");
     expect(firstMountHydrationBlock).toContain('focusOnStorageKeyChangeRef.current');
@@ -87,10 +87,25 @@ describe('ChatInput session switch focus contract', () => {
   });
 
   it('guards delayed storageKey focus against stealing from another focused control', () => {
-    expect(chatInputSource).toContain('function hasFocusMovedToInteractiveElement(');
-    expect(chatInputSource).toContain('if (activeElement === focusAnchor) return false;');
-    expect(chatInputSource).toContain('if (editor.view.dom.contains(activeElement)) return false;');
-    expect(chatInputSource).toContain('return isInteractiveFocusedElement(activeElement);');
+    expect(chatInputSource).toContain(
+      'hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)',
+    );
+  });
+
+  it('wires local send locking through the behavior-tested focus restore hook', () => {
+    const localSendLockBlock = extractBetween(
+      chatInputSource,
+      '// Local/SSH sends keep the live composer while references and runtime',
+      'try {\n        let serializedContent',
+    );
+
+    expect(chatInputSource).toContain(
+      'const captureSendFocusForRestore = useComposerSendFocusRestore(',
+    );
+    expect(localSendLockBlock).toContain('captureSendFocusForRestore();');
+    expect(localSendLockBlock.indexOf('captureSendFocusForRestore();')).toBeLessThan(
+      localSendLockBlock.indexOf('setSendDispatchInFlight(true);'),
+    );
   });
 
   it('reuses in-composer Plugin placement for routed Use and end-focuses Create with Cindy', () => {

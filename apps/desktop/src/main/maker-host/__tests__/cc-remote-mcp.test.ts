@@ -225,6 +225,8 @@ describe('buildCcRemoteHttpMcpServers', () => {
       sessionId: 's1',
       sessionInstanceId: 'instance-1',
       agentKind: 'claude-code',
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
       vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: 's1' },
     });
   });

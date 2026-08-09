@@ -14,6 +14,7 @@ import {
   Maker,
   ClaudeCodeAgent,
   CodexAgent,
+  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   configureDefaultImageResizer,
   type McpProvider,
 } from '@cindy/maker-core';
@@ -230,7 +231,7 @@ const reviewAutoPermissionAction = createAutoPermissionReviewer({
       agentKind: request.agentKind,
       model: request.model,
       maxTokens: 384,
-      timeoutMs: 8_000,
+      timeoutMs: DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs,
       reasoningEffort: 'low',
     });
     return result.ok ? result.text : null;
@@ -1253,7 +1254,7 @@ export function getMaker(): Maker {
             : {}),
         };
       },
-      registerCodexMcpThreadContext: ({ threadId, sessionId, sessionInstanceId, workingDir, remoteHostId, vendorOptions }) => {
+      registerCodexMcpThreadContext: ({ threadId, sessionId, sessionInstanceId, mcpCallerKind, mcpCallerAttested, workingDir, remoteHostId, vendorOptions }) => {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
@@ -1263,6 +1264,8 @@ export function getMaker(): Maker {
         registerCodexMcpThreadContext(threadId, {
           agentKind: 'codex',
           sessionId,
+          mcpCallerKind,
+          mcpCallerAttested,
           ...(sessionInstanceId ? { sessionInstanceId } : {}),
           workingDir,
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。

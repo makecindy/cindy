@@ -41,6 +41,7 @@ import type {
   AgentInputRecovery,
   AgentInputSessionReferenceContext,
   AutoResumeInfo,
+  RecoveryCheckpoint,
 } from '../../shared/agentInputQueue.js';
 import {
   buildMakerUserMessage,
@@ -54,6 +55,12 @@ import {
 } from '../../shared/agentInputQueue.js';
 import { CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '../../shared/interruptedTurn.js';
 import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata.js';
+import {
+  appendRecoveryCheckpointPrompt,
+  buildRecoveryCheckpoint,
+  RECOVERY_CHECKPOINT_MARKER,
+  type RecoveryContextSnapshot,
+} from './recoveryCoordinator.js';
 
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
@@ -200,6 +207,7 @@ export interface AgentInputSendOpts {
      */
     autoResume?: boolean;
     autoResumeInfo?: AutoResumeInfo;
+    recoveryCheckpoint?: RecoveryCheckpoint;
     /**
      * 仅写入 user 行的 agentMeta,不传给 maker-core。Orca 等自动队列来源没有
      * 对应的 SendOrigin 变体,但仍不能被 host 当成真人输入来给 episode 充值。
@@ -260,6 +268,11 @@ export interface AgentInputCoordinatorDeps {
   hasPendingInteraction: (sessionId: string) => boolean;
   getAgentKind: (sessionId: string) => AgentInputCreateOpts['agentKind'] | null;
   getSdkSessionId: (sessionId: string) => Promise<string | undefined>;
+  /** Read a bounded, durable progress snapshot before a retry is re-enqueued. */
+  getRecoveryContextSnapshot?: (
+    sessionId: string,
+    userClientId: string,
+  ) => Promise<RecoveryContextSnapshot>;
   /**
    * Durable user-row writer shared with direct maker sends.  The fallback keeps
    * the coordinator usable in narrow unit harnesses, while the registered host
@@ -341,6 +354,7 @@ export interface AgentInputCoordinatorDeps {
   screenUserMessage?: (
     sessionId: string,
     agentFacingText: string,
+    item: AgentInputQueuedMessage,
   ) => Promise<
     | { action: 'allow' }
     | { action: 'block'; ghostId: string; ghostName: string; reason: string }
@@ -1709,7 +1723,11 @@ export class AgentInputCoordinator {
     // marker 已置位,筛查期间并发 steer / drain 被挡;stop / clearSession 竞态
     // 由筛查后的 marker 复查兜底。
     if (!item.bypassGhostHooks && this.deps.screenUserMessage) {
-      const verdict = await this.deps.screenUserMessage(sessionId, getAgentFacingText(item));
+      const verdict = await this.deps.screenUserMessage(
+        sessionId,
+        getAgentFacingText(item),
+        item,
+      );
       const cur = this.getState(sessionId);
       if (!cur.steeringQueueClientIds.includes(item.clientId)) {
         // stop/close/clearSession 赢在筛查期间:steer 事务已被取消,静默放弃。
@@ -2155,7 +2173,8 @@ export class AgentInputCoordinator {
     let progressKnown = false;
     const previousAutoResumeInfo = opts?.auto ? state.autoResumePending : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
-    const continueText = CONTINUE_AFTER_ERROR_PROMPT;
+    let continueText = CONTINUE_AFTER_ERROR_PROMPT;
+    let recoveryCheckpoint: RecoveryCheckpoint | undefined;
     if (recovery.kind === 'active-turn' && this.deps.hasAssistantProgressAfter) {
       let hasProgress = false;
       try {
@@ -2182,6 +2201,56 @@ export class AgentInputCoordinator {
         return { projection: this.getProjection(sessionId), outcome: 'superseded' };
       }
       if (hasProgress) {
+        if (this.deps.getRecoveryContextSnapshot) {
+          try {
+            const snapshot = await this.deps.getRecoveryContextSnapshot(
+              sessionId,
+              recovery.item.clientId,
+            );
+            // Revalidate after the second await: the snapshot read may race
+            // enqueue/clearError/session close that cancel the recovery intent.
+            const stateAfterSnapshot = this.getState(sessionId);
+            if (stateAfterSnapshot.recovery !== recovery) {
+              return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+            }
+            if (
+              opts?.auto &&
+              (!stateAfterSnapshot.autoResumePending ||
+                stateAfterSnapshot.autoResumeAttemptToken !== attemptToken)
+            ) {
+              return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+            }
+            recoveryCheckpoint = buildRecoveryCheckpoint(
+              opts?.auto ? 'automatic' : 'manual',
+              recovery.item.clientId,
+              recovery.item.recoveryCheckpoint,
+              snapshot,
+              opts?.auto ? previousAutoResumeInfo?.attempt : undefined,
+            );
+            continueText = appendRecoveryCheckpointPrompt(continueText, recoveryCheckpoint);
+          } catch (err) {
+            // Recovery must remain available if the optional read races DB
+            // shutdown. The generic continuation is the safe fallback.
+            log.warn('recovery checkpoint read failed; using generic continuation', {
+              sessionId,
+              error: errorMessage(err),
+            });
+            // Revalidate after the failed await: user may have sent a new
+            // message, cleared the error, or closed the session while the
+            // snapshot read was failing.
+            const stateAfterCatch = this.getState(sessionId);
+            if (stateAfterCatch.recovery !== recovery) {
+              return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+            }
+            if (
+              opts?.auto &&
+              (!stateAfterCatch.autoResumePending ||
+                stateAfterCatch.autoResumeAttemptToken !== attemptToken)
+            ) {
+              return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+            }
+          }
+        }
         const clientId = crypto.randomUUID();
         continueItem = {
           ...recovery.item,
@@ -2190,6 +2259,7 @@ export class AgentInputCoordinator {
           originalSyntheticTrigger: 'continue',
           persistedContent: continueText,
           autoResume: opts?.auto ? true : undefined,
+          recoveryCheckpoint,
           // 人工 Retry 是新的真人介入周期，不能继承上一轮隐藏自动消息的标记；自动路径
           // 则把展示信息随消息落库，成为「已重新连接」活动行的 param 位与展开详情。
           autoResumeInfo: opts?.auto ? (previousAutoResumeInfo ?? undefined) : undefined,
@@ -2920,6 +2990,25 @@ export class AgentInputCoordinator {
     delete projected.hostAcceptedAtMs;
     delete projected.trustedSessionReferenceContexts;
     delete projected.sessionReferencesRequireTrustedSnapshot;
+    // Recovery hints are main-owned evidence for the next vendor turn, not
+    // renderer/device-link payload. Keep the projection minimal and avoid
+    // echoing transcript-derived summaries to remote controllers.
+    delete projected.recoveryCheckpoint;
+    if (typeof projected.text === 'string' && projected.text.includes(RECOVERY_CHECKPOINT_MARKER)) {
+      projected.text = projected.text.slice(0, projected.text.indexOf(RECOVERY_CHECKPOINT_MARKER));
+    }
+    if (typeof projected.persistedContent === 'string' && projected.persistedContent.includes(RECOVERY_CHECKPOINT_MARKER)) {
+      projected.persistedContent = projected.persistedContent.slice(0, projected.persistedContent.indexOf(RECOVERY_CHECKPOINT_MARKER));
+    }
+    // chatMessage.content is the outbound payload sent to remote controllers
+    // (device-link); it must mirror the same strip so the checkpoint marker
+    // never leaks past transport boundaries.
+    if (projected.chatMessage && typeof projected.chatMessage.content === 'string' && projected.chatMessage.content.includes(RECOVERY_CHECKPOINT_MARKER)) {
+      projected.chatMessage = {
+        ...projected.chatMessage,
+        content: projected.chatMessage.content.slice(0, projected.chatMessage.content.indexOf(RECOVERY_CHECKPOINT_MARKER)),
+      };
+    }
     return projected;
   }
 
@@ -3069,7 +3158,11 @@ export class AgentInputCoordinator {
       // 留痕署名后照常派发。activeTurn 已置位,并发 drain 被挡住,询问期间
       // 不会抢发下一条。
       if (!head.bypassGhostHooks && this.deps.screenUserMessage) {
-        const verdict = await this.deps.screenUserMessage(sessionId, getAgentFacingText(head));
+        const verdict = await this.deps.screenUserMessage(
+          sessionId,
+          getAgentFacingText(head),
+          head,
+        );
         if (!this.isActiveTurnCurrent(sessionId, active)) return;
         if (verdict.action === 'block') {
           this.getState(sessionId).activeTurn = null;
@@ -3146,6 +3239,7 @@ export class AgentInputCoordinator {
             // host 靠它跳过额度充值(见 AgentInputQueuedMessage.autoResume)。
             ...(head.autoResume ? { autoResume: true } : {}),
             ...(head.autoResumeInfo ? { autoResumeInfo: head.autoResumeInfo } : {}),
+            ...(head.recoveryCheckpoint ? { recoveryCheckpoint: head.recoveryCheckpoint } : {}),
             ...(head.origin ? { origin: head.origin } : {}),
             shouldBroadcast: () => this.isTurnGenerationCurrent(sessionId, active),
             onPersisting: () => {

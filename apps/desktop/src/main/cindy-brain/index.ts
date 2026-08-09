@@ -74,7 +74,10 @@ import { serverApiFetch } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createGhostOauthBrokerClient } from './ghostOauthBroker.js';
 import { readRefImagesWithinBudget } from './refImageBudget.js';
-import { resolveGhostRepoRoot } from './repoRoot.js';
+import {
+  resolveCachedGhostRepoRoot,
+  type GhostRepoRootCacheEntry,
+} from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
 import {
@@ -751,17 +754,19 @@ export function suspendAllGhosts(): void {
 let ipcRegistered = false;
 
 /** 意识仓库根(userData/cindy-brain;旧 brain 目录首次解析时原地迁移)。 */
-let brainRootCache: string | null = null;
+let brainRootCache: GhostRepoRootCacheEntry | null = null;
 function brainRootDir(): string {
-  if (!brainRootCache) {
-    brainRootCache = resolveGhostRepoRoot({
+  brainRootCache = resolveCachedGhostRepoRoot(
+    brainRootCache,
+    activeOwnerScopeKey(),
+    {
       userDataDir: ownerScopedUserDataPath(),
       exists: (p) => fs.existsSync(p),
       rename: (from, to) => fs.renameSync(from, to),
       log,
-    });
-  }
-  return brainRootCache;
+    },
+  );
+  return brainRootCache.rootDir;
 }
 
 /**
@@ -3724,6 +3729,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       // inspect 与 install 各自重读磁盘,临时 .cindy 在两读之间被替换时,
       // 所有前置校验(保留前缀/审阅比对/签名/解压上限)都会作用在旧字节上。
       // 本地 .cindy 装入通道已强制此对账,市场通道同一口径。
+      expected.beforeCommitInLock?.();
       return installAndDock(manager, cindyFilePath, {
         ghostId: expected.ghostId,
         enable: true,

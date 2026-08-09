@@ -97,6 +97,25 @@ describe('parseBlobUrl / resolveSafe(取件形状校验)', () => {
     }
   });
 
+  it('拒绝为同一 blob 制造缓存别名的 URL 附加部分', () => {
+    const canonical = `cindy-media://blobs/${PNG_HASH}.png`;
+    for (const alias of [
+      `${canonical}?nonce=1`,
+      `${canonical}?`,
+      `${canonical}#preview`,
+      `${canonical}#`,
+      `cindy-media://user@blobs/${PNG_HASH}.png`,
+      `cindy-media://blobs:443/${PNG_HASH}.png`,
+      `cindy-media://blobs/${PNG_HASH}.PNG`,
+      `cindy-media://@blobs/${PNG_HASH}.png`,
+      `cindy-media://blobs:/${PNG_HASH}.png`,
+      `cindy-media://blobs/a/../${PNG_HASH}.png`,
+    ]) {
+      expect(blobStore.parseBlobUrl(alias)).toBeNull();
+      expect(() => blobStore.resolveSafe(alias)).toThrow('invalid url');
+    }
+  });
+
   it('resolveHashRef 拒绝非法指纹与扩展名(供图分支复用同一校验)', () => {
     expect(() => blobStore.resolveHashRef('..', '.png')).toThrow('invalid hash');
     expect(() => blobStore.resolveHashRef(PNG_HASH, '.sh')).toThrow('unsupported ext');

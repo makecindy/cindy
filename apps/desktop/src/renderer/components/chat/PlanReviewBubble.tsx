@@ -76,6 +76,60 @@ const INACTIVE_COLLAPSED_MAX_HEIGHT = 56;
 const COLLAPSED_FADE_MASK =
   'linear-gradient(to bottom, black calc(100% - 28px), transparent 100%)';
 
+/** 折叠时要从 tab 序里摘掉的元素(MarkdownRenderer 会产出链接、文件 chip、
+ *  代码块复制按钮、媒体控件,其中 chip 靠 tabIndex={0} 参与键盘导航)。 */
+const FOCUSABLE_SELECTOR =
+  'a[href], button, input, select, textarea, summary, audio[controls], video[controls], [tabindex], [contenteditable="true"]';
+
+/** 暂存被改动前的 tabindex 原值,空串表示"原本没有这个属性"。属性跟着节点走,
+ *  React 重渲染换了节点也不会把还原值串到别的元素上。 */
+const SAVED_TABINDEX_ATTR = 'data-plan-collapse-tabindex';
+
+/**
+ * 监听会新增 / 改变可聚焦节点的子树变动。
+ * - childList + subtree:异步解析把纯文本换成 FileTargetChip 这类节点替换;
+ * - tabindex / href:原地把一个普通节点变成可聚焦节点(FOCUSABLE_SELECTOR 就靠
+ *   这两个属性判定 `[tabindex]` 与 `a[href]`)。
+ * 刻意不监听 SAVED_TABINDEX_ATTR —— 那是本组件自己的记账属性。
+ */
+const FOCUSABILITY_OBSERVE_OPTIONS: MutationObserverInit = {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ['tabindex', 'href'],
+};
+
+/**
+ * 把 root 内"底边超过 cutoff"的可聚焦元素移出 tab 序;cutoff 为 null(未折叠)
+ * 时全部还原。
+ *
+ * 判据用底边而不是顶边:跨在裁剪线上的控件只露出一半,聚焦它同样会把
+ * overflow-hidden 容器滚起来,所以按"不完全可见"处理。只改 tabindex、不加
+ * aria-hidden —— 读屏用户没有"折叠"这个视觉概念,把内容从 a11y 树里摘掉是净
+ * 损失;避免"激活看不见的控件"只需要它进不了 tab 序。
+ */
+function syncClippedFocusability(root: HTMLElement, cutoff: number | null): void {
+  const rootTop = root.getBoundingClientRect().top;
+  root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR).forEach((el) => {
+    const saved = el.getAttribute(SAVED_TABINDEX_ATTR);
+    const clipped =
+      cutoff != null && el.getBoundingClientRect().bottom - rootTop > cutoff;
+
+    if (clipped) {
+      if (saved == null) {
+        el.setAttribute(SAVED_TABINDEX_ATTR, el.getAttribute('tabindex') ?? '');
+      }
+      el.setAttribute('tabindex', '-1');
+      return;
+    }
+
+    if (saved == null) return;
+    if (saved === '') el.removeAttribute('tabindex');
+    else el.setAttribute('tabindex', saved);
+    el.removeAttribute(SAVED_TABINDEX_ATTR);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -203,9 +257,32 @@ export function PlanReviewBubble({
  * 行高与外边距差得很远,行数和视觉高度没有稳定关系,而"能否展开"必须和用户
  * 真正看到的有没有被切掉一致 —— 否则会出现按钮点了没变化(或该给按钮时没给)。
  *
- * 折叠态整块 inert(见下方注释):裁掉的部分只是视觉上不见了,DOM 里仍在 tab 序
- * 与 a11y 树里。所以任何会被裁的状态都必须给得出展开入口 —— 三态共用同一个
- * 折叠+展开机制,只有折叠高度不同。
+ * ## 不变量(折叠态的唯一约束)
+ *
+ * **用户看得见的内容 == 能被键盘聚焦 / 激活的内容。**
+ *
+ * 只用 `overflow-hidden` + mask 满足不了它:那两者只挡"看得见",被裁掉的链接 /
+ * 文件 chip / 代码块按钮仍留在 tab 序里,键盘能聚焦并激活一个隐形控件,焦点一
+ * 进去浏览器还会滚动这个容器把预览顶掉。反过来,整块 `inert` 又管得太宽,会连
+ * 带禁掉可见正文的选中(DESIGN.md §14.1 要求消息正文默认可选)、可见控件的点击、
+ * find-in-page 与读屏。所以判据只有一个 —— `syncClippedFocusability()` 按渲染
+ * 后的位置逐个摘 tabindex,可见部分一律不碰。
+ *
+ * ## 会打破它的全部路径(逐条都要有对应机制)
+ *
+ * 1. 内容或折叠状态本身变了 → effect 依赖(`plan` / `expanded` / 折叠高度);
+ * 2. 回流让裁剪线两侧易主(图片加载、字体就位、窗口改宽)→ `ResizeObserver`;
+ * 3. **尺寸不变**的子树替换(`useResolvedMarkdownTarget` 异步把纯文本换成带
+ *    `tabIndex={0}` 的 `FileTargetChip`)→ `MutationObserver`;
+ * 4. **容器被程序化滚动**(计划里指向折叠线下标题的内部锚点走
+ *    `MarkdownRenderer` 的 anchor 分支调 `scrollIntoView()`;`overflow-hidden`
+ *    容器照样能被程序化滚动)→ 折叠态的 `onScroll` 直接展开。
+ *
+ * 第 5 条"焦点进入被裁元素导致滚动"不需要单独机制:1–4 保证被裁元素永远不在
+ * tab 序里,它就不可能拿到焦点。
+ *
+ * 任何会被裁的状态都必须给得出展开入口 —— 三态共用同一个折叠 + 展开机制,只有
+ * 折叠高度不同。
  */
 function PlanMarkdownBody({
   workingDir,
@@ -230,19 +307,48 @@ function PlanMarkdownBody({
   const bodyRef = useRef<HTMLDivElement>(null);
 
   // useLayoutEffect:首帧就在 paint 前定下折叠与否,否则长计划会先整段铺开
-  // 再收起,滚动位置和卡片高度跳一下。
+  // 再收起,滚动位置和卡片高度跳一下。tab 序同步也放这里 —— 它依赖布局,必须
+  // 在同一时机跟着高度一起算。
+  //
+  // 三个重算触发源,缺一个就会漏掉一类"隐形可聚焦元素":
+  //   - effect 依赖(plan / expanded / 折叠高度):内容或折叠状态本身变了;
+  //   - ResizeObserver:图片加载、字体就位、窗口改宽导致回流,裁剪线两侧的
+  //     元素易主;
+  //   - MutationObserver:**尺寸不变的子树替换**。MarkdownRenderer 的
+  //     useResolvedMarkdownTarget 会在初次布局之后把本地路径异步解析成带
+  //     tabIndex={0} 的 FileTargetChip,这种行内替换可能一点尺寸都不改 ——
+  //     那么前两个触发源都不响,新 chip 就绕过同步、继续留在 tab 序里。
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
-    const measure = () => {
-      setOverflowing(el.offsetHeight > collapsedMaxHeight + 1);
+
+    let mutationObserver: MutationObserver | null = null;
+
+    const sync = () => {
+      const tooTall = el.offsetHeight > collapsedMaxHeight + 1;
+      setOverflowing(tooTall);
+      // 本函数自己就会改 tabindex,而 tabindex 也在 MutationObserver 的监听项里。
+      // 改之前断开:disconnect() 会连带清空已排队的记录,所以自己造成的变动不会
+      // 再回调进来,不存在自触发循环。
+      mutationObserver?.disconnect();
+      syncClippedFocusability(el, tooTall && !expanded ? collapsedMaxHeight : null);
+      mutationObserver?.observe(el, FOCUSABILITY_OBSERVE_OPTIONS);
     };
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [collapsedMaxHeight, plan]);
+
+    if (typeof MutationObserver !== 'undefined') {
+      mutationObserver = new MutationObserver(sync);
+    }
+    sync();
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    resizeObserver?.observe(el);
+
+    return () => {
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [collapsedMaxHeight, plan, expanded]);
 
   const collapsed = !expanded && overflowing;
 
@@ -250,15 +356,21 @@ function PlanMarkdownBody({
     <div className="flex flex-col gap-[8px]">
       <div
         className={cn('min-w-0', collapsed && 'overflow-hidden')}
-        // 折叠态整块 inert。overflow-hidden 与 mask 只挡住"看得见",被裁掉的
-        // Markdown 链接、文件 chip、代码块按钮仍留在 tab 序与 a11y 树里:键盘
-        // 用户能聚焦并激活一个看不见的控件,而且焦点一进去浏览器就会滚动这个
-        // overflow-hidden 容器,把折叠预览顶掉、露出本该藏起来的下半部分。
-        // inert 一次解决聚焦、点击和 a11y 三条路径,唯一入口收敛到下方的展开
-        // 按钮(它在本容器之外,不受影响)。
-        // 代价:inert 子树内的文字不能选中,所以折叠预览无法复制 —— 这也是三态
-        // 都必须给展开按钮的原因,展开后完整可选可交互。
-        inert={collapsed}
+        // 路径 4(见上方不变量注释):overflow-hidden 只挡用户手动滚动,程序化滚动
+        // 照样生效 —— 计划开头指向折叠线下标题的内部锚点会调 scrollIntoView(),
+        // 把预览直接卷到下半段:既显示了本该藏起来的内容,也让"可见"与 tab 序
+        // 错位(卷走的可聚焦元素还在序里、新露出的仍是 -1)。既然有东西要跳到下面,
+        // 就直接展开;先把已经卷走的位置退回去,避免展开前闪一下下半段。展开后
+        // effect 依赖变化会重跑 sync,状态自然回到一致。
+        // 鼠标滚轮不会走到这里:overflow-hidden 容器不响应 wheel。
+        onScroll={
+          collapsed
+            ? (event) => {
+                event.currentTarget.scrollTop = 0;
+                setExpanded(true);
+              }
+            : undefined
+        }
         style={
           collapsed
             ? ({

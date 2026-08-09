@@ -31,6 +31,7 @@ import {
   TRANSPORT_MAX_RETRY_ATTEMPTS,
   TRANSPORT_PENDING_PUSH_MAX_AGE_MS,
   TRANSPORT_RETRY_INTERVAL_MS,
+  TRANSPORT_RETRY_PASS_BUDGET,
   decodeTransportJson,
   encodeReliableFrames,
   isTransportSkipPayload,
@@ -40,6 +41,7 @@ import {
   parseTransportPayload,
   byteLength,
 } from './transport.js';
+import { MAKER_EVENT_BATCH_CHANNEL } from './topics.js';
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 /** RFC 6455 1013 Try Again Later:relay 因拥塞主动断连(如 inbound backpressure)。 */
 const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
@@ -48,11 +50,13 @@ const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
  * 黑名单 → 白名单 → 收缩到单通道)。push 单 FIFO 上混着三类语义,只有第一类
  * 可以参与传输层 latest-wins:
  *
- * - 自相似有损事件流(本表,现仅 maker:event):流内每帧价值均匀且整流已是
- *   契约——旧语义拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按
+ * - 自相似有损事件流(本表:maker:event 及其微批帧):流内每帧价值均匀且整流
+ *   已是契约——旧语义拥塞时本就丢**最新**帧(admission 拒收后 forwardPush 按
  *   best-effort 放弃),换成丢最旧不引入新的损失面;转录内容由受保护的
  *   local-db:messages:created + 控制端消息对账自愈,会话运行态由受保护的
- *   status / activity 通道承载。
+ *   status / activity 通道承载。微批帧(MAKER_EVENT_BATCH_CHANNEL)与逐帧
+ *   **必须同档**:它只是同一事件流的聚合体,漏登记会让启用微批的控制端在拥塞
+ *   时退回 BACKPRESSURE 风暴(正是微批要消除的那一个)。
  * - 键控/终态快照(sessions:activity、maker:input:projection):看似「镜像」
  *   但**不满足跨帧可替代**——快照按 sessionId 键控,会话的 completed/error
  *   收尾快照是该键的最后一帧,被其它键/其它通道的洪峰驱逐后不会再有后继帧
@@ -69,15 +73,25 @@ const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
  */
 const COALESCIBLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
+  MAKER_EVENT_BATCH_CHANNEL,
 ]);
 /** push 拥塞驱逐告警的 per-peer 聚合窗口:洪峰期逐条 warn 本身就是新的风暴。 */
 const PUSH_ADMISSION_DROP_LOG_INTERVAL_MS = 5_000;
+
+/**
+ * 该 push channel 是否属于可驱逐档(latest-wins 腾位的唯一判据入口)。
+ * 导出供上层断言「新增的聚合/整流 channel 已与其源 channel 同档」——漏登记会让
+ * 拥塞时退回 BACKPRESSURE 风暴,而这类漏登记只有对着判据本身断言才拦得住。
+ */
+export function isCoalesciblePushChannel(channel: string): boolean {
+  return COALESCIBLE_PUSH_CHANNELS.has(channel);
+}
 
 function isCoalesciblePushEnvelope(env: Envelope): boolean {
   if (env.kind !== 'push') return false;
   const payload = env.payload as { channel?: unknown } | undefined;
   return typeof payload?.channel === 'string'
-    && COALESCIBLE_PUSH_CHANNELS.has(payload.channel);
+    && isCoalesciblePushChannel(payload.channel);
 }
 /** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
 const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
@@ -202,6 +216,11 @@ export interface DeviceLinkTiming {
   transportRetryIntervalMs: number;
   /** 单个连接世代内的最大发送次数；耗尽后主动重连并在新世代继续。 */
   transportMaxRetryAttempts: number;
+  /**
+   * **定时器驱动**的单趟重发条数上限（理由与线上证据见
+   * TRANSPORT_RETRY_PASS_BUDGET）。link 重建后的 replay 不受此限。
+   */
+  transportRetryPassBudget: number;
   /** presence fire-and-forget 帧命中 WebSocket 背压后的合并重试间隔。 */
   presenceRetryIntervalMs: number;
   /**
@@ -238,11 +257,24 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   handshakeTimeoutMs: 15_000,
   transportRetryIntervalMs: TRANSPORT_RETRY_INTERVAL_MS,
   transportMaxRetryAttempts: TRANSPORT_MAX_RETRY_ATTEMPTS,
+  transportRetryPassBudget: TRANSPORT_RETRY_PASS_BUDGET,
   presenceRetryIntervalMs: 500,
   stalledLinkPendingMaxAgeMs: 60_000,
   congestionBackoffBaseMs: 5_000,
   congestionBackoffMaxMs: 30_000,
 };
+
+/**
+ * 单趟帧预算的规范化:`Partial<DeviceLinkTiming>` 很容易把字段「可选值直塞」成
+ * undefined,object spread 会**覆盖**默认值,于是 Math.max(1, undefined) = NaN、
+ * `framesLeft <= 0` 恒为 false —— 预算被静默关掉,悄悄退回「一趟灌完整窗口」
+ * (copilot review)。非有限值 / ≤0 一律回退到常量默认,并向下取整。
+ */
+function normalizeRetryPassBudget(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return TRANSPORT_RETRY_PASS_BUDGET;
+  const floored = Math.floor(value);
+  return floored >= 1 ? floored : TRANSPORT_RETRY_PASS_BUDGET;
+}
 
 /**
  * 重连延迟计算(包内部工具,为确定性单测保持具名导出;**不属于稳定公共
@@ -1148,8 +1180,30 @@ export class DeviceLinkClient {
       pending.attempts = 0;
       pending.lastSentAt = 0;
       pending.sent = false;
-      this.retryPending(dst, true);
+      // **定向**发这一帧,不借道 retryPending:后者从队头遍历,skip 前面若压着超过预算的
+      // pending,预算会在到达它之前用完 —— 注释说的「立刻发」就没发生,而接收端正等这个
+      // seq,后面的可靠消息会一直阻塞(codex P2 第二轮)。skip payload 是单帧,不涉及预算;
+      // 其余 pending 照旧由定时趟次按预算推进。生成 skip 不证明对端可达,所以这里也不顺带
+      // 触发无预算重放。
+      this.sendSkipPlaceholderNow(dst, peer, pending);
       return;
+    }
+  }
+
+  /**
+   * 立刻发出一个 skip 占位帧(超时 / 永久帧错误后替换原消息用)。前置条件与 retryPending
+   * 同源;失败只记 debug —— 它本就是 best-effort 的解堵动作,发不出去时由定时趟次接棒。
+   */
+  private sendSkipPlaceholderNow(
+    dst: string,
+    peer: PeerTransportState,
+    pending: PendingReliableMessage,
+  ): void {
+    if (!peer.reliable || !peer.linkReady || this.stopped || this.status !== 'online') return;
+    try {
+      this.sendReliableFrames(peer, pending);
+    } catch (err) {
+      this.log.debug(`reliable transport skip placeholder send failed for ${dst.slice(0, 8)}`, err);
     }
   }
 
@@ -2274,7 +2328,8 @@ export class DeviceLinkClient {
     return true;
   }
 
-  private sendReliableFrames(peer: PeerTransportState, pending: PendingReliableMessage): void {
+  /** @returns 实际写进 ws 的**帧**数(一条逻辑消息可能分多帧);抛错时为已写出的帧数。 */
+  private sendReliableFrames(peer: PeerTransportState, pending: PendingReliableMessage): number {
     const frames = encodeReliableFrames(
       pending.envelope,
       peer.streamId,
@@ -2282,20 +2337,21 @@ export class DeviceLinkClient {
       this.getTransportBaseSeq(peer),
     );
     this.assertWebSocketCapacity(this.measureReliableFrames(frames));
-    let sentAny = false;
+    let sent = 0;
     try {
       for (const frame of frames) {
         this.sendEnvelope(frame);
         pending.sent = true;
-        sentAny = true;
+        sent += 1;
       }
     } finally {
-      if (sentAny) {
+      if (sent > 0) {
         pending.sent = true;
         pending.attempts++;
         pending.lastSentAt = Date.now();
       }
     }
+    return sent;
   }
 
   private measureReliableFrames(frames: readonly Envelope[]): number {
@@ -2719,12 +2775,24 @@ export class DeviceLinkClient {
     const peer = this.getPeerTransport(dst);
     if (peer.retryTimer) return;
     peer.retryTimer = setInterval(
-      () => this.retryPending(dst, false),
+      () => this.retryPending(dst, { ignoreInterval: false, unlimited: false }),
       this.timing.transportRetryIntervalMs,
     );
   }
 
-  private retryPending(dst: string, force: boolean): void {
+  /**
+   * 一趟重发。两个开关**刻意分开**——它们是两个独立的量,合成一个 `force` 会让「生成
+   * skip 占位」这类既不证明可达性、又需要立刻发出的路径顺带拿到无限预算(codex P2):
+   *
+   * @param opts.ignoreInterval 忽略 transportRetryIntervalMs 的最小间隔,本趟立刻发。
+   * @param opts.unlimited 不受单趟帧预算约束。**只有可达性刚被证明的路径才配**:收到
+   *   对端 link-accept 后的 replayPending。其余一切(定时器、skip 占位替换)都必须
+   *   受预算约束(理由与线上证据见 TRANSPORT_RETRY_PASS_BUDGET)。
+   */
+  private retryPending(
+    dst: string,
+    opts: { ignoreInterval: boolean; unlimited: boolean },
+  ): void {
     const peer = this.peerTransport.get(dst);
     if (
       !peer
@@ -2734,19 +2802,61 @@ export class DeviceLinkClient {
       || this.status !== 'online'
     ) return;
     const now = Date.now();
+    // pending 是按 seq 递增插入的 Map,迭代天然旧→新 —— 正是累计 ACK 需要推进的顺序。
+    // 对端长期不 ACK 时预算会一直压在队头那几条上,这**不是饥饿**而是正确形状:接收端
+    // 在拿到队头之前无法消费后面的 seq,重发队尾是无效工作。队头被累计 ACK 掉、窗口
+    // 前移之后,后面的消息自然轮到(有交错用例锚定这两段行为)。
+    //
+    // 预算按**帧**计而不是按逻辑消息计:压垮 relay 的是帧数,而一条 4MB 消息会被分成
+    // 32 片,按消息计数会让 8 条预算放出 ~256 帧,等于没限(greptile P1)。
+    //
+    // 本趟实际上限是 **max(预算, 队头那一条消息的分片数)**,不是预算本身:
+    //  - 非队头的大消息**发送前**就按预估分片数拦下(不许挤爆本趟),留到下一趟;
+    //  - 队头那一条无法再压 —— 分片不能跨趟拆(接收端按 seq 整条重组),而它又必须先送
+    //    到(累计 ACK 不推进,后面的 seq 谁也消费不了)。
+    //
+    // **队头那条的溢出已定案不再压(review 两轮的结论,不要再往这里加游标)**:要压它就得
+    // 引入 per-message 分片游标 + 跨趟续传进度,那是可靠层新机制(重试从游标续发还是从 0
+    // 重发?attempts/lastSentAt 按消息还是按片记?游标与累计 ACK / baseSeq 推进如何互不
+    // 矛盾?跨连接世代是否保留?)。而且它是用「大消息交付延迟 ×N 趟」换「突发再小一点」
+    // ——32 片消息在预算 8 下要 4 趟 = 8s,而它是队头,后面所有 seq 都在等它,对健康但慢的
+    // peer 是净损失。量级上也不是主要矛盾:线上那 449 条的形状是几 KB 级 maker:event 塞满
+    // 64 槽窗口(最大簇 213),本上限已把它压到 ≤8;「队头恰好 4MB」时溢出是 ≤32,仍低于
+    // 引发事故的量级。真出现这种负载时日志会给出真实形状,届时按证据设计,不先建机制。
+    const budget = opts.unlimited
+      ? Number.POSITIVE_INFINITY
+      : normalizeRetryPassBudget(this.timing.transportRetryPassBudget);
+    let framesSpent = 0;
     for (const pending of peer.pending.values()) {
-      if (!force && now - pending.lastSentAt < this.timing.transportRetryIntervalMs) continue;
+      if (!opts.ignoreInterval && now - pending.lastSentAt < this.timing.transportRetryIntervalMs) {
+        continue;
+      }
       if (pending.attempts >= this.timing.transportMaxRetryAttempts) {
         this.handleReliableRetryExhausted(dst, pending.seq);
         return;
       }
+      // 发送前先按预估分片数结算:已经发过东西、且这一条会超预算时,把它留到下一趟。
+      // 用预估而非真实编码结果是刻意的 —— 这是流控决策,不需要精确,重新编码一条 4MB
+      // 消息只为数分片数不划算;发送后再用真实帧数扣减。
+      if (framesSpent > 0 && framesSpent + this.estimateReliableFrameCount(pending) > budget) break;
+      let sentFrames = 0;
       try {
-        this.sendReliableFrames(peer, pending);
+        sentFrames = this.sendReliableFrames(peer, pending);
       } catch (err) {
         this.log.debug(`reliable transport retry failed for ${dst.slice(0, 8)}`, err);
         break;
       }
+      framesSpent += Math.max(1, sentFrames);
+      if (framesSpent >= budget) break;
     }
+  }
+
+  /**
+   * 预估一条 pending 消息会写出多少帧(流控用,不要求精确)。`pending.bytes` 是入队时
+   * 量好的保留字节数,按分片上限向上取整即可;真实帧数由 sendReliableFrames 返回。
+   */
+  private estimateReliableFrameCount(pending: PendingReliableMessage): number {
+    return Math.max(1, Math.ceil(pending.bytes / MAX_TRANSPORT_CHUNK_BYTES));
   }
 
   private replayPending(dst: string, resumedLink = false): void {
@@ -2765,7 +2875,8 @@ export class DeviceLinkClient {
         pending.lastSentAt = 0;
       }
     }
-    this.retryPending(dst, true);
+    // 可达性刚被对端 link-accept 证明过:本趟不限预算,尽快把积压交付出去。
+    this.retryPending(dst, { ignoreInterval: true, unlimited: true });
     this.ensureRetryTimer(dst);
   }
 

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AutoReviewRequest } from '@cindy/maker-core';
+import {
+  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  type AutoReviewRequest,
+} from '@cindy/maker-core';
 
 import {
   buildAutoPermissionReviewPrompt,
@@ -193,12 +196,29 @@ describe('createAutoPermissionReviewer', () => {
     });
 
     const pending = reviewer(request());
-    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs);
 
     await expect(pending).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledWith(
       'auto permission reviewer timed out',
-      expect.objectContaining({ durationMs: 8_000 }),
+      expect.objectContaining({ durationMs: DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs }),
     );
+  });
+
+  it('accepts a response after the legacy eight-second limit but before the shared deadline', async () => {
+    vi.useFakeTimers();
+    let resolveRequest: ((value: string | null) => void) | undefined;
+    const reviewer = createAutoPermissionReviewer({
+      requestText: vi.fn(() => new Promise<string | null>((resolve) => {
+        resolveRequest = resolve;
+      })),
+      logger: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const pending = reviewer(request());
+    await vi.advanceTimersByTimeAsync(8_001);
+    resolveRequest?.('{"verdict":"allow","reason":"Routine test"}');
+
+    await expect(pending).resolves.toEqual({ verdict: 'allow', reason: 'Routine test' });
   });
 });

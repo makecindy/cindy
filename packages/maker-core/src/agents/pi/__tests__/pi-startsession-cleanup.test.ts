@@ -178,6 +178,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       sessionId: 's1',
       sessionInstanceId: 'pi-instance-1',
       workingDir: cwd,
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
     });
     expect(disposed).toBe(0);
     expect(proxyDisposed).toBe(0);

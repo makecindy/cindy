@@ -225,6 +225,28 @@ describe('PluginMarketService 自定义市场聚合', () => {
     });
   });
 
+  it('does not mark a custom market installation removed when discovery is temporarily empty', async () => {
+    const h = harness([], []);
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    h.ledger.upsertInstallation({
+      pluginId,
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z',
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({ items: [] });
+
+    expect(h.ledger.installationForGhost('alpha')?.installed).toBe(true);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', pluginId)).toBe(false);
+  });
+
   it('does not expose custom market releases that require a newer Cindy version', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

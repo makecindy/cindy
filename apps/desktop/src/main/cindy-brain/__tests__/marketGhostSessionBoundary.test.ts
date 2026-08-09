@@ -58,4 +58,25 @@ describe('market Ghost session boundary', () => {
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
     expect(body).toContain('releaseMutation?.();');
   });
+
+  it('runs the final market callback before both initial install and update placement', () => {
+    const installStart = source.indexOf(
+      'async function installOrUpdateMarketGhostPackageLocked(',
+    );
+    const installEnd = source.indexOf(
+      '\n}\n\ntype GhostUninstallLedgerCompletion',
+      installStart,
+    );
+    const body = source.slice(installStart, installEnd);
+    const initialBranch = body.slice(
+      body.indexOf('if (!installed) {'),
+      body.indexOf('const runtime = getGhostRuntime();'),
+    );
+
+    expect(initialBranch.indexOf('expected.beforeCommitInLock?.();')).toBeGreaterThan(-1);
+    expect(initialBranch.indexOf('expected.beforeCommitInLock?.();')).toBeLessThan(
+      initialBranch.indexOf('return installAndDock('),
+    );
+    expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(2);
+  });
 });

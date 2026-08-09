@@ -126,7 +126,15 @@ const OWNER_NOTICE_TIMEOUT_MS = 4_500;
  */
 const TYPING_REFRESH_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMs;
 const TYPING_LOOP_MAX_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMaxMs;
-/** link preview 关闭:全档出站/编辑共用,取自能力契约单一出处(见 linkPreviewDisabled)。 */
+/**
+ * link preview 关闭,取自能力契约单一出处(见 `linkPreviewDisabled`)。
+ *
+ * **覆盖面是答案这条路,不是全部出站**(原注释写的"全档出站/编辑共用"不准确):
+ * 正文/过程消息的 `sendMessage`、400 回落的纯文本 `sendMessage`、分段
+ * `sendPlainChunked`、`editMessageText` 及其 HTML 解析失败后的纯文本回落 —— 只有
+ * 这五处带它。**卡片消息、rich 主路径(`rich_message` payload)、陌生人提示、主人
+ * 通知都不带**。新增出站路径时自己决定挂不挂, 不会被这个常量自动覆盖。
+ */
 const LINK_PREVIEW_OPTIONS = {
   is_disabled: TELEGRAM_PERSONAL_CAPABILITIES.linkPreviewDisabled,
 } as const;

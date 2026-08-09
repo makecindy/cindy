@@ -345,7 +345,7 @@ export function translatePiEvent(
         ctx.finalAssistantText = fullText;
         queue.push({
           type: 'text',
-          data: { text: fullText, isFinal: true },
+          data: { text: fullText, isFinal: true, isFullText: true },
           source: 'pi',
           agentMeta: {
             model: message.model,

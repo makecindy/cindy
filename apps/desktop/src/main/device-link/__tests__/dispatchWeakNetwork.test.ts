@@ -33,7 +33,12 @@ vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, flushRemoteInvokeResultOutboxOnReconnect } from '../dispatch';
+import {
+  __testing,
+  flushRemoteInvokeResultOutboxOnReconnect,
+  handleControllerOffline,
+  setDispatchPresenceOfflineCheck,
+} from '../dispatch';
 
 function mkClient(
   over: Partial<{
@@ -233,6 +238,173 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
     status = 'online';
     flushRemoteInvokeResultOutboxOnReconnect();
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+});
+
+describe('[5] outbox flush 的 presence 显式离线门禁', () => {
+  it('presence 明确离线的控制端本轮跳过(条目保留),在线控制端照常投递;设备回归后可投', () => {
+    // 门禁要掐掉的是**同一连接代内**的稳态盲发:relay 在线时全量轮每 500ms 跑一次
+    // (REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS),对 presence 已明说离线的控制端就是
+    // 2 帧/秒的 DEVICE_OFFLINE 稳定输出,直到 TTL 出清——纯粹喂 relay 聚合背压。
+    // 门禁按 src 隔离:一个离线控制端不影响其它控制端本轮的投递。
+    const offline = new Set(['ctrl-offline']);
+    setDispatchPresenceOfflineCheck((id) => offline.has(id));
+    const sendInvokeResult = vi.fn().mockImplementation(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+
+    // 两个控制端各一条 outbox 积压(首发失败入队)
+    for (const src of ['ctrl-offline', 'ctrl-online']) {
+      __testing.sendInvokeResultSafe(
+        client as never,
+        src,
+        `req-${src}`,
+        { ok: true, result: 1 },
+        'local-db:sessions:list',
+      );
+    }
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(2);
+
+    // ws-online 全量 flush:离线者被门禁跳过(不 trySend),在线者投递成功
+    sendInvokeResult.mockImplementation(() => {});
+    const callsBefore = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    const flushed = sendInvokeResult.mock.calls.slice(callsBefore);
+    expect(flushed.map((c) => c[0])).toEqual(['ctrl-online']);
+    // 离线者的条目保留(TTL 照常),没有被丢弃
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 设备回归(presence 翻转):下一次 flush 正常投递
+    offline.clear();
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult).toHaveBeenLastCalledWith(
+      'ctrl-offline',
+      'req-ctrl-offline',
+      expect.anything(),
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('定向 flush(link-open 触发)不受门禁约束:对端已主动建链是更强的在线证据', () => {
+    // review P2:presence 短暂滞后/误报为 offline 时,不得把「对端刚 link-open」
+    // 这条恢复事件一并拦死——定向轮(onlySrc)必须照常投递。
+    setDispatchPresenceOfflineCheck(() => true); // 极端:判据说所有设备都离线
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 全量轮:被门禁挡住(条目保留)
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 定向轮(link-open 路径):不看门禁,直接投递
+    __testing.flushRemoteInvokeResultOutbox('ctrl-a');
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('presence 滞后为 offline 但控制端已 link-open 回归:全量轮不再拦它(定向轮失败后的无参重试照样投递)', () => {
+    // codex review 同族第 3 次指出的缺口:定向轮首发被 BACKPRESSURE 打回后,末尾排的
+    // 重试是**无参全量轮**、丢掉 onlySrc 证据 —— 判据若只看 presence,这个已建链的
+    // peer 会被持续跳过到 presence 更新或 TTL 丢结果。判据带上 accepted link 后 fail-open。
+    setDispatchPresenceOfflineCheck(() => true); // presence 停留在陈旧的 offline
+    const sendInvokeResult = vi.fn().mockImplementation(() => {
+      throw backpressure();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 还没有 accepted link:全量轮被门禁挡住(不 trySend)
+    let calls = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult.mock.calls.length).toBe(calls);
+
+    // 控制端 link-open 回归 → accepted link 成立;它触发的定向轮仍被背压打回,
+    // 条目保留、末尾排下无参全量重试。
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-1', undefined);
+    expect(__testing.getActiveControllers().map((c) => c.deviceId)).toEqual(['ctrl-a']);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // 无参全量重试:presence 判据仍说离线,但 accepted link 是更新的可达证据 → 放行
+    sendInvokeResult.mockImplementation(() => {});
+    calls = sendInvokeResult.mock.calls.length;
+    vi.advanceTimersByTime(500);
+    expect(sendInvokeResult.mock.calls.length).toBeGreaterThan(calls);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('presence 宣告离线拆掉 accepted link 后:全量轮重新受门禁约束', () => {
+    // 可达证据不得比链路活得更久 —— presence 说离线时 index.ts 会调
+    // handleControllerOffline 拆掉该控制端的 accepted link 与订阅,此后必须回到
+    // 「presence 说了算」,否则一次历史建链会永久豁免门禁。
+    setDispatchPresenceOfflineCheck(() => true);
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-1', undefined);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // accepted link 在场:全量轮放行
+    sendInvokeResult.mockImplementation(() => {
+      throw notConnected();
+    });
+    let calls = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult.mock.calls.length).toBeGreaterThan(calls);
+
+    // presence 宣告离线 → 拆链:证据随链路一起消失,门禁重新生效
+    handleControllerOffline('ctrl-a');
+    calls = sendInvokeResult.mock.calls.length;
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult.mock.calls.length).toBe(calls);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+  });
+
+  it('presence 判据未接线(null)时 fail-open:行为与门禁不存在时一致', () => {
+    // __testing.reset() 已把判据清空;不接线直接 flush,验证默认路径不受影响
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
+      throw notConnected();
+    });
+    const client = mkClient({ sendInvokeResult });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(
+      client as never,
+      'ctrl-a',
+      'req-1',
+      { ok: true, result: 1 },
+      'local-db:sessions:list',
+    );
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+    flushRemoteInvokeResultOutboxOnReconnect();
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
   });
 });

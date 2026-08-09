@@ -41,6 +41,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
+import { LayoutResetControl } from './LayoutResetControl';
 
 const log = createLogger('settings/AppearanceSection');
 
@@ -838,6 +839,8 @@ export function AppearanceSection() {
           ))}
         </div>
       </div>
+
+      <LayoutResetControl />
     </div>
   );
 }

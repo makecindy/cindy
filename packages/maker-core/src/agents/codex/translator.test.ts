@@ -16,6 +16,7 @@ import {
   extractRolloutUpdatePlanFunctionCallEvent,
   newCodexRuntimeState,
   translateErrorNotification,
+  translateAgentMessageDelta,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
   translatePlanUpdatedNotification,
@@ -76,6 +77,180 @@ async function collect(queue: AsyncQueue<AgentEvent>): Promise<AgentEvent[]> {
   for await (const ev of queue) out.push(ev);
   return out;
 }
+
+describe('Codex assistant text streaming contract', () => {
+  it('uses dedicated deltas for live text, dedupes item snapshots, and keeps completed as final calibration', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hello ' },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'world' },
+      q,
+      ctx,
+    );
+    // 新 app-server 可能同时发送专用 delta 与 item/updated 全文快照；不得重复正文。
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello world' },
+      },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello world' },
+      },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      {
+        type: 'text',
+        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        source: 'codex',
+      },
+    ]);
+  });
+
+  it('dedupes a snapshot that arrives before its dedicated deltas and resumes after catch-up', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello ' },
+      },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hello ' },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'world' },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello world' },
+      },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+      {
+        type: 'text',
+        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        source: 'codex',
+      },
+    ]);
+    expect(rt.itemRawText.has('msg-1')).toBe(false);
+    expect(rt.itemDeltaText.has('msg-1')).toBe(false);
+    expect(rt.itemSnapshotText.has('msg-1')).toBe(false);
+  });
+
+  it('keeps interleaved snapshots and dedicated deltas append-only without replaying text', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hel' },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello ' },
+      },
+      q,
+      ctx,
+    );
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'world' },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hel', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'lo ', isFinal: false }, source: 'codex' },
+      { type: 'text', data: { text: 'world', isFinal: false }, source: 'codex' },
+    ]);
+  });
+
+  it('never mixes a divergent snapshot tail into an already emitted dedicated stream', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateAgentMessageDelta(
+      { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hello worxd' },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'updated',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello wonderful' },
+      },
+      q,
+      ctx,
+    );
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Hello wonderful' },
+      },
+      q,
+      ctx,
+    );
+
+    expect((await collect(q)).filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hello worxd', isFinal: false }, source: 'codex' },
+      {
+        type: 'text',
+        data: { text: 'Hello wonderful', isFinal: true, isFullText: true },
+        source: 'codex',
+      },
+    ]);
+  });
+});
 
 describe('translateAccountRateLimitsUpdated', () => {
   it('normalizes Codex 0.144 windowDurationMins before emitting account usage', async () => {
@@ -1868,7 +2043,7 @@ describe('codex internal citation 归一化 (#785)', () => {
     expect(events).toEqual([
       expect.objectContaining({
         type: 'text',
-        data: { text: 'done `/a/b.md`', isFinal: true },
+        data: { text: 'done `/a/b.md`', isFinal: true, isFullText: true },
       }),
     ]);
   });

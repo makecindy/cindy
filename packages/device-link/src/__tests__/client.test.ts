@@ -12,6 +12,7 @@ import {
   MAX_TRANSPORT_PENDING_MESSAGES,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
   TRANSPORT_PENDING_PUSH_MAX_AGE_MS,
+  TRANSPORT_RETRY_PASS_BUDGET,
   encodeReliableFrames,
   makeTransportSkipPayload,
   parseTransportPayload,
@@ -4404,4 +4405,330 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     expect(internals.congestionCloseStreak).toBe(0);
     h.client.stop();
   });
+});
+
+describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
+  /**
+   * 统计每个 seq 的**发送次数**(首发 1 次,之后每次重发 +1)。
+   * 分片消息一次发送会写出多帧,所以只数首片(segment.index === 0 或未分片),
+   * 否则「首发」本身就会被误判成重发过。
+   */
+  function sendsBySeq(ws: FakeWs, kind: Envelope['kind'] = 'invoke-result'): Map<number, number> {
+    const counts = new Map<number, number>();
+    for (const env of ws.sent) {
+      if (env.kind !== kind) continue;
+      const parsed = parseTransportPayload(env.payload);
+      if (!parsed) continue;
+      if (parsed.meta.segment && parsed.meta.segment.index !== 0) continue;
+      counts.set(parsed.meta.seq, (counts.get(parsed.meta.seq) ?? 0) + 1);
+    }
+    return counts;
+  }
+  /** 统计写进 ws 的**帧**数(分片逐帧计),用于验证按帧扣预算。 */
+  function framesSent(ws: FakeWs, kind: Envelope['kind'] = 'invoke-result'): number {
+    return ws.sent.filter((env) => (
+      env.kind === kind && parseTransportPayload(env.payload) !== null
+    )).length;
+  }
+  const retriedSeqs = (counts: Map<number, number>): number[] =>
+    [...counts.entries()].filter(([, n]) => n > 1).map(([seq]) => seq).sort((a, b) => a - b);
+
+  /**
+   * 这两条断言的是「**每一趟**发多少」,所以必须用 fake timers 逐趟驱动:真实定时器下
+   * 回调会在负载高的 runner 上挤在一起(CI 上实测把「只压队头 2 条」跑成 4 条),那不是
+   * 实现问题,而是「累计重发集合」根本不是不变量 —— 每趟上限才是。
+   */
+  async function withFakeTimers(
+    fn: (h: Harness, advance: (ms: number) => Promise<void>) => Promise<void>,
+    timing: NonNullable<Parameters<typeof makeHarness>[0]>['timing'],
+  ): Promise<void> {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing });
+      const advance = async (ms: number): Promise<void> => {
+        await vi.advanceTimersByTimeAsync(ms);
+      };
+      h.client.start();
+      await advance(1);
+      h.current().ack();
+      const linked = establishInboundReliableLink(h, 'remote-stream');
+      await advance(1);
+      await linked;
+      await fn(h, advance);
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('对端停止 ACK 时,一趟定时重发只发预算内的最旧几条(而不是整个窗口)', async () => {
+    // 2026-08-08 线上:一趟重发遍历整个 pending 窗口(上限 64 条)、同步全部写进 ws,
+    // 对端 relay 路由已失效时逐帧弹回 DEVICE_OFFLINE —— 单簇 213 条就是这个形状。
+    // 既有两道刹车都拦不住本趟:per-peer 制动要等 relay-error 回来(异步),ws 容量
+    // 中断的阈值是 8MB(小帧根本到不了)。所以「一趟发多少条」必须自己有上限。
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 9; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      expect(seqs).toHaveLength(9);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+
+      // 恰好跑一趟:只重发预算内的最旧 3 条 —— 累计 ACK 只能从队头推进,顺序不是可选项
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+
+      // 再一趟:对端仍未 ACK,预算继续压在同样的队头 3 条上(不铺满窗口)
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+      const headCounts = seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq));
+      expect(headCounts).toEqual([3, 3, 3]); // 首发 + 两趟重发
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 3,
+      transportMaxRetryAttempts: 50, // 不让耗尽路径提前介入
+    });
+  }, 10_000);
+
+  it('队头被累计 ACK 后窗口前移,后续消息才轮到重发', async () => {
+    // 「一直重发最旧几条」不是饥饿而是正确形状:接收端拿不到队头就无法消费后面的 seq。
+    // 窗口只在队头被确认后前移,这条用例锚定 ACK 前后两段。
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 6; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const streamId = parseTransportPayload(
+        ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+      )!.meta.streamId;
+
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+      // 累计 ACK 掉前 3 条 → 窗口前移 → 下一趟轮到 seq[3]、seq[4]
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId, ackSeq: seqs[2] },
+        },
+      });
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([...seqs.slice(0, 2), seqs[3], seqs[4]]);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 2,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 10_000);
+
+  it('分片消息按**帧**扣预算:一条大消息就能用满一趟(不再让 8 条放出上百帧)', async () => {
+    // greptile P1:压垮 relay 的是帧数。按逻辑消息计数时,一条 4MB 消息分 32 片,
+    // 8 条预算能放出 ~256 帧,等于没限。分片不能跨趟拆(接收端要整条重组),所以
+    // 每趟至少发一条,发完按帧数结算。
+    await withFakeTimers(async (h, advance) => {
+      // 每条 ~3 片(payload 略大于 2×128KB)
+      const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+      for (let i = 0; i < 4; i += 1) {
+        h.client.sendInvokeResult('dev-b', `big-${i}`, { ok: true, result: chunky });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      expect(seqs).toHaveLength(4);
+      // 首发就证明确实分片了:帧数远多于消息数,而每条消息只算发过 1 次
+      expect(framesSent(ws)).toBeGreaterThan(8);
+      expect([...sendsBySeq(ws).values()]).toEqual([1, 1, 1, 1]);
+
+      // 预算 4 帧、每条 3 片:队头那条发完(3 帧)后,第二条会超预算 → 发送前就被拦下,
+      // 留到下一趟。所以本趟只重发队头 1 条、只写出 3 帧。
+      const framesBefore = framesSent(ws);
+      await advance(200);
+      const retried = retriedSeqs(sendsBySeq(ws));
+      expect(retried).toEqual([seqs[0]]);
+      // 本趟真实写出的帧数不超过 max(预算, 队头分片数) —— 这才是「上限」的准确表述
+      const passFrames = framesSent(ws) - framesBefore;
+      expect(passFrames).toBeLessThanOrEqual(4);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 4,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 15_000);
+
+  it('队头单条就超预算时:本趟只发它一条,后面的一条都不带(上限 = max(预算, 队头分片数))', async () => {
+    // review 两位都指出「预算不是硬上限」。准确表述是 max(预算, 队头分片数):队头那条
+    // 压不下去(分片不能跨趟拆,而它又必须先送到),但它绝不能顺带把后面的也拖出去。
+    await withFakeTimers(async (h, advance) => {
+      const chunky = 'x'.repeat(3 * 128 * 1024 + 1_000); // ~4 片,单条即超预算(2)
+      h.client.sendInvokeResult('dev-b', 'big', { ok: true, result: chunky });
+      for (let i = 0; i < 5; i += 1) {
+        h.client.sendInvokeResult('dev-b', `small-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const framesBefore = framesSent(ws);
+
+      await advance(200);
+      // 只有队头那条大消息被重发,5 条小消息一条都没被带出去
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[0]]);
+      // 溢出被限制在「队头这一条的分片数」内,而不是预算 + 队头
+      const passFrames = framesSent(ws) - framesBefore;
+      expect(passFrames).toBeLessThanOrEqual(6);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 2,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 15_000);
+
+  it('预算字段被显式塞成 undefined 时回退到常量默认,不是静默关掉限流', async () => {
+    // copilot review:Partial<DeviceLinkTiming> 的「可选值直塞」会 spread 覆盖默认值,
+    // Math.max(1, undefined) = NaN → 判据恒 false → 预算被静默关闭。
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 20; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      await advance(200);
+      // 回退到 TRANSPORT_RETRY_PASS_BUDGET(8),而不是把 20 条全部重发
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, TRANSPORT_RETRY_PASS_BUDGET));
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: undefined as unknown as number,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 10_000);
+
+  it('超时生成的 skip 占位一定被发出(哪怕队头压着超过预算的 pending),且不顺带重放全窗口', async () => {
+    // codex P2 两轮:① 不该借道无限重放(会同步重发整个窗口);② 但也不能借道「受预算的
+    // 一趟」—— 那会从队头开始消耗预算、在到达 skip 之前用完,接收端正等这个 seq,后面的
+    // 可靠消息会一直阻塞。所以改成定向发这一帧。
+    await withFakeTimers(async (h, advance) => {
+      // 队头先压 12 条(远超预算 3)
+      for (let i = 0; i < 12; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+
+      // 先挂 catch 再推进时钟:fake timer 下 reject 发生在 advance 内部,
+      // 事后才 await 会被算成 unhandled rejection。
+      const invoke = h.client.invoke('dev-b', { channel: 'maker:slow', args: [] }, 50)
+        .then(() => null, (err: unknown) => err);
+      const invokeFrame = ws.sent.filter((env) => (
+        env.kind === 'invoke' && parseTransportPayload(env.payload)
+      )).at(-1)!;
+      const invokeSeq = parseTransportPayload(invokeFrame.payload)!.meta.seq;
+      expect(invokeSeq).toBeGreaterThan(seqs.at(-1)!); // 它排在那 12 条之后
+
+      await advance(60);
+      expect(await invoke).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+
+      // ① 该 seq 的 skip 占位确实发出去了(不是等后续趟次才触达)
+      const skipSent = ws.sent.some((env) => {
+        const parsed = parseTransportPayload(env.payload);
+        if (!parsed || parsed.meta.seq !== invokeSeq) return false;
+        return JSON.parse(parsed.data)?.__cindyDeviceLinkTransportSkip === true;
+      });
+      expect(skipSent).toBe(true);
+
+      // ② 没有顺带把前面 12 条全部重发(那正是本 PR 要消除的簇)
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 10_000, // 定时器不参与,只看 skip 这一步
+      transportRetryPassBudget: 3,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 10_000);
+
+  it('link 重建后的 replay 不受预算限制:可达性刚被对端 link-accept 证明过', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000, // 定时器不参与,只看 replay 那一趟
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+
+    // 对端重新 link-open → 本端 link-accept → replay:一趟把 7 条全部重放
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws)).length).toBe(7);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('多 peer 拓扑:一个 peer 停止 ACK 被限流,另一个 peer 的投递零感知', async () => {
+    // 故障半径第 3 问(docs/dev-rules/remote-and-mobile-adaptation.md):预算是 per-peer 的,
+    // 一台休眠手机的积压不得拖慢另一台在线设备。
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 200,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'stream-b', 1, 'dev-b');
+    await establishInboundReliableLink(h, 'stream-c', 1, 'dev-c');
+
+    // dev-b 积压 8 条且从不 ACK;dev-c 只有 1 条并正常 ACK
+    for (let i = 0; i < 8; i += 1) {
+      h.client.sendInvokeResult('dev-b', `b-${i}`, { ok: true, result: i });
+    }
+    h.client.sendInvokeResult('dev-c', 'c-0', { ok: true, result: 'c' });
+
+    const ws = h.current();
+    const cFrames = () => ws.sent.filter((env) => {
+      if (env.kind !== 'invoke-result' || env.dst !== 'dev-c') return false;
+      return parseTransportPayload(env.payload) !== null;
+    });
+    expect(cFrames()).toHaveLength(1);
+    const cStreamId = parseTransportPayload(cFrames()[0]!.payload)!.meta.streamId;
+
+    // dev-c 累计 ACK:它的 pending 清空,此后不再重发
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-c',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: cStreamId, ackSeq: 1 },
+      },
+    });
+
+    // 等 dev-b 至少跑过一趟限流重发,确认 dev-c 完全没被牵连
+    await vi.waitFor(() => {
+      const bRetried = ws.sent.filter((env) => env.dst === 'dev-b' && env.kind === 'invoke-result');
+      expect(bRetried.length).toBeGreaterThan(8);
+    });
+    expect(cFrames()).toHaveLength(1);
+
+    h.client.stop();
+  }, 10_000);
 });

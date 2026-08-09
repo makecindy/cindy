@@ -160,6 +160,16 @@ describe('maker:event hot path ordering', () => {
       'sessionTurnActivityTracker.setSessionInTurn(sessionId, false);',
       'notifyGoalIdleAfterTurnSettled(sessionId);',
     );
+    expectOrder(
+      reconcileSource,
+      'markTurnEndedAfterPersistDrain(sessionId);',
+      'clearCodexPlanRowsForSession(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'clearCodexPlanRowsForSession(sessionId);',
+      'resetTurnPersistState(sessionId);',
+    );
 
     // ABORT_SESSION reconciles from finally, so vendor abort rejection still reaches the
     // shared idle wake-up once the exact Session/generation boundary proves idle.
