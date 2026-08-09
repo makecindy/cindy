@@ -55,6 +55,7 @@ function createHarness(options: {
   register?: (accelerator: string) => boolean;
   retain?: (owner: string, subscriber: (keys: readonly string[]) => void) => Promise<() => void>;
   omitPlatform?: boolean;
+  platform?: 'darwin' | 'linux';
 } = {}) {
   const memory = createMemoryStore(
     options.preferences ? JSON.stringify({ version: 1, preferences: options.preferences }) : undefined,
@@ -85,7 +86,7 @@ function createHarness(options: {
     getRunningBundleIds: () => runningBundleIds,
     onStateChanged: stateChanged,
     onCaptureFailure: captureFailure,
-    platform: options.omitPlatform === true ? undefined : 'darwin',
+    platform: options.platform ?? (options.omitPlatform === true ? undefined : 'darwin'),
   });
   return {
     service,
@@ -254,6 +255,17 @@ describe('AppshotShortcutService', () => {
     harness.runningBundleIds.clear();
     await harness.service.refreshConflicts();
     expect(harness.retain).toHaveBeenCalledWith('appshots-shortcut-service', expect.any(Function));
+  });
+
+  it('does not register any shortcut on non-macOS platforms', async () => {
+    const harness = createHarness({ platform: 'linux' });
+
+    await harness.service.start();
+
+    expect(harness.service.state()).toMatchObject({ active: null });
+    expect(harness.service.state()).not.toHaveProperty('fallbackReason');
+    expect(harness.globalShortcut.register).not.toHaveBeenCalled();
+    expect(harness.retain).not.toHaveBeenCalled();
   });
 
   it('falls back after conventional preferred registration fails and disables global capture when both fail', async () => {

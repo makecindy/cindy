@@ -122,6 +122,13 @@ export class AppshotShortcutService {
     if (!this.isCurrent(operation)) return;
     this.deactivate();
     const preferences = suppliedPreferences ?? this.deps.store.get();
+    // Appshots is macOS-only: never register a global shortcut (the preferred
+    // dual-modifier listener or the fallback accelerator) on other platforms.
+    if ((this.deps.platform ?? process.platform) !== 'darwin') {
+      this.currentState = { preferences, configured: preferences.preferred, active: null };
+      this.publish();
+      return;
+    }
     const codexRunning = preferences.preferred.kind === 'dual-modifier'
       && this.deps.getRunningBundleIds().has('com.openai.codex');
     const primary = codexRunning ? preferences.fallback : preferences.preferred;
