@@ -383,10 +383,15 @@ export function worktreeEligibilityCaptionKey(
   }
 }
 
-/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余交给 Main 生成最终名。 */
-export function normalizeSuggestedWorktreeName(value: unknown): string {
+/** suggest-name 失败时的兼容兜底名；旧 Desktop host 仍要求 create 的 name 非空且合法。 */
+export function fallbackWorktreeName(now = Date.now()): string {
+  return `auto-${now.toString(36).slice(-6)}`;
+}
+
+/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余走兼容 auto-* 兜底。 */
+export function normalizeSuggestedWorktreeName(value: unknown, now?: number): string {
   if (typeof value === 'string' && value.trim().length > 0) return value.trim();
-  return '';
+  return fallbackWorktreeName(now);
 }
 
 export interface WorktreeCreateRequest {
@@ -453,11 +458,13 @@ export function buildWorktreeCreateRequest(input: {
   sourceBranch?: string | null;
   suggestedName: string | null | undefined;
   recoveryKey: string;
+  /** 仅供测试固定 fallback；不进入 wire request。 */
+  now?: number;
 }): WorktreeCreateRequest {
   return {
     sessionId: input.sessionId,
     baseRepo: input.eligibility.baseRepo,
-    name: normalizeSuggestedWorktreeName(input.suggestedName),
+    name: normalizeSuggestedWorktreeName(input.suggestedName, input.now),
     sourceBranch: input.sourceBranch?.trim() || input.eligibility.sourceBranch,
     recoveryKey: input.recoveryKey,
   };

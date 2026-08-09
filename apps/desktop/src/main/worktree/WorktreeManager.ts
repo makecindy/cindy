@@ -674,8 +674,8 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
   const totalStartedAt = Date.now();
   try {
     // 0. 防御性校验显式 worktree name(IPC 不可信, 调试 / 未来扩展 / 误用
-    //    都可能传入非法值)。空白名与历史移动端 auto-* fallback 只是命名提示，
-    //    最终名称由 Main 在收集当前仓库占用项后生成。
+    //    都可能传入非法值)。只有空白名是生成请求；包括 auto-* 在内的合法非空名
+    //    都按显式名称保留。
     //    要求: [a-z0-9-], 首尾字母数字, 无连续 --, 长度 ≤20。
     //    符合 git ref + Windows/POSIX 路径 + cli flag 安全的交集。
     // Only an empty name is a generation request. `auto-*` is a valid explicit
