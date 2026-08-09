@@ -559,7 +559,7 @@ export function useDeviceLinkRemoteProjects(): void {
         timerKey,
         setTimeout(() => {
           reseedTimers.delete(timerKey);
-          if (!disposed && eligible.has(deviceId)) {
+          if (!disposed && linkOnline && eligible.has(deviceId)) {
             void refreshRemoteDeviceSessions(deviceId, name, {
               snapshotMode: 'merge',
               status,
