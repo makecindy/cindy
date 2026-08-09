@@ -38,7 +38,6 @@ import {
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
-import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
 
@@ -90,70 +89,12 @@ function normalizeSettings(raw: unknown): SidebarSettingsShape {
   };
 }
 
-function isSidebarSettingsObject(raw: unknown): raw is Record<string, unknown> {
-  return Boolean(raw && typeof raw === 'object' && !Array.isArray(raw));
-}
-
-function readSidebarSettingsFile(file: string, atomic = false): SidebarSettingsShape {
-  const readablePath = atomic && !fs.existsSync(file) ? `${file}.bak` : file;
-  const stat = fs.lstatSync(readablePath);
-  if (!stat.isFile()) throw new Error('sidebar settings migration source is not a regular file');
-  if (stat.size > MAX_SETTINGS_BYTES) {
-    throw new Error(`file exceeds ${MAX_SETTINGS_BYTES} byte limit`);
-  }
-  const text = atomic ? readAtomicFileSync(file) : fs.readFileSync(file, 'utf-8');
-  if (text == null) throw new Error('sidebar settings file disappeared during migration');
-  if (atomic && Buffer.byteLength(text, 'utf-8') > MAX_SETTINGS_BYTES) {
-    throw new Error(`file exceeds ${MAX_SETTINGS_BYTES} byte limit`);
-  }
-  const parsed: unknown = JSON.parse(text);
-  if (!isSidebarSettingsObject(parsed)) {
-    throw new Error('sidebar settings migration source root must be an object');
-  }
-  return normalizeSettings(parsed);
-}
-
 function sidebarSettingsErrorCode(error: unknown): string {
   const code =
     error && typeof error === 'object' && 'code' in error
       ? (error as NodeJS.ErrnoException).code
       : undefined;
   return typeof code === 'string' && /^E[A-Z0-9_]{1,31}$/.test(code) ? code : 'INVALID_SETTINGS';
-}
-
-function reconcileLegacySidebarSettings(
-  legacyPath: string,
-  scopedPath: string,
-  ownerKey: string,
-): boolean {
-  try {
-    const scoped = readSidebarSettingsFile(scopedPath, true);
-    const legacy = readSidebarSettingsFile(legacyPath);
-    // The old schema has no unpin/unhide tombstones. Preserve both snapshots,
-    // while keeping the newer scoped snapshot authoritative for ordering.
-    const merged = normalizeSettings({
-      pinnedOrder: [...scoped.pinnedOrder, ...legacy.pinnedOrder],
-      hiddenProjectKeys: [...scoped.hiddenProjectKeys, ...legacy.hiddenProjectKeys],
-    });
-    const serialized = JSON.stringify(merged, null, 2);
-    if (Buffer.byteLength(serialized, 'utf-8') > MAX_SETTINGS_BYTES) {
-      throw new Error(`merged file exceeds ${MAX_SETTINGS_BYTES} byte limit`);
-    }
-    atomicWriteFileSync(scopedPath, serialized);
-    fs.unlinkSync(legacyPath);
-    log.info('legacy and owner-scoped sidebar settings reconciled', {
-      ownerKey,
-      pinnedCount: merged.pinnedOrder.length,
-      hiddenProjectCount: merged.hiddenProjectKeys.length,
-    });
-    return true;
-  } catch (err) {
-    log.warn('failed to reconcile legacy and owner-scoped sidebar settings', {
-      ownerKey,
-      errorCode: sidebarSettingsErrorCode(err),
-    });
-    return false;
-  }
 }
 
 function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
@@ -190,11 +131,16 @@ type SidebarStoreAccessResult = 'blocked' | 'ready' | 'snapshot-changed';
 function sidebarStoreAccessResult(): SidebarStoreAccessResult {
   const session = getActiveAppSession();
   if (!session.dataOwnerId) return 'blocked';
+  if (session.mode !== 'local' && session.mode !== 'cloud') return 'blocked';
+
+  const scopedPathState = scopedSidebarPathState(ownerScopedUserDataPath(SETTINGS_FILE_NAME));
+  // The old schema cannot express unpin/unhide tombstones. Once scoped state
+  // exists, it is the sole authority; preserve any conflicting legacy bytes.
+  if (scopedPathState === 'regular-file') return 'ready';
+  if (scopedPathState === 'blocked') return 'blocked';
+
   if (session.mode === 'local') return 'ready';
-  if (session.mode !== 'cloud') return 'blocked';
-  const claim = claimLegacySidebarSettingsResult();
-  if (claim !== 'blocked') return claim;
-  return isLegacyOwnerNamespaceClaimedByOtherOwner(session.dataOwnerId) ? 'ready' : 'blocked';
+  return claimLegacySidebarSettingsResult();
 }
 
 function requireSidebarStoreAccess(options: { rejectSnapshotChange?: boolean } = {}): void {
@@ -501,6 +447,14 @@ function legacySidebarPathState(file: string): LegacySidebarPathState {
   }
 }
 
+function scopedSidebarPathState(file: string): LegacySidebarPathState {
+  const primaryState = legacySidebarPathState(file);
+  if (primaryState !== 'missing') return primaryState;
+  // A leftover atomic-write backup can be the only recoverable scoped snapshot.
+  // Never replace it with legacy data or an empty mutation.
+  return legacySidebarPathState(`${file}.bak`) === 'missing' ? 'missing' : 'blocked';
+}
+
 type LegacySidebarClaimResult = 'blocked' | 'ready' | 'snapshot-changed';
 
 function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
@@ -511,6 +465,8 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
   const legacyPath = path.join(root, SETTINGS_FILE_NAME);
   const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
+
+  if (isLegacyOwnerNamespaceClaimedByOtherOwner(session.dataOwnerId)) return 'ready';
   const legacyPathState = legacySidebarPathState(legacyPath);
 
   if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
@@ -521,11 +477,6 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
 
   if (legacyPathState === 'missing') return 'ready';
   if (legacyPathState === 'blocked') return 'blocked';
-  if (fs.existsSync(scopedPath) || fs.existsSync(`${scopedPath}.bak`)) {
-    return reconcileLegacySidebarSettings(legacyPath, scopedPath, ownerKey)
-      ? 'snapshot-changed'
-      : 'blocked';
-  }
   try {
     fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
     fs.renameSync(legacyPath, scopedPath);
