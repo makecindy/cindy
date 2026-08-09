@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -911,6 +911,51 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'after ask', {
       threadTs: undefined,
     });
+  });
+
+  it('removes a delivered staged attachment even when another interaction medium fails', async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'cindy-im-partial-staging-'));
+    const stagedFile = path.join(tempDir, 'report.pdf');
+    await writeFile(stagedFile, 'private report');
+    try {
+      mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+      mocks.materializeLocalMarkdownFiles.mockResolvedValueOnce({
+        files: [{ absPath: stagedFile, displayName: 'report.pdf' }],
+        tempDirs: [tempDir],
+        text: 'report',
+      });
+      mocks.resolveXdtImageUrl.mockReturnValue({
+        absPath: '/tmp/retry-after-interaction.png',
+        mimeType: 'image/png',
+      });
+      mocks.feishuIm.sendFile.mockImplementation(async (_userId, absPath) =>
+        absPath === stagedFile ? { ok: true } : { ok: false, reason: 'UPLOAD_FAIL' },
+      );
+      mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+      mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-partial-staging' });
+      mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+      const h = setupSession(async () => ({ accepted: true }));
+
+      await runDefaultTurn();
+      h.emit({
+        type: 'text',
+        data: { text: '[report](xdt-file:///F:/XDMaker/report.pdf)', isFinal: true },
+      });
+      h.emit({
+        type: 'tool_result_full',
+        data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://retry.png' }) },
+      });
+      await h.dispatchInteraction({
+        kind: 'ask_user_question',
+        requestId: 'ask-partial-staging',
+        questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+      });
+
+      await waitForAssertion(() => expect(mocks.feishuIm.sendFile).toHaveBeenCalledTimes(2));
+      expect(existsSync(tempDir)).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('cleans staged fallback attachments when a pending interaction session is disposed', async () => {

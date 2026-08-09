@@ -2675,8 +2675,60 @@ export function createTurnRunner(
       }
     }
     if (delivered.size > 0) {
+      await cleanupDeliveredStagedMedia(turn, delivered);
       turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
       for (const absPath of delivered) turn.mediaDisplayNames.delete(absPath);
+    }
+  }
+
+  async function cleanupDeliveredStagedMedia(
+    turn: TurnState,
+    delivered: ReadonlySet<string>,
+  ): Promise<void> {
+    const ownedTempDirs = new Map(
+      [...turn.mediaTempDirs].map((tempDir) => [path.resolve(tempDir), tempDir]),
+    );
+    const touchedTempDirs = new Set<string>();
+
+    for (const absPath of delivered) {
+      const tempDir = ownedTempDirs.get(path.dirname(path.resolve(absPath)));
+      if (!tempDir) continue;
+      touchedTempDirs.add(tempDir);
+      try {
+        await fs.rm(absPath, { force: true, maxRetries: 2, retryDelay: 50 });
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} delivered media cleanup failed`, {
+          kind: 'delivered-media-cleanup',
+          source: 'rm',
+          error,
+        });
+      }
+    }
+
+    for (const tempDir of touchedTempDirs) {
+      try {
+        const remaining = await fs.readdir(tempDir);
+        if (remaining.length > 0) continue;
+        await fs.rm(tempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 2,
+          retryDelay: 50,
+        });
+        turn.mediaTempDirs.delete(tempDir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          turn.mediaTempDirs.delete(tempDir);
+          continue;
+        }
+        const error = sanitizeSendOutcomeError(err);
+        log.warn(`${channel} delivered media directory cleanup failed`, {
+          kind: 'delivered-media-cleanup',
+          source: 'readdir-or-rm',
+          error,
+        });
+      }
     }
   }
 

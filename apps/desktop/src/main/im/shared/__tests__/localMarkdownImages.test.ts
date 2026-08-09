@@ -99,6 +99,23 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
   });
 
+  it('redacts but does not materialize an angle destination missing its closing bracket', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    const text = `![private](<${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-malformed-angle' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(deps.ingest).not.toHaveBeenCalled();
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('private');
+  });
+
   it('parses an escaped closing bracket in a local image label', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'generated.png');

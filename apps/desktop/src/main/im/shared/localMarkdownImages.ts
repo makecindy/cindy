@@ -237,7 +237,8 @@ function markdownImageDestination(raw: string): string {
     // Markdown permits an optional title after an angle-bracket destination:
     // `![alt](</private/file.png> "title")`. Extract only the destination.
     // A malformed missing `>` remains fail-closed for local-path detection.
-    target = target.slice(1, closingBracket >= 0 ? closingBracket : target.length).trim();
+    if (closingBracket < 0) return '';
+    target = target.slice(1, closingBracket).trim();
   } else {
     // A plain destination may be followed by a quoted/parenthesized title:
     // `![alt](/work/out.png "preview")`. Unescaped whitespace is not part of
@@ -407,7 +408,13 @@ export async function materializeLocalMarkdownFiles(
 }
 
 function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
-  const target = markdownImageDestination(rawTarget);
+  const trimmedTarget = rawTarget.trim();
+  // A malformed angle destination is never eligible for materialization, but
+  // its local path still must not cross the IM boundary in plain text.
+  const target =
+    trimmedTarget.startsWith('<') && !trimmedTarget.includes('>')
+      ? trimmedTarget.slice(1).trim()
+      : markdownImageDestination(rawTarget);
   const targetLower = target.toLowerCase();
   return (
     targetLower.startsWith('file://') ||
