@@ -2718,15 +2718,11 @@ describe('remoteSessionStore', () => {
 
   it('keeps optimistic projection writes out of remote acceptance evidence', () => {
     const local = projection('s1', 'q-local');
-    remoteSessionStore.setInputProjectionOptimistically('s1', local);
     remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-local', local.pendingQueue[0]);
-    const authorityEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
-    const remoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    const [authorityEpoch, remoteEpoch] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
     remoteSessionStore.setInputProjectionOptimistically('s1', { ...local, queuePaused: true });
-    expect(remoteSessionStore.captureInputProjectionRemoteEpoch('s1')).toBe(remoteEpoch);
-    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', remoteEpoch)).toBe(false);
-    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', local, authorityEpoch, remoteEpoch)).toBe(false);
-    expect([remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId, remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size]).toEqual(['q-local', 0]);
+    expect([remoteSessionStore.captureInputProjectionRemoteEpoch('s1'), remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', remoteEpoch)]).toEqual([remoteEpoch, false]);
+    expect([remoteSessionStore.setInputProjectionIfCurrent('s1', local, authorityEpoch, remoteEpoch), remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId, remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size]).toEqual([false, 'q-local', 0]);
   });
   it('retains an unconfirmed row across empty projections and offline cleanup', () => {
     const local = projection('s1', 'q-local');
@@ -2742,8 +2738,7 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId)).toEqual(['q-local', 'q-confirmed']);
     expect([[...remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1')], remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', staleRemoteEpoch)]).toEqual([['q-local'], true]);
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
-    const offlineEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
-    const offlineRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    const [offlineEpoch, offlineRemoteEpoch] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
     remoteSessionStore.markDeviceOffline('dev-1');
     expect(remoteSessionStore.setInputProjectionIfCurrent('s1', local, offlineEpoch, offlineRemoteEpoch)).toBe(false);
     expect([remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId), [...remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1')]]).toEqual([['q-local'], ['q-local']]);
@@ -2772,11 +2767,9 @@ describe('remoteSessionStore', () => {
     const unsubscribe = remoteSessionStore.subscribe(listener);
     remoteSessionStore.appendMessage('s1', { ...message('q-local', 's1'), role: 'user' });
     unsubscribe();
-    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toEqual([]);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue, listener.mock.calls.length]).toEqual([[], 1]);
     remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-stale', projection('s1', 'q-stale').pendingQueue[0]);
-    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
-    const expectedRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    const [expectedEpoch, expectedRemoteEpoch] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
     remoteSessionStore.setInputProjectionOptimistically('s1', { ...remoteSessionStore.getInputProjection('s1'), queuePaused: true });
     expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...local, pendingQueue: [] }, expectedEpoch, expectedRemoteEpoch, 'q-stale')).toBe(false);
     const beforePersistence = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
@@ -2789,9 +2782,11 @@ describe('remoteSessionStore', () => {
     expect([remoteSessionStore.getInputProjection('s1').pendingQueue, remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size, settledEpoch !== beforePersistence, remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')]).toEqual([[], 0, true, reconciledEpoch]);
     remoteSessionStore.setInputProjection('s1', projection('s1', 'q-deleted'));
     remoteSessionStore.setInputProjection('s1', { ...local, pendingQueue: [] });
-    const beforeDeletion = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const [beforeDeletion, beforeDeletionRemote] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
     remoteSessionStore.removeMessages('s1', ['q-deleted']);
-    expect([remoteSessionStore.getInputProjection('s1').pendingQueue, remoteSessionStore.captureInputProjectionAuthorityEpoch('s1') !== beforeDeletion]).toEqual([[], true]);
+    const [afterDeletion, afterDeletionRemote] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
+    remoteSessionStore.removeMessages('s1', ['unrelated']);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue, afterDeletion !== beforeDeletion, afterDeletionRemote !== beforeDeletionRemote, remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')]).toEqual([[], true, true, afterDeletion, afterDeletionRemote]);
   });
   it('clears a continuation owner at a terminal boundary without a projection clear push', () => {
     const ownerProjection = {

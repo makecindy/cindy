@@ -1824,9 +1824,13 @@ export const remoteSessionStore = {
   removeMessages(sessionId: string, clientIds: readonly string[], deviceId?: string): void {
     const deletedClientIds = new Set(clientIds.filter(Boolean));
     if (!sessionId || deletedClientIds.size === 0) return;
-    recordInputProjectionRemoteEvidence(sessionId, deletedClientIds, true);
-    const unconfirmedChanged = resolveInputProjectionUnconfirmed(sessionId, deletedClientIds, true);
-    if (!unconfirmedChanged) bumpInputProjectionAuthorityEpoch(sessionId);
+    const tracked = new Set(inputProjections.get(sessionId)?.pendingQueue.map((item) => item.clientId) ?? []);
+    for (const clientId of inputProjectionUnconfirmedQueuedClientIds.get(sessionId) ?? []) tracked.add(clientId);
+    for (const [clientId, epoch] of inputProjectionRemoteQueuedEvidence.get(sessionId) ?? []) if (epoch > 0) tracked.add(clientId);
+    const settled = new Set([...deletedClientIds].filter((clientId) => tracked.has(clientId)));
+    if (settled.size) recordInputProjectionRemoteEvidence(sessionId, settled, true);
+    const unconfirmedChanged = resolveInputProjectionUnconfirmed(sessionId, settled, true);
+    if (!unconfirmedChanged && settled.size) bumpInputProjectionAuthorityEpoch(sessionId);
     const existing = messages.get(sessionId) ?? emptyMessages;
     const removed = existing.filter((message) => (
       deletedClientIds.has(message.clientId) || deletedClientIds.has(message.id)
