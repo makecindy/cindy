@@ -192,7 +192,7 @@ test("login-all-hifi embeds generated truth as a script-safe static literal", ()
 	assert.deepEqual(JSON.parse(match[1]), readJson("docs/design-previews/login-all-hifi/truth.json"));
 });
 
-test("current login QA artifacts cover every supported locale", () => {
+test("current locale-aware QA artifacts cover every supported locale", () => {
 	const supportedLocales = readSupportedLocales("apps/desktop/src/shared/locale.ts");
 	assert.deepEqual(
 		readSupportedLocales("apps/mobile/src/i18n/locale.ts"),
@@ -208,6 +208,10 @@ test("current login QA artifacts cover every supported locale", () => {
 		{
 			dir: "docs/design-previews/login-all-hifi",
 			copyPaths: [["desk", "copy"], ["mobile", "copy"]],
+		},
+		{
+			dir: "docs/design-previews/login-deletion-bubble",
+			copyPaths: [["desktop", "copy"], ["mobile", "copy"]],
 		},
 	];
 
@@ -233,6 +237,42 @@ test("current login QA artifacts cover every supported locale", () => {
 				`${dir} truth ${copyPath.join(".")} locale coverage drifted`,
 			);
 		}
+	}
+
+	const newMakerDir = "docs/design-previews/newmaker-quickstart-cards";
+	const newMakerSpec = readJson(`${newMakerDir}/spec.json`);
+	const newMakerTruth = readJson(`${newMakerDir}/truth.json`);
+	assert.deepEqual(newMakerSpec.matrix.langs, supportedLocales, `${newMakerDir} matrix locale order drifted`);
+	assert.deepEqual(
+		newMakerTruth.supportedLocales.map(({ value }) => value),
+		supportedLocales,
+		`${newMakerDir} embedded locale order drifted`,
+	);
+	assert.deepEqual(
+		[...new Set(newMakerSpec.verify.cases.map(({ prefs }) => prefs.lang))].sort(),
+		expectedSet,
+		`${newMakerDir} representative cases must exercise every supported locale`,
+	);
+	assert.deepEqual(
+		Object.keys(newMakerTruth.section.titles).sort(),
+		expectedSet,
+		`${newMakerDir} section-title locale coverage drifted`,
+	);
+	for (const [index, card] of newMakerTruth.cards.entries()) {
+		assert.deepEqual(
+			Object.keys(card.labels).sort(),
+			expectedSet,
+			`${newMakerDir} card ${index} locale coverage drifted`,
+		);
+	}
+
+	for (const dir of ["docs/design-previews/login-deletion-bubble", newMakerDir]) {
+		const html = readText(`${dir}/index.html`);
+		const embedded = html.match(
+			/<script id="qa-truth" type="application\/json">([\s\S]*?)<\/script>/,
+		)?.[1];
+		assert.ok(embedded, `${dir} must embed generated truth`);
+		assert.deepEqual(JSON.parse(embedded), readJson(`${dir}/truth.json`), `${dir} embedded truth drifted`);
 	}
 });
 

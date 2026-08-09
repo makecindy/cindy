@@ -1,5 +1,10 @@
 {
  "gate": "interaction",
+ "stale": {
+  "since": "2026-08-10",
+  "reason": "interaction-gate.mjs 已扩展为支持语言全集 × 双模式 × 三态；本文件仍是 2026-07-26 的四语前证据。",
+  "warning": "下面的 pass:true 只对旧 gate 版本成立；安装 Playwright 后重跑 interaction-gate.mjs 会覆盖本字段。"
+ },
  "pass": true,
  "total": 48,
  "passed": 48,
