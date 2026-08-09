@@ -1255,7 +1255,7 @@ export class GoalController {
     // #2105 P0:恢复写 active 的**真实状态迁移**(resumed 只在派发边界
     // 记录,若派发被拒绝 / preflight 拦截,审计会丢失 paused/blocked/usageLimited→active
     // 的迁移;此处持久化已提交,迁移在事件流中与状态机一致)。
-    if (state.status !== 'active') {
+    if ((state.status as string) !== 'active') {
       this.recordRunEvent('state-transition', sessionId, updated, {
         from: state.status,
         to: 'active',
@@ -1852,7 +1852,7 @@ export class GoalController {
           // (与 accepted 补发的 dispatch 同生命周期配对)。
           lifecycleId: completedLifecycleId,
         });
-        if (decision.status !== state.status) {
+        if ((decision.status as string) !== (state.status as string)) {
           this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
             from: state.status,
             to: 'complete',
@@ -1980,7 +1980,7 @@ export class GoalController {
       status === 'paused' &&
       state.noProgressLimit != null &&
       state.noProgressStreak + 1 >= state.noProgressLimit &&
-      /no tool use/i.test(lastReason)
+      lastReason != null && /no tool use/i.test(lastReason)
     ) {
       this.recordRunEvent('stall-detected', sessionId, postDecisionCounts, {
         from: state.status,
