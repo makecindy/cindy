@@ -1206,6 +1206,30 @@ describe('SplitGroup', () => {
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
   });
 
+  it('pane 标题按钮以任务标题命名，并将拖动能力作为补充说明', () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [
+        { id: 'session-a', title: 'Session A', status: 'active' },
+        { id: 'session-b', title: 'Session B', status: 'active' },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const pane = view.container.querySelector('[data-split-pane-session-id="session-b"]');
+    const handle = pane?.querySelector('[data-split-pane-drag-handle]');
+    if (!(handle instanceof HTMLElement)) throw new Error('pane drag handle missing');
+
+    expect(screen.getByRole('button', { name: 'Session B' })).toBe(handle);
+    expect(handle.getAttribute('aria-label')).toBeNull();
+    const describedBy = handle.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy ?? '')?.textContent).toBe('splitGroup.dragPaneAria');
+  });
+
   it('未启用 pane drop 的单窗格目标不会吞掉 pane 拖放', async () => {
     const view = renderSplitGroup('session-a');
     const dropTarget = view.container.querySelector('[data-split-drop-target="single"]');

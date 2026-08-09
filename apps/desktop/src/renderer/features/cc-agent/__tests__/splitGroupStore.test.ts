@@ -268,6 +268,16 @@ describe('splitGroupStore', () => {
     },
   );
 
+  it('仅部分边缘重合时仍按落点重排 pane', async () => {
+    const { splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    const before = splitGroupStore.getSnapshot();
+
+    expect(splitGroupStore.moveSession('session-b', 'session-a', 'right')).toBe(true);
+    expect(splitGroupStore.getSnapshot()).not.toBe(before);
+  });
+
   it('分支比例夹到下限，并仅切换根方向', async () => {
     const { MIN_SPLIT_CHILD_FRACTION, splitGroupStore } = await loadStore();
     splitGroupStore.addSession('session-b', 'session-a', 'right');

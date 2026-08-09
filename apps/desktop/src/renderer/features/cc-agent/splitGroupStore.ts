@@ -174,8 +174,11 @@ function collectPaneRects(
   ];
 }
 
-function rangesOverlap(startA: number, sizeA: number, startB: number, sizeB: number): boolean {
-  return Math.min(startA + sizeA, startB + sizeB) - Math.max(startA, startB) > ADJACENCY_EPSILON;
+function rangesMatch(startA: number, sizeA: number, startB: number, sizeB: number): boolean {
+  return (
+    Math.abs(startA - startB) <= ADJACENCY_EPSILON &&
+    Math.abs(startA + sizeA - (startB + sizeB)) <= ADJACENCY_EPSILON
+  );
 }
 
 function isPaneAlreadyAtSide(
@@ -193,22 +196,22 @@ function isPaneAlreadyAtSide(
     case 'left':
       return (
         Math.abs(source.x + source.width - anchor.x) <= ADJACENCY_EPSILON &&
-        rangesOverlap(source.y, source.height, anchor.y, anchor.height)
+        rangesMatch(source.y, source.height, anchor.y, anchor.height)
       );
     case 'right':
       return (
         Math.abs(anchor.x + anchor.width - source.x) <= ADJACENCY_EPSILON &&
-        rangesOverlap(source.y, source.height, anchor.y, anchor.height)
+        rangesMatch(source.y, source.height, anchor.y, anchor.height)
       );
     case 'top':
       return (
         Math.abs(source.y + source.height - anchor.y) <= ADJACENCY_EPSILON &&
-        rangesOverlap(source.x, source.width, anchor.x, anchor.width)
+        rangesMatch(source.x, source.width, anchor.x, anchor.width)
       );
     case 'bottom':
       return (
         Math.abs(anchor.y + anchor.height - source.y) <= ADJACENCY_EPSILON &&
-        rangesOverlap(source.x, source.width, anchor.x, anchor.width)
+        rangesMatch(source.x, source.width, anchor.x, anchor.width)
       );
   }
 

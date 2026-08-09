@@ -9,6 +9,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -827,6 +828,7 @@ const SplitPaneView = memo(function SplitPaneView({
   const viewSessionId = pane.sessionId;
   const session = sessionsById.get(viewSessionId) ?? null;
   const title = session ? getSessionDisplayTitle(session, unnamedTitle) : loadingTitle;
+  const dragDescriptionId = useId();
 
   return (
     <SplitDropTarget
@@ -878,7 +880,7 @@ const SplitPaneView = memo(function SplitPaneView({
             type="button"
             data-split-pane-drag-handle
             draggable
-            aria-label={t('splitGroup.dragPaneAria', { title })}
+            aria-describedby={dragDescriptionId}
             onDragStart={(event) => {
               if (!writeSplitGroupPaneDragData(event.dataTransfer, viewSessionId)) {
                 event.preventDefault();
@@ -896,6 +898,9 @@ const SplitPaneView = memo(function SplitPaneView({
           >
             {title}
           </button>
+          <span id={dragDescriptionId} className="sr-only">
+            {t('splitGroup.dragPaneAria', { title })}
+          </span>
           <button
             type="button"
             data-split-pane-no-focus
