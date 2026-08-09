@@ -51,6 +51,9 @@ const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
 const SETTINGS_FILE_NAME = 'sidebar-settings.json';
+// An explicit empty scoped snapshot must remain durable, otherwise a preserved
+// legacy file could become authoritative again after the user clears the list.
+const SIDEBAR_WRITE_OPTIONS = { preserveDefaults: true } as const;
 
 const log = createLogger('sidebar-settings');
 const stores = new Map<
@@ -364,8 +367,8 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
         requireSidebarStoreAccess({ rejectSnapshotChange: true });
         const nextOrder = applyPinnedMutation(current.value.pinnedOrder, mutation);
         changed = !sameStringArray(current.value.pinnedOrder, nextOrder);
-        return changed ? { pinnedOrder: nextOrder } : {};
-      }),
+        return { pinnedOrder: nextOrder };
+      }, SIDEBAR_WRITE_OPTIONS),
     );
     assertScopeCurrent(scopeKey);
   } catch (err) {
@@ -408,7 +411,7 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
         const alreadyHidden = currentKeys.some(
           (entry) => projectKeyComparisonKey(entry, process.platform) === comparisonKey,
         );
-        if (alreadyHidden === hidden) return {};
+        if (alreadyHidden === hidden) return { hiddenProjectKeys: currentKeys };
         if (hidden && currentKeys.length >= MAX_HIDDEN_PROJECT_ENTRIES) {
           throwIpcError('INVALID_PARAMS', 'too many hidden sidebar projects');
         }
@@ -420,7 +423,7 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
                 (entry) => projectKeyComparisonKey(entry, process.platform) !== comparisonKey,
               ),
         };
-      }),
+      }, SIDEBAR_WRITE_OPTIONS),
     );
     assertScopeCurrent(scopeKey);
   } catch (err) {

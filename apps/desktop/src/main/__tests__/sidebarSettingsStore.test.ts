@@ -688,6 +688,50 @@ describe('sidebarSettingsStore', () => {
     expect(fs.readFileSync(legacy, 'utf-8')).toBe(legacyContents);
   });
 
+  it('keeps explicit empty scoped snapshots authoritative for clears and no-ops', async () => {
+    const legacy = path.join(harness.root, 'sidebar-settings.json');
+    const legacyContents = JSON.stringify({
+      pinnedOrder: ['legacy-session'],
+      hiddenProjectKeys: ['local:/workspace/legacy'],
+    });
+    fs.writeFileSync(legacy, legacyContents, 'utf-8');
+    fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
+    fs.writeFileSync(
+      ownerFile(),
+      JSON.stringify({
+        pinnedOrder: ['scoped-session'],
+        hiddenProjectKeys: ['local:/workspace/scoped'],
+      }),
+      'utf-8',
+    );
+    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByOwner = true;
+
+    await pinnedHandler(request({ mutation: { kind: 'remove', entryId: 'scoped-session' } }));
+    await hiddenHandler(request({ projectKey: 'local:/workspace/scoped', hidden: false }));
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8'))).toEqual({
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+    });
+
+    fs.writeFileSync(ownerFile(), '{}', 'utf-8');
+    harness.send.mockClear();
+    harness.sendSecond.mockClear();
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: [] } }));
+    await hiddenHandler(request({ projectKey: 'local:/workspace/missing', hidden: false }));
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8'))).toEqual({
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+    });
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
+    expect(fs.readFileSync(legacy, 'utf-8')).toBe(legacyContents);
+
+    harness.legacyClaimReady = true;
+    expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+    expect(fs.readFileSync(legacy, 'utf-8')).toBe(legacyContents);
+  });
+
   it.each([['null'], ['[]'], ['42']] as const)(
     'ignores an invalid legacy root once scoped state exists: %s',
     async (invalidContents) => {
