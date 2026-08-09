@@ -110,6 +110,10 @@ function normalizeSettings(raw: unknown): SidebarSettingsShape {
   };
 }
 
+function isSidebarSettingsObject(raw: unknown): raw is Record<string, unknown> {
+  return Boolean(raw && typeof raw === 'object' && !Array.isArray(raw));
+}
+
 function readSidebarSettingsFile(file: string, atomic = false): SidebarSettingsShape {
   const readablePath = atomic && !fs.existsSync(file) ? `${file}.bak` : file;
   const stat = fs.lstatSync(readablePath);
@@ -122,7 +126,11 @@ function readSidebarSettingsFile(file: string, atomic = false): SidebarSettingsS
   if (atomic && Buffer.byteLength(text, 'utf-8') > MAX_SETTINGS_BYTES) {
     throw new Error(`file exceeds ${MAX_SETTINGS_BYTES} byte limit`);
   }
-  return normalizeSettings(JSON.parse(text));
+  const parsed: unknown = JSON.parse(text);
+  if (!isSidebarSettingsObject(parsed)) {
+    throw new Error('sidebar settings migration source root must be an object');
+  }
+  return normalizeSettings(parsed);
 }
 
 function sidebarSettingsErrorCode(error: unknown): string {

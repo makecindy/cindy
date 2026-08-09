@@ -668,6 +668,37 @@ describe('sidebarSettingsStore', () => {
     });
   });
 
+  it.each([
+    ['legacy', 'null'],
+    ['legacy', '[]'],
+    ['legacy', '42'],
+    ['scoped', 'null'],
+    ['scoped', '[]'],
+    ['scoped', '42'],
+  ] as const)(
+    'preserves both migration files when the %s file has a non-object root: %s',
+    async (invalidSide, invalidContents) => {
+      const legacy = path.join(harness.root, 'sidebar-settings.json');
+      const validLegacy = '{"pinnedOrder":["legacy-session"]}';
+      const validScoped = '{"pinnedOrder":["scoped-session"]}';
+      const legacyContents = invalidSide === 'legacy' ? invalidContents : validLegacy;
+      const scopedContents = invalidSide === 'scoped' ? invalidContents : validScoped;
+      fs.writeFileSync(legacy, legacyContents, 'utf-8');
+      fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
+      fs.writeFileSync(ownerFile(), scopedContents, 'utf-8');
+
+      expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+      expect(fs.readFileSync(legacy, 'utf-8')).toBe(legacyContents);
+      expect(fs.readFileSync(ownerFile(), 'utf-8')).toBe(scopedContents);
+      await expect(
+        pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
+      ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings migration is pending');
+      expect(fs.readFileSync(legacy, 'utf-8')).toBe(legacyContents);
+      expect(fs.readFileSync(ownerFile(), 'utf-8')).toBe(scopedContents);
+      expect(harness.send).not.toHaveBeenCalled();
+    },
+  );
+
   it('rejects an oversized scoped file before reconciliation reads it', () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
     fs.writeFileSync(legacy, '{"pinnedOrder":["legacy-session"]}', 'utf-8');
