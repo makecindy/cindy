@@ -464,6 +464,15 @@
         "label": "侧边栏卡片模式",
         "hint": "置顶任务以卡片形式展示，含执行状态摘要，卡片高度随摘要长短错落；侧栏拉宽时自动分 2~3 列。",
         "aria": "切换侧边栏卡片模式"
+      },
+      "layout": {
+        "label": "面板布局",
+        "hint": "面板位置和宽度会保留到下次启动。如果布局变得难以使用，可以恢复默认排列。",
+        "reset": "恢复默认布局",
+        "resetSuccess": "已恢复默认面板布局",
+        "resetFailed": "无法恢复默认面板布局",
+        "saved": "面板位置已保存；可在“设置 → 外观”中恢复默认布局",
+        "saveFailed": "无法保存面板位置"
       }
     },
     "notifications": {
@@ -2040,6 +2049,7 @@
         "project": "切换项目工作区",
         "model": "查看或切换模型",
         "permission": "查看或切换权限模式",
+        "settings": "查看当前项目与 Agent 设置",
         "ctr": "接管桌面端的任务",
         "exctr": "退出远程控制"
       },
@@ -4260,6 +4270,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
     "cacheLabel": "缓存",
+    "timeLabel": "耗时",
+    "timeAndRateValue": "{{duration}} 速度：{{rate}} token/秒",
     "modelLabel": "模型",
     "staleData": "数据更新于 {{minutes}} 分钟前",
     "paceTrendFast": "按当前平均速度偏快（粗略趋势）",
@@ -4268,6 +4280,11 @@
     "waiting": "Claude 订阅余量会在下一轮完成后更新。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "performanceLine": "速度 {{rate}} token/秒 · 耗时 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} token/秒",
+    "timeLine": "耗时 {{duration}}",
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
     "tokenLine": "Token：共 {{total}} · 输入 {{input}} · 输出 {{output}}",
@@ -5626,7 +5643,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 登录已失效",
-    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请打开 ChatGPT App 重新登录后重试。",
+    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请在 Cindy 中重新登录后重试。",
     "instanceIsolatedInvalidated": "Cindy 当前使用的是单独登录的 ChatGPT 账号。该登录已失效。请在 Cindy 中重新登录后重试。",
     "unknownInvalidated": "Cindy 当前的 ChatGPT 登录已失效。请重新登录后重试。",
     "recovered": "ChatGPT 登录已恢复，请重试。",

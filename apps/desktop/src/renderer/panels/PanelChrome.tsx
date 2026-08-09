@@ -103,7 +103,7 @@ export function PanelChrome({
         className="flex h-[36px] shrink-0 items-center justify-between gap-2 border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-3"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
       >
-        <div className="min-w-0 truncate text-[12px] font-medium text-[var(--text-secondary)]">
+        <div className="min-w-0 truncate text-12 font-medium text-[var(--text-secondary)]">
           {title}
         </div>
         {(actions || showMaximize || onDetach || onMinimize || onClose) && (

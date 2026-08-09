@@ -152,7 +152,7 @@ export function SidebarWindowLayout() {
         <div className={isMac ? 'w-20 shrink-0' : 'w-3 shrink-0'} />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <PanelRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-          <span className="truncate text-[13px] text-[var(--text-secondary)]">
+          <span className="truncate text-13 text-[var(--text-secondary)]">
             {t('rightSidebar.window.title')}
           </span>
         </div>
@@ -170,7 +170,7 @@ export function SidebarWindowLayout() {
             }}
             title={t('rightSidebar.window.mergeBack')}
             aria-label={t('rightSidebar.window.mergeBack')}
-            className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+            className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-12 text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           >
             <PanelRight size={14} />
             <span>{t('rightSidebar.window.mergeBack')}</span>
@@ -199,7 +199,7 @@ export function SidebarWindowLayout() {
         />
         {!sessionId && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <span className="text-[13px] text-[var(--text-tertiary)]">
+            <span className="text-13 text-[var(--text-tertiary)]">
               {t('rightSidebar.window.followPlaceholder')}
             </span>
           </div>

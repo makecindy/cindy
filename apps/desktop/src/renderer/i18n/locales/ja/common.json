@@ -464,6 +464,15 @@
         "label": "サイドバーカードモード",
         "hint": "ピン留めセッションをタスク状況の要約付きカードで表示します。カードの高さは要約の長さで変わり、サイドバーを広げると 2〜3 列に自動配置されます。",
         "aria": "サイドバーカードモードを切り替える"
+      },
+      "layout": {
+        "label": "パネルレイアウト",
+        "hint": "パネルの位置と幅は次回起動時も保持されます。使いにくい配置になった場合は、初期レイアウトに戻せます。",
+        "reset": "初期レイアウトに戻す",
+        "resetSuccess": "パネルレイアウトを初期状態に戻しました",
+        "resetFailed": "パネルレイアウトを初期状態に戻せませんでした",
+        "saved": "パネル位置を保存しました。設定 → 外観から初期レイアウトに戻せます。",
+        "saveFailed": "パネル位置を保存できませんでした"
       }
     },
     "notifications": {
@@ -2040,6 +2049,7 @@
         "project": "プロジェクトワークスペースを切り替え",
         "model": "モデルを表示・切り替え",
         "permission": "権限モードを表示・切り替え",
+        "settings": "プロジェクトと Agent 設定を表示",
         "ctr": "デスクトップセッションをリモート操作",
         "exctr": "リモート操作を終了"
       },
@@ -4260,6 +4270,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
     "cacheLabel": "キャッシュ",
+    "timeLabel": "時間",
+    "timeAndRateValue": "{{duration}} 速度:{{rate}} トークン/秒",
     "modelLabel": "モデル",
     "staleData": "データは {{minutes}} 分前に更新されました",
     "paceTrendFast": "現在の平均使用ペースは速めです（おおよその傾向）",
@@ -4268,6 +4280,11 @@
     "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "performanceLine": "速度 {{rate}} トークン/秒 · 時間 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} トークン/秒",
+    "timeLine": "時間 {{duration}}",
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
     "tokenLine": "Token: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
@@ -5626,7 +5643,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT のログインが無効になりました",
-    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。ChatGPT App を開いて再度ログインしてから、再試行してください。",
+    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "instanceIsolatedInvalidated": "Cindy は現在、個別にログインした ChatGPT アカウントを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "unknownInvalidated": "Cindy の現在の ChatGPT ログインは無効になりました。再度ログインしてから、再試行してください。",
     "recovered": "ChatGPT ログインが復旧しました。再試行してください。",

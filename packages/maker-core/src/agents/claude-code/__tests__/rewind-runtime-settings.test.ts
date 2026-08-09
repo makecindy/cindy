@@ -1498,6 +1498,55 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('late setPlanMode RPC from a rewound Query cannot change the replacement SDK plan state', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    let resolveOldPermission!: () => void;
+    const oldPermissionRpc = new Promise<void>((resolve) => { resolveOldPermission = resolve; });
+    firstQuery.setPermissionMode.mockImplementationOnce(() => oldPermissionRpc);
+
+    const oldSetPlanMode = handle.setPlanMode?.(true);
+    await vi.waitFor(() => {
+      expect(firstQuery.setPermissionMode).toHaveBeenCalledWith('plan');
+    });
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+
+    await handle.send({ type: 'user', content: 'normal replacement turn' }, { planMode: false });
+    expect(secondQuery.setPermissionMode).not.toHaveBeenCalled();
+
+    resolveOldPermission();
+    await oldSetPlanMode;
+    // Releasing q1's RPC after q2 exists must not make the next explicit normal
+    // turn issue a synthetic downgrade/upgrade on q2.
+    expect(secondQuery.setPermissionMode).not.toHaveBeenCalled();
+
+    secondQuery.stream.emit({
+      type: 'result',
+      subtype: 'success',
+      result: 'replacement done',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await vi.waitFor(() => expect(handle.isTurnRunning?.()).toBe(false));
+
+    await handle.send({ type: 'user', content: 'second normal turn' }, { planMode: false });
+    expect(secondQuery.setPermissionMode).not.toHaveBeenCalled();
+    secondQuery.stream.emit({
+      type: 'result',
+      subtype: 'success',
+      result: 'second done',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await vi.waitFor(() => expect(handle.isTurnRunning?.()).toBe(false));
+
+    await handle.close();
+  });
+
   it('abort during bridge compact closes query so eager-drained user input cannot continue', async () => {
     // 反馈原型 (Codex review 3536258014): SDK 可能 eager-drain /compact 和真实用户消息。
     // Stop 只 inputQueue.clear() 时,已被 SDK 拉走的真实消息无法追回,q.interrupt() 也只

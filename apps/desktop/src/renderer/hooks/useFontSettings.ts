@@ -43,9 +43,9 @@ const MIN_UI_FONT_SIZE = APPEARANCE_LIMITS.uiSize.min;
 const MIN_FONT_SIZE = APPEARANCE_LIMITS.codeSize.min;
 const MAX_FONT_SIZE = APPEARANCE_LIMITS.codeSize.max;
 
-const UI_TEXT_TOKEN_SIZES = [
-  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
-] as const;
+// DESIGN.md §3 numeric 字号白名单的运行时镜像；applyFontSettings 会按
+// 用户 UI 字号缩放覆写 globals.css 的静态默认值。
+const UI_TEXT_TOKEN_SIZES = [10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28] as const;
 
 const SCALED_TAILWIND_TOKENS = {
   xs: 12,

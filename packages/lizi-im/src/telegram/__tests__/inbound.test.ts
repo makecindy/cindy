@@ -110,6 +110,27 @@ describe('replyContextOf', () => {
     expect(replyContextOf(empty)).toBeNull();
     expect(replyContextOf(msg())).toBeNull();
   });
+
+  it('受保护群的被引消息不进 prompt(原文不外传)', () => {
+    // 「禁止保存内容」的群里, 引用块会把原文原样带进模型上下文 —— 那和把它
+    // 写进本地池是同一次外传。与官方 bot 服务端同一条边界。
+    const protectedReplied = msg({
+      reply_to_message: msg({ message_id: 3, text: '机密讨论', has_protected_content: true }),
+    });
+    expect(replyContextOf(protectedReplied)).toBeNull();
+
+    // 触发消息自身受保护(整个群开了保护)时同样不带引用原文。
+    const protectedTrigger = msg({
+      has_protected_content: true,
+      reply_to_message: msg({ message_id: 4, text: '机密讨论' }),
+    });
+    expect(replyContextOf(protectedTrigger)).toBeNull();
+
+    // 未保护的群逐字节不变。
+    expect(
+      replyContextOf(msg({ reply_to_message: msg({ message_id: 5, text: '普通讨论' }) })),
+    ).toMatchObject({ text: '普通讨论' });
+  });
 });
 
 describe('groupWindowEntryOf / laneThreadIdOf', () => {

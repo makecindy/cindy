@@ -931,4 +931,16 @@ describe('subscription value and usage details', () => {
       { model: 'claude-haiku-4-5', money: usdMoney(0.8) },
     ]);
   });
+
+  it('keeps generation and full-turn durations separate', () => {
+    const details = buildClaudeTurnUsageDetails(
+      { input_tokens: 10, output_tokens: 25 },
+      undefined,
+      'claude-opus-4-8',
+      undefined,
+      1_250,
+      8_500,
+    );
+    expect(details).toMatchObject({ durationMs: 1_250, turnDurationMs: 8_500 });
+  });
 });

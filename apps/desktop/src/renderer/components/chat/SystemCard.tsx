@@ -44,7 +44,7 @@ const valueClass = 'font-medium';
 const rowClass = 'flex items-baseline justify-between gap-3 py-[2px]';
 const descClass = cn(labelClass, 'text-right flex-1');
 const codeClass = cn(
-  'inline shrink-0 px-[5px] py-[1px] rounded-[4px] font-mono text-[13px]',
+  'inline shrink-0 px-[5px] py-[1px] rounded-[4px] font-mono text-13',
   'bg-[var(--status-bar-accent)]/15',
   'text-[var(--status-bar-accent)]',
 );
@@ -263,7 +263,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
     <div
       className={cn(
         'w-full rounded-[12px] border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)]',
-        'px-3 py-3 text-[13px] leading-none text-[var(--msg-user-text)] select-text',
+        'px-3 py-3 text-13 leading-none text-[var(--msg-user-text)] select-text',
       )}
     >
       <button
@@ -276,10 +276,10 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
           : t('chat.systemCard.context.expand')}
       >
         <Layers size={14} strokeWidth={1.8} className="shrink-0 text-[var(--msg-user-text)]" />
-        <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
+        <span className="min-w-0 flex-1 truncate text-15 font-medium">
           {t('chat.systemCard.context.title')}
         </span>
-        <span className="shrink-0 text-[12px] font-medium tabular-nums text-[var(--msg-tool-text)]">
+        <span className="shrink-0 text-12 font-medium tabular-nums text-[var(--msg-tool-text)]">
           {t('chat.systemCard.context.tokensSummary', {
             used: fmtContextTokens(totalTokens),
             total: fmtContextTokens(rawMaxTokens),
@@ -316,7 +316,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       <Collapse open={expanded}>
         <div className="mt-2">
           {usage.model && (
-            <div className="mb-2 truncate text-[12px] leading-[1.3] text-[var(--msg-tool-text)]">
+            <div className="mb-2 truncate text-12 leading-[1.3] text-[var(--msg-tool-text)]">
               {t('chat.systemCard.context.model', { model: usage.model })}
             </div>
           )}
@@ -333,19 +333,19 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                     }}
                     aria-hidden="true"
                   />
-                  <span className="min-w-0 truncate text-[12px] leading-none text-[var(--msg-user-text)]">
+                  <span className="min-w-0 truncate text-12 leading-none text-[var(--msg-user-text)]">
                     {localizeContextCategory(t, cat.name)}
                     {cat.isDeferred && (
-                      <span className="ml-1 text-[12px] text-[var(--msg-tool-text)]">
+                      <span className="ml-1 text-12 text-[var(--msg-tool-text)]">
                         {t('chat.systemCard.context.deferred')}
                       </span>
                     )}
                   </span>
                 </div>
-                <span className="shrink-0 text-[12px] tabular-nums text-[var(--msg-tool-text)]">
+                <span className="shrink-0 text-12 tabular-nums text-[var(--msg-tool-text)]">
                   {fmtContextTokens(cat.tokens)}
                 </span>
-                <span className="w-[42px] shrink-0 text-right text-[12px] tabular-nums text-[var(--msg-user-text)]">
+                <span className="w-[42px] shrink-0 text-right text-12 tabular-nums text-[var(--msg-user-text)]">
                   {fmtPercent(finiteNumber(cat.tokens), rawMaxTokens)}
                 </span>
               </div>
@@ -362,7 +362,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                       type="button"
                       className={cn(
                         'grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3',
-                        'text-left text-[12px] text-[var(--msg-tool-text)] select-none',
+                        'text-left text-12 text-[var(--msg-tool-text)] select-none',
                       )}
                       onClick={() => toggleDetail(row.key)}
                       aria-expanded={isDetailExpanded}
@@ -486,11 +486,11 @@ function ContextDetailSection({
   return (
     <div>
       {title && (
-        <div className="mb-1 text-[12px] font-medium text-[var(--msg-user-text)]">{title}</div>
+        <div className="mb-1 text-12 font-medium text-[var(--msg-user-text)]">{title}</div>
       )}
       <div className="flex flex-col gap-[2px]">
         {visibleRows.map(([label, tokens]) => (
-          <div key={label} className="flex items-baseline justify-between gap-3 text-[12px]">
+          <div key={label} className="flex items-baseline justify-between gap-3 text-12">
             <span className="min-w-0 flex-1 truncate text-[var(--msg-tool-text)]">{label}</span>
             <span className="shrink-0 font-medium tabular-nums text-[var(--msg-tool-text)]">
               {fmtContextTokens(tokens)}
@@ -588,7 +588,7 @@ function PwdCard({ data }: { data?: Record<string, unknown> }) {
   return (
     <div className={cardClass}>
       <div className={titleClass}>Working Directory</div>
-      <span className={cn(codeClass, 'text-[14px]')}>{workingDir}</span>
+      <span className={cn(codeClass, 'text-14')}>{workingDir}</span>
     </div>
   );
 }
@@ -661,7 +661,7 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
       aria-label={t('chat.systemCard.compact.aria')}
     >
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
-      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-[11px] text-muted-foreground tabular-nums">
+      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <Layers size={12} className="shrink-0" />
         <span>{triggerLabel}</span>
         {stats.length > 0 && (
@@ -704,7 +704,7 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
       title={reason || undefined}
     >
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
-      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-[11px] text-muted-foreground tabular-nums">
+      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <Target size={12} className="shrink-0" />
         <span>{label}</span>
       </div>
@@ -732,7 +732,7 @@ function GoalResumedCard({ data }: { data?: { kind?: string } }) {
   return (
     <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
-      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-[11px] text-muted-foreground tabular-nums">
+      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <Target size={12} className="shrink-0" />
         <span>{label}</span>
       </div>
@@ -823,7 +823,7 @@ function AutoResumeSeparator() {
   return (
     <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
-      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-[11px] text-muted-foreground tabular-nums">
+      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <RefreshCw size={12} className="shrink-0" />
         <span>{label}</span>
       </div>
@@ -930,13 +930,13 @@ function AutoResumeActionRow({
             <RefreshCw size={13} />
           )}
         </span>
-        <span className="text-[14px] text-[var(--msg-tool-card-chevron)] shrink-0">{label}</span>
+        <span className="text-14 text-[var(--msg-tool-card-chevron)] shrink-0">{label}</span>
         {/* param 位:中断原因摘要。与动词同色同字号(工具行的命令同款处理),
             不加色 —— 设计规范禁止在正文里引入 chromatic 色。 */}
         {summary && (
           <span
             title={summary}
-            className="min-w-0 truncate text-[14px] text-[var(--msg-tool-card-chevron)]"
+            className="min-w-0 truncate text-14 text-[var(--msg-tool-card-chevron)]"
           >
             {summary}
           </span>
@@ -967,7 +967,7 @@ function AutoResumeActionRow({
         >
           {info.error && (
             <>
-              <div className="text-[12px] opacity-70">
+              <div className="text-12 opacity-70">
                 {t('chat.systemCard.autoResume.detail.reason')}
               </div>
               <pre className="m-0 mt-[2px] whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]">
@@ -976,7 +976,7 @@ function AutoResumeActionRow({
             </>
           )}
           {(hasProgress || info.sessionTotal !== undefined) && (
-            <div className={cn('flex flex-wrap gap-x-4 gap-y-[2px] text-[12px]', info.error && 'mt-2')}>
+            <div className={cn('flex flex-wrap gap-x-4 gap-y-[2px] text-12', info.error && 'mt-2')}>
               {hasProgress && (
                 <span>
                   {t('chat.systemCard.autoResume.detail.attempt', {
@@ -1045,7 +1045,7 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
             // min-w-0(而非 shrink-0):自定义供应商的模型 id 可以很长,胶囊必须
             // 能收缩、由内部模型名 truncate 让位,不许把整行顶出卡片宽度。
             'flex min-w-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)]',
-            'bg-background/50 px-2.5 py-1 text-[11px] text-muted-foreground',
+            'bg-background/50 px-2.5 py-1 text-11 text-muted-foreground',
             handoff && 'cursor-pointer hover:bg-[var(--msg-tool-card-bg)]',
           )}
           aria-expanded={expanded}
@@ -1082,14 +1082,14 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
               'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
             )}
           >
-            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+            <div className="mb-1.5 text-11 font-medium text-muted-foreground">
               {t(
                 isEnglishSourceHandoff(handoff)
                   ? 'chat.systemCard.agentSwitch.handoffTitleEnglishSource'
                   : 'chat.systemCard.agentSwitch.handoffTitle',
               )}
             </div>
-            <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.55] text-[var(--msg-tool-text)]">
+            <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-12 leading-[1.55] text-[var(--msg-tool-text)]">
               {handoff}
             </pre>
           </div>
@@ -1164,7 +1164,7 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   const statusChip = (
     <span
       className={cn(
-        'shrink-0 px-[8px] py-[1px] rounded-full font-mono text-[11px]',
+        'shrink-0 px-[8px] py-[1px] rounded-full font-mono text-11',
         'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]',
         'border border-[var(--msg-tool-card-border)]',
       )}
@@ -1189,20 +1189,20 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-user-text)]',
     'border border-[var(--msg-code-block-border)]',
   );
-  const sectionLabelClass = cn(labelClass, 'mt-3 text-[12px]');
+  const sectionLabelClass = cn(labelClass, 'mt-3 text-12');
 
   return (
     <div className={cardClass}>
       <div className="flex items-center gap-2">
         <span className={cn(titleClass, 'mb-0')}>$ Shell</span>
         {statusChip}
-        <span className={cn(labelClass, 'text-[12px] ml-auto')}>{elapsedMs}ms</span>
+        <span className={cn(labelClass, 'text-12 ml-auto')}>{elapsedMs}ms</span>
       </div>
 
       <pre className={cmdLineClass}>{cmdLine || '<empty>'}</pre>
 
       {cwd && (
-        <div className={cn(labelClass, 'mt-1 text-[12px] truncate')} title={cwd}>
+        <div className={cn(labelClass, 'mt-1 text-12 truncate')} title={cwd}>
           cwd: {cwd}
         </div>
       )}
@@ -1226,7 +1226,7 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
         </>
       )}
       {!stdout && !stderr && !spawnError && (
-        <div className={cn(labelClass, 'mt-2 text-[12px] italic')}>(no output)</div>
+        <div className={cn(labelClass, 'mt-2 text-12 italic')}>(no output)</div>
       )}
     </div>
   );

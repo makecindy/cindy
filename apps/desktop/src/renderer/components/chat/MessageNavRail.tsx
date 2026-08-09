@@ -413,7 +413,7 @@ export function MessageNavRail({
               >
                 <span
                   aria-hidden="true"
-                  className="text-[9px] leading-none text-[var(--text-tertiary)]"
+                  className="text-10 leading-none text-[var(--text-tertiary)]"
                 >
                   ⋯
                 </span>

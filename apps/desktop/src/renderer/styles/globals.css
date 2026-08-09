@@ -43,7 +43,9 @@
     --text-3xl-line-height: 36px;
     --text-4xl-line-height: 40px;
     --text-5xl-line-height: 48px;
-    --text-9: 9px;
+    /* DESIGN.md §3 的 numeric 字号白名单默认值。运行时会由
+       useFontSettings 按用户 UI 缩放覆写；档位须与 tailwind.config.ts、
+       UI_TEXT_TOKEN_SIZES、tailwind-merge 字号组保持权威来源与消费端一致。 */
     --text-10: 10px;
     --text-11: 11px;
     --text-12: 12px;
@@ -51,17 +53,9 @@
     --text-14: 14px;
     --text-15: 15px;
     --text-16: 16px;
-    --text-17: 17px;
     --text-18: 18px;
-    --text-19: 19px;
     --text-20: 20px;
-    --text-21: 21px;
-    --text-22: 22px;
-    --text-23: 23px;
     --text-24: 24px;
-    --text-25: 25px;
-    --text-26: 26px;
-    --text-27: 27px;
     --text-28: 28px;
 
     /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
@@ -374,6 +368,18 @@ html:lang(ko) {
 }
 .chat-rail-compact [data-chat-input-root] .text-\[15px\] {
   font-size: 15px;
+}
+.chat-rail-compact [data-chat-input-root] .text-12 {
+  font-size: var(--text-12);
+}
+.chat-rail-compact [data-chat-input-root] .text-13 {
+  font-size: var(--text-13);
+}
+.chat-rail-compact [data-chat-input-root] .text-14 {
+  font-size: var(--text-14);
+}
+.chat-rail-compact [data-chat-input-root] .text-15 {
+  font-size: var(--text-15);
 }
 
 /* Tiptap ChatInput — placeholder hook & chip alignment

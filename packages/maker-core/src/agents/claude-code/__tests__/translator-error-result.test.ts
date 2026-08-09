@@ -49,6 +49,47 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator is_error result guard', () => {
+  it('carries the assistant API message id into done for Vertex lag detection', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          id: 'msg_vrtx_123',
+          content: [{ type: 'text', text: '完成' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        result: '完成',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 20_000, output_tokens: 7 },
+        modelUsage: {
+          'claude-opus-4-8': {
+            inputTokens: 20_000,
+            outputTokens: 7,
+            costUSD: 0,
+            contextWindow: 200_000,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({ assistant_message_id: 'msg_vrtx_123' });
+  });
+
   it('surfaces a terminal error AND keeps the Done/done tail when is_error arrives without a prior envelope', async () => {
     // 原 bug 路径②: result.is_error 但 turn 内没有任何 API-error envelope → 旧实现只发
     // status Done + done, renderer 的 state.error 不置位, 失败被通知成"已完成"。

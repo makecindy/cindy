@@ -23,6 +23,8 @@ export interface QuotaHoverCardTurnUsage {
   totalTokensText?: string | null;
   inputTokensText?: string | null;
   outputTokensText?: string | null;
+  outputRateText?: string | null;
+  turnDurationText?: string | null;
   cacheLineText?: string | null;
   model?: string | null;
   perModelCost?: ReadonlyArray<{
@@ -322,6 +324,26 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
         </div>
       ) : null}
 
+      {turnUsage.turnDurationText != null ? (
+        <div
+          data-testid="quota-performance"
+          className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums"
+        >
+          <span className="text-[var(--text-secondary)]">{t('quotaCard.timeLabel')}</span>
+          <span
+            data-testid="quota-performance-value"
+            className="ml-auto text-right font-medium text-[var(--text-primary)]"
+          >
+            {turnUsage.outputRateText != null
+              ? t('quotaCard.timeAndRateValue', {
+                  duration: turnUsage.turnDurationText,
+                  rate: turnUsage.outputRateText,
+                })
+              : turnUsage.turnDurationText}
+          </span>
+        </div>
+      ) : null}
+
       {!showModelCostBreakdown && turnUsage.model != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3">
           <span className="text-[var(--text-secondary)]">{t('quotaCard.modelLabel')}</span>
@@ -450,7 +472,7 @@ export function QuotaHoverCard({
   return (
     <div
       data-testid="quota-hover-card"
-      className="flex max-h-[calc(100vh-16px)] w-[340px] select-none flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] pb-2 text-[13px] leading-5 text-[var(--text-primary)]"
+      className="flex max-h-[calc(100vh-16px)] w-[340px] select-none flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] pb-2 text-13 leading-5 text-[var(--text-primary)]"
       style={{ boxShadow: 'var(--shadow-menu)' }}
     >
       <div
@@ -467,7 +489,7 @@ export function QuotaHoverCard({
               {planLabel ? (
                 <span
                   data-testid="quota-plan-badge"
-                  className="ml-auto rounded-full border border-[var(--border-default)] px-[7px] py-px text-[11px] font-medium"
+                  className="ml-auto rounded-full border border-[var(--border-default)] px-[7px] py-px text-11 font-medium"
                 >
                   {planLabel}
                 </span>

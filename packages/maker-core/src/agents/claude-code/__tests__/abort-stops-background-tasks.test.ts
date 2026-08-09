@@ -460,6 +460,8 @@ afterEach(async () => {
   asyncQueueMock.rejectNextDone = false;
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
+  imageResizerMock.process.mockReset();
+  imageResizerMock.process.mockImplementation(async (p: string) => p);
   if (originalClaudeConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR;
   } else {
@@ -1476,6 +1478,88 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await waitFor(() => handle.isTurnRunning?.() === false, 'ordinary turn settled');
     expect(events.filter((event) => event.type === 'done').at(-1)?.turnContinuationId).toBeUndefined();
     expect(handle.listBackgroundTasks?.()).toEqual([]);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('ordinary attachment Stop cancels only the synthetic turn and preserves local_bash', async () => {
+    const { handle, stream, events, fakeQuery, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'start a dev server' });
+    stream.emit(taskStarted('task-bash', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 1, 'local_bash task observed');
+    stream.emit(turnResult('server is running'));
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'initial turn done');
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    let resolveResize!: (value: string) => void;
+    imageResizerMock.process.mockImplementationOnce(
+      () => new Promise<string>((resolve) => { resolveResize = resolve; }),
+    );
+    const controller = new AbortController();
+    const sendPromise = handle.send(
+      { type: 'user', content: [{ type: 'image', path: path.join(os.tmpdir(), 'ordinary-stop.png') }] },
+      { signal: controller.signal },
+    );
+    await waitFor(() => imageResizerMock.process.mock.calls.length >= 1, 'attachment conversion started');
+
+    controller.abort();
+    await handle.abort();
+    resolveResize(path.join(os.tmpdir(), 'ordinary-stop.png'));
+    await expect(sendPromise).rejects.toThrow('Claude send cancelled before acceptance');
+
+    expect(fakeQuery.close).toHaveBeenCalledTimes(0);
+    expect(fakeQueries).toHaveLength(1);
+    expect(handle.listBackgroundTasks?.()).toEqual([
+      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
+    ]);
+    await waitFor(() => events.filter(isProductTerminal).length === 2, 'ordinary cancellation terminal');
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.send({ type: 'user', content: 'next ordinary turn' });
+    stream.emit(turnResult('next turn done'));
+    await waitFor(() => events.filter(isProductTerminal).length === 3, 'next ordinary turn done');
+    await waitFor(() => handle.isTurnRunning?.() === false, 'next ordinary turn settled');
+    expect(fakeQueries).toHaveLength(1);
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(handle.listBackgroundTasks?.()).toEqual([
+      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
+    ]);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('ordinary attachment Stop with no background task emits one terminal and leaves the Query reusable', async () => {
+    const { handle, stream, events, fakeQuery, fakeQueries } = await startSessionWithStream();
+
+    let resolveResize!: (value: string) => void;
+    imageResizerMock.process.mockImplementationOnce(
+      () => new Promise<string>((resolve) => { resolveResize = resolve; }),
+    );
+    const controller = new AbortController();
+    const sendPromise = handle.send(
+      { type: 'user', content: [{ type: 'image', path: path.join(os.tmpdir(), 'ordinary-stop-no-task.png') }] },
+      { signal: controller.signal },
+    );
+    await waitFor(() => imageResizerMock.process.mock.calls.length >= 1, 'attachment conversion started');
+    controller.abort();
+    await handle.abort();
+    resolveResize(path.join(os.tmpdir(), 'ordinary-stop-no-task.png'));
+    await expect(sendPromise).rejects.toThrow('Claude send cancelled before acceptance');
+
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'ordinary cancellation terminal');
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(fakeQueries).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'usable after ordinary cancellation' });
+    stream.emit(turnResult('usable'));
+    await waitFor(() => events.filter(isProductTerminal).length === 2, 'follow-up terminal');
+    await waitFor(() => handle.isTurnRunning?.() === false, 'follow-up settled');
+    expect(fakeQueries).toHaveLength(1);
+    expect(fakeQuery.close).not.toHaveBeenCalled();
 
     stream.end();
     await handle.close().catch(() => undefined);

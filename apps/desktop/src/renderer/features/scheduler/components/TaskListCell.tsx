@@ -396,7 +396,7 @@ export function TaskListCell({
         {!isEditing && isProjectSchedule && (
           <span
             className={cn(
-              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-[2px] text-[11px] font-medium leading-none',
+              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
             title={t('scheduler.projectAutomation.cell.tooltip')}
@@ -408,7 +408,7 @@ export function TaskListCell({
         {!isEditing && (s.manual || !s.recurring) && (
           <span
             className={cn(
-              'shrink-0 translate-x-[2px] rounded-full border px-2 py-[2px] text-[11px] font-medium leading-none',
+              'shrink-0 translate-x-[2px] rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
           >
@@ -443,7 +443,7 @@ export function TaskListCell({
           {costText && (
             <span
               className={cn(
-                'ml-auto shrink-0 text-[11px]',
+                'ml-auto shrink-0 text-11',
                 selected
                   ? 'text-[var(--settings-section-desc)]'
                   : 'text-[var(--cmd-palette-item-meta)]',

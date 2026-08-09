@@ -1950,6 +1950,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
       turnState.pendingApiError = null;
+      turnState.lastAssistantRequestId = undefined;
       // 代际前进: 迟到的被打断 result 据此被 translator 识别为已被本 send 接管。
       turnState.generation += 1;
       // interruptRequested **刻意不在这里清**: watchdog / tool-loop guard 先置
@@ -3140,6 +3141,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // still has buffered activity. Suppress that cancelled tail until its
     // Query is replaced before the next explicit user turn.
     let continuationCancellationGeneration: number | null = null;
+    /**
+     * 本次 Stop 已经发过终态 boundary 的那一代。
+     *
+     * accept 阶段的 foreground 终态归 send 的 finishSendBeforeUserInput 发, 但
+     * abort 若同时取消了一个 awaiting continuation, 它已经先发过
+     * turn_continuation_cancelled —— 同一次 Stop 再补一个 done 就是双终态,
+     * Session 不按 generation 去重, 所有监听方都会收到两条。
+     *
+     * 单独记一个代次而不是复用 continuationCancellationGeneration: 后者在关
+     * query 分支里**无条件**设置(哪怕那一轮根本没发 boundary), 拿它当去重依据
+     * 会把 send 该发的那个终态一起吞掉。
+     */
+    let stopTerminalEmittedGeneration: number | null = null;
     let continuationCancellationRequiresQueryRebuild = false;
     const continuationClaims = new Map<number, ContinuationClaim>();
     const continuationListeners = new Set<(
@@ -3410,6 +3424,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         continuationId: claim.id,
       });
       if (emitTurnBoundary('turn_continuation_cancelled', undefined, true)) {
+        // 这一代的终态已经出去了 —— accept 阶段的 send 醒来后不要再补一个。
+        stopTerminalEmittedGeneration = turnState.generation;
         // Install the cancelled-tail fence at the same enqueue boundary as
         // the synthetic product terminal. stopTask can win before interrupt
         // resolves, so waiting for the interrupt ACK leaves a double-terminal
@@ -4369,6 +4385,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       query: Query;
       input: AsyncQueue<SdkUserInput>;
       retryResumeAt?: string;
+      retireQueryOnCancel: boolean;
       cancellation: Promise<never>;
       cancelled: boolean;
       settled: boolean;
@@ -4407,6 +4424,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       idleResumeRebuildGate !== null ||
       continuationCancellationRequiresQueryRebuild ||
       canceledBridgeQueries.has(q);
+    const isLiveRuntimeTarget = (targetQuery: Query): boolean =>
+      !closed &&
+      targetQuery === q &&
+      !canceledBridgeQueries.has(targetQuery) &&
+      !rewindTransitionQueries.has(targetQuery) &&
+      !canceledQueryClosePromises.has(targetQuery);
     type QueryRuntimeSnapshot = {
       model: string;
       effort: Effort;
@@ -4419,17 +4442,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       targetQuery: Query = q,
     ): Promise<void> {
       for (let pass = 0; pass < 5; pass += 1) {
+        if (!isLiveRuntimeTarget(targetQuery)) return;
         let replayed = false;
         if (mutableModel !== snapshot.model) {
           replayed = true;
           const targetModel = mutableModel;
           try {
             await targetQuery.setModel(sdkModelFor(targetModel));
+            if (!isLiveRuntimeTarget(targetQuery)) return;
             snapshot.model = targetModel;
             log.debug(`${label}: replayed setModel`, { model: targetModel });
           } catch (e) {
             log.warn(`${label}: replay setModel failed`, { error: String(e) });
           }
+          if (!isLiveRuntimeTarget(targetQuery)) return;
         }
         if (mutableEffort !== snapshot.effort) {
           replayed = true;
@@ -4442,6 +4468,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 sdkEffort,
                 getSdkMaxEffortFallbackForModel(mutableModel),
               );
+              if (!isLiveRuntimeTarget(targetQuery)) return;
               log.debug(`${label}: replayed setEffort`, {
                 effort: targetEffort,
                 sdk: appliedEffort,
@@ -4451,6 +4478,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               log.warn(`${label}: replay setEffort failed`, { error: String(e) });
             }
           }
+          if (!isLiveRuntimeTarget(targetQuery)) return;
           snapshot.effort = targetEffort;
         }
         if (mutableFastMode !== snapshot.fastMode) {
@@ -4458,10 +4486,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           const targetFastMode = mutableFastMode;
           try {
             await targetQuery.applyFlagSettings({ fastMode: targetFastMode });
+            if (!isLiveRuntimeTarget(targetQuery)) return;
             log.debug(`${label}: replayed setFastMode`, { fastMode: targetFastMode });
           } catch (e) {
             log.warn(`${label}: replay setFastMode failed`, { error: String(e) });
           }
+          if (!isLiveRuntimeTarget(targetQuery)) return;
           snapshot.fastMode = targetFastMode;
         }
         const sdkMode = currentTurnSdkPermissionMode();
@@ -4470,12 +4500,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           const targetSdkMode = sdkMode;
           try {
             await targetQuery.setPermissionMode(targetSdkMode);
+            if (!isLiveRuntimeTarget(targetQuery)) return;
             sdkInPlanMode = targetSdkMode === 'plan';
             snapshot.sdkPermissionMode = targetSdkMode;
             log.debug(`${label}: replayed setPermissionMode`, { sdkMode: targetSdkMode });
           } catch (e) {
             log.warn(`${label}: replay setPermissionMode failed`, { error: String(e) });
           }
+          if (!isLiveRuntimeTarget(targetQuery)) return;
         }
         if (!replayed) return;
       }
@@ -4688,8 +4720,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // effectiveSdkPermissionMode()(planTurnActive 已置 true → 'plan') 起档。
           if (!sdkInPlanMode && !controlRequestsBlocked()) {
             try {
-              await q.setPermissionMode('plan');
-              sdkInPlanMode = true;
+              const targetQuery = q;
+              await targetQuery.setPermissionMode('plan');
+              if (isLiveRuntimeTarget(targetQuery)) sdkInPlanMode = true;
             } catch (e) {
               log.warn('deferred plan-mode SDK switch failed — sending as a normal turn', { error: String(e) });
             }
@@ -4789,7 +4822,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           pendingToolIds.clear();
           acceptingRebuiltSend = false;
           clearUpstreamResponseIdle();
-          emitTurnBoundary(reason, doneData);
+          // 同一次 Stop 只发一个终态: abort 若已为被取消的 continuation 发过
+          // turn_continuation_cancelled(同一代), 这里只清状态、不再补 done。
+          if (stopTerminalEmittedGeneration !== turnState.generation) {
+            emitTurnBoundary(reason, doneData);
+          }
         };
         const createSendAcceptAttempt = (): SendAcceptAttempt => {
           let rejectAcceptCancellation!: (error: Error) => void;
@@ -4801,6 +4838,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             query: q,
             input: inputQueue,
             ...(acceptRetryResumeAt ? { retryResumeAt: acceptRetryResumeAt } : {}),
+            retireQueryOnCancel:
+              acceptRetryResumeAt !== undefined ||
+              bridgeCompactQueued ||
+              bridgeStateActive(),
             cancellation: acceptCancellation,
             cancelled: false,
             settled: false,
@@ -4819,33 +4860,39 @@ export class ClaudeCodeAgent extends BaseAgent {
               this.cancelled = true;
               const cancellationReason = bridgeStateActive() ? 'bridge_aborted' : reason;
               let suppressedDoneData: Record<string, unknown> | undefined;
-              canceledBridgeQueries.add(this.query);
-              this.input.clear();
-              try {
-                this.input.end();
-              } catch (endError) {
-                log.warn('accept-phase cancellation: inputQueue.end threw', {
-                  error: String(endError),
-                });
+              // Rewind/bridge acceptance owns a fresh Query that must be retired
+              // as one unit. An ordinary attachment conversion has not queued
+              // any user input yet, so cancel only that synthetic turn and keep
+              // the existing Query (including long-lived local_bash tasks) alive.
+              if (this.retireQueryOnCancel) {
+                canceledBridgeQueries.add(this.query);
+                this.input.clear();
+                try {
+                  this.input.end();
+                } catch (endError) {
+                  log.warn('accept-phase cancellation: inputQueue.end threw', {
+                    error: String(endError),
+                  });
+                }
+                if (bridgeStateActive()) {
+                  restoreBridgeAutoCompactSnapshot(cancellationReason);
+                  autoCompactController?.onCompactCanceled(cancellationReason);
+                  suppressedDoneData = takeBridgeSuppressedDoneData();
+                  clearBridgeState();
+                }
+                if (this.retryResumeAt) {
+                  pendingRewindTo = this.retryResumeAt;
+                } else {
+                  continuationCancellationGeneration = turnState.generation;
+                  continuationCancellationRequiresQueryRebuild = true;
+                }
+                recordCanceledQueryClose(this.query, 'accept-phase send cancelled');
+                discardActiveContinuation(cancellationReason);
+                runningBackgroundTasks.clear();
+                terminalBackgroundTaskIds.clear();
+                replayableUserInput = null;
+                acceptingRebuiltSend = false;
               }
-              if (bridgeStateActive()) {
-                restoreBridgeAutoCompactSnapshot(cancellationReason);
-                autoCompactController?.onCompactCanceled(cancellationReason);
-                suppressedDoneData = takeBridgeSuppressedDoneData();
-                clearBridgeState();
-              }
-              if (this.retryResumeAt) {
-                pendingRewindTo = this.retryResumeAt;
-              } else {
-                continuationCancellationGeneration = turnState.generation;
-                continuationCancellationRequiresQueryRebuild = true;
-              }
-              recordCanceledQueryClose(this.query, 'accept-phase send cancelled');
-              discardActiveContinuation(cancellationReason);
-              runningBackgroundTasks.clear();
-              terminalBackgroundTaskIds.clear();
-              replayableUserInput = null;
-              acceptingRebuiltSend = false;
               finishSendBeforeUserInput(cancellationReason, error, suppressedDoneData);
               rejectAcceptCancellation(new Error('Claude send cancelled before acceptance'));
             },
@@ -5214,6 +5261,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           runningBackgroundTasks.clear();
           terminalBackgroundTaskIds.clear();
           turnInFlight = false;
+          // Accept-phase Stop 已在上方由 activeSendAcceptAttempt 独占处理；
+          // 能走到这里说明真实输入已经交付，本分支自己发唯一 bridge_aborted 终态。
           turnState.interruptRequested = false;
           preserveBridgeRetryTarget(abortedBridgeKind, abortedRewindResumeAt);
           emitTurnBoundary(
@@ -5310,7 +5359,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               // foreground turn has not already produced a terminal, replace
               // it with one synthetic boundary; a raced natural result leaves
               // foregroundWasInFlight=false and therefore does not get a duplicate.
-              if (foregroundWasInFlight) emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              if (foregroundWasInFlight) {
+                emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              }
             }
             inputQueue.clear();
             try {
@@ -5327,6 +5378,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // error_during_execution result → translator 在 onTurnEnd 清
             // turnInFlight。这里显式补清以防 SDK 未 drain result 的极端
             // 情况(确保不会 SESSION_RUNNING 永拒)。
+            //
             turnInFlight = false;
           }
         } catch (e) {
@@ -5789,8 +5841,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 重建时 buildQuery 以 effectiveSdkPermissionMode() 起档并回写 sdkInPlanMode
           return;
         }
-        await q.setPermissionMode(sdkMode);
-        sdkInPlanMode = sdkMode === 'plan';
+        const targetQuery = q;
+        await targetQuery.setPermissionMode(sdkMode);
+        if (isLiveRuntimeTarget(targetQuery)) {
+          sdkInPlanMode = sdkMode === 'plan';
+        }
       },
 
       getPlanMode() {

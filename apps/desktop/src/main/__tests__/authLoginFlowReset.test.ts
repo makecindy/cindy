@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { shouldTeardownColdStartRuntime } from '../authColdStartBoundary';
 
 /** Regression guard for login progress that is intentionally owned by Electron main. */
 describe('auth login-flow reset', () => {
@@ -190,6 +192,42 @@ describe('auth login-flow reset', () => {
       "await expireRuntimeAuth(currentUser.id, 'replaced-elsewhere', {",
     );
     expect(refreshBody).toContain('preservePersistedRefreshToken: true');
+  });
+
+  it('does not call teardown for a fresh signed-out/null cold-start session', () => {
+    const teardown = vi.fn();
+    const previousAppSession = {
+      mode: 'signed-out' as const,
+      dataOwnerId: null,
+      generation: 0,
+    };
+
+    if (shouldTeardownColdStartRuntime(previousAppSession, 'account-1')) {
+      teardown();
+    }
+
+    expect(teardown).not.toHaveBeenCalled();
+  });
+
+  it('tears down only an already-committed runtime that crosses an owner boundary', () => {
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'cloud', dataOwnerId: 'account-1', generation: 1 },
+        'account-1',
+      ),
+    ).toBe(false);
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'cloud', dataOwnerId: 'account-1', generation: 1 },
+        'account-2',
+      ),
+    ).toBe(true);
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'local', dataOwnerId: 'local-v1', generation: 1 },
+        'account-1',
+      ),
+    ).toBe(true);
   });
 
   it('drops a runtime refresh result after logout or a newer login changes auth generation', () => {

@@ -1,5 +1,10 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
+import {
+  MAKER_EVENT_BATCH_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL,
+  expandMakerEventBatchPayload,
+  type SessionActivityPayload,
+} from '@cindy/device-link';
 import {
   applyAgentTaskUpdateEvent,
   isSameAgentTaskAlias,
@@ -2005,6 +2010,17 @@ export const remoteSessionStore = {
     emit();
   },
 
+  /**
+   * 单条 maker:event push payload 的消费(逐帧与微批拆包**共用**唯一实现——
+   * 两条路径若各自解析,批的语义就会随逐帧演进而漂移)。
+   */
+  applyMakerEventPush(payload: Record<string, unknown>): void {
+    const sessionId = readString(payload, 'sessionId');
+    const event = isRecord(payload.event) ? payload.event : null;
+    const persistId = readString(payload, 'persistId') ?? undefined;
+    if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId);
+  },
+
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       this.applySessionActivity(deviceId, payload);
@@ -2102,10 +2118,20 @@ export const remoteSessionStore = {
       return;
     }
     if (channel === 'maker:event' && isRecord(payload)) {
-      const sessionId = readString(payload, 'sessionId');
-      const event = isRecord(payload.event) ? payload.event : null;
-      const persistId = readString(payload, 'persistId') ?? undefined;
-      if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId);
+      this.applyMakerEventPush(payload);
+      return;
+    }
+    // 微批帧:被控端把同一会话的连续 maker:event 合并成一帧(能力协商见
+    // CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)。逐条按原顺序走与逐帧**完全
+    // 相同**的处理路径——批只是传输层的聚合,不引入新的应用语义;单条形状不符
+    // 时跳过该条而不丢整批。
+    if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+      // 拆包与 fail-closed 的 topic 隔离判据在共享包里(desktop 作为控制端时也用
+      // 同一份,见 expandMakerEventBatchPayload 注释)。
+      for (const event of expandMakerEventBatchPayload(payload)) {
+        if (!isRecord(event)) continue;
+        this.applyMakerEventPush(event);
+      }
       return;
     }
     if (channel === 'maker:status-changed' && isRecord(payload)) {
