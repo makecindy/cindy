@@ -235,14 +235,11 @@ export function MarketplaceSourcesDialog({
                           })}
                         </p>
                       ) : null}
-                      {source.pluginCount === 0 && source.skippedCount > 0 ? (
-                        // 可用 0 但清单有条目:常见成因是插件目录被做成 Git
-                        // submodule(clone 有意不递归),清单合法、无错误码,
-                        // 不点明成因用户无从排查。推导不变量见
-                        // MarketplaceDiscoveryNotice(declared = accepted +
-                        // skipped + unreadable)。
+                      {source.pluginCount === 0 &&
+                      source.skippedCount > 0 &&
+                      source.unreadableCount === 0 ? (
                         <p className="text-[var(--warning-fg)]">
-                          {t('settings.ghosts.market.sources.emptyWithEntries')}
+                          {t('settings.ghosts.market.sources.emptyWithSkippedEntries')}
                         </p>
                       ) : null}
                       {source.unreadableCount > 0 ? (

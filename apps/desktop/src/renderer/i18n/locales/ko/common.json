@@ -3308,7 +3308,7 @@
           "unreadableEntries": "플러그인 항목 {{count}}개를 일시적으로 읽을 수 없습니다. 새로고침하여 다시 시도하세요",
           "addedReceipt": "\"{{name}}\"을(를) 추가했고 플러그인 {{count}}개를 발견했습니다",
           "refreshedReceipt": "\"{{name}}\"을(를) 새로고침했고 플러그인 {{count}}개를 발견했습니다",
-          "emptyWithEntries": "매니페스트에 항목이 있지만 사용 가능한 플러그인을 찾지 못했습니다. 흔한 원인은 플러그인 디렉터리가 git submodule인 경우입니다(내용을 가져오지 않음). 마켓플레이스 작성자에게 플러그인 디렉터리를 저장소에 직접 넣도록 요청하세요.",
+          "emptyWithSkippedEntries": "사용 가능한 플러그인을 찾지 못했습니다. 매니페스트의 모든 항목을 건너뛰었습니다. 소스 유형, 플러그인 디렉터리, 매니페스트를 확인하세요.",
           "localBadge": "로컬",
           "defaultRef": "기본 브랜치",
           "neverSynced": "동기화되지 않음",

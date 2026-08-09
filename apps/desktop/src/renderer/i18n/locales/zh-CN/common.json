@@ -3308,7 +3308,7 @@
           "unreadableEntries": "{{count}} 个插件条目暂时无法读取，请刷新重试",
           "addedReceipt": "已添加“{{name}}”，发现 {{count}} 个插件",
           "refreshedReceipt": "已刷新“{{name}}”，发现 {{count}} 个插件",
-          "emptyWithEntries": "清单有条目但没有发现可用插件。常见原因是插件目录为 git submodule（内容不会被拉取）——请市场作者将插件目录直接放入仓库。",
+          "emptyWithSkippedEntries": "未发现可用插件：清单中的条目均被跳过。请检查来源类型、插件目录和清单配置。",
           "localBadge": "本地",
           "defaultRef": "默认分支",
           "neverSynced": "尚未同步",

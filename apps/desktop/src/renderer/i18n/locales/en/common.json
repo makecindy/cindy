@@ -3309,7 +3309,7 @@
           "unreadableEntries": "{{count}} plugin entries are temporarily unreadable; refresh to retry",
           "addedReceipt": "Added \"{{name}}\" with {{count}} plugins discovered",
           "refreshedReceipt": "Refreshed \"{{name}}\" with {{count}} plugins discovered",
-          "emptyWithEntries": "The manifest lists entries but no usable plugins were discovered. A common cause is plugin directories being git submodules (their contents are not fetched) — ask the marketplace author to put plugin directories directly into the repository.",
+          "emptyWithSkippedEntries": "No usable plugins were discovered because all listed entries were skipped. Check the source types, plugin directories, and manifest entries.",
           "localBadge": "Local",
           "defaultRef": "Default branch",
           "neverSynced": "Never synced",
