@@ -277,16 +277,32 @@ function lineStaysInHtmlBlockContainer(
   return prefix.indent >= opening.listContentIndent;
 }
 
+function lineLeavesParagraphOpen(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  start: HtmlBlockLineStart,
+): boolean {
+  const content = text.slice(start.contentStart, lineEnd).trim();
+  if (content === '') return false;
+  if (/^#{1,6}(?:[ \t]+|$)/.test(content)) return false;
+  if (/^(?:={1,}|-{1,})[ \t]*$/.test(content)) return false;
+  if (/^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content)) return false;
+  if (/^(?:`{3,}|~{3,})/.test(content)) return false;
+  return true;
+}
+
 function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
   const lowerText = text.toLowerCase();
   let lineStart = 0;
   let paragraphOpen = false;
+  let paragraphQuoteDepth = 0;
   while (lineStart < text.length) {
     const lineEnd = lineEndAfterNewline(text, lineStart);
     const opening = htmlBlockLineStart(text, lineStart, lineEnd);
     if (!opening) {
-      paragraphOpen = !isBlankLine(text, lineStart, lineEnd);
+      paragraphOpen = false;
       lineStart = lineEnd;
       continue;
     }
@@ -302,9 +318,15 @@ function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
       const rawTag = contentLower.match(/^<(pre|script|style|textarea)(?:\s|>|$)/)?.[1];
       if (rawTag) closingMarker = `</${rawTag}>`;
       else if (HTML_BLOCK_TAG_RE.test(content)) blankTerminated = true;
-      else if (!paragraphOpen && COMPLETE_HTML_TAG_RE.test(content)) blankTerminated = true;
+      else if (
+        (!paragraphOpen || paragraphQuoteDepth !== opening.quoteDepth) &&
+        COMPLETE_HTML_TAG_RE.test(content)
+      ) {
+        blankTerminated = true;
+      }
       else {
-        paragraphOpen = !isBlankLine(text, lineStart, lineEnd);
+        paragraphOpen = lineLeavesParagraphOpen(text, lineStart, lineEnd, opening);
+        paragraphQuoteDepth = opening.quoteDepth;
         lineStart = lineEnd;
         continue;
       }

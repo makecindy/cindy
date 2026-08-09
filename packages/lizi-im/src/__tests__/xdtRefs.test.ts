@@ -379,6 +379,17 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toContain('\n报告\n');
   });
 
+  it('allows a type-7 HTML block after an ATX heading', () => {
+    const text = [
+      '# 标题',
+      '<span>',
+      '[示例](xdt-file:///tmp/heading-html.pdf)',
+      '</span>',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+  });
+
   it('ends an unclosed HTML comment when its blockquote container ends', () => {
     const text = [
       '> <!--',
