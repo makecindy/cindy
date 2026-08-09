@@ -80,12 +80,15 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
       });
       if (ring.length > capacity) ring.shift();
       // best-effort:外部 sink 抛错/异步 reject 不得冒泡影响业务流程。
-      try {
-        Promise.resolve(sink?.(evt)).catch(() => {
-          // 观测链路失败静默;环内数据不受影响。
-        });
-      } catch {
-        // 同步 throw 同样静默。
+      // sink 为空时不产生 Promise/微任务开销(Copilot)。
+      if (sink) {
+        try {
+          Promise.resolve(sink(evt)).catch(() => {
+            // 观测链路失败静默;环内数据不受影响。
+          });
+        } catch {
+          // 同步 throw 同样静默。
+        }
       }
     },
     snapshot() {

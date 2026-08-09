@@ -1527,6 +1527,16 @@ export class GoalController {
     for (const sessionId of [...this.unsubscribers.keys()]) {
       this.stopSession(sessionId);
     }
+    // 停掉已派发且跨过 onDispatching 的 in-flight goal turn:仅 detach listener
+    // 不会让旧 agent 进程停下——登出/切账号后它仍可能继续跑/消耗 token/产生
+    // 副作用,必须走 input coordinator 的 Stop 边界(与 clearGoal 一致,Codex P1)。
+    for (const sessionId of [...this.goalTurnsInFlight]) {
+      try {
+        this.deps.stopActiveGoalTurn(sessionId);
+      } catch {
+        // 中断失败不阻塞 dispose 其余清理。
+      }
+    }
     for (const sessionId of [...this.usageResumeTimers.keys()]) {
       this.cancelUsageResume(sessionId);
     }
@@ -1934,7 +1944,7 @@ export class GoalController {
         // 收口事件已真实记录:accepted 补发 turn-dispatched 以此为准(Greptile P1,
         // finalized 可能在 storage await 期间提前置位但事件未写)。
         turn.auditFinalized = true;
-      this.flushPendingDispatch(sessionId, turn);
+        this.flushPendingDispatch(sessionId, turn);
       } else {
         this.deps.logger.info('[goal] completion audit skipped — controller disposed', {
           sessionId,
@@ -2521,9 +2531,6 @@ export class GoalController {
         const boundaryStillLive =
           this.turns.get(sessionId) === dispatchBoundary ||
           (dispatchBoundary?.finalized === true && !this.disposed);
-
-
-
 
         if (!boundaryStillLive) {
           this.deps.logger.info('[goal] dispatch audit skipped — lifecycle replaced before accepted', {
