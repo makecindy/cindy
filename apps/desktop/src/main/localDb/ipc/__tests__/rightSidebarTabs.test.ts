@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { rightSidebarTabs, sessions } from '../../schema';
+import { rightSidebarTabs, sessions } from '../../schema.js';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -25,21 +25,18 @@ vi.mock('electron', () => ({
   },
   BrowserWindow: { getAllWindows: () => [] },
 }));
-vi.mock('../../../logger', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../../security/trustedAppRenderer', () => ({
+vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
 }));
-vi.mock('../../client/current', () => ({
+vi.mock('../../client/current.js', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
 
-import { registerRightSidebarTabsIpc } from '../rightSidebarTabs';
-import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer';
+import { registerRightSidebarTabsIpc } from '../rightSidebarTabs.js';
+import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
 function createDb(): Database.Database {
   const sqlite = new Database(':memory:');

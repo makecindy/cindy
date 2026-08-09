@@ -550,7 +550,7 @@ describe('db worker tx handlers', () => {
   });
 
   it.each([false, true])(
-    'rewind.commit hides linked and parentless Subagent tail rows atomically (inline=%s)',
+    'rewind.commit hides linked and parentless Subagent tail rows across providers atomically (inline=%s)',
     async (useInlineWorker) => {
       await withClient(
         async (client) => {
@@ -578,25 +578,45 @@ describe('db worker tx handlers', () => {
           );
           await client.exec(
             `INSERT INTO subagent_runs
-             (id, session_id, parent_tool_use_id, started_at, rewind_at)
-           VALUES (?, ?, ?, ?, NULL), (?, ?, ?, ?, NULL), (?, ?, ?, ?, NULL), (?, ?, ?, ?, NULL)`,
+             (id, session_id, provider, parent_tool_use_id, started_at, rewind_at)
+           VALUES
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL)`,
             [
               'linked',
               's1',
+              'pi',
               'spawn-tool',
               50,
               'orphan-before',
               's1',
+              'claude-code',
               null,
               100,
-              'orphan-same-ms',
+              'orphan-same-ms-claude',
               's1',
+              'claude-code',
               null,
               200,
-              'orphan-after',
+              'orphan-same-ms-codex',
               's1',
+              'codex',
+              null,
+              200,
+              'orphan-after-pi',
+              's1',
+              'pi',
               null,
               201,
+              'orphan-after-codex',
+              's1',
+              'codex',
+              null,
+              202,
             ],
           );
 
@@ -612,9 +632,11 @@ describe('db worker tx handlers', () => {
             client.query('SELECT id, rewind_at FROM subagent_runs ORDER BY id'),
           ).resolves.toEqual([
             { id: 'linked', rewind_at: 999 },
-            { id: 'orphan-after', rewind_at: 999 },
+            { id: 'orphan-after-codex', rewind_at: 999 },
+            { id: 'orphan-after-pi', rewind_at: 999 },
             { id: 'orphan-before', rewind_at: null },
-            { id: 'orphan-same-ms', rewind_at: 999 },
+            { id: 'orphan-same-ms-claude', rewind_at: 999 },
+            { id: 'orphan-same-ms-codex', rewind_at: 999 },
           ]);
         },
         { useInlineWorker },
@@ -1302,7 +1324,7 @@ describe('db worker tx handlers', () => {
   });
 
   it.each([false, true])(
-    'message.delete scrubs the selected AI round, linked Subagents, and parentless Claude runs atomically (inline=%s)',
+    'message.delete scrubs the selected AI round and parentless Subagents across providers atomically (inline=%s)',
     async (useInlineWorker) => {
       await withClient(async (client) => {
       await seedSession(client, 's1');
@@ -1339,6 +1361,7 @@ describe('db worker tx handlers', () => {
         `INSERT INTO subagent_runs
           (id, session_id, provider, logical_agent_id, parent_tool_use_id, title, description, summary, activity, started_at, updated_at)
          VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
           (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
           (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
           (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
@@ -1388,6 +1411,17 @@ describe('db worker tx handlers', () => {
           '[{"sequence":1,"summary":"codex activity"}]',
           220,
           230,
+          'parentless-pi',
+          's1',
+          'pi',
+          'pi-task',
+          null,
+          'pi title',
+          'pi prompt',
+          'pi result',
+          '[{"sequence":1,"summary":"pi activity"}]',
+          230,
+          240,
         ],
       );
 
@@ -1414,7 +1448,7 @@ describe('db worker tx handlers', () => {
           { messageId: 'auto-resume', clientId: 'auto-resume' },
           { messageId: 'tool', clientId: 'tool' },
         ],
-        subagentRunIds: ['linked', 'parentless-claude'],
+        subagentRunIds: ['linked', 'parentless-claude', 'parentless-codex', 'parentless-pi'],
       });
 
       await expect(
@@ -1505,11 +1539,19 @@ describe('db worker tx handlers', () => {
         },
         {
           id: 'parentless-codex',
-          title: 'codex title',
-          description: 'codex prompt',
-          summary: 'codex result',
-          activity: '[{"sequence":1,"summary":"codex activity"}]',
-          deleted_at: null,
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
+        },
+        {
+          id: 'parentless-pi',
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
         },
       ]);
       }, { useInlineWorker });

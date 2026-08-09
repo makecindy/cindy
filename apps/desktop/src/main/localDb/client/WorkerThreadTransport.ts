@@ -493,10 +493,10 @@ function messageDelete(readyDb, args) {
       if (subagentTurnWindow) {
         const parentlessRows = subagentTurnWindow.startedAtExclusive === undefined
           ? readyDb.prepare(
-              "SELECT id FROM subagent_runs WHERE session_id = ? AND provider = 'claude-code' AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ?",
+              'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ?',
             ).all(sessionId, subagentTurnWindow.startedAtInclusive)
           : readyDb.prepare(
-              "SELECT id FROM subagent_runs WHERE session_id = ? AND provider = 'claude-code' AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ? AND started_at < ?",
+              'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ? AND started_at < ?',
             ).all(sessionId, subagentTurnWindow.startedAtInclusive, subagentTurnWindow.startedAtExclusive);
         for (const row of parentlessRows) subagentRunIds.add(row.id);
       }

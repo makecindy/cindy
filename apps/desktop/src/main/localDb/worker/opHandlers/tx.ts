@@ -327,7 +327,6 @@ function messageDelete(
                 `SELECT id
                    FROM subagent_runs
                   WHERE session_id = ?
-                    AND provider = 'claude-code'
                     AND parent_tool_use_id IS NULL
                     AND rewind_at IS NULL
                     AND deleted_at IS NULL
@@ -337,7 +336,6 @@ function messageDelete(
                 `SELECT id
                    FROM subagent_runs
                   WHERE session_id = ?
-                    AND provider = 'claude-code'
                     AND parent_tool_use_id IS NULL
                     AND rewind_at IS NULL
                     AND deleted_at IS NULL
