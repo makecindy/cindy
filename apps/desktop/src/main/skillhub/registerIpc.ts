@@ -47,7 +47,10 @@ interface LocalImportGrant {
 
 interface ScannedSkillGrant {
   ownerId: string;
-  roots: Set<string>;
+  entries: Array<{
+    root: string;
+    projectRootKey?: string;
+  }>;
 }
 
 export interface RegisterSkillhubIpcOptions {
@@ -119,25 +122,37 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     ownerId: string,
     skills: import('./scanner').Skill[],
   ) => {
-    const roots = new Set<string>();
+    const entries: ScannedSkillGrant['entries'] = [];
+    const seenEntries = new Set<string>();
     for (const skill of skills) {
+      const skillProjectRootKey = skill.scope === 'project'
+        ? projectRootKey(skill.projectRoot)
+        : undefined;
+      if (skill.scope === 'project' && !skillProjectRootKey) continue;
       // discoveredPath preserves an allowed lexical alias when absolutePath was
       // canonicalized through a parent-directory symlink.
       for (const candidate of [skill.discoveredPath, skill.absolutePath]) {
         const root = resolveExistingSkillPathForGrant(candidate);
         if (root) {
-          roots.add(root);
+          const entryKey = `${root}\0${skillProjectRootKey ?? ''}`;
+          if (!seenEntries.has(entryKey)) {
+            seenEntries.add(entryKey);
+            entries.push({
+              root,
+              ...(skillProjectRootKey ? { projectRootKey: skillProjectRootKey } : {}),
+            });
+          }
           break;
         }
       }
     }
-    scannedSkillRootsBySender.set(event.sender.id, { ownerId, roots });
+    scannedSkillRootsBySender.set(event.sender.id, { ownerId, entries });
   };
 
   const hasScannedSkillGrant = (
     event: Electron.IpcMainInvokeEvent,
     targetPath: string,
-  ): boolean => {
+  ): Promise<boolean> => {
     assertTrustedAppRendererEvent(event);
     const grant = scannedSkillRootsBySender.get(event.sender.id);
     const ownerId = getCurrentDataOwnerId();
@@ -148,9 +163,24 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       || grant.ownerId !== ownerId
     ) {
       if (grant) scannedSkillRootsBySender.delete(event.sender.id);
-      return false;
+      return Promise.resolve(false);
     }
-    return isExistingSkillPathGranted(targetPath, grant.roots);
+    const matchingEntries = grant.entries.filter(({ root }) => (
+      isExistingSkillPathGranted(targetPath, new Set([root]))
+    ));
+    if (matchingEntries.length === 0) return Promise.resolve(false);
+    if (matchingEntries.some(({ projectRootKey: key }) => !key)) return Promise.resolve(true);
+
+    return options.getAllowedProjectRoots()
+      .then((roots) => {
+        const allowedKeys = new Set(
+          roots.map(projectRootKey).filter((key): key is string => key !== null),
+        );
+        return matchingEntries.some(({ projectRootKey: key }) => (
+          key !== undefined && allowedKeys.has(key)
+        ));
+      })
+      .catch(() => false);
   };
 
   const scanGrantDenied = () => ({
@@ -272,7 +302,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:read-skill',
     async (event, params: { mdPath: string }) => {
-      if (!hasScannedSkillGrant(event, params.mdPath)) return scanGrantDenied();
+      if (!await hasScannedSkillGrant(event, params.mdPath)) return scanGrantDenied();
       return readSkillContent(params);
     },
   );
@@ -283,7 +313,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:list-children',
     async (event, params: { dirPath: string }) => {
-      if (!hasScannedSkillGrant(event, params.dirPath)) return scanGrantDenied();
+      if (!await hasScannedSkillGrant(event, params.dirPath)) return scanGrantDenied();
       return listSkillFolderChildren(params);
     },
   );
@@ -293,7 +323,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:read-sibling-file',
     async (event, params: { filePath: string }) => {
-      if (!hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
+      if (!await hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
       return readSkillSiblingFile(params);
     },
   );
@@ -306,7 +336,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:read-raw',
     async (event, params: { filePath: string }) => {
-      if (!hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
+      if (!await hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
       return readSkillRawFile(params);
     },
   );
@@ -315,7 +345,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:write-file',
     async (event, params: { filePath: string; content: string }) => {
-      if (!hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
+      if (!await hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
       return writeSkillFile(params);
     },
   );
@@ -338,7 +368,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:rename-local',
     async (event, params: { absolutePath: string; newName: string }) => {
-      if (!hasScannedSkillGrant(event, params.absolutePath)) return scanGrantDenied();
+      if (!await hasScannedSkillGrant(event, params.absolutePath)) return scanGrantDenied();
       return renameLocalSkill(params);
     },
   );

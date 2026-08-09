@@ -134,6 +134,8 @@ describe('registerSkillhubIpc usage handlers', () => {
       skills: [{
         absolutePath: '/physical/demo',
         discoveredPath: '/repo/.pi/skills/authorized/demo',
+        scope: 'project',
+        projectRoot: '/repo',
       }],
       sources: [],
     });
@@ -192,6 +194,36 @@ describe('registerSkillhubIpc usage handlers', () => {
       { mdPath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
     );
     expect(afterDestroy).toMatchObject({ success: false });
+  });
+
+  it('revokes project scan grants after the last active project session disappears', async () => {
+    const sender = { id: 12, once: vi.fn() };
+    scanAllSkills.mockResolvedValueOnce({
+      skills: [{
+        absolutePath: '/physical/demo',
+        discoveredPath: '/repo/.pi/skills/authorized/demo',
+        scope: 'project',
+        projectRoot: '/repo',
+      }],
+      sources: [],
+    });
+    readSkillRawFile.mockResolvedValue({ success: true, content: 'raw' });
+
+    await handlers.get('skillhub:scan')?.(
+      { sender },
+      { projects: [{ projectRoot: '/repo', hash: 'repo' }] },
+    );
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: true });
+
+    getAllowedProjectRoots.mockResolvedValue([]);
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+    expect(readSkillRawFile).toHaveBeenCalledTimes(1);
   });
 
   it('does not let an older concurrent scan overwrite the latest sender grant', async () => {
