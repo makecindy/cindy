@@ -8,7 +8,7 @@ import {
   claimLegacyOwnerNamespace,
   getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
-  isLegacyOwnerNamespaceClaimCompleteForOwner,
+  isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
   listLegacyGhostTombstoneRoots,
   recoverLegacyGhostPlugins,
@@ -216,6 +216,37 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(resumed).toMatchObject({ status: 'migrated' });
     await expect(fs.readFile(path.join(targetRoot, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
+  });
+
+  it('keeps ownership when an earlier path fails after sidebar state moved', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const failedSource = path.join(root, 'ghost-cindy-prefs.json');
+    const legacySidebar = path.join(root, 'sidebar-settings.json');
+    const scopedSidebar = path.join(
+      root,
+      'owners',
+      dataOwnerStorageKey(ownerId),
+      'sidebar-settings.json',
+    );
+    await fs.writeFile(failedSource, 'legacy-prefs');
+    await fs.writeFile(legacySidebar, JSON.stringify({ pinnedOrder: ['legacy-session'] }));
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root, {}, {
+        rename: (source: string, target: string) =>
+          source === failedSource
+            ? Promise.reject(Object.assign(new Error('rename failed'), { code: 'EACCES' }))
+            : fs.rename(source, target),
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'partial', moved: 1 });
+    await expect(fs.access(legacySidebar)).rejects.toThrow();
+    await expect(fs.readFile(scopedSidebar, 'utf-8')).resolves.toContain('legacy-session');
+    expect(hasLegacyOwnerNamespaceClaim(ownerId, root)).toBe(false);
+    expect(isLegacyOwnerNamespaceClaimOwnedBy(ownerId, root)).toBe(true);
   });
 
   it('defers when a pre-patch packaged instance holds a live SingletonLock', async () => {
@@ -1414,17 +1445,17 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
     expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(false);
   });
 
-  it('reads a completed same-owner marker without granting migration permission', async () => {
+  it('reads a same-owner marker without granting migration permission', async () => {
     const root = await tempRoot();
-    expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(false);
+    expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(false);
     await fs.writeFile(
       path.join(root, __testing.CLAIM_MARKER),
       JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
     );
     process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
     try {
-      expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(true);
-      expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-b', root)).toBe(false);
+      expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(true);
+      expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-b', root)).toBe(false);
       expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(false);
     } finally {
       delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
@@ -1434,9 +1465,9 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
       path.join(root, __testing.CLAIM_MARKER),
       JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: false }),
     );
-    expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(false);
+    expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(true);
     await fs.writeFile(path.join(root, __testing.CLAIM_MARKER), '{ invalid');
-    expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(false);
+    expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(false);
   });
 
   it('answers false while another live instance shares this userData, true again after it exits', async () => {

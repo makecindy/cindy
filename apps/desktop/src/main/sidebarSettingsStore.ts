@@ -31,7 +31,7 @@ import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
   hasLegacyOwnerNamespaceClaim,
-  isLegacyOwnerNamespaceClaimCompleteForOwner,
+  isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
@@ -560,8 +560,7 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   const legacyPathState = legacySidebarPathState(legacyPath);
 
   if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
-    return existing === ownerKey &&
-      isLegacyOwnerNamespaceClaimCompleteForOwner(session.dataOwnerId) &&
+    return isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) &&
       legacyPathState === 'missing'
       ? 'ready'
       : 'blocked';
