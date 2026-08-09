@@ -377,23 +377,35 @@ describe('approvalSignature — 可记忆判据', () => {
     }
   });
 
-  it('psql 外部 SQL 文件入口不可记忆', () => {
+  it('psql 只有显式禁用 psqlrc 且未读取外部 SQL 文件时才可记忆', () => {
     for (const command of [
+      "psql prod -c 'select 1'",
+      "psql -x prod -c 'select 1'",
+      "psql --no-psql prod -c 'select 1'",
+      "psql -- --no-psqlrc -c 'select 1'",
+      "PSQLRC=./custom.psqlrc psql prod -c 'select 1'",
+      "env PSQLRC=./custom.psqlrc psql prod -c 'select 1'",
       'psql -f ./deploy.sql prod',
       'psql -f./deploy.sql prod',
       'psql --file ./deploy.sql prod',
       'psql --file=./deploy.sql prod',
       'psql.exe --file=./deploy.sql prod',
-      'env psql -f ./deploy.sql prod',
+      'env psql -X -f ./deploy.sql prod',
+      'psql --no-psqlrc --file=./deploy.sql prod',
       'true && psql --file=./deploy.sql prod',
+      "psql -X prod -c 'select 1' && psql prod -c 'select 2'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
     }
 
     for (const command of [
-      "psql prod -c 'select 1'",
-      'psql -- --file=./deploy.sql',
+      "psql -X prod -c 'select 1'",
+      "psql --no-psqlrc prod -c 'select 1'",
+      "psql.exe -X prod -c 'select 1'",
+      "env PSQLRC=./custom.psqlrc psql -X prod -c 'select 1'",
+      'psql -X -- --file=./deploy.sql',
+      "psql -X prod -c 'select 1' && psql --no-psqlrc prod -c 'select 2'",
       'echo psql -f ./deploy.sql prod',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
@@ -403,11 +415,20 @@ describe('approvalSignature — 可记忆判据', () => {
     const memory = createApprovalMemory({
       agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
     });
-    const action = exec('psql -f ./deploy.sql prod');
-    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
-    // deploy.sql 即使在两次调用之间被替换，这类入口也从未写入可复用摘要。
-    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    for (const action of [
+      exec("psql prod -c 'select 1'"),
+      exec('psql -X -f ./deploy.sql prod'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      // psqlrc 或 deploy.sql 被替换时，两类入口都从未写入可复用摘要。
+      expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    }
     expect(memory.size()).toBe(0);
+
+    const isolatedAction = exec("psql -X prod -c 'select 1'");
+    memory.rememberReviewerAllow(isolatedAction, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(isolatedAction, defaultIntent, roots, reviewerRoute)).toBe(true);
+    expect(memory.size()).toBe(1);
   });
 
   it('curl 只有首参数显式禁用配置且未另行指定 config 时才可记忆', () => {
