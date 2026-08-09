@@ -1763,6 +1763,17 @@ export class ClaudeCodeAgent extends BaseAgent {
     const buildSettings = (): Settings =>
       buildClaudeFlagSettings({
         showThinkingSummaries,
+        // availableModels is the SDK's highest-priority allowlist. Convert the
+        // whole current catalog and the selected model through the one
+        // catalog-id → wire-string mapper so startup and live switches share
+        // the same [1m] and legacy conversion rules. Keep the selected model
+        // even when it is temporarily outside the catalog.
+        availableModels: [
+          ...new Set([
+            ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
+            sdkModelFor(mutableModel),
+          ]),
+        ],
         // Do not carry the local manager's native-memory suppression across the
         // SSH boundary: the remote host retains its own Claude memory
         // configuration. Maker Memory on remote sessions is injected via the

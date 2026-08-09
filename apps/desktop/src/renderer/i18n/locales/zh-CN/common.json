@@ -1749,6 +1749,12 @@
         "cellLabel": "消息通知",
         "hint": "上下线时向 Bot 发送通知消息"
       },
+      "sessionNotification": {
+        "label": "任务完成通知",
+        "cellLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
+        "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
+        "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
+      },
       "bind": "绑定"
     },
     "wechatBot": {
@@ -7925,6 +7931,9 @@
       "deny": "拒绝"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "需要信任此项目后可用"
+  },
   "skillhub": {
     "home": {
       "title": "技能",
@@ -7952,7 +7961,12 @@
     },
     "common": {
       "openFolderFailed": "打开文件夹失败",
-      "close": "关闭"
+      "close": "关闭",
+      "statusDiscovered": "已发现",
+      "statusApproved": "已批准",
+      "statusLoaded": "已加载",
+      "statusFailed": "加载失败",
+      "statusUnknown": "未知"
     },
     "welcome": {
       "scanning": "正在扫描本地 Skill…",
