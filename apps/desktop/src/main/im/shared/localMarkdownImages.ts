@@ -29,13 +29,18 @@ import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { materializeSshRemoteFile } from '../../file-browser/ssh-media';
 import { readBoundedFileFollowLinks } from '../../utils/readBoundedFile';
 
-// Destination scanning permits escaped characters and one balanced parenthesis
-// level, so a parenthesized Markdown title is captured before the outer `)`.
-const LOCAL_MARKDOWN_IMAGE_RE =
-  /!\[((?:\\[^\r\n]|[^\\\]\r\n]){0,512})\]\(((?:\\[^\r\n]|[^()\r\n]|\((?:\\[^\r\n]|[^()\r\n])*\)){1,4096})\)/g;
 const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_MARKDOWN_IMAGE_LABEL_LENGTH = 512;
+const MAX_MARKDOWN_IMAGE_DESTINATION_LENGTH = 4096;
+
+interface LocalMarkdownImageMatch {
+  start: number;
+  end: number;
+  label: string;
+  target: string;
+}
 
 function isEscapedMarkdownMarker(text: string, markerIndex: number): boolean {
   let backslashes = 0;
@@ -48,14 +53,63 @@ function isEscapedMarkdownMarker(text: string, markerIndex: number): boolean {
 function localMarkdownImageMatches(
   text: string,
   options: { includeEscaped?: boolean } = {},
-): RegExpMatchArray[] {
+): LocalMarkdownImageMatch[] {
   const codeRanges = markdownCodeRanges(text);
-  return Array.from(text.matchAll(LOCAL_MARKDOWN_IMAGE_RE)).filter(
-    (match) =>
-      match.index !== undefined &&
-      !isMarkdownCodePosition(codeRanges, match.index) &&
-      (options.includeEscaped === true || !isEscapedMarkdownMarker(text, match.index)),
-  );
+  const matches: LocalMarkdownImageMatch[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf('![', cursor);
+    if (start === -1) break;
+    cursor = start + 2;
+    if (isMarkdownCodePosition(codeRanges, start)) continue;
+    if (options.includeEscaped !== true && isEscapedMarkdownMarker(text, start)) continue;
+
+    let labelEnd = start + 2;
+    const labelLimit = Math.min(text.length, labelEnd + MAX_MARKDOWN_IMAGE_LABEL_LENGTH + 1);
+    while (labelEnd < labelLimit) {
+      const char = text[labelEnd];
+      if (char === '\r' || char === '\n') break;
+      if (char === '\\') {
+        labelEnd += 2;
+        continue;
+      }
+      if (char === ']' && text[labelEnd + 1] === '(') break;
+      labelEnd += 1;
+    }
+    if (text[labelEnd] !== ']' || text[labelEnd + 1] !== '(') continue;
+
+    const targetStart = labelEnd + 2;
+    const targetLimit = Math.min(
+      text.length,
+      targetStart + MAX_MARKDOWN_IMAGE_DESTINATION_LENGTH + 1,
+    );
+    let targetEnd = targetStart;
+    let depth = 1;
+    while (targetEnd < targetLimit) {
+      const char = text[targetEnd];
+      if (char === '\r' || char === '\n') break;
+      if (char === '\\') {
+        targetEnd += 2;
+        continue;
+      }
+      if (char === '(') depth += 1;
+      else if (char === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+      targetEnd += 1;
+    }
+    if (depth !== 0 || targetEnd === targetStart) continue;
+
+    matches.push({
+      start,
+      end: targetEnd + 1,
+      label: text.slice(start + 2, labelEnd),
+      target: text.slice(targetStart, targetEnd),
+    });
+    cursor = targetEnd + 1;
+  }
+  return matches;
 }
 
 function markdownImageLabel(raw: string): string {
@@ -303,11 +357,9 @@ export function sanitizeLocalMarkdownImageRefs(text: string): string {
   let sanitized = text;
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const match = matches[index];
-    if (!isSensitiveLocalMarkdownImageTarget(match[2])) continue;
-    const start = match.index;
-    if (start === undefined) continue;
-    const replacement = markdownImageLabel(match[1]);
-    sanitized = `${sanitized.slice(0, start)}${replacement}${sanitized.slice(start + match[0].length)}`;
+    if (!isSensitiveLocalMarkdownImageTarget(match.target)) continue;
+    const replacement = markdownImageLabel(match.label);
+    sanitized = `${sanitized.slice(0, match.start)}${replacement}${sanitized.slice(match.end)}`;
   }
   return sanitized;
 }
@@ -355,7 +407,7 @@ export async function materializeLocalMarkdownImages(
 
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index];
-    const rawTarget = match[2].trim();
+    const rawTarget = match.target.trim();
     const destination = markdownImageDestination(rawTarget);
     const managed = isManagedImageTarget(destination);
     const localTarget = managed ? null : markdownLocalTarget(rawTarget);
@@ -429,10 +481,8 @@ export async function materializeLocalMarkdownImages(
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     if (!acceptedMatchIndexes.has(index)) continue;
     const match = matches[index];
-    const start = match.index;
-    if (start === undefined) continue;
-    const replacement = markdownImageLabel(match[1]);
-    text = `${text.slice(0, start)}${replacement}${text.slice(start + match[0].length)}`;
+    const replacement = markdownImageLabel(match.label);
+    text = `${text.slice(0, match.start)}${replacement}${text.slice(match.end)}`;
   }
 
   return { absPaths, text };

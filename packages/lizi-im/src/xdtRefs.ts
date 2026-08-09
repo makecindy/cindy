@@ -36,6 +36,14 @@ function runLength(text: string, start: number, char: string): number {
   return end - start;
 }
 
+function isEscapedAt(text: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === '\\'; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
 function lineEndAfterNewline(text: string, start: number): number {
   const newline = text.indexOf('\n', start);
   return newline === -1 ? text.length : newline + 1;
@@ -268,6 +276,10 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
       continue;
     }
     const openingRun = runLength(text, cursor, '`');
+    if (isEscapedAt(text, cursor)) {
+      cursor += openingRun;
+      continue;
+    }
     let search = cursor + openingRun;
     let closingEnd = -1;
     while (search < text.length && (!block || search < block.start)) {

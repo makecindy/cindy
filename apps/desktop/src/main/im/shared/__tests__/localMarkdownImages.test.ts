@@ -169,6 +169,24 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
   });
 
+  it('materializes a local image target with multiple balanced parenthesis levels', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'chart(a(b)c).png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `![nested](${sourcePath})`,
+          workingDir,
+          sessionId: 'session-nested-parentheses',
+        },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'nested' });
+  });
+
   it('leaves local image examples inside Markdown code untouched and unsent', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'private.png');
@@ -570,5 +588,11 @@ describe('sanitizeLocalMarkdownImageRefs', () => {
     expect(sanitizeLocalMarkdownImageRefs('![preview](/Users/private/a.png (caption))')).toBe(
       'preview',
     );
+  });
+
+  it('redacts a local target with multiple balanced parenthesis levels', () => {
+    expect(
+      sanitizeLocalMarkdownImageRefs('![private](/Users/alice/a(b(c)d).png)'),
+    ).toBe('private');
   });
 });

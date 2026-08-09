@@ -227,6 +227,15 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
   });
 
+  it('does not treat escaped backticks as an inline code range', () => {
+    const text = '\\`[报告](xdt-file:///tmp/report.pdf)\\`';
+
+    expect(collectXdtFileLinks(text)).toEqual([
+      { alt: '报告', absPath: '/tmp/report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('\\`报告\\`');
+  });
+
   it('ignores file references inside blockquote and list-container fences', () => {
     const quoted = '> ~~~md\n> [报告](xdt-file:///tmp/quoted.pdf)\n> ~~~';
     const listed = '- ```md\n  [报告](xdt-file:///tmp/listed.pdf)\n  ```';
