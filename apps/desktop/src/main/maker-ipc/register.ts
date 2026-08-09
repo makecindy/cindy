@@ -496,7 +496,11 @@ import {
   commitQueuedMessageAfterOrcaFence,
   type OrcaQueueCommitResult,
 } from './orcaQueueCommit.js';
-import { discardPendingOrcaWorkerInput } from './orcaQueueCleanup.js';
+import {
+  commitPendingOrcaWorkerInput,
+  preparePendingOrcaWorkerInput,
+  type OrcaPendingWorkerInputPlan,
+} from './orcaQueueCleanup.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -8076,6 +8080,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           withSendToSessionLock,
           activeWorkers.map((worker) => worker.sessionId),
           async () => {
+            const pendingWorkerInputPlans: OrcaPendingWorkerInputPlan[] = [];
             for (const w of activeWorkers) {
               await closeOrcaWorkerRuntimeWhileLocked(
                 {
@@ -8090,14 +8095,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 },
                 w.sessionId,
               );
-              await discardPendingOrcaWorkerInput(inputCoordinator, w.sessionId);
+              pendingWorkerInputPlans.push(
+                await preparePendingOrcaWorkerInput(inputCoordinator, w.sessionId),
+              );
             }
 
-            // Keep every Worker route locked until the ended/archived state is
-            // durable. Otherwise a queued send could recreate a runtime in the gap
-            // after closeSession and before these writes complete.
+            // Keep every Worker route locked until the ended state is durable.
+            // Queue plans are only snapshots before this boundary; removing them
+            // earlier would lose callbacks if markTeamEnded rejects and the fence
+            // rolls back.
             await markTeamEnded(team.id, 'completed');
             markTeamEndDurable();
+            // The durable boundary has passed: now commit the prepared queue
+            // removals through coordinator.remove so discard side effects fire.
+            for (const plan of pendingWorkerInputPlans) {
+              commitPendingOrcaWorkerInput(inputCoordinator, plan);
+            }
             await markWorkersStatusByTeam(team.id, 'done');
             await archiveWorkersByTeam(team.id);
 

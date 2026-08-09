@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { discardPendingOrcaWorkerInput } from '../orcaQueueCleanup.js';
+import {
+  commitPendingOrcaWorkerInput,
+  preparePendingOrcaWorkerInput,
+} from '../orcaQueueCleanup.js';
+import {
+  isOrcaWorkerSessionDisableFenced,
+  withOrcaWorkerDisableFence,
+} from '../orcaDisableWorkerRuntime.js';
 
 function createCoordinator(
   onDiscarded: (sessionId: string, item: { clientId: string }) => void = () => undefined,
@@ -27,17 +34,46 @@ function createCoordinator(
   return { coordinator, queues, discarded };
 }
 
-describe('discardPendingOrcaWorkerInput', () => {
+describe('Orca worker queue cleanup', () => {
   it('fails closed when durable queue restore rejects', async () => {
     const h = createCoordinator();
     const restoreError = new Error('queue snapshot unavailable');
     h.coordinator.ensureQueueRestored.mockRejectedValue(restoreError);
 
     await expect(
-      discardPendingOrcaWorkerInput(h.coordinator, 'worker-a'),
+      preparePendingOrcaWorkerInput(h.coordinator, 'worker-a'),
     ).rejects.toBe(restoreError);
     expect(h.coordinator.getProjection).not.toHaveBeenCalled();
     expect(h.coordinator.remove).not.toHaveBeenCalled();
+    expect(h.queues.get('worker-a')).toEqual([
+      { clientId: 'orca-a' },
+      { clientId: 'scheduler-a' },
+    ]);
+  });
+
+  it('does not remove or discard when markTeamEnded rejects before durable commit', async () => {
+    const discardAccepted = vi.fn();
+    const schedulerWatcher = vi.fn();
+    const h = createCoordinator((_sessionId, item) => {
+      discardAccepted(item.clientId);
+      if (item.clientId === 'scheduler-a') schedulerWatcher();
+    });
+    const markTeamEnded = vi.fn(async () => {
+      throw new Error('team write failed');
+    });
+
+    await expect(
+      withOrcaWorkerDisableFence(['worker-a'], async () => {
+        expect(isOrcaWorkerSessionDisableFenced('worker-a')).toBe(true);
+        const plan = await preparePendingOrcaWorkerInput(h.coordinator, 'worker-a');
+        await markTeamEnded();
+        commitPendingOrcaWorkerInput(h.coordinator, plan);
+      }),
+    ).rejects.toThrow('team write failed');
+    expect(isOrcaWorkerSessionDisableFenced('worker-a')).toBe(false);
+    expect(h.coordinator.remove).not.toHaveBeenCalled();
+    expect(discardAccepted).not.toHaveBeenCalled();
+    expect(schedulerWatcher).not.toHaveBeenCalled();
     expect(h.queues.get('worker-a')).toEqual([
       { clientId: 'orca-a' },
       { clientId: 'scheduler-a' },
@@ -55,7 +91,8 @@ describe('discardPendingOrcaWorkerInput', () => {
       if (item.clientId === 'scheduler-a') schedulerWatcher();
     });
 
-    const removed = await discardPendingOrcaWorkerInput(h.coordinator, 'worker-a');
+    const plan = await preparePendingOrcaWorkerInput(h.coordinator, 'worker-a');
+    const removed = commitPendingOrcaWorkerInput(h.coordinator, plan);
 
     expect(removed).toBe(2);
     expect(h.queues.get('worker-a')).toEqual([]);
@@ -88,7 +125,8 @@ describe('discardPendingOrcaWorkerInput', () => {
       if (index >= 0) queue.splice(index, 1);
     });
 
-    await discardPendingOrcaWorkerInput(h.coordinator, 'worker-b');
+    const plan = await preparePendingOrcaWorkerInput(h.coordinator, 'worker-b');
+    commitPendingOrcaWorkerInput(h.coordinator, plan);
 
     expect(order).toEqual(['restore', 'snapshot', 'remove:orca-b']);
     expect(h.queues.get('worker-b')).toEqual([]);

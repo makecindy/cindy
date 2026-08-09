@@ -7,19 +7,39 @@ export interface OrcaShutdownQueueCoordinator {
   remove: (sessionId: string, clientId: string) => unknown;
 }
 
+export interface OrcaPendingWorkerInputPlan {
+  sessionId: string;
+  clientIds: readonly string[];
+}
+
 /**
- * Discard only the pending input belonging to one Worker being shut down.
+ * Prepare a durable-safe cleanup plan for one Worker without mutating its queue.
+ *
+ * The restore must succeed before the snapshot is trusted: a projection from an
+ * un-restored coordinator can omit durable queued input.
+ */
+export async function preparePendingOrcaWorkerInput(
+  coordinator: OrcaShutdownQueueCoordinator,
+  sessionId: string,
+): Promise<OrcaPendingWorkerInputPlan> {
+  await coordinator.ensureQueueRestored(sessionId);
+  return {
+    sessionId,
+    clientIds: coordinator.getProjection(sessionId).pendingQueue.map((item) => item.clientId),
+  };
+}
+
+/**
+ * Commit a prepared Worker queue cleanup after the team-end durable boundary.
  *
  * The coordinator's remove() is intentional: it emits onDiscardedQueuedMessage,
  * which releases Orca accepted callbacks, scheduler discard watchers, and any
  * other queue-owned resources. Do not clear coordinator internals directly.
  */
-export async function discardPendingOrcaWorkerInput(
+export function commitPendingOrcaWorkerInput(
   coordinator: OrcaShutdownQueueCoordinator,
-  sessionId: string,
-): Promise<number> {
-  await coordinator.ensureQueueRestored(sessionId);
-  const clientIds = coordinator.getProjection(sessionId).pendingQueue.map((item) => item.clientId);
-  for (const clientId of clientIds) coordinator.remove(sessionId, clientId);
-  return clientIds.length;
+  plan: OrcaPendingWorkerInputPlan,
+): number {
+  for (const clientId of plan.clientIds) coordinator.remove(plan.sessionId, clientId);
+  return plan.clientIds.length;
 }

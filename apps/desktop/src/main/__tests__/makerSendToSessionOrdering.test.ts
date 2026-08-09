@@ -791,7 +791,12 @@ describe('sendToSession ordering', () => {
     expect(activeDisableBlock).toContain('await withOrcaWorkerSessionLocks(');
     expect(activeDisableBlock).toContain('withSendToSessionLock,');
     expect(activeDisableBlock).toContain('await closeOrcaWorkerRuntimeWhileLocked(');
-    expect(activeDisableBlock).toContain('await discardPendingOrcaWorkerInput(inputCoordinator, w.sessionId);');
+    expect(activeDisableBlock).toContain(
+      'await preparePendingOrcaWorkerInput(inputCoordinator, w.sessionId),',
+    );
+    expect(activeDisableBlock).toContain(
+      'commitPendingOrcaWorkerInput(inputCoordinator, plan);',
+    );
     expect(activeDisableBlock).toContain("cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');");
     expect(activeDisableBlock).toContain('forgetKnownOrcaWorkerSession(w.sessionId);');
     expectOrder(
@@ -802,12 +807,17 @@ describe('sendToSession ordering', () => {
     expectOrder(
       activeDisableBlock,
       'await closeOrcaWorkerRuntimeWhileLocked(',
-      'await discardPendingOrcaWorkerInput(inputCoordinator, w.sessionId);',
+      'await preparePendingOrcaWorkerInput(inputCoordinator, w.sessionId),',
     );
     expectOrder(
       activeDisableBlock,
-      'await discardPendingOrcaWorkerInput(inputCoordinator, w.sessionId);',
+      'await preparePendingOrcaWorkerInput(inputCoordinator, w.sessionId),',
       "await markTeamEnded(team.id, 'completed');",
+    );
+    expectOrder(
+      activeDisableBlock,
+      'markTeamEndDurable();',
+      'commitPendingOrcaWorkerInput(inputCoordinator, plan);',
     );
     expectOrder(
       activeDisableBlock,
