@@ -3308,7 +3308,7 @@
           "unreadableEntries": "プラグイン項目 {{count}} 件を一時的に読み込めません。更新して再試行してください",
           "addedReceipt": "「{{name}}」を追加し、プラグイン {{count}} 件を検出しました",
           "refreshedReceipt": "「{{name}}」を更新し、プラグイン {{count}} 件を検出しました",
-          "emptyWithInvalidEntries": "利用可能なプラグインが見つかりませんでした。マニフェストの項目がすべて無効です。プラグインのディレクトリとマニフェストを確認してください。",
+          "emptyWithSkippedEntries": "利用可能なプラグインが見つかりませんでした。マニフェストの項目はすべてスキップされました。ソースの種類、プラグインのディレクトリ、マニフェストを確認してください。",
           "localBadge": "ローカル",
           "defaultRef": "デフォルトブランチ",
           "neverSynced": "未同期",

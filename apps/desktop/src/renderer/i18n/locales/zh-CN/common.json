@@ -3308,7 +3308,7 @@
           "unreadableEntries": "{{count}} 个插件条目暂时无法读取，请刷新重试",
           "addedReceipt": "已添加“{{name}}”，发现 {{count}} 个插件",
           "refreshedReceipt": "已刷新“{{name}}”，发现 {{count}} 个插件",
-          "emptyWithInvalidEntries": "未发现可用插件：清单中的条目均无效。请检查插件目录和清单配置。",
+          "emptyWithSkippedEntries": "未发现可用插件：清单中的条目均被跳过。请检查来源类型、插件目录和清单配置。",
           "localBadge": "本地",
           "defaultRef": "默认分支",
           "neverSynced": "尚未同步",

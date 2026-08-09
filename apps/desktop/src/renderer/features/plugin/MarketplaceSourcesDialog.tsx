@@ -239,7 +239,7 @@ export function MarketplaceSourcesDialog({
                       source.skippedCount > 0 &&
                       source.unreadableCount === 0 ? (
                         <p className="text-[var(--warning-fg)]">
-                          {t('settings.ghosts.market.sources.emptyWithInvalidEntries')}
+                          {t('settings.ghosts.market.sources.emptyWithSkippedEntries')}
                         </p>
                       ) : null}
                       {source.unreadableCount > 0 ? (

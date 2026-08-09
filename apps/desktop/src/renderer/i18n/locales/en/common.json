@@ -3309,7 +3309,7 @@
           "unreadableEntries": "{{count}} plugin entries are temporarily unreadable; refresh to retry",
           "addedReceipt": "Added \"{{name}}\" with {{count}} plugins discovered",
           "refreshedReceipt": "Refreshed \"{{name}}\" with {{count}} plugins discovered",
-          "emptyWithInvalidEntries": "No usable plugins were discovered because all listed entries were invalid. Check the plugin directories and manifest entries.",
+          "emptyWithSkippedEntries": "No usable plugins were discovered because all listed entries were skipped. Check the source types, plugin directories, and manifest entries.",
           "localBadge": "Local",
           "defaultRef": "Default branch",
           "neverSynced": "Never synced",
