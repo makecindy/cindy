@@ -80,6 +80,7 @@ export async function resolveDefaultScheduleRoute(
   // the route; otherwise legacy/local owners can look disconnected until another UI read heals it.
   const views = await getDesktopProviderService().listProviders({
     allowSideEffects: true,
+    waitForDiscovery: true,
     getCatalog: getActiveCatalog,
   });
   const preferredModelId = modelId?.trim();

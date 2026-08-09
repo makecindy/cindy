@@ -712,25 +712,63 @@ async function claimNativeProviderAuthOnRead(
   provider: 'anthropic' | 'xai',
   hasCredential: () => boolean,
   onClaimed?: () => void | Promise<void>,
+  waitForClaimed = false,
 ): Promise<void> {
   try {
     if (!claimDetectedNativeProviderAuth(provider, hasCredential)) return;
     log.info('native provider credential auto-bound to current owner', { provider });
-    await onClaimed?.();
+    const ownerAtClaim = getActiveAppSession();
+    const notifyIfClaimStillCurrent = () => {
+      const current = getActiveAppSession();
+      if (
+        current.generation !== ownerAtClaim.generation ||
+        current.dataOwnerId !== ownerAtClaim.dataOwnerId
+      ) {
+        log.info('native provider claim broadcast skipped after owner change', {
+          provider,
+          claimedGeneration: ownerAtClaim.generation,
+          currentGeneration: current.generation,
+        });
+        return;
+      }
+      notifyNativeProviderClaimed();
+    };
+    const claimedWork = onClaimed?.();
+    if (waitForClaimed) {
+      await claimedWork;
+      // 认领成功 = 这家供应商刚从「未连接」翻成「已连接」,但只有触发这次读取的那个调用方
+      // 拿到了新快照。其它窗口会一直留着 connected:false;配对的手机 / 控制端更是只认
+      // maker:provider:changed 这一条推送来失效缓存,不广播就永远停在旧快照
+      // (PR #548 review)。显式登录 / 登出路径本来就会广播,自愈这条同样得补上。
+      notifyIfClaimStillCurrent();
+      return;
+    }
+    if (claimedWork) {
+      // Ordinary provider reads retain low latency. Discovery still runs in the background and
+      // its completion invalidates other snapshots, while explicit routing callers opt into the
+      // await above. Keep the rejection contained so a refresh failure cannot become an
+      // unhandled rejection on the connection-status path.
+      void Promise.resolve(claimedWork)
+        .then(notifyIfClaimStillCurrent)
+        .catch((err) => {
+          log.warn('native provider post-claim work failed', { provider, error: String(err) });
+        });
+      return;
+    }
     // 认领成功 = 这家供应商刚从「未连接」翻成「已连接」,但只有触发这次读取的那个调用方
     // 拿到了新快照。其它窗口会一直留着 connected:false;配对的手机 / 控制端更是只认
     // maker:provider:changed 这一条推送来失效缓存,不广播就永远停在旧快照
     // (PR #548 review)。显式登录 / 登出路径本来就会广播,自愈这条同样得补上。
-    notifyNativeProviderClaimed();
+    notifyIfClaimStillCurrent();
   } catch (err) {
     log.warn('native provider auth binding claim failed', { provider, error: String(err) });
   }
 }
 
 /**
- * 首个 Anthropic 绑定认领后的目录补拉要让并发的 provider 读取共等同一趟。
- * 绑定文件在补拉开始前就已落盘；若只让赢得认领的调用等待，紧随其后的读取会看到
- * 「已绑定」便直接返回旧目录，再次制造首次 scheduler fire 的零来源快照。
+ * 首个 Anthropic 绑定认领后的目录补拉共用同一趟 flight。
+ * 普通 provider 读取只启动后台补拉并保留低延迟/LKG；scheduler 与 Orca 等明确要求
+ * post-claim routing snapshot 的调用方通过 waitForDiscovery 共等这趟 flight。
  */
 let anthropicClaimDiscoveryInflight: Promise<void> | null = null;
 
@@ -813,25 +851,32 @@ export function getDesktopProviderService(): ProviderService {
       // hasClaudeAiOAuth / hasCodexOAuthLogin / hasGrokOAuthLogin 内部都已校验绑定,
       // 所以这里不再前置 isNativeProviderAuthBound —— 前置短路是纯冗余,而且会把
       // listProviders 挡在自愈之前,正是「设置页已连接 / 聊天无来源」假报的成因(#294)。
-      anthropic: async ({ allowSideEffects }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery }) => {
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
         // 才放行,其余降级为纯读(PR #548 review)。
         if (!allowSideEffects) return hasClaudeAiOAuth();
-        await claimNativeProviderAuthOnRead('anthropic', hasClaudeAiOAuthUnbound, () => {
-          // anthropic 的 live entitlement 证据只来自动态发现，而发现只在启动期与
-          // 显式 OAuth 登录成功时触发。绑定是在这两个时机之后才建立的，启动期那次
-          // 早被登录态 gate 掉——不在认领成功时补拉，目录虽可能有 Registry presence，
-          // 运行时仍缺少当前账号的可用性证据。
-          //
-          // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
-          // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
-          // 失败,明明有可用的缓存清单,用户还是一个模型都选不了(PR #548 review)。
-          return refreshAnthropicCatalogAfterClaim();
-        });
+        await claimNativeProviderAuthOnRead(
+          'anthropic',
+          hasClaudeAiOAuthUnbound,
+          () => {
+            // anthropic 的 live entitlement 证据只来自动态发现，而发现只在启动期与
+            // 显式 OAuth 登录成功时触发。绑定是在这两个时机之后才建立的，启动期那次
+            // 早被登录态 gate 掉——不在认领成功时补拉，目录虽可能有 Registry presence，
+            // 运行时仍缺少当前账号的可用性证据。
+            //
+            // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
+            // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
+            // 失败,明明有可用的缓存清单,用户还是一个模型都选不了(PR #548 review)。
+            return refreshAnthropicCatalogAfterClaim();
+          },
+          waitForDiscovery === true,
+        );
         // 认领者写完绑定后、目录补拉完成前，并发读取会走「已经绑定」分支。它们也必须
         // 等同一趟补拉，才能让随后求值的 lazy catalog 与连接态属于同一个新快照。
-        if (anthropicClaimDiscoveryInflight) await anthropicClaimDiscoveryInflight;
+        if (waitForDiscovery === true && anthropicClaimDiscoveryInflight) {
+          await anthropicClaimDiscoveryInflight;
+        }
         return hasClaudeAiOAuth();
       },
       // openai 的自愈挂在 adapter 的 reconcile 收口里(#294 既有形态),这里同样要受开关约束:

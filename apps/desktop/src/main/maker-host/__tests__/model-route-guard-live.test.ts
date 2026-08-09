@@ -40,25 +40,56 @@ import { resolveDefaultScheduleRoute } from '../model-route-guard-live.js';
 describe('resolveDefaultScheduleRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.listProviders.mockResolvedValue([]);
-    h.effectiveSourceIdForModel.mockReturnValue('anthropic');
+    h.listProviders.mockImplementation(async (opts: { getCatalog?: () => unknown }) => {
+      // Simulate the native claim/discovery side effect completing before the provider service
+      // evaluates its lazy full-catalog getter.
+      const dynamicModel = {
+        id: 'claude-first-fire',
+        supportsFastMode: false,
+      };
+      h.catalog = { modelRegistry: { revision: 'fresh-after-claim' } };
+      const freshCatalog = opts.getCatalog?.();
+      expect(freshCatalog).toBe(h.catalog);
+      return [
+        {
+          id: 'anthropic',
+          name: 'Anthropic',
+          connected: true,
+          source: 'bundled',
+          models: { 'claude-code': [dynamicModel] },
+        },
+      ];
+    });
+    h.effectiveSourceIdForModel.mockImplementation(
+      (
+        views: Array<{ id: string; models: Record<string, Array<{ id: string }>> }>,
+        _preferred: unknown,
+        model: string,
+      ) =>
+        views.some((provider) =>
+          Object.values(provider.models).some((models) =>
+            models.some((entry) => entry.id === model),
+          ),
+        )
+          ? 'anthropic'
+          : null,
+    );
   });
 
   it('uses a trusted provider snapshot so scheduler fire can claim native subscriptions', async () => {
     await expect(
-      resolveDefaultScheduleRoute('claude-code', null, 'claude-sonnet-4-6'),
-    ).resolves.toEqual({ model: 'claude-sonnet-4-6', providerId: 'anthropic' });
+      resolveDefaultScheduleRoute('claude-code', null, 'claude-first-fire'),
+    ).resolves.toEqual({ model: 'claude-first-fire', providerId: 'anthropic' });
 
     expect(h.listProviders).toHaveBeenCalledWith({
       allowSideEffects: true,
+      waitForDiscovery: true,
       getCatalog: expect.any(Function),
     });
-    const { getCatalog } = h.listProviders.mock.calls[0]![0];
-    expect(getCatalog()).toBe(h.catalog);
     expect(h.effectiveSourceIdForModel).toHaveBeenCalledWith(
-      [],
+      [expect.objectContaining({ id: 'anthropic' })],
       null,
-      'claude-sonnet-4-6',
+      'claude-first-fire',
       'claude-code',
     );
   });

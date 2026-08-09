@@ -71,6 +71,7 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import {
   resolveBoundSessionGenerationRoute,
@@ -457,7 +458,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.
       const { getDesktopProviderService } = await import('../maker-host/createDesktopProviderService.js');
-      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+      const providers = await getDesktopProviderService().listProviders({
+        allowSideEffects: true,
+        waitForDiscovery: true,
+        getCatalog: getActiveCatalog,
+      });
       const route = resolveBoundSessionGenerationRoute({
         session,
         sessionProviderId: getSessionProvider(targetSessionId),

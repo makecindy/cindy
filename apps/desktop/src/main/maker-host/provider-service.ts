@@ -31,6 +31,12 @@ import {
  */
 export interface ConnectionReadOptions {
   allowSideEffects: boolean;
+  /**
+   * Wait for post-claim model discovery before materializing this snapshot.
+   * This is an internal readiness hint for routing callers; ordinary provider reads
+   * intentionally keep the low-latency/LKG behavior even when side effects are allowed.
+   */
+  waitForDiscovery?: boolean;
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
@@ -117,7 +123,10 @@ export interface ProviderService {
  */
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
-    const readOpts: ConnectionReadOptions = { allowSideEffects: opts?.allowSideEffects === true };
+    const readOpts: ConnectionReadOptions = {
+      allowSideEffects: opts?.allowSideEffects === true,
+      waitForDiscovery: opts?.waitForDiscovery === true,
+    };
     const [xd, anthropic, openai, xai] = await Promise.all([
       Promise.resolve(deps.connection.xd(readOpts)),
       Promise.resolve(deps.connection.anthropic(readOpts)),
