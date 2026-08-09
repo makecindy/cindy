@@ -215,17 +215,73 @@ const HTML_BLOCK_TAG_RE = new RegExp(
   'i',
 );
 
+interface HtmlBlockLineStart {
+  contentStart: number;
+  quoteDepth: number;
+  listContentIndent: number | null;
+}
+
+function htmlBlockLineStart(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+): HtmlBlockLineStart | null {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (prefix.indent > 3) return null;
+  let cursor = prefix.cursor;
+  let contentIndent = prefix.indent;
+  let listContentIndent: number | null = null;
+  while (cursor < lineEnd) {
+    let markerEnd = cursor;
+    if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
+      markerEnd += 1;
+    } else {
+      let digits = 0;
+      while (markerEnd < lineEnd && digits < 9) {
+        const code = text.charCodeAt(markerEnd);
+        if (code < 48 || code > 57) break;
+        markerEnd += 1;
+        digits += 1;
+      }
+      if (digits === 0 || (text[markerEnd] !== '.' && text[markerEnd] !== ')')) break;
+      markerEnd += 1;
+    }
+    if (text[markerEnd] !== ' ' && text[markerEnd] !== '\t') break;
+    contentIndent += markerEnd - cursor;
+    cursor = markerEnd;
+    while (text[cursor] === ' ' || text[cursor] === '\t') {
+      contentIndent += text[cursor] === '\t' ? 4 - (contentIndent % 4) : 1;
+      cursor += 1;
+    }
+    listContentIndent = contentIndent;
+  }
+  return { contentStart: cursor, quoteDepth: prefix.quoteDepth, listContentIndent };
+}
+
+function lineStaysInHtmlBlockContainer(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  opening: HtmlBlockLineStart,
+): boolean {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (opening.quoteDepth > 0 && prefix.quoteDepth < opening.quoteDepth) return false;
+  if (opening.listContentIndent === null || isBlankLine(text, lineStart, lineEnd)) return true;
+  return prefix.indent >= opening.listContentIndent;
+}
+
 function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
+  const lowerText = text.toLowerCase();
   let lineStart = 0;
   while (lineStart < text.length) {
     const lineEnd = lineEndAfterNewline(text, lineStart);
-    const prefix = lineContainerPrefix(text, lineStart, lineEnd);
-    if (prefix.indent > 3) {
+    const opening = htmlBlockLineStart(text, lineStart, lineEnd);
+    if (!opening) {
       lineStart = lineEnd;
       continue;
     }
-    const content = text.slice(prefix.cursor, lineEnd);
+    const content = text.slice(opening.contentStart, lineEnd);
     const contentLower = content.toLowerCase();
     let closingMarker: string | null = null;
     let blankTerminated = false;
@@ -245,15 +301,36 @@ function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
 
     let blockEnd = text.length;
     if (closingMarker) {
-      const closingAt = text.toLowerCase().indexOf(
-        closingMarker.toLowerCase(),
-        prefix.cursor + content.indexOf('<') + 1,
-      );
-      if (closingAt >= 0) blockEnd = lineEndAfterNewline(text, closingAt);
+      const closingLower = closingMarker.toLowerCase();
+      let searchLine = lineStart;
+      while (searchLine < text.length) {
+        const searchEnd = lineEndAfterNewline(text, searchLine);
+        if (
+          searchLine !== lineStart &&
+          !lineStaysInHtmlBlockContainer(text, searchLine, searchEnd, opening)
+        ) {
+          blockEnd = searchLine;
+          break;
+        }
+        const searchStart =
+          searchLine === lineStart
+            ? opening.contentStart + content.indexOf('<') + 1
+            : lineContainerPrefix(text, searchLine, searchEnd).cursor;
+        const closingInLine = lowerText.slice(searchStart, searchEnd).indexOf(closingLower);
+        if (closingInLine >= 0) {
+          blockEnd = searchEnd;
+          break;
+        }
+        searchLine = searchEnd;
+      }
     } else if (blankTerminated) {
       let searchLine = lineEnd;
       while (searchLine < text.length) {
         const searchEnd = lineEndAfterNewline(text, searchLine);
+        if (!lineStaysInHtmlBlockContainer(text, searchLine, searchEnd, opening)) {
+          blockEnd = searchLine;
+          break;
+        }
         if (isBlankLine(text, searchLine, searchEnd)) {
           blockEnd = searchLine;
           break;

@@ -1244,6 +1244,63 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('replays unconfirmed interaction media into the next streaming handle', async () => {
+    const firstHandle = {
+      messageId: 'stream-before-unconfirmed-media',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => []),
+    };
+    const secondHandle = {
+      messageId: 'stream-after-unconfirmed-media',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+      addExtraImageAbsPath: vi.fn(),
+      getDeliveredExtraImageAbsPaths: vi.fn(() => ['/tmp/unconfirmed-replay.png']),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockResolvedValueOnce(firstHandle)
+      .mockResolvedValueOnce(secondHandle);
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/unconfirmed-replay.png',
+      mimeType: 'image/png',
+    });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-replay' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://unconfirmed-replay.png' }) },
+    });
+    await flushMicrotasks();
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-replay-media',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+
+    await waitForAssertion(() => {
+      expect(secondHandle.addExtraImageAbsPath).toHaveBeenCalledWith(
+        '/tmp/unconfirmed-replay.png',
+      );
+    });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(secondHandle.finalize).toHaveBeenCalledWith('after ask');
+    });
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+  });
+
   it('continues media fallback and settles safely when one generated image send fails', async () => {
     mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
     mocks.resolveXdtImageUrl.mockImplementation((url: string) => ({

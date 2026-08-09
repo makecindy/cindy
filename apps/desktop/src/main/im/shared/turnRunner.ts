@@ -179,6 +179,8 @@ interface TurnState {
   presenter: TurnPresenter;
   /** Managed images discovered in tool output for terminal delivery. */
   mediaAbsPaths: string[];
+  /** Image subset of the media ledger, retained across interaction stream boundaries. */
+  imageMediaAbsPaths: Set<string>;
   /** Optional user-facing names for file paths in the terminal media ledger. */
   mediaDisplayNames: Map<string, string>;
   /** Private staging directories created for race-safe local-file fallback. */
@@ -692,6 +694,7 @@ export function createTurnRunner(
       streamingHandlePromise: null,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
+      imageMediaAbsPaths: new Set(),
       mediaDisplayNames: new Map(),
       mediaTempDirs: new Set(),
       cleanupRequested: false,
@@ -1889,6 +1892,7 @@ export function createTurnRunner(
           : resolveXdtImageUrl(url);
         absPaths.push(absPath);
         if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+        turn.imageMediaAbsPaths.add(absPath);
       } catch (err) {
         const error = sanitizeSendOutcomeError(err);
         log.warn(`[${channel}/turn] resolve managed image failed`, {
@@ -2421,6 +2425,12 @@ export function createTurnRunner(
                 threadTs: turn.scopeKey,
               });
       turn.streamingHandle = handle;
+      // An interaction finalizes and detaches the previous handle. Media that
+      // channel did not confirm as delivered stays in the turn ledger and must
+      // be attached to the replacement handle as well.
+      if (handle.addExtraImageAbsPath) {
+        for (const absPath of turn.imageMediaAbsPaths) handle.addExtraImageAbsPath(absPath);
+      }
       return handle;
     })().catch((err) => {
       const error = sanitizeSendOutcomeError(err);
@@ -2677,7 +2687,10 @@ export function createTurnRunner(
     if (delivered.size > 0) {
       await cleanupDeliveredStagedMedia(turn, delivered);
       turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
-      for (const absPath of delivered) turn.mediaDisplayNames.delete(absPath);
+      for (const absPath of delivered) {
+        turn.imageMediaAbsPaths.delete(absPath);
+        turn.mediaDisplayNames.delete(absPath);
+      }
     }
   }
 
@@ -2902,6 +2915,7 @@ export function createTurnRunner(
       turn.presenter.replaceBody(materialized.text);
       for (const absPath of materialized.absPaths) {
         if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+        turn.imageMediaAbsPaths.add(absPath);
       }
     } catch (err) {
       const error = sanitizeSendOutcomeError(err);
@@ -3213,7 +3227,10 @@ export function createTurnRunner(
     if (deliveredMediaAbsPaths.length > 0) {
       const delivered = new Set(deliveredMediaAbsPaths);
       turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
-      for (const absPath of delivered) turn.mediaDisplayNames.delete(absPath);
+      for (const absPath of delivered) {
+        turn.imageMediaAbsPaths.delete(absPath);
+        turn.mediaDisplayNames.delete(absPath);
+      }
     }
     turn.presenter.replaceBody('');
   }

@@ -345,6 +345,35 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(collectXdtImageRefs(text)).toEqual([]);
   });
 
+  it('ends an unclosed HTML comment when its blockquote container ends', () => {
+    const text = [
+      '> <!--',
+      '> 示例',
+      '',
+      '[报告](xdt-file:///tmp/outside.pdf)',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/outside.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(
+      ['> <!--', '> 示例', '', '报告'].join('\n'),
+    );
+  });
+
+  it('ends an unclosed HTML comment when its list container ends', () => {
+    const text = [
+      '- <!--',
+      '  示例',
+      '',
+      '[报告](xdt-file:///tmp/outside-list.pdf)',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/outside-list.pdf' },
+    ]);
+  });
+
   it('keeps a four-space list continuation eligible for attachment delivery', () => {
     const text = '- 输出：\n    [报告](xdt-file:///tmp/list-report.pdf)';
     const afterBlank = '- 输出：\n\n    [报告](xdt-file:///tmp/list-report.pdf)';
