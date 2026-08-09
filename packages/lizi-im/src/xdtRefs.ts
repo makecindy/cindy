@@ -691,6 +691,9 @@ function plainReferenceBounds(
     let urlEnd = titleStart;
     while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
     if (urlEnd === titleStart || urlEnd <= schemeStart) return fallback();
+    if (hasWhitespaceBetween(whitespacePositions, schemeStart, urlEnd)) {
+      return { endParen, urlEnd: schemeStart };
+    }
     return { endParen, urlEnd };
   } else {
     return fallback();
@@ -715,6 +718,9 @@ function plainReferenceBounds(
   while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
   if (urlEnd === titleStart || urlEnd <= schemeStart) {
     return fallback();
+  }
+  if (hasWhitespaceBetween(whitespacePositions, schemeStart, urlEnd)) {
+    return { endParen, urlEnd: schemeStart };
   }
   return { endParen, urlEnd };
 }

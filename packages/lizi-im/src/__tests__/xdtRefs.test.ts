@@ -255,11 +255,17 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
   });
 
   it('rejects a plain file destination with unescaped whitespace', () => {
-    const text = '[示例](xdt-file:///work/secret report.pdf)';
+    const texts = [
+      '[示例](xdt-file:///work/secret report.pdf)',
+      '[示例](xdt-file:///work/secret report.pdf "title")',
+      '[示例](xdt-file:///work/secret report.pdf (title))',
+    ];
 
-    expect(collectXdtFileRefs(text)).toEqual([]);
-    expect(collectXdtFileLinks(text)).toEqual([]);
-    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+    for (const text of texts) {
+      expect(collectXdtFileRefs(text)).toEqual([]);
+      expect(collectXdtFileLinks(text)).toEqual([]);
+      expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+    }
   });
 
   it('ignores file references inside inline code and fenced code blocks', () => {

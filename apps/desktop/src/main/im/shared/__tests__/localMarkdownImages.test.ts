@@ -545,15 +545,17 @@ describe('materializeLocalMarkdownFiles', () => {
     const reportPath = path.join(workingDir, 'secret report.pdf');
     await fs.writeFile(reportPath, '%PDF-1.4');
 
-    const result = await materializeLocalMarkdownFiles({
-      text: `[示例](xdt-file://${reportPath})`,
-      workingDir,
-    });
+    for (const text of [
+      `[示例](xdt-file://${reportPath})`,
+      `[示例](xdt-file://${reportPath} "title")`,
+    ]) {
+      const result = await materializeLocalMarkdownFiles({ text, workingDir });
 
-    expect(result.files).toEqual([]);
-    expect(result.tempDirs).toEqual([]);
-    expect(result.text).not.toContain('xdt-file://');
-    expect(result.text).not.toContain(reportPath);
+      expect(result.files).toEqual([]);
+      expect(result.tempDirs).toEqual([]);
+      expect(result.text).not.toContain('xdt-file://');
+      expect(result.text).not.toContain(reportPath);
+    }
   });
 
   it('sanitizes control characters, path separators, and oversized attachment names', async () => {
