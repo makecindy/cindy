@@ -70,7 +70,8 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 | 阶段 | 个人 bot | 官方 bot |
 |---|---|---|
 | 首帧 | 有真实内容（含工具步骤）就建一条**真实消息**；空内容不建（惰性占位） | 快照进 `turn.progress` 帧发给服务端 |
-| 过程中 | **第一帧真实内容用 `sendMessage` 建消息（这一条会推送），之后持续 `editMessageText` 覆盖（编辑不推送）**，用户看着它长大：过程区在上、正文在下 | **私聊**：进 Telegram **草稿**（`sendDraft`）——在输入框那个位置，**不在消息流里**；**群**：一条进度消息，`editMessageText` 覆盖 |
+| 过程中 | **第一帧真实内容用 `sendMessage` 建消息（这一条会推送），之后持续 `editMessageText` 覆盖（编辑不推送）**，用户看着它长大：过程区在上、正文在下，正文是整轮累计内容 | **私聊**：进 Telegram **草稿**（`sendDraft`）——在输入框那个位置，**不在消息流里**；**群**：一条进度消息，`editMessageText` 覆盖。桌面端对 Telegram 专门用 `progressBodyMode: 'whole'`，在 3800 字单帧上限内同样累计展示整轮正文；超过后退回当前 assistant 消息，避免头部截断把最新答案藏掉。Slack / X 仍只展示当前 assistant 消息 |
+| `done` 交接 | 最后一帧由个人 driver 自己定稿 | 桌面端在 `turn.end` 之前先 `flushProgress()`，跳过尚余的 1.5 秒尾沿节流，把最新安全快照放进既有进度载体；这是防止 observer teardown 吞掉最后一帧的客户端兜底，**不等于**服务端终稿已发布成功 |
 | 终稿内容（**成功收口**） | **只有正文**（`composeStreamingView` 在 `turn.done` 时直接 `return body`，不再合成过程区） | **只有正文**（`presenter.finalText()` 取 body 引擎的缓冲，不经过 `composeProgressView`） |
 | 终稿落在哪 | **单段且原位编辑成功时**留在那条消息里。**会新发消息的只有两种**：终稿超长被切成多段（第 1 段仍原位，第 2 段起逐段 `send`）；原位编辑失败后整条 repost 承载终稿，再尽力删掉停在过程态的旧消息——**删不掉就两条并存**。**受管图片不算**：它只让终稿跳过 rich 一次性定稿（`editFinal`），后面照样算 `inPlaceText` 走 `finalizeInPlaceOrRepost` 编辑原消息，图片随后由 `uploadImages` 另发 | **私聊**：新发一条正文消息，草稿随之消失；**群**：编辑那条进度消息 |
 | **失败收口**（普通轮次） | **过程区保留**：错误路径不置 `turn.done`，`composeStreamingView` 仍走运行中合成——卡片定稿成「过程区 + 正文 + ❌ 错误：…」，用户能看到失败前干到了哪一步 | 终稿正文为**空**，错误信息走独立的 `errorMessage` 字段，由服务端按语言渲染成「任务失败：…」——**不带过程区** |
