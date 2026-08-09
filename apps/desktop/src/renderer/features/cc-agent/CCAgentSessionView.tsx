@@ -133,13 +133,23 @@ import {
   useControlledBy,
 } from '@/features/remote-device/ControlledBanner';
 import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import {
+  loadAllCommands,
+  dispatchCommand,
+  PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  rebaseInlineRangesAfterSlashCommandRewrite,
+  reconcilePiRuntimeCommandForDispatch,
+  reconcilePiRuntimeCommandForDispatchWithRetry,
+  rewriteAgentSkillInvocationForDispatch,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { loadAllCommands, dispatchCommand, type UnifiedCommand } from '@/lib/slashCommands';
 import * as sessionService from '@/lib/sessionService';
 import { emitRefresh } from '@/lib/sessionsBus';
 import type { Session } from '@/lib/ccAgent.types';
 import { toast } from '@/lib/toast';
 import {
+  buildCreateOptsForCurrentSession,
   decodeRemoteErrorMessage,
   makerChatStore,
   type AgentTaskUpdate,
@@ -1201,7 +1211,10 @@ export function CCAgentSessionView({
     // (与 ChatInput palette 同源)。否则此 cache 取的是控制端命令,maybeDispatchDesktopSlashCommand
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
-    loadAllCommands(agentKind, wd, { skipAgentSkills: isRemoteSession }, remoteDeviceId)
+    loadAllCommands(agentKind, wd, {
+      skipAgentSkills: isRemoteSession,
+      sessionId: session?.id,
+    }, remoteDeviceId)
       .then((cmds) => {
         if (!cancelled) setAllCommands(cmds);
       })
@@ -1211,7 +1224,7 @@ export function CCAgentSessionView({
     return () => {
       cancelled = true;
     };
-  }, [session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   // Keep lastWorkingDir in sync so Settings can distinguish a real project
   // scope from「新对话默认值」. Standalone dialogues have an internal runtime
@@ -1752,13 +1765,13 @@ export function CCAgentSessionView({
       return await loadAllCommands(
         agentKind,
         session?.workingDir,
-        { skipAgentSkills: isRemoteSession },
+        { skipAgentSkills: isRemoteSession, sessionId: session?.id },
         remoteDeviceId,
       );
     } catch {
       return [];
     }
-  }, [session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   const insertHelpCard = useCallback(async () => {
     const commands = await getHelpCommandsSnapshot();
@@ -2206,72 +2219,6 @@ export function CCAgentSessionView({
     }
   }, [sessionId]);
 
-  const handleWorkingDirChange = useCallback(
-    (newDir: string | null) => {
-      // ChatInput already persists workingDir to server; we just refresh our local copy.
-      refreshServerSession();
-
-      // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③
-      if (newDir && pendingSendRef.current) {
-        const {
-          deliveryMode,
-          message,
-          model,
-          effort,
-          permissionMode,
-          files,
-          mentions,
-          vendorOptions,
-          quotesEncoded,
-          agentReferences,
-          pastedTextRanges,
-          slashCommandRanges,
-          onRemoteOptimisticFailure,
-          onDeferredAccepted,
-        } = pendingSendRef.current;
-        pendingSendRef.current = null;
-        const dispatch = deliveryMode === 'steer' ? steerMessage : sendMessage;
-        void dispatch(
-          message,
-          model,
-          effort,
-          permissionMode,
-          newDir,
-          files,
-          mentions,
-          quotesEncoded ||
-            vendorOptions !== undefined ||
-            agentReferences?.length ||
-            pastedTextRanges?.length ||
-            slashCommandRanges !== undefined ||
-            onRemoteOptimisticFailure !== undefined ||
-            onDeferredAccepted !== undefined
-            ? {
-                ...(vendorOptions ? { vendorOptions } : {}),
-                ...(quotesEncoded ? { quotesEncoded: true } : {}),
-                ...(agentReferences?.length ? { agentReferences } : {}),
-                ...(pastedTextRanges?.length ? { pastedTextRanges } : {}),
-                ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
-                ...(onRemoteOptimisticFailure ? { onRemoteOptimisticFailure } : {}),
-                ...(onDeferredAccepted ? { onDeferredAccepted } : {}),
-              }
-            : undefined,
-        ).then(
-          (accepted) => {
-            if (accepted) onDeferredAccepted?.();
-          },
-          (error) => {
-            log.warn(
-              'pending send after working directory selection failed:',
-              error instanceof Error ? error.message : String(error),
-            );
-          },
-        );
-      }
-    },
-    [refreshServerSession, sendMessage, steerMessage],
-  );
-
   const handleFolderPickerOpenChange = useCallback((open: boolean) => {
     setFolderPickerOpen(open);
     // If user closed the popover without selecting, clear pending send
@@ -2401,15 +2348,68 @@ export function CCAgentSessionView({
   const pendingIssueFilesRef = useRef<AttachedFile[] | undefined>(undefined);
 
   const maybeDispatchDesktopSlashCommand = useCallback(
-    async (message: string, files?: AttachedFile[]): Promise<boolean> => {
+    async (
+      message: string,
+      files?: AttachedFile[],
+      options?: {
+        allowDesktopDispatch?: boolean;
+        piRuntimeRetryDelaysMs?: readonly number[];
+        workingDirOverride?: string;
+        preparePiRuntime?: () => Promise<void>;
+      },
+    ): Promise<{ handled: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
-      if (!slashMatch) return false;
+      if (!slashMatch) return { handled: false, message };
       const cmdName = slashMatch[1].toLowerCase();
       const args = slashMatch[2] ?? '';
+      const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
+      const workingDir = options?.workingDirOverride ?? session?.workingDir;
       const cached = allCommandsRef.current;
-      const commands = cached.length > 0 ? cached : await getHelpCommandsSnapshot();
-      const hit = commands.find((c) => c.name.toLowerCase() === cmdName);
-      if (hit?.kind !== 'desktop') return false;
+      // A newly selected project changes command ownership, so do not let a
+      // pre-selection global hit suppress the forced project catalog refresh.
+      const commands = options?.workingDirOverride
+        ? []
+        : cached.length > 0
+          ? cached
+          : await getHelpCommandsSnapshot();
+      const agentKind = dbToMakerAgentKind(session?.agentKind);
+      const reconcileParams = {
+        agentKind,
+        sessionId: session?.id,
+        commandName: cmdName,
+        commands,
+        reload: () => loadAllCommands(
+          agentKind,
+          workingDir,
+          {
+            skipAgentSkills: isRemoteSession,
+            sessionId: session?.id,
+            forceReload: true,
+          },
+          remoteDeviceId,
+        ),
+      };
+      const reconciled = options?.piRuntimeRetryDelaysMs
+        ? await reconcilePiRuntimeCommandForDispatchWithRetry({
+            ...reconcileParams,
+            prepareRuntime: options.preparePiRuntime,
+            retryDelaysMs: options.piRuntimeRetryDelaysMs,
+          })
+        : await reconcilePiRuntimeCommandForDispatch(reconcileParams);
+      if (reconciled.commands !== commands) {
+        allCommandsRef.current = reconciled.commands;
+        setAllCommands(reconciled.commands);
+      }
+      const hit = reconciled.command;
+      if (hit?.kind !== 'desktop') {
+        return {
+          handled: false,
+          message: agentKind === 'pi'
+            ? rewriteAgentSkillInvocationForDispatch(message, hit)
+            : message,
+        };
+      }
+      if (!allowDesktopDispatch) return { handled: false, message };
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。
       if (hit.name === 'issue') {
@@ -2421,13 +2421,153 @@ export function CCAgentSessionView({
       // (/cmd 拿被控端路径本机 spawn、/goal /learn 在本机产生副作用;Codex review #548)。
       void dispatchCommand(hit, {
         ...(sessionId ? { sessionId } : {}),
-        ...(session?.workingDir ? { workingDir: session.workingDir } : {}),
+        ...(workingDir ? { workingDir } : {}),
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
       });
-      return true;
+      return { handled: true, message };
     },
-    [getHelpCommandsSnapshot, session?.workingDir, sessionId, remoteDeviceId],
+    [
+      getHelpCommandsSnapshot,
+      isRemoteSession,
+      session?.agentKind,
+      session?.id,
+      session?.workingDir,
+      sessionId,
+      remoteDeviceId,
+    ],
+  );
+
+  const handleWorkingDirChange = useCallback(
+    (newDir: string | null) => {
+      // ChatInput already persists workingDir to server; we just refresh our local copy.
+      refreshServerSession();
+
+      // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③.
+      // The first slash reconciliation ran before this directory existed, so refresh again with
+      // the selected project before dispatching and keep inline metadata aligned with any alias rewrite.
+      const pending = pendingSendRef.current;
+      if (!newDir || !pending) return;
+      pendingSendRef.current = null;
+      void (async () => {
+        try {
+          const slashDispatch = await maybeDispatchDesktopSlashCommand(
+            pending.message,
+            pending.files,
+            {
+              allowDesktopDispatch: pending.deliveryMode !== 'steer',
+              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              workingDirOverride: newDir,
+              preparePiRuntime: async () => {
+                if (!sessionId || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
+                const createOpts = {
+                  id: sessionId,
+                  ...buildCreateOptsForCurrentSession(
+                    sessionId,
+                    pending.model,
+                    pending.effort,
+                    pending.permissionMode,
+                    newDir,
+                    pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : undefined,
+                  ),
+                  agentKind: 'pi' as const,
+                  workingDir: newDir,
+                  orcaRole: session?.orcaRole ?? null,
+                };
+                if (remoteDeviceId) {
+                  await window.electronAPI.deviceLink.invoke(
+                    remoteDeviceId,
+                    'maker:create-session',
+                    [createOpts],
+                  );
+                } else {
+                  await window.electronAPI.maker.createSession(createOpts);
+                }
+              },
+            },
+          );
+          if (slashDispatch.handled) {
+            pending.onDeferredAccepted?.();
+            return;
+          }
+
+          const pendingAgentReferences = pending.agentReferences
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.agentReferences,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const pendingPastedTextRanges = pending.pastedTextRanges
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.pastedTextRanges,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.slashCommandRanges,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
+          const accepted = await dispatch(
+            slashDispatch.message,
+            pending.model,
+            pending.effort,
+            pending.permissionMode,
+            newDir,
+            pending.files,
+            pending.mentions,
+            pending.quotesEncoded ||
+              pending.vendorOptions !== undefined ||
+              pendingAgentReferences?.length ||
+              pendingPastedTextRanges?.length ||
+              pendingSlashCommandRanges !== undefined ||
+              pending.onRemoteOptimisticFailure !== undefined ||
+              pending.onDeferredAccepted !== undefined
+              ? {
+                  ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
+                  ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
+                  ...(pendingAgentReferences?.length
+                    ? { agentReferences: pendingAgentReferences }
+                    : {}),
+                  ...(pendingPastedTextRanges?.length
+                    ? { pastedTextRanges: pendingPastedTextRanges }
+                    : {}),
+                  ...(pendingSlashCommandRanges !== undefined
+                    ? { slashCommandRanges: pendingSlashCommandRanges }
+                    : {}),
+                  ...(pending.onRemoteOptimisticFailure
+                    ? { onRemoteOptimisticFailure: pending.onRemoteOptimisticFailure }
+                    : {}),
+                  ...(pending.onDeferredAccepted
+                    ? { onDeferredAccepted: pending.onDeferredAccepted }
+                    : {}),
+                }
+              : undefined,
+          );
+          if (accepted) pending.onDeferredAccepted?.();
+        } catch (error) {
+          log.warn(
+            'pending send after working directory selection failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      })();
+    },
+    [
+      maybeDispatchDesktopSlashCommand,
+      refreshServerSession,
+      remoteDeviceId,
+      session?.agentKind,
+      session?.orcaRole,
+      sessionId,
+      sendMessage,
+      steerMessage,
+    ],
   );
 
   const maybeShowContextUsage = useCallback(
@@ -2534,8 +2674,48 @@ export function CCAgentSessionView({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      if (deliveryMode !== 'steer' && (await maybeDispatchDesktopSlashCommand(message, files))) {
-        return;
+      const originalMessage = message;
+      const slashDispatch = deliveryMode === 'steer'
+        ? await maybeDispatchDesktopSlashCommand(message, files, {
+            allowDesktopDispatch: false,
+            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+          })
+        : await maybeDispatchDesktopSlashCommand(message, files, {
+            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+          });
+      if (slashDispatch.handled) return;
+      message = slashDispatch.message;
+      if (message !== originalMessage && opts) {
+        opts = {
+          ...opts,
+          ...(opts.agentReferences
+            ? {
+                agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.agentReferences,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+          ...(opts.pastedTextRanges
+            ? {
+                pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.pastedTextRanges,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+          ...(opts.slashCommandRanges !== undefined
+            ? {
+                slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.slashCommandRanges,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+        };
       }
 
       // ① 本机会话维持既有 readiness gate。device-link 已建任务不把视图生命周期内
@@ -2997,15 +3177,43 @@ export function CCAgentSessionView({
         }
         // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
         // resolve false / 抛错都保留(见该函数注释)。
-        const dispatched = await deliverRecoverableHandoff(sessionId, () =>
-          maybeDispatchDesktopSlashCommand(pending.text, pending.files),
-        );
+        let pendingText = pending.text;
+        const dispatched = await deliverRecoverableHandoff(sessionId, async () => {
+          const slashDispatch = await maybeDispatchDesktopSlashCommand(
+            pending.text,
+            pending.files,
+            { piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS },
+          );
+          pendingText = slashDispatch.message;
+          return slashDispatch.handled;
+        });
         if (dispatched) return;
+        const pendingAgentReferences = pending.agentReferences
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.agentReferences,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
+        const pendingPastedTextRanges = pending.pastedTextRanges
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.pastedTextRanges,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
+        const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.slashCommandRanges,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
         await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
-            pending.text,
+            pendingText,
             session.model,
             session.effort as Effort,
             session.permissionMode as PermissionMode,
@@ -3014,20 +3222,20 @@ export function CCAgentSessionView({
             pending.mentions,
             pending.vendorOptions ||
               pending.quotesEncoded ||
-              pending.agentReferences?.length ||
-              pending.pastedTextRanges?.length ||
-              pending.slashCommandRanges !== undefined
+              pendingAgentReferences?.length ||
+              pendingPastedTextRanges?.length ||
+              pendingSlashCommandRanges !== undefined
               ? {
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
-                  ...(pending.agentReferences?.length
-                    ? { agentReferences: pending.agentReferences }
+                  ...(pendingAgentReferences?.length
+                    ? { agentReferences: pendingAgentReferences }
                     : {}),
-                  ...(pending.pastedTextRanges?.length
-                    ? { pastedTextRanges: pending.pastedTextRanges }
+                  ...(pendingPastedTextRanges?.length
+                    ? { pastedTextRanges: pendingPastedTextRanges }
                     : {}),
-                  ...(pending.slashCommandRanges !== undefined
-                    ? { slashCommandRanges: pending.slashCommandRanges }
+                  ...(pendingSlashCommandRanges !== undefined
+                    ? { slashCommandRanges: pendingSlashCommandRanges }
                     : {}),
                 }
               : undefined,

@@ -51,6 +51,14 @@ describe('ChatInput steer shortcut contract', () => {
     expect(windowKeydownBlock).toContain("(enterIntent === 'queue' || enterIntent === 'steer')");
     expect(windowKeydownBlock).toContain("currentState !== 'listening'");
     expect(windowKeydownBlock).toContain('void dispatchSendRef.current(enterIntent);');
+    const paletteGuard = windowComposerCaptureBlock.indexOf(
+      'panelBridgeRef.current?.captureKey(event)',
+    );
+    const modifiedSend = windowComposerCaptureBlock.indexOf(
+      'void dispatchSendRef.current(enterIntent);',
+    );
+    expect(paletteGuard).toBeGreaterThan(-1);
+    expect(paletteGuard).toBeLessThan(modifiedSend);
     expect(chatInputSource).toContain("'Alt-Enter': () => this.editor.commands.setHardBreak()");
     expect(chatInputSource).toContain('ComposerHardBreak');
     expect(chatInputSource).toContain('turnRunning={showStopButton}');

@@ -5647,7 +5647,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, agentKind: unknown, params: unknown) => {
       try {
         const kind = requireAgentKind(agentKind);
-        const skillParams = (params ?? {}) as { workingDir?: string; forceReload?: boolean };
+        const skillParams = (params ?? {}) as {
+          workingDir?: string;
+          forceReload?: boolean;
+          sessionId?: string;
+        };
         const linksChanged = await prepareProjectSkillLinksFailSoft(skillParams?.workingDir);
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;

@@ -214,8 +214,15 @@ import {
   EMPTY_SLASH_COMMANDS,
   failSlashCommandRosterLoad,
   filterSlashCommands,
+  firstAvailableSlashCommandIndex,
+  hasAvailableSlashCommand,
+  hasUnavailableProjectSkillPreview,
+  isSlashCommandUnavailable,
   isSlashCommandRosterReady,
   loadAllCommands,
+  nextAvailableSlashCommandIndex,
+  PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  slashCommandInvocationName,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -345,7 +352,6 @@ const ComposerHardBreak = HardBreak.extend({
 // 自然宽度（permission + model + voice + send 等）估，实测可微调。
 const TOOLBAR_DENSE_MAX_WIDTH = 520;
 const TOOLBAR_COMPACT_MAX_WIDTH = 448;
-
 function isVoiceInputIdleLike(state: VoiceInputState): boolean {
   return state === 'idle' || state === 'done' || state === 'error';
 }
@@ -2740,9 +2746,25 @@ export function ChatInput({
       ) {
         event.preventDefault();
         event.stopPropagation();
+        if (panelBridgeRef.current?.captureKey(event)) return;
         clearPressTimer();
         voiceShortcutPressRef.current = null;
         void dispatchSendRef.current(enterIntent);
+        return;
+      }
+
+      // This window capture listener runs before Tiptap's palette bridge. While
+      // listening, preserve the editor's normal priority: Enter first selects
+      // or dismisses the open palette instead of stopping voice and sending the
+      // unresolved slash query.
+      if (
+        currentState === 'listening' &&
+        isComposerEnterTarget(event.target) &&
+        (enterIntent === 'queue' || enterIntent === 'steer') &&
+        panelBridgeRef.current?.captureKey(event)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -3413,6 +3435,7 @@ export function ChatInput({
     workingDir ?? null,
     paletteAgentKind,
     isRemoteSession,
+    sessionId ?? null,
     deviceLinkDeviceId ?? null,
   ]);
   const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
@@ -3438,6 +3461,7 @@ export function ChatInput({
     [mergedCommands, planModeCommandAvailable, slashCommandsReady, t],
   );
   const slashCommandLoadSeqRef = useRef(0);
+  const piRuntimeRetryRef = useRef(0);
   useEffect(
     () => () => {
       slashCommandLoadSeqRef.current += 1;
@@ -3455,7 +3479,7 @@ export function ChatInput({
       loadAllCommands(
         paletteAgentKind,
         workingDir,
-        { ...opts, skipAgentSkills: isRemoteSession },
+        { ...opts, skipAgentSkills: isRemoteSession, sessionId },
         deviceLinkDeviceId,
       )
         .then((cmds) => {
@@ -3479,10 +3503,14 @@ export function ChatInput({
       workingDir,
       paletteAgentKind,
       isRemoteSession,
+      sessionId,
       deviceLinkDeviceId,
       slashCommandContextKey,
     ],
   );
+  useEffect(() => {
+    piRuntimeRetryRef.current = 0;
+  }, [slashCommandContextKey]);
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
@@ -3772,10 +3800,15 @@ export function ChatInput({
   const [slashFocus, setSlashFocus] = useState(0);
   const [atFocus, setAtFocus] = useState(0);
 
-  // Reset focus when the list shrinks below current index
+  // Keep keyboard focus on an executable row when filtering or runtime status changes.
   useEffect(() => {
-    if (slashFocus >= filteredCommands.length) setSlashFocus(0);
-  }, [filteredCommands.length, slashFocus]);
+    setSlashFocus((current) => (
+      current >= filteredCommands.length
+      || (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
+        ? firstAvailableSlashCommandIndex(filteredCommands)
+        : current
+    ));
+  }, [filteredCommands]);
   useEffect(() => {
     if (
       atFocus >= filteredAt.length ||
@@ -3852,6 +3885,21 @@ export function ChatInput({
     if (!slashOpen) return;
     reloadSlashCommands({ forceReload: true });
   }, [slashOpen, reloadSlashCommands]);
+  useEffect(() => {
+    if (!slashOpen) {
+      piRuntimeRetryRef.current = 0;
+      return;
+    }
+    if (paletteAgentKind !== 'pi' || !sessionId) return;
+    if (!hasUnavailableProjectSkillPreview(mergedCommands)) return;
+    const attempt = piRuntimeRetryRef.current;
+    if (attempt >= PI_RUNTIME_SKILL_RETRY_DELAYS_MS.length) return;
+    piRuntimeRetryRef.current = attempt + 1;
+    const timer = window.setTimeout(() => {
+      reloadSlashCommands({ forceReload: true });
+    }, PI_RUNTIME_SKILL_RETRY_DELAYS_MS[attempt]);
+    return () => window.clearTimeout(timer);
+  }, [mergedCommands, paletteAgentKind, reloadSlashCommands, sessionId, slashOpen]);
 
   // ── Panel → editor bridge for keyboard nav ─────────────────────────
   // The editor's `handleKeyDown` fires before React re-renders, so we need
@@ -3868,7 +3916,7 @@ export function ChatInput({
         switch (e.key) {
           case 'ArrowDown':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => (i + 1) % filteredCommands.length);
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, 1));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -3878,7 +3926,7 @@ export function ChatInput({
             return false;
           case 'ArrowUp':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, -1));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -3888,8 +3936,20 @@ export function ChatInput({
             return false;
           case 'Enter':
           case 'Tab':
-            if (slashOpen && filteredCommands[slashFocus]) {
-              insertSlashCommand(filteredCommands[slashFocus]);
+            if (slashOpen) {
+              const focusedCommand = filteredCommands[slashFocus];
+              if (!focusedCommand) {
+                if (trigger.kind === 'slash') setSuppressedSlashAt(trigger.from);
+                return true;
+              }
+              if (isSlashCommandUnavailable(focusedCommand)) {
+                setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
+                if (!hasAvailableSlashCommand(filteredCommands) && trigger.kind === 'slash') {
+                  setSuppressedSlashAt(trigger.from);
+                }
+                return true;
+              }
+              insertSlashCommand(focusedCommand);
               return true;
             }
             if (
@@ -3933,7 +3993,8 @@ export function ChatInput({
         !editor ||
         editor.isDestroyed ||
         trigger.kind !== 'slash' || composerMutationLockedRef.current ||
-        editor.view.composing
+        editor.view.composing ||
+        isSlashCommandUnavailable(cmd)
       ) {
         return;
       }
@@ -3983,7 +4044,13 @@ export function ChatInput({
           } else {
             // Slash 也保持纯文本;SlashCommandDecoration 只负责视觉确认,
             // Backspace / 光标移动因此与普通文字完全一致。
-            replaceSlashCommandRunWithText(tr, editor.schema, from, runEnd, cmd.name);
+            replaceSlashCommandRunWithText(
+              tr,
+              editor.schema,
+              from,
+              runEnd,
+              slashCommandInvocationName(cmd),
+            );
           }
           return true;
         })
