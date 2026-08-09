@@ -47,6 +47,10 @@ import {
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import {
+  hasFocusMovedToInteractiveElement,
+  useComposerSendFocusRestore,
+} from './useComposerSendFocusRestore';
+import {
   setVoiceInputDraftDecoration,
   VoiceInputDraftDecoration,
   type VoiceInputCaretState,
@@ -191,7 +195,6 @@ import { composerDocIsEmpty } from './composerDocState';
 import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
 import {
   isComposerBlankPointerTarget,
-  isInteractiveFocusedElement,
   resolveComposerBlankFocusIntent,
 } from './composerBlankPointerFocus';
 import {
@@ -742,20 +745,6 @@ function scrollVoiceInputDraftEndIntoView(editor: Editor): void {
   } else if (draftBox.bottom < scrollerBox.top + PAD) {
     scroller.scrollTop -= scrollerBox.top + PAD - draftBox.bottom;
   }
-}
-
-function hasFocusMovedToInteractiveElement(focusAnchor: Element | null, editor: Editor): boolean {
-  const activeElement = document.activeElement;
-  if (
-    !activeElement ||
-    activeElement === document.body ||
-    activeElement === document.documentElement
-  ) {
-    return false;
-  }
-  if (activeElement === focusAnchor) return false;
-  if (editor.view.dom.contains(activeElement)) return false;
-  return isInteractiveFocusedElement(activeElement);
 }
 
 /**
@@ -1651,12 +1640,6 @@ export function ChatInput({
   const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
   const composerEditorLocked = disabled || sendDispatchInFlight;
   const composerMutationLockedRef = useRef(composerEditorLocked);
-  // Chromium moves focus to <body> when the ProseMirror root becomes
-  // contenteditable=false. Remember keyboard-owned focus so the temporary
-  // send lock can restore it without stealing focus from another control.
-  const pendingSendFocusRestoreRef = useRef<{
-    focusAnchor: Element | null;
-  } | null>(null);
   composerMutationLockedRef.current = composerEditorLocked;
 
   useEffect(() => {
@@ -2585,19 +2568,12 @@ export function ChatInput({
   composerMutationLockedRef.current = composerMutationLocked;
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
-    if (!editor || sendDispatchInFlight) return;
-
-    const pendingFocusRestore = pendingSendFocusRestoreRef.current;
-    if (!pendingFocusRestore) return;
-    pendingSendFocusRestoreRef.current = null;
-    if (composerMutationLocked) return;
-
-    window.requestAnimationFrame(() => {
-      if (editor.isDestroyed || !editor.isEditable || editor.isFocused) return;
-      if (hasFocusMovedToInteractiveElement(pendingFocusRestore.focusAnchor, editor)) return;
-      editor.commands.focus();
-    });
-  }, [composerMutationLocked, editor, sendDispatchInFlight]);
+  }, [composerMutationLocked, editor]);
+  const captureSendFocusForRestore = useComposerSendFocusRestore(
+    editor,
+    composerMutationLocked,
+    sendDispatchInFlight,
+  );
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -3113,7 +3089,7 @@ export function ChatInput({
         window.requestAnimationFrame(() => {
           if (editor.isDestroyed || !editor.isEditable) return;
           if (latestStorageKeyRef.current !== storageKey) return;
-          if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;
+          if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;
           editor.commands.focus('end');
         });
       }
@@ -3180,7 +3156,7 @@ export function ChatInput({
         if (!focusOnStorageKeyChangeRef.current) return;
         if (disableAutofocusRef.current || disabledRef.current) return;
         if (editor.isDestroyed || !editor.isEditable) return;
-        if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;
+        if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;
         editor.commands.focus('end');
       });
     };
@@ -4253,9 +4229,7 @@ export function ChatInput({
       // settings settle; remote sends must stay editable after their
       // click-time snapshot is cleared.
       if (!optimisticallyClearRemoteComposer) {
-        pendingSendFocusRestoreRef.current = editor.isFocused
-          ? { focusAnchor: document.activeElement }
-          : null;
+        captureSendFocusForRestore();
         setSendDispatchInFlight(true);
       }
       try {
@@ -4832,6 +4806,7 @@ export function ChatInput({
       confirmDialog,
       navigate,
       planModeEntry,
+      captureSendFocusForRestore,
     ],
   );
   useEffect(() => {

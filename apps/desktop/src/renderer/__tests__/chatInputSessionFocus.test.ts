@@ -55,7 +55,7 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(restoreNextDraftBlock).toContain('if (!isCurrentTransition()) return;');
     expect(restoreNextDraftBlock).toContain(
-      'if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;',
+      'if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;',
     );
     expect(restoreNextDraftBlock).toContain("editor.commands.focus('end');");
     expect(firstMountHydrationBlock).toContain('focusOnStorageKeyChangeRef.current');
@@ -87,41 +87,25 @@ describe('ChatInput session switch focus contract', () => {
   });
 
   it('guards delayed storageKey focus against stealing from another focused control', () => {
-    expect(chatInputSource).toContain('function hasFocusMovedToInteractiveElement(');
-    expect(chatInputSource).toContain('if (activeElement === focusAnchor) return false;');
-    expect(chatInputSource).toContain('if (editor.view.dom.contains(activeElement)) return false;');
-    expect(chatInputSource).toContain('return isInteractiveFocusedElement(activeElement);');
+    expect(chatInputSource).toContain(
+      'hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)',
+    );
   });
 
-  it('restores keyboard focus after the temporary local send lock without stealing it', () => {
-    const editorLockEffect = extractBetween(
-      chatInputSource,
-      'const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;',
-      'const { settings: voiceInputSettings }',
-    );
+  it('wires local send locking through the behavior-tested focus restore hook', () => {
     const localSendLockBlock = extractBetween(
       chatInputSource,
       '// Local/SSH sends keep the live composer while references and runtime',
       'try {\n        let serializedContent',
     );
 
-    expect(chatInputSource).toContain('const pendingSendFocusRestoreRef = useRef<{');
-    expect(chatInputSource).toContain('focusAnchor: Element | null;');
-    expect(localSendLockBlock).toContain('pendingSendFocusRestoreRef.current = editor.isFocused');
-    expect(localSendLockBlock.indexOf('pendingSendFocusRestoreRef.current')).toBeLessThan(
+    expect(chatInputSource).toContain(
+      'const captureSendFocusForRestore = useComposerSendFocusRestore(',
+    );
+    expect(localSendLockBlock).toContain('captureSendFocusForRestore();');
+    expect(localSendLockBlock.indexOf('captureSendFocusForRestore();')).toBeLessThan(
       localSendLockBlock.indexOf('setSendDispatchInFlight(true);'),
     );
-    expect(editorLockEffect).toContain('editor?.setEditable(!composerMutationLocked);');
-    expect(editorLockEffect).toContain('if (!editor || sendDispatchInFlight) return;');
-    expect(editorLockEffect).toContain('pendingSendFocusRestoreRef.current = null;');
-    expect(editorLockEffect).toContain('if (composerMutationLocked) return;');
-    expect(editorLockEffect).toContain(
-      'if (editor.isDestroyed || !editor.isEditable || editor.isFocused) return;',
-    );
-    expect(editorLockEffect).toContain(
-      'hasFocusMovedToInteractiveElement(pendingFocusRestore.focusAnchor, editor)',
-    );
-    expect(editorLockEffect).toContain('editor.commands.focus();');
   });
 
   it('reuses in-composer Plugin placement for routed Use and end-focuses Create with Cindy', () => {
