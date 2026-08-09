@@ -3213,9 +3213,13 @@ export function MessageStream({
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
       newUserSend: userMessageObservation.isNewUserSend,
-      // #2194: 缺省 prop 时按既有语义视为本端发送（测试 / 其它消费方不变）。
+      // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
+      // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
+      // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
       sentFromThisRenderer: lastUserMsg
-        ? (isLocalUserSend?.(lastUserMsg.clientId) ?? true)
+        ? isLocalUserSend
+          ? isLocalUserSend(lastUserMsg.clientId) === true
+          : true
         : false,
       nearBottom: isNearBottomRef.current,
     });

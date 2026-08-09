@@ -573,7 +573,10 @@ describe('isLocalSentUserMessage (#2194)', () => {
       projection(sid, { pendingQueue: [queuedItem('q2', 'queued')], queuePaused: true }),
     );
 
+    // 预登记后回执确认未生效需回滚——回执回调链不止 3 个 tick，多刷几轮。
     makerChatStore.resumeQueue(sid);
+    await flushPromises();
+    await flushPromises();
     await flushPromises();
 
     expect(makerChatStore.isLocalSentUserMessage(sid, 'q2')).toBe(false);
@@ -630,5 +633,75 @@ describe('isLocalSentUserMessage (#2194)', () => {
 
     expect(makerChatStore.isLocalSentUserMessage(sid, 'ext-continue')).toBe(false);
     expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone-2')).toBe(true);
+  });
+
+  // Greptile review P1（第十三轮）: 点击后、回执前由外部入口并发入队的
+  // continue 项不在点击快照里（通过「新出现」校验），但 main 的
+  // performRetryLastError 把本次续跑指令 unshift 到队首且回执同步生成——
+  // 只登记回执队首的 continue 项，队尾的外部并发项不得误认。
+  it('Retry 回执里点击后并发入队的外部 continue 项（非队首）不被误认', async () => {
+    const sid = `retry-ext-race-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(projection(sid, { pendingQueue: [], error: 'turn failed' }));
+    // 回执：队首是 main 为本次点击生成的续跑指令，队尾是点击后并发入队的外部
+    // continue 项（同为新出现的 continue 项，只能靠队首位置区分）。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('continue-manual-2', 'continue', { originalSyntheticTrigger: 'continue' }),
+          queuedItem('ext-continue-race', 'external continue', {
+            originalSyntheticTrigger: 'continue',
+          }),
+        ],
+      }),
+    );
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-manual-2')).toBe(true);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'ext-continue-race')).toBe(false);
+  });
+
+  // Codex review P2（第十三轮）: main 的 resume 在返回 projection 前就会 emit
+  // 并 scheduleDrain，队首行可能抢在回执回调前落库——resumeQueue 必须在 IPC
+  // 前同步预登记；回执确认未生效或 IPC 失败时回滚。
+  it('resumeQueue 在 IPC 回执前同步预登记队首，生效后保留', async () => {
+    const sid = `resume-pre-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, { pendingQueue: [queuedItem('q5', 'queued')], queuePaused: true }),
+    );
+    resume.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('q5', 'queued')], queuePaused: false }),
+    );
+
+    makerChatStore.resumeQueue(sid);
+    // 回执未到，登记已同步生效（main 的 drain / 落库可能抢在回执前）。
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q5')).toBe(true);
+
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q5')).toBe(true);
+  });
+
+  it('resume IPC 失败时回滚预登记', async () => {
+    const sid = `resume-rollback-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, { pendingQueue: [queuedItem('q6', 'queued')], queuePaused: true }),
+    );
+    resume.mockRejectedValueOnce(new Error('ipc down'));
+
+    makerChatStore.resumeQueue(sid);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q6')).toBe(true);
+
+    // IPC 拒绝 → 回滚。回执回调链不止 3 个 tick，多刷几轮。
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q6')).toBe(false);
   });
 });

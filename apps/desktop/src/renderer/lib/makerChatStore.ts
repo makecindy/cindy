@@ -10890,13 +10890,19 @@ function resumeQueue(sessionId: string): void {
   // #2194 (Codex review P2): 暂停队列的「继续」是本端点击意图——恢复后 drain
   // 派发的队首项落库时会作为新尾部 user 行出现，不登记则门控误判为外部注入，
   // 续跑在屏幕外开始（队列可能来自上一次 renderer 生命周期或外部入口）。
-  // 点击时刻快照队首，回执确认恢复生效（queuePaused 翻 false）且队首仍在队列
-  // 才登记（与 retry 的 drain 竞态同口径）。
+  // 点击时刻快照队首。main 的 resume 在返回 projection 前就会 emit 并
+  // scheduleDrain，快的恢复队列上队首行可能抢在回执回调前落库、被基线化为
+  // 外部（Codex review P2）：点击意图在点击时刻已确定，先登记，回执确认未
+  // 生效（仍 paused / 队首已不在队列）或 IPC 失败再回滚（会话已 purge 时
+  // 回滚为 no-op，不会复活条目）。
   const preResumeState = sessions.get(sessionId);
   const preResumeHeadClientId =
     preResumeState?.queuePaused === true
       ? (preResumeState.pendingQueue[0]?.clientId ?? null)
       : null;
+  if (preResumeHeadClientId) {
+    markLocalSentUserMessage(sessionId, preResumeHeadClientId);
+  }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.resume(sessionId, boundaryOpts) : input.resume(sessionId),
@@ -10904,14 +10910,21 @@ function resumeQueue(sessionId: string): void {
     .then(({ projection }) => {
       if (
         preResumeHeadClientId &&
-        sessions.has(sessionId) &&
-        projection.queuePaused === false &&
-        projection.pendingQueue.some((item) => item.clientId === preResumeHeadClientId)
+        !(
+          sessions.has(sessionId) &&
+          projection.queuePaused === false &&
+          projection.pendingQueue.some((item) => item.clientId === preResumeHeadClientId)
+        )
       ) {
-        markLocalSentUserMessage(sessionId, preResumeHeadClientId);
+        unmarkLocalSentUserMessage(sessionId, preResumeHeadClientId);
       }
     })
-    .catch((err) => log.warn('resumeQueue failed:', err));
+    .catch((err) => {
+      if (preResumeHeadClientId) {
+        unmarkLocalSentUserMessage(sessionId, preResumeHeadClientId);
+      }
+      log.warn('resumeQueue failed:', err);
+    });
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
@@ -12272,9 +12285,16 @@ function retryLastError(sessionId: string): Promise<void> {
       if (preRetryQueueIds.has(item.clientId)) continue;
       if (item.supersedesUserClientId) {
         markLocalSentUserMessage(sessionId, item.clientId);
-      } else if (item.originalSyntheticTrigger === 'continue' && item.autoResume !== true) {
+      } else if (
+        item.originalSyntheticTrigger === 'continue' &&
+        item.autoResume !== true &&
+        projection.pendingQueue[0]?.clientId === item.clientId
+      ) {
         // 有产出人工 retry 的隐藏续跑指令：合成行渲染 null，不登记则续跑产出
         // 在屏幕外开始（Codex review P1）。auto 自动续跑不标记。
+        // 还须是回执队首：main 的 performRetryLastError 把本次续跑指令
+        // unshift 到队首且回执同步生成（先于 drain）；点击后由外部入口并发
+        // 入队的 continue 项只会追加在队尾，不得误认（Greptile review P1）。
         markLocalSentUserMessage(sessionId, item.clientId);
       }
     }
