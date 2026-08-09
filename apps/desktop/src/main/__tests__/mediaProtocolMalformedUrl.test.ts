@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const handle = vi.fn();
+type ProtocolHandler = (request: Request) => Promise<Response>;
+
+const handle = vi.fn<(scheme: string, handler: ProtocolHandler) => void>();
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp/cindy-media-protocol-test') },
   protocol: { handle },
@@ -18,9 +20,11 @@ describe('media protocol malformed URLs', () => {
     registerImageProtocolHandler();
     registerVideoProtocolHandler();
     registerModelProtocolHandler();
-    const handlers = new Map(handle.mock.calls);
+    const handlers = new Map<string, ProtocolHandler>(handle.mock.calls);
     for (const scheme of ['xdt-image', 'xdt-video', 'xdt-model']) {
       const handler = handlers.get(scheme);
+      expect(handler).toBeTypeOf('function');
+      if (!handler) throw new Error(`missing protocol handler for ${scheme}`);
       await expect(handler(new Request(`${scheme}://session/%E0%A4%A`))).resolves.toMatchObject({ status: 403 });
     }
   });
