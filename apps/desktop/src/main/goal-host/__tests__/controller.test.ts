@@ -3261,9 +3261,11 @@ describe('GoalController', () => {
     await tick();
     const dispatched = events.filter((e) => e.type === 'turn-dispatched');
     expect(dispatched.length).toBeGreaterThanOrEqual(1);
+    // 首轮 dispatch 的 generation = 2:setGoal 创建路径换代一次(resetTurn)
+    // + fireTurn 内再换代一次(统一"每轮 dispatch 前换代"语义)。
     expect(dispatched[0]).toMatchObject({
       goalSessionId: 's1',
-      generation: 1,
+      generation: 2,
       turnIndex: 1,
     });
   });
@@ -3482,7 +3484,10 @@ describe('GoalController', () => {
     await tick();
     expect(await local.storage.get('s1')).toMatchObject({ status: 'budgetLimited' });
     expect(events.some((e) => e.type === 'resumed')).toBe(false);
-    // 同 sessionId 新目标:首轮派发不得消费上一个 Goal 的旧恢复标记。
+    // 同 sessionId 新目标(clear 后重建——预算耗尽的旧 goal 无法续跑,setGoal
+    // 编辑路径保留耗尽计数会被 preflight 拦截,与 913 的竞态语义一致):
+    // 首轮派发不得消费上一个 Goal 的旧恢复标记。
+    await local.controller.clearGoal('s1');
     await local.controller.setGoal({ sessionId: 's1', objective: 'new goal' });
     await tick();
     expect(events.filter((e) => e.type === 'resumed')).toHaveLength(0);
