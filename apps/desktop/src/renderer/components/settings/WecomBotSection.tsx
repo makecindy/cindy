@@ -359,6 +359,7 @@ export function WecomBotSection({
               placeholder={t('settings.notifications.wecomGroupPlaceholder')}
               autoComplete="new-password"
               spellCheck={false}
+              aria-label={t('settings.notifications.wecomGroupLabel')}
               className={cn(
                 'h-[42px] w-full rounded-full px-[14px]',
                 'border border-[var(--settings-input-border)]',

@@ -47,6 +47,7 @@ export function FeishuBotNotificationSection() {
             : t('settings.feishuBot.sessionNotification.disabledHint')
         }
         checked={sessionNotifyEnabled && feishuReady}
+        disabled={!feishuReady}
         onCheckedChange={(next) => {
           if (feishuReady) setSessionNotifyEnabled(next);
         }}
