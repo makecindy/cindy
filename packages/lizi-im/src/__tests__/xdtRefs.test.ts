@@ -202,6 +202,14 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(collectXdtFileLinks(text)).toEqual([{ alt: 'report', absPath: '/tmp/report.pdf' }]);
   });
 
+  it('scans repeated unclosed angle destinations in linear time', () => {
+    const text = '[x](<xdt-file://missing'.repeat(20_000);
+    const startedAt = performance.now();
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
   it('parses a plain destination with an optional Markdown title', () => {
     const quoted = '[报告](xdt-file:///tmp/report.pdf "下载")';
     const parenthesized = '[报告](xdt-file:///tmp/report.pdf (下载))';
@@ -269,6 +277,34 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     const listShapedLiteral = '```md\n- ```\n[报告](xdt-file:///tmp/literal.pdf)\n```';
 
     expect(collectXdtFileRefs(`${quoted}\n${listed}\n${nestedQuote}\n${listShapedLiteral}`)).toEqual([]);
+  });
+
+  it('does not close a list fence on a new list marker inside the code block', () => {
+    const text =
+      '- ```md\n  - ```\n  [secret](xdt-file:///tmp/secret.pdf)\n  ```';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('keeps four-column list continuation fences inside their container', () => {
+    const text =
+      '1.  ```md\n    [secret](xdt-file:///tmp/secret.pdf)\n    ```';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('rejects a backtick fence opener whose info string contains a backtick', () => {
+    const text =
+      '```lang`\n[报告](xdt-file:///tmp/report.pdf)\n```';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(
+      '```lang`\n报告\n```',
+    );
   });
 
   it('ends an unclosed container fence when the container ends', () => {

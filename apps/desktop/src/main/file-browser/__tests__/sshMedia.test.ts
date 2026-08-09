@@ -84,6 +84,41 @@ describe('makeSshChunkExecutor', () => {
       makeSshChunkExecutor(request as unknown as SshMediaDeps['request'], 'h1', '/wd', 'x')(dest, vi.fn()),
     ).rejects.toThrow('empty chunk before eof');
   });
+
+  it('aborts when remote identity or bytes grow beyond the stat snapshot', async () => {
+    const changedIdentity = vi.fn(async () => ({
+      dataBase64: Buffer.from('data').toString('base64'),
+      eof: true,
+      size: 8,
+      mtimeMs: 2,
+    }));
+    const oversizedChunk = vi.fn(async () => ({
+      dataBase64: Buffer.from('12345').toString('base64'),
+      eof: true,
+      size: 4,
+      mtimeMs: 1,
+    }));
+    const constraints = { expectedSize: 4, expectedMtimeMs: 1, maxBytes: 4 };
+
+    await expect(
+      makeSshChunkExecutor(
+        changedIdentity as unknown as SshMediaDeps['request'],
+        'h1',
+        '/wd',
+        'changed.bin',
+        constraints,
+      )(path.join(tmpDir, 'changed.bin'), vi.fn()),
+    ).rejects.toThrow('remote file identity changed');
+    await expect(
+      makeSshChunkExecutor(
+        oversizedChunk as unknown as SshMediaDeps['request'],
+        'h1',
+        '/wd',
+        'grown.bin',
+        constraints,
+      )(path.join(tmpDir, 'grown.bin'), vi.fn()),
+    ).rejects.toThrow('remote chunk exceeds download limit');
+  });
 });
 
 describe('serveSshRemoteMedia', () => {

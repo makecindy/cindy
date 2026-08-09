@@ -114,13 +114,23 @@ function lineContainerPrefix(text: string, lineStart: number, lineEnd: number): 
   let quoteDepth = 0;
   let indent = 0;
   while (cursor < lineEnd) {
+    const indentStart = cursor;
     let spaces = 0;
     while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
       cursor += 1;
       spaces += 1;
     }
-    indent += spaces;
-    if (text[cursor] !== '>') break;
+    if (text[cursor] !== '>') {
+      // The three-space limit applies to a fence relative to its container,
+      // not to the indentation that keeps a continuation inside a list.
+      cursor = indentStart;
+      indent = 0;
+      while (cursor < lineEnd && text[cursor] === ' ') {
+        cursor += 1;
+        indent += 1;
+      }
+      break;
+    }
     quoteDepth += 1;
     cursor += 1;
     if (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
@@ -141,12 +151,15 @@ function fenceMarkerAtLine(
   text: string,
   lineStart: number,
   lineEnd: number,
+  allowListMarker: boolean,
+  maxIndent: number,
 ): FenceMarker | null {
   const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (prefix.indent > maxIndent) return null;
   let cursor = prefix.cursor;
   let contentIndent = prefix.indent;
   let listContentIndent: number | null = null;
-  while (cursor < lineEnd) {
+  while (allowListMarker && cursor < lineEnd) {
     let markerEnd = cursor;
     if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
       markerEnd += 1;
@@ -178,6 +191,13 @@ function fenceMarkerAtLine(
     : null;
 }
 
+function isValidFenceOpener(text: string, marker: FenceMarker, lineEnd: number): boolean {
+  return (
+    marker.marker !== '`' ||
+    !text.slice(marker.start + marker.run, lineEnd).includes('`')
+  );
+}
+
 function lineStaysInFenceContainer(
   text: string,
   lineStart: number,
@@ -196,8 +216,8 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
   let lineStart = 0;
   while (lineStart < text.length) {
     const openingLineEnd = lineEndAfterNewline(text, lineStart);
-    const opening = fenceMarkerAtLine(text, lineStart, openingLineEnd);
-    if (!opening) {
+    const opening = fenceMarkerAtLine(text, lineStart, openingLineEnd, true, 3);
+    if (!opening || !isValidFenceOpener(text, opening, openingLineEnd)) {
       lineStart = openingLineEnd;
       continue;
     }
@@ -210,7 +230,15 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
         fenceEnd = searchLine;
         break;
       }
-      const closing = fenceMarkerAtLine(text, searchLine, candidateLineEnd);
+      // A closing fence inside a list must use the existing container's
+      // continuation indentation. A fresh list marker is code content.
+      const closing = fenceMarkerAtLine(
+        text,
+        searchLine,
+        candidateLineEnd,
+        false,
+        (opening.listContentIndent ?? 0) + 3,
+      );
       if (
         closing?.marker === opening.marker &&
         closing.run >= opening.run &&
@@ -457,6 +485,12 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     cachedParen = text.indexOf(')', from);
     return cachedParen;
   };
+  let cachedAngle = -2;
+  const nextAngle = (from: number): number => {
+    if (cachedAngle === -1 || cachedAngle >= from) return cachedAngle;
+    cachedAngle = text.indexOf('>', from);
+    return cachedAngle;
+  };
 
   while (cursor < text.length) {
     const openBracket = text.indexOf('[', cursor);
@@ -498,7 +532,7 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       continue;
     }
 
-    const closingAngle = angleWrapped ? text.indexOf('>', schemeStart + scheme.length) : -1;
+    const closingAngle = angleWrapped ? nextAngle(schemeStart + scheme.length) : -1;
     const initialEndParen = angleWrapped
       ? closingAngle === -1
         ? -1

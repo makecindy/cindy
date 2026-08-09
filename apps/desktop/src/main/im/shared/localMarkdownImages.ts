@@ -112,6 +112,64 @@ function localMarkdownImageMatches(
   return matches;
 }
 
+function incompleteLocalMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
+  const codeRanges = markdownCodeRanges(text);
+  const matches: LocalMarkdownImageMatch[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf('![', cursor);
+    if (start === -1) break;
+    cursor = start + 2;
+    if (isMarkdownCodePosition(codeRanges, start)) continue;
+
+    let labelEnd = start + 2;
+    const labelLimit = Math.min(text.length, labelEnd + MAX_MARKDOWN_IMAGE_LABEL_LENGTH + 1);
+    while (labelEnd < labelLimit) {
+      const char = text[labelEnd];
+      if (char === '\r' || char === '\n') break;
+      if (char === '\\') {
+        labelEnd += 2;
+        continue;
+      }
+      if (char === ']' && text[labelEnd + 1] === '(') break;
+      labelEnd += 1;
+    }
+    if (text[labelEnd] !== ']' || text[labelEnd + 1] !== '(') continue;
+
+    const targetStart = labelEnd + 2;
+    const lineBreak = text.indexOf('\n', targetStart);
+    const lineEnd = lineBreak === -1 ? text.length : lineBreak;
+    const targetLimit = Math.min(
+      lineEnd,
+      targetStart + MAX_MARKDOWN_IMAGE_DESTINATION_LENGTH + 1,
+    );
+    let targetEnd = targetStart;
+    let depth = 1;
+    while (targetEnd < targetLimit) {
+      const char = text[targetEnd];
+      if (char === '\r') break;
+      if (char === '\\') {
+        targetEnd += 2;
+        continue;
+      }
+      if (char === '(') depth += 1;
+      else if (char === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+      targetEnd += 1;
+    }
+    if (depth === 0 || targetEnd === targetStart) continue;
+    matches.push({
+      start,
+      end: targetEnd,
+      label: text.slice(start + 2, labelEnd),
+      target: text.slice(targetStart, targetEnd),
+    });
+  }
+  return matches;
+}
+
 function markdownImageLabel(raw: string): string {
   return raw.replace(/\\([\\[\]])/g, '$1').trim() || '图片';
 }
@@ -353,7 +411,10 @@ function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
 export function sanitizeLocalMarkdownImageRefs(text: string): string {
   // Escaped image syntax is not materialized, but local paths still must not
   // cross the IM boundary in a plain-text fallback.
-  const matches = localMarkdownImageMatches(text, { includeEscaped: true });
+  const matches = [
+    ...localMarkdownImageMatches(text, { includeEscaped: true }),
+    ...incompleteLocalMarkdownImageMatches(text),
+  ].sort((a, b) => a.start - b.start);
   let sanitized = text;
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const match = matches[index];

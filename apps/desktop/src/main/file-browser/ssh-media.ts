@@ -85,6 +85,11 @@ export function makeSshChunkExecutor(
   hostId: string,
   workdir: string,
   relPath: string,
+  constraints: {
+    expectedSize?: number;
+    expectedMtimeMs?: number;
+    maxBytes?: number;
+  } = {},
 ): FetchExecutor {
   return async (destPath, progress) => {
     const handle = await fsPromises.open(destPath, 'w');
@@ -96,13 +101,36 @@ export function makeSshChunkExecutor(
           'readFileChunk',
           { workdir, relPath, offset, length: CHUNK_LENGTH },
         );
+        if (
+          (constraints.expectedSize !== undefined && chunk.size !== constraints.expectedSize) ||
+          (constraints.expectedMtimeMs !== undefined &&
+            chunk.mtimeMs !== constraints.expectedMtimeMs)
+        ) {
+          throw new Error('remote file identity changed during download');
+        }
+        if (constraints.maxBytes !== undefined && chunk.size > constraints.maxBytes) {
+          throw new Error('remote file exceeds download limit');
+        }
         const buf = Buffer.from(chunk.dataBase64, 'base64');
+        const nextOffset = offset + buf.length;
+        if (
+          buf.length > CHUNK_LENGTH ||
+          (constraints.expectedSize !== undefined && nextOffset > constraints.expectedSize) ||
+          (constraints.maxBytes !== undefined && nextOffset > constraints.maxBytes)
+        ) {
+          throw new Error('remote chunk exceeds download limit');
+        }
         if (buf.length > 0) {
           await handle.write(buf, 0, buf.length, offset);
           offset += buf.length;
         }
         progress(Math.min(offset, chunk.size), chunk.size, 'download');
-        if (chunk.eof) break;
+        if (chunk.eof) {
+          if (constraints.expectedSize !== undefined && offset !== constraints.expectedSize) {
+            throw new Error('remote file size changed during download');
+          }
+          break;
+        }
         if (buf.length === 0) throw new Error('empty chunk before eof');
       }
     } finally {
@@ -243,7 +271,11 @@ export async function materializeSshRemoteFile(
         size: stat.size,
         mtimeMs: stat.mtimeMs,
       },
-      makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath),
+      makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath, {
+        expectedSize: stat.size,
+        expectedMtimeMs: stat.mtimeMs,
+        maxBytes,
+      }),
       noopProgress,
     );
     return { ok: true, cachePath, size: stat.size, relPath };
@@ -329,7 +361,11 @@ export async function materializeSshRemoteMedia(
         size: stat.size,
         mtimeMs: stat.mtimeMs,
       },
-      makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath),
+      makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath, {
+        expectedSize: stat.size,
+        expectedMtimeMs: stat.mtimeMs,
+        maxBytes: maxBytes ?? stat.size,
+      }),
       noopProgress,
     );
     return { ok: true, cachePath, size: stat.size, mime, relPath };

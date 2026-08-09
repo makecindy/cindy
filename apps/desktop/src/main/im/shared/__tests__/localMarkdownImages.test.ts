@@ -595,4 +595,16 @@ describe('sanitizeLocalMarkdownImageRefs', () => {
       sanitizeLocalMarkdownImageRefs('![private](/Users/alice/a(b(c)d).png)'),
     ).toBe('private');
   });
+
+  it('fail-closes incomplete local image syntax without touching code examples', () => {
+    const text = [
+      '![private](/Users/alice/private/output.png',
+      '![angle](<file:///Users/alice/private/angle.png',
+      '`![inline](/Users/alice/private/inline.png`',
+    ].join('\n');
+
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe(
+      ['private', 'angle', '`![inline](/Users/alice/private/inline.png`'].join('\n'),
+    );
+  });
 });

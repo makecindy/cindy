@@ -182,6 +182,8 @@ interface TurnState {
   mediaDisplayNames: Map<string, string>;
   /** Private staging directories created for race-safe local-file fallback. */
   mediaTempDirs: Set<string>;
+  /** Session teardown won ownership while async fallback materialization was in flight. */
+  cleanupRequested: boolean;
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
   /** SSH host when the session workdir lives on a remote machine. */
@@ -689,6 +691,7 @@ export function createTurnRunner(
       mediaAbsPaths: [],
       mediaDisplayNames: new Map(),
       mediaTempDirs: new Set(),
+      cleanupRequested: false,
       workingDir: row.workingDir,
       remoteHostId: row.remoteHostId ?? null,
       done: false,
@@ -2627,12 +2630,15 @@ export function createTurnRunner(
 
   async function cleanupFallbackMedia(turn: TurnState): Promise<void> {
     const tempDirs = [...turn.mediaTempDirs];
-    // Claim the directories synchronously so terminal and session cleanup
-    // cannot race into duplicate removals while the first rm is in flight.
-    turn.mediaTempDirs.clear();
     for (const tempDir of tempDirs) {
       try {
-        await fs.rm(tempDir, { recursive: true, force: true });
+        await fs.rm(tempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 2,
+          retryDelay: 50,
+        });
+        turn.mediaTempDirs.delete(tempDir);
       } catch (err) {
         const error = sanitizeSendOutcomeError(err);
         log.warn(`${channel} media fallback cleanup failed`, {
@@ -2796,8 +2802,12 @@ export function createTurnRunner(
         existingAbsPaths: [...turn.mediaAbsPaths],
         remoteHostId: turn.remoteHostId,
       });
-      turn.presenter.replaceBody(materialized.text);
       for (const tempDir of materialized.tempDirs) turn.mediaTempDirs.add(tempDir);
+      if (turn.cleanupRequested) {
+        await cleanupFallbackMedia(turn);
+        return;
+      }
+      turn.presenter.replaceBody(materialized.text);
       for (const file of materialized.files) {
         if (!turn.mediaAbsPaths.includes(file.absPath)) turn.mediaAbsPaths.push(file.absPath);
         if (file.displayName) turn.mediaDisplayNames.set(file.absPath, file.displayName);
@@ -2944,6 +2954,12 @@ export function createTurnRunner(
       const ownerDmSourceMessageId =
         sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
+      const currentTurn = sessionStates.get(localSessionId)?.queue[0];
+      if (!currentTurn || currentTurn.cleanupRequested) {
+        const kind = req.kind as InteractionDecision['kind'];
+        if (kind === 'ask_user_question') return { kind, answers: {} };
+        return { kind, behavior: 'deny', reason: 'session_cleanup' };
+      }
 
       let messageId: string;
       try {
@@ -3018,6 +3034,7 @@ export function createTurnRunner(
       }
       await materializeTurnLocalImages(state, turn, { richCardFallback: true });
       await materializeTurnLocalFiles(state, turn);
+      if (turn.cleanupRequested) return;
       const fallbackText = composeStreamingView(turn);
       try {
         if (fallbackText.length > 0) {
@@ -3245,6 +3262,7 @@ export function createTurnRunner(
     }
     const mediaCleanups: Promise<void>[] = [];
     for (const turn of state.queue) {
+      turn.cleanupRequested = true;
       releaseTurnInteractionRoute(turn, 'session_cleanup');
       turn.terminalKind = 'aborted';
       turn.terminalErrorCode ??= 'session_cleanup';
