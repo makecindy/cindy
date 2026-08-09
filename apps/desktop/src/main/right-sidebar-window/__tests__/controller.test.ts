@@ -14,6 +14,7 @@ import type { RsbWindowSettings } from '../settings-store.js';
 interface FakeWindow {
   on: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  hide: ReturnType<typeof vi.fn>;
   show: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   restore: ReturnType<typeof vi.fn>;
@@ -39,6 +40,7 @@ function fakeWindow(id = 1, asyncClose = false): FakeWindow {
       win.destroyed = true;
       listeners.get('closed')?.();
     }),
+    hide: vi.fn(),
     show: vi.fn(),
     focus: vi.fn(),
     restore: vi.fn(),
@@ -201,6 +203,35 @@ describe('open / close', () => {
     h.windows[0].emitClosed();
     expect(h.getSettings().lastOpen).toBe(false);
     expect(h.broadcasts.at(-1)).toEqual({ detached: false, open: false });
+  });
+
+  it('hides a reattached opener window until its transferred popup is released', () => {
+    let allowClose = false;
+    const h = makeHarness(
+      { detached: true, lastOpen: true },
+      { asyncClose: true, canCloseWindow: () => allowClose },
+    );
+    h.controller.open();
+
+    expect(h.controller.setDetached(false)).toEqual({
+      detached: false,
+      lastOpen: false,
+      open: false,
+    });
+    const blocked = h.windows[0].emitClose();
+
+    expect(blocked.preventDefault).toHaveBeenCalledOnce();
+    expect(h.windows[0].hide).toHaveBeenCalledOnce();
+    expect(h.windows[0].isDestroyed()).toBe(false);
+    expect(h.getSettings()).toMatchObject({ detached: false, lastOpen: false });
+    expect(h.controller.getState()).toEqual({ detached: false, lastOpen: false, open: false });
+
+    allowClose = true;
+    h.controller.retryRetainedClose();
+    const allowed = h.windows[0].emitClose();
+    expect(allowed.preventDefault).not.toHaveBeenCalled();
+    h.windows[0].emitClosed();
+    expect(h.windows[0].isDestroyed()).toBe(true);
   });
 });
 

@@ -43,6 +43,12 @@ interface SurfaceRecord {
   popupPinRelease: (() => void) | null;
   claimTimer: ReturnType<typeof setTimeout> | null;
   detachOwnerObservers: (() => void) | null;
+  /**
+   * Renderer host that owns the ordinary webview which created this popup.
+   * Moving the native view does not move Chromium's outlivesOpener:false
+   * dependency, so this host may need to outlive the current surface owner.
+   */
+  openerHostWebContentsId: number;
   /** Invalidates callbacks captured by a previous owner during transfer/rollback. */
   ownerGeneration: number;
 }
@@ -51,6 +57,7 @@ export const RSB_NATIVE_POPUP_CLAIM_TIMEOUT_MS = 30_000;
 
 const surfaces = new Map<string, SurfaceRecord>();
 const managedWebContentsIds = new Set<number>();
+const surfaceReleaseListeners = new Set<() => void>();
 let registry: TabRegistry | null = null;
 let ipcRegistered = false;
 
@@ -153,6 +160,13 @@ function cleanupSurface(record: SurfaceRecord, notifyClosed: boolean): void {
   record.openerPinRelease = null;
   record.popupPinRelease = null;
   if (record.tabId) registry?.release(record.tabId, record.webContents.id);
+  for (const listener of surfaceReleaseListeners) {
+    try {
+      listener();
+    } catch (err) {
+      log.warn('native popup surface release listener threw', { err });
+    }
+  }
 }
 
 function installSurfaceObservers(record: SurfaceRecord): void {
@@ -254,6 +268,7 @@ export function createRsbNativePopupSurface(
     popupPinRelease: null,
     claimTimer: null,
     detachOwnerObservers: null,
+    openerHostWebContentsId: hostContents.id,
     ownerGeneration: 0,
   };
   surfaces.set(surfaceId, record);
@@ -647,12 +662,36 @@ export function hasActiveRsbNativePopupSurfacesForOwner(webContentsId: number): 
   return false;
 }
 
+/**
+ * Whether closing a renderer host can still tear down an active popup. The
+ * current surface owner and the original Chromium opener host are distinct
+ * during a reattach transfer and both must remain alive until cleanup.
+ */
+export function hasActiveRsbNativePopupDependenciesForHost(webContentsId: number): boolean {
+  for (const record of surfaces.values()) {
+    if (
+      record.ownerWebContents?.id === webContentsId ||
+      record.openerHostWebContentsId === webContentsId
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Notify window lifecycle code when a retained opener may be closed safely. */
+export function onRsbNativePopupSurfaceReleased(listener: () => void): () => void {
+  surfaceReleaseListeners.add(listener);
+  return () => surfaceReleaseListeners.delete(listener);
+}
+
 /** Test-only reset. */
 export function _resetRsbNativePopupSurfacesForTests(): void {
   for (const record of [...surfaces.values()]) {
     cleanupSurface(record, false);
     if (!record.webContents.isDestroyed()) record.webContents.close();
   }
+  surfaceReleaseListeners.clear();
   registry = null;
   ipcRegistered = false;
 }

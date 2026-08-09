@@ -57,9 +57,11 @@ import {
   createRsbNativePopupSurface,
   disposeUnclaimedRsbNativePopupSurface,
   getRsbNativePopupOwnerWebContents,
+  hasActiveRsbNativePopupDependenciesForHost,
   hasActiveRsbNativePopupSurfaces,
   hasActiveRsbNativePopupSurfacesForOwner,
   isRsbNativePopupWebContentsId,
+  onRsbNativePopupSurfaceReleased,
   prepareQueuedRsbNativePopupSurfaceTransfer,
   registerRsbNativePopupSurfaceIpc,
   transferRsbNativePopupSurface,
@@ -204,6 +206,7 @@ describe('main-owned RSB native popup surfaces', () => {
     ) => void;
 
     expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(true);
+    expect(hasActiveRsbNativePopupDependenciesForHost(oldHost.id)).toBe(true);
     expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(false);
 
     expect(transferRsbNativePopupSurface(surfaceId, nextHost as never)).toBe('transferred');
@@ -213,6 +216,9 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(nextWindow.children.has(view)).toBe(true);
     expect(getRsbNativePopupOwnerWebContents(42)).toBe(nextHost);
     expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(false);
+    // Moving the view does not move Chromium's outlivesOpener:false
+    // relationship. The creating host must stay alive until the popup ends.
+    expect(hasActiveRsbNativePopupDependenciesForHost(oldHost.id)).toBe(true);
     expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(true);
 
     // removeListener cannot revoke a callback Electron already queued. Both
@@ -231,9 +237,14 @@ describe('main-owned RSB native popup surfaces', () => {
     ).toThrow(/PERMISSION_DENIED/);
     await claim({ sender: nextHost }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
 
+    const released = vi.fn();
+    const unsubscribe = onRsbNativePopupSurfaceReleased(released);
     nextHost.close();
+    unsubscribe();
     expect(popup.close).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledWith('tab-popup', 42);
+    expect(released).toHaveBeenCalledOnce();
+    expect(hasActiveRsbNativePopupDependenciesForHost(oldHost.id)).toBe(false);
     expect(hasActiveRsbNativePopupSurfaces()).toBe(false);
   });
 

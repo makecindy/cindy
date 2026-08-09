@@ -76,6 +76,10 @@ export class RsbWindowController {
   private winRef: BrowserWindow | null = null;
   /** BrowserWindow.close() 到 closed 事件之间仍未 destroyed，不能继续当活 host。 */
   private closing = false;
+  /** Hidden physical window retained only for a transferred popup's opener relationship. */
+  private retainedForPopup = false;
+  /** The current close attempt came from detached → attached reparenting. */
+  private retainOnBlockedClose = false;
   /** 子窗口 renderer 根组件已挂载(READY 握手过)。窗口销毁时复位。 */
   private ready = false;
   private readyWaiters: Array<{
@@ -110,6 +114,12 @@ export class RsbWindowController {
     const userInitiated = opts.userInitiated !== false;
     if (this.winRef && !this.winRef.isDestroyed()) {
       if (this.closing) return;
+      if (this.retainedForPopup) {
+        this.retainedForPopup = false;
+        this.retainOnBlockedClose = false;
+        this.deps.settings.writePatch({ lastOpen: true });
+        this.broadcast();
+      }
       if (!userInitiated) return;
       if (this.winRef.isMinimized()) this.winRef.restore();
       this.winRef.show();
@@ -119,11 +129,25 @@ export class RsbWindowController {
     const win = this.deps.createWindow({ userInitiated });
     this.winRef = win;
     this.closing = false;
+    this.retainedForPopup = false;
+    this.retainOnBlockedClose = false;
     this.ready = false;
     win.on('close', (event) => {
       if (this.deps.isQuitting() || this.deps.canCloseWindow?.(win) !== false) return;
       event.preventDefault();
       this.closing = false;
+      if (this.retainOnBlockedClose && !this.deps.settings.read().detached) {
+        this.retainOnBlockedClose = false;
+        this.retainedForPopup = true;
+        // The sidebar is already logically attached to main. Keep only the
+        // physical opener renderer alive and invisible until popup cleanup.
+        win.hide();
+        this.deps.settings.writePatch({ lastOpen: false });
+        this.broadcast();
+        this.deps.log.warn('right-sidebar opener retained for active browser popup');
+        return;
+      }
+      this.retainOnBlockedClose = false;
       // close() optimistically persists lastOpen=false before Electron emits
       // this cancellable event. Restore the real open state when the popup
       // guard keeps the window alive.
@@ -142,12 +166,31 @@ export class RsbWindowController {
     this.deps.settings.writePatch({ lastOpen: false });
     if (this.winRef && !this.winRef.isDestroyed()) {
       // onClosed 会广播 {open:false},这里不重复
+      if (this.retainedForPopup) this.retainOnBlockedClose = true;
       this.closing = true;
       this.winRef.close();
     } else {
       this.closing = false;
+      this.retainedForPopup = false;
+      this.retainOnBlockedClose = false;
       this.broadcast();
     }
+  }
+
+  /** Retry destruction after native-popup cleanup releases the hidden opener. */
+  retryRetainedClose(): void {
+    if (
+      !this.retainedForPopup ||
+      this.deps.settings.read().detached ||
+      !this.winRef ||
+      this.winRef.isDestroyed() ||
+      this.closing
+    ) {
+      return;
+    }
+    this.retainOnBlockedClose = true;
+    this.closing = true;
+    this.winRef.close();
   }
 
   /** 写偏好;true 附带开窗,false 附带关窗。返回新 state 供 invoke handler 直接回。 */
@@ -160,6 +203,7 @@ export class RsbWindowController {
       // queued 调用方早已返回；attach 时必须把 ownership 显式交回主 renderer。
       this.flushDeferredCommandsToAttachedHost();
       this.deps.onPopupHostAvailable?.();
+      this.retainOnBlockedClose = true;
       this.close();
     }
     // open()/close() 已各自广播,但两者都可能命中"窗口状态没变"的幂等分支
@@ -213,7 +257,12 @@ export class RsbWindowController {
         if (sessionId !== ctx.sessionId) this.deferredCommands.delete(sessionId);
       }
     }
-    if (this.winRef && !this.winRef.isDestroyed() && !this.closing) {
+    if (
+      this.winRef &&
+      !this.winRef.isDestroyed() &&
+      !this.closing &&
+      !this.retainedForPopup
+    ) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, ctx);
     }
     this.flushDeferredCommandsToDetachedHost();
@@ -381,19 +430,26 @@ export class RsbWindowController {
 
   /** IPC 层校验 READY 握手 sender 用。 */
   getSidebarWebContents(): WebContents | null {
-    return !this.closing && this.winRef && !this.winRef.isDestroyed()
+    return !this.closing && !this.retainedForPopup && this.winRef && !this.winRef.isDestroyed()
       ? this.winRef.webContents
       : null;
   }
 
   private isOpen(): boolean {
-    return this.winRef !== null && !this.closing && !this.winRef.isDestroyed();
+    return (
+      this.winRef !== null &&
+      !this.closing &&
+      !this.retainedForPopup &&
+      !this.winRef.isDestroyed()
+    );
   }
 
   private onClosed(): void {
     this.winRef = null;
     this.ready = false;
     this.closing = false;
+    this.retainedForPopup = false;
+    this.retainOnBlockedClose = false;
     const closeWaiters = this.closeWaiters.splice(0);
     closeWaiters.forEach((resolve) => resolve());
     // 悬着的 ready 等待全部失败(窗口没等到挂载就没了)
