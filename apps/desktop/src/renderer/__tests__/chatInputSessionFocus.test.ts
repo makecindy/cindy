@@ -93,6 +93,37 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain('return isInteractiveFocusedElement(activeElement);');
   });
 
+  it('restores keyboard focus after the temporary local send lock without stealing it', () => {
+    const editorLockEffect = extractBetween(
+      chatInputSource,
+      'const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;',
+      'const { settings: voiceInputSettings }',
+    );
+    const localSendLockBlock = extractBetween(
+      chatInputSource,
+      '// Local/SSH sends keep the live composer while references and runtime',
+      'try {\n        let serializedContent',
+    );
+
+    expect(chatInputSource).toContain('const pendingSendFocusRestoreRef = useRef<{');
+    expect(chatInputSource).toContain('focusAnchor: Element | null;');
+    expect(localSendLockBlock).toContain('pendingSendFocusRestoreRef.current = editor.isFocused');
+    expect(localSendLockBlock.indexOf('pendingSendFocusRestoreRef.current')).toBeLessThan(
+      localSendLockBlock.indexOf('setSendDispatchInFlight(true);'),
+    );
+    expect(editorLockEffect).toContain('editor?.setEditable(!composerMutationLocked);');
+    expect(editorLockEffect).toContain('if (!editor || sendDispatchInFlight) return;');
+    expect(editorLockEffect).toContain('pendingSendFocusRestoreRef.current = null;');
+    expect(editorLockEffect).toContain('if (composerMutationLocked) return;');
+    expect(editorLockEffect).toContain(
+      'if (editor.isDestroyed || !editor.isEditable || editor.isFocused) return;',
+    );
+    expect(editorLockEffect).toContain(
+      'hasFocusMovedToInteractiveElement(pendingFocusRestore.focusAnchor, editor)',
+    );
+    expect(editorLockEffect).toContain('editor.commands.focus();');
+  });
+
   it('reuses in-composer Plugin placement for routed Use and end-focuses Create with Cindy', () => {
     expect(pluginPageSource).toContain('pendingGhostId: ghost.manifest.id');
     expect(pluginPageSource.match(/focusAtEnd: true/g)).toHaveLength(1);

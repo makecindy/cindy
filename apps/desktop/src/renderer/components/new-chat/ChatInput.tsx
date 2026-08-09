@@ -1651,6 +1651,12 @@ export function ChatInput({
   const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
   const composerEditorLocked = disabled || sendDispatchInFlight;
   const composerMutationLockedRef = useRef(composerEditorLocked);
+  // Chromium moves focus to <body> when the ProseMirror root becomes
+  // contenteditable=false. Remember keyboard-owned focus so the temporary
+  // send lock can restore it without stealing focus from another control.
+  const pendingSendFocusRestoreRef = useRef<{
+    focusAnchor: Element | null;
+  } | null>(null);
   composerMutationLockedRef.current = composerEditorLocked;
 
   useEffect(() => {
@@ -2579,7 +2585,19 @@ export function ChatInput({
   composerMutationLockedRef.current = composerMutationLocked;
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
-  }, [composerMutationLocked, editor]);
+    if (!editor || sendDispatchInFlight) return;
+
+    const pendingFocusRestore = pendingSendFocusRestoreRef.current;
+    if (!pendingFocusRestore) return;
+    pendingSendFocusRestoreRef.current = null;
+    if (composerMutationLocked) return;
+
+    window.requestAnimationFrame(() => {
+      if (editor.isDestroyed || !editor.isEditable || editor.isFocused) return;
+      if (hasFocusMovedToInteractiveElement(pendingFocusRestore.focusAnchor, editor)) return;
+      editor.commands.focus();
+    });
+  }, [composerMutationLocked, editor, sendDispatchInFlight]);
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -4234,7 +4252,12 @@ export function ChatInput({
       // Local/SSH sends keep the live composer while references and runtime
       // settings settle; remote sends must stay editable after their
       // click-time snapshot is cleared.
-      if (!optimisticallyClearRemoteComposer) setSendDispatchInFlight(true);
+      if (!optimisticallyClearRemoteComposer) {
+        pendingSendFocusRestoreRef.current = editor.isFocused
+          ? { focusAnchor: document.activeElement }
+          : null;
+        setSendDispatchInFlight(true);
+      }
       try {
         let serializedContent = serializedAtClick;
         if (!serializedContent) {
