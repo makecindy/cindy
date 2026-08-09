@@ -377,7 +377,7 @@ describe('approvalSignature — 可记忆判据', () => {
     }
   });
 
-  it('psql 只有显式禁用 psqlrc 且未读取外部 SQL 文件时才可记忆', () => {
+  it('psql 只有显式禁用 psqlrc 且没有文件或管道输入时才可记忆', () => {
     for (const command of [
       "psql prod -c 'select 1'",
       "psql -x prod -c 'select 1'",
@@ -394,6 +394,14 @@ describe('approvalSignature — 可记忆判据', () => {
       'psql --no-psqlrc --file=./deploy.sql prod',
       'true && psql --file=./deploy.sql prod',
       "psql -X prod -c 'select 1' && psql prod -c 'select 2'",
+      'cat deploy.sql | psql -X prod',
+      'head -n 20 deploy.sql | env psql --no-psqlrc prod',
+      'gzip -dc deploy.sql.gz | timeout 30 psql -X prod',
+      'cat deploy.sql | tee audit.sql | psql -X prod',
+      "printf 'select 1' | psql.exe -X prod",
+      'cat deploy.sql |& psql -X prod',
+      'true && cat deploy.sql | psql -X prod',
+      'cat deploy.sql | { psql -X prod; }',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -407,6 +415,10 @@ describe('approvalSignature — 可记忆判据', () => {
       'psql -X -- --file=./deploy.sql',
       "psql -X prod -c 'select 1' && psql --no-psqlrc prod -c 'select 2'",
       'echo psql -f ./deploy.sql prod',
+      "echo 'cat deploy.sql | psql -X prod'",
+      'echo ok # cat deploy.sql | psql -X prod',
+      "cat deploy.sql | wc -l && psql -X prod -c 'select 1'",
+      "false || psql -X prod -c 'select 1'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
@@ -418,9 +430,10 @@ describe('approvalSignature — 可记忆判据', () => {
     for (const action of [
       exec("psql prod -c 'select 1'"),
       exec('psql -X -f ./deploy.sql prod'),
+      exec('cat deploy.sql | psql -X prod'),
     ]) {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
-      // psqlrc 或 deploy.sql 被替换时，两类入口都从未写入可复用摘要。
+      // psqlrc、deploy.sql 或管道输入被替换时，各入口都从未写入可复用摘要。
       expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
     }
     expect(memory.size()).toBe(0);
@@ -442,6 +455,16 @@ describe('approvalSignature — 可记忆判据', () => {
       "mongosh.exe --eval 'db.jobs.deleteMany({})'",
       "mongo --norc --eval 'db.jobs.findOne()'"
         + " && mongosh --eval 'db.jobs.deleteMany({})'",
+      'mongosh --norc --file ./deploy.js mongodb://prod',
+      'mongosh --norc --file=./deploy.js mongodb://prod',
+      'mongosh.exe --norc -f .\\deploy.js mongodb://prod',
+      'mongo --norc mongodb://prod ./deploy.js',
+      'mongosh --norc mongodb://prod ./deploy.mjs',
+      'env mongosh --norc --file ./deploy.js mongodb://prod',
+      'mongo --norc --shell ./deploy.js mongodb://prod',
+      'mongosh --norc -- ./deploy.js',
+      "mongo --norc --eval 'db.jobs.findOne()'"
+        + ' && mongosh --norc --file ./deploy.js mongodb://prod',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -456,6 +479,10 @@ describe('approvalSignature — 可记忆判据', () => {
       "mongo --norc --eval 'db.jobs.findOne()'"
         + " && mongosh --norc --eval 'db.jobs.findOne()'",
       "echo mongosh --eval 'db.jobs.deleteMany({})'",
+      'mongosh --norc mongodb://prod',
+      'mongo --norc prod',
+      `mongosh --norc --eval "print('deploy.js')"`,
+      'echo mongosh --file ./deploy.js mongodb://prod',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
@@ -464,11 +491,16 @@ describe('approvalSignature — 可记忆判据', () => {
     const memory = createApprovalMemory({
       agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
     });
-    const defaultAction = exec("mongosh --eval 'db.jobs.findOne()'");
-    memory.rememberReviewerAllow(defaultAction, defaultIntent, roots, reviewerRoute);
-    expect(memory.isRemembered(
-      defaultAction, defaultIntent, roots, reviewerRoute,
-    )).toBe(false);
+    for (const action of [
+      exec("mongosh --eval 'db.jobs.findOne()'"),
+      exec('mongosh --norc --file ./deploy.js mongodb://prod'),
+      exec('mongo --norc mongodb://prod ./deploy.js'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      expect(memory.isRemembered(
+        action, defaultIntent, roots, reviewerRoute,
+      )).toBe(false);
+    }
     expect(memory.size()).toBe(0);
 
     const isolatedAction = exec("mongosh --norc --eval 'db.jobs.findOne()'");

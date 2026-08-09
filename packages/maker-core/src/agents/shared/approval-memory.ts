@@ -302,7 +302,15 @@ function mongoShellMayLoadMutableUserState(args: readonly string[]): boolean {
   const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
   // mongo / mongosh 默认执行用户目录中的启动脚本。只信任 `--` 前大小写精确的
   // --norc；缩写、近似拼写或位置参数中的同名文本都不能证明启动脚本已被禁用。
-  return !options.includes('--norc');
+  if (!options.includes('--norc')) return true;
+  // --file / -f 会直接执行可替换脚本；旧 mongo 与 mongosh 也都支持把 JavaScript
+  // 文件作为位置参数传入。文件选项即使写在 `--` 后，也会由随后的位置脚本兜住。
+  return args.some((arg) =>
+    arg === '--file'
+    || arg.startsWith('--file=')
+    || arg === '-f'
+    || (arg.startsWith('-f') && arg.length > 2)
+    || /(?:^|[\\/])[^\\/]+\.(?:[cm]?js)$/i.test(arg));
 }
 
 const MYSQL_FAMILY_OPTION_FILE_CLIENTS: ReadonlySet<string> = new Set([
@@ -500,8 +508,8 @@ const DYNAMIC_COMMAND_INPUT_PATTERNS: readonly RegExp[] = [
   /\d*<{1,3}\s*(?!\()(?:"[^"\r\n]+"|'[^'\r\n]+'|&(?:\d+|-)|[^\s;&|]+)/,
 ];
 
-/** 引号与命令/进程替换感知地识别真正由管道接收 stdin 的 SQLite invocation。 */
-function hasPipedSqliteInvocation(command: string): boolean {
+/** 引号与命令/进程替换感知地识别真正由管道接收 stdin 的目标 invocation。 */
+function hasPipedInvocation(command: string, executableName: string): boolean {
   let singleQuoted = false;
   let doubleQuoted = false;
   let escaped = false;
@@ -532,7 +540,7 @@ function hasPipedSqliteInvocation(command: string): boolean {
     if (char === '|' && command[i - 1] !== '|' && command[i + 1] !== '|') {
       const separatorLength = command[i + 1] === '&' ? 2 : 1;
       const suffix = command.slice(i + separatorLength).replace(/^[\s({]+/, '');
-      if (commandExecutableInvocations(suffix)[0]?.name === 'sqlite3') return true;
+      if (commandExecutableInvocations(suffix)[0]?.name === executableName) return true;
       i += separatorLength - 1;
     }
   }
@@ -550,13 +558,14 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (invocations.some(({ name, args }) =>
     // SQLite shell 会把 stdin 当 SQL / dot command 执行。只看 sqlite3 自身 argv 会漏掉
     // `cat deploy.sql | sqlite3 prod.db`：命令文本没变，上游文件内容却可替换。
-    name === 'sqlite3' && (hasPipedSqliteInvocation(command)
+    name === 'sqlite3' && (hasPipedInvocation(command, 'sqlite3')
       || sqliteMayLoadMutableFileState(args)))) {
     return true;
   }
   if (invocations.some(({ name, args }) =>
-    // 默认 psqlrc 与 `psql -f FILE` 都会让同一 argv 执行可替换的外部 SQL。
-    name === 'psql' && psqlMayLoadMutableUserState(args))) return true;
+    // 默认 psqlrc、`psql -f FILE` 与管道 stdin 都会让同一 argv 执行可替换的外部 SQL。
+    name === 'psql' && (hasPipedInvocation(command, 'psql')
+      || psqlMayLoadMutableUserState(args)))) return true;
   if (invocations.some(({ name, args }) =>
     // mongo / mongosh 默认加载可替换的用户启动脚本；只有显式 --norc 才可稳定复用。
     (name === 'mongo' || name === 'mongosh')
