@@ -20,6 +20,7 @@ export interface MessageContentLayout {
   markdownBodyGap: number;
   markdownListGap: number;
   markdownListMarkerWidth: number;
+  markdownTableAvailableWidth: number;
   markdownTableCellMinWidth: number;
   mediaGap: number;
   mediaPlaceholderMinHeight: number;
@@ -59,6 +60,7 @@ export function buildMessageContentLayout(input: MessageContentLayoutInput): Mes
     markdownBodyGap: compact ? 12 : 14,
     markdownListGap: compact ? 6 : 8,
     markdownListMarkerWidth: compact ? 20 : 24,
+    markdownTableAvailableWidth: contentWidth,
     markdownTableCellMinWidth: compact ? 96 : 112,
     mediaGap: compact ? 6 : 8,
     mediaPlaceholderMinHeight: compact ? 84 : 90,

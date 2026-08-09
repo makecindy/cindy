@@ -31,6 +31,11 @@ describe('parseCron', () => {
     expect(p.dayOfWeek).toEqual([0]);
   });
 
+  it('expands dayOfWeek steps through the Sunday alias 7', () => {
+    expect(parseCron('0 0 * * 7/2').dayOfWeek).toEqual([0]);
+    expect(parseCron('0 0 * * 5/2').dayOfWeek).toEqual([0, 5]);
+  });
+
   it('rejects out-of-range minute', () => {
     expect(() => parseCron('60 * * * *')).toThrow();
   });
@@ -38,6 +43,13 @@ describe('parseCron', () => {
   it('rejects wrong field count', () => {
     expect(() => parseCron('* * * *')).toThrow();
     expect(() => parseCron('* * * * * *')).toThrow();
+  });
+
+  it('rejects malformed numeric field segments instead of partially parsing them', () => {
+    expect(() => parseCron('5abc * * * *')).toThrow();
+    expect(() => parseCron('*/5abc * * * *')).toThrow();
+    expect(() => parseCron('1-2-3 * * * *')).toThrow();
+    expect(() => parseCron('1/2/3 * * * *')).toThrow();
   });
 });
 

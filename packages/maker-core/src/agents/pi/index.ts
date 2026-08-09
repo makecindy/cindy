@@ -83,6 +83,7 @@ import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
 import {
   createPiTranslateContext,
+  disposePiTranslateContext,
   translatePiEvent,
   usageSnapshotOf,
   type PiTranslateContext,
@@ -1016,8 +1017,11 @@ export class PiAgent extends BaseAgent {
 
     // 追加而非替换:pi 默认 prompt(工具用法/工程约定)原样保留,只追加 host 产品段
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
+    const ghostRosterPrompt =
+      this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
     const appendSections = [
       this.deps.runtimeConfig.systemPrompt?.trim(),
+      ghostRosterPrompt.trim(),
       opts.userPrompt?.trim(),
       piExtraDirsPrompt(mutableExtraDirs),
     ].filter((s): s is string => !!s && s.length > 0);
@@ -1308,6 +1312,7 @@ export class PiAgent extends BaseAgent {
           translatePiEvent(event, queue, ctx);
         },
         onExit: ({ code, signal }) => {
+          disposePiTranslateContext(ctx);
           clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true });
           runtimeCapabilityGeneration++;
           publishRuntimeCapabilities(undefined);
@@ -1337,6 +1342,7 @@ export class PiAgent extends BaseAgent {
         },
       });
     } catch (err) {
+      disposePiTranslateContext(ctx);
       try {
         disposeSessionRegistrations();
       } catch {
@@ -1553,6 +1559,7 @@ export class PiAgent extends BaseAgent {
         }
       }
     } catch (err) {
+      disposePiTranslateContext(ctx);
       try {
         disposeSessionRegistrations();
       } catch {
@@ -1849,6 +1856,7 @@ export class PiAgent extends BaseAgent {
 
       async close(): Promise<void> {
         closed = true;
+        disposePiTranslateContext(ctx);
         runtimeCapabilityGeneration++;
         publishRuntimeCapabilities(undefined);
         runtimeCapabilityListeners.clear();

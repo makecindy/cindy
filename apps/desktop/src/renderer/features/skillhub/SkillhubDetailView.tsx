@@ -102,7 +102,7 @@ const KIND_ICON: Record<SkillhubKind, LucideIcon> = {
 };
 
 // Compact chip — tuned to sit cleanly to the right of the h2 title (text-lg).
-// h-5 + text-[11px] keeps the visual weight subdued so the title leads.
+// h-5 + text-11 keeps the visual weight subdued so the title leads.
 function KindChip({ kind }: { kind: SkillhubKind }) {
   const Icon = KIND_ICON[kind];
   return (
@@ -116,7 +116,7 @@ function KindChip({ kind }: { kind: SkillhubKind }) {
       {/* relative top-[1px]: optical correction — Inter's cap sits high in
           the line-box at small sizes, so text-only nudge gets it level
           with the icon center without affecting layout. */}
-      <span className="relative top-[0.5px] text-[11px] font-medium leading-none">{KIND_LABEL[kind]}</span>
+      <span className="relative top-[0.5px] text-11 font-medium leading-none">{KIND_LABEL[kind]}</span>
     </span>
   );
 }
@@ -132,7 +132,7 @@ function ScopeChip({ scope }: { scope: SkillhubScope }) {
       )}
     >
       <Icon size={11} className="shrink-0 text-[var(--settings-theme-icon)]" />
-      <span className="relative top-[0.5px] text-[11px] font-medium leading-none">
+      <span className="relative top-[0.5px] text-11 font-medium leading-none">
         {scope === 'global' ? t('skillhub.detail.scopeGlobal') : t('skillhub.detail.scopeProject')}
       </span>
     </span>
@@ -1878,7 +1878,7 @@ export function SkillhubDetailView() {
                   'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
                 )}
               >
-                <span className="relative top-[0.5px] text-[11px] font-medium leading-none">
+                <span className="relative top-[0.5px] text-11 font-medium leading-none">
                   {le.label}
                 </span>
               </span>
@@ -2068,7 +2068,7 @@ export function SkillhubDetailView() {
               ) : (
                 <span className={cn(
                   'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
-                  'text-[13px] text-[var(--cmd-palette-item-meta)]',
+                  'text-13 text-[var(--cmd-palette-item-meta)]',
                   'border-[var(--confirm-btn-secondary-border)]',
                 )}>
                   <CheckCircle size={12} className="shrink-0" />
@@ -2080,7 +2080,7 @@ export function SkillhubDetailView() {
             {detailAction?.kind === 'installed-tag' && (
               <span className={cn(
                 'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
-                'text-[13px] text-[var(--cmd-palette-item-meta)]',
+                'text-13 text-[var(--cmd-palette-item-meta)]',
                 'border-[var(--confirm-btn-secondary-border)]',
               )}>
                 <CheckCircle size={12} className="shrink-0" />

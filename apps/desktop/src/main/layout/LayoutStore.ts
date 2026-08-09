@@ -2,7 +2,7 @@ import fs from 'node:fs';
 
 import {
   coerceLayout,
-  createDefaultLayout,
+  createDefaultLayoutPreservingGhostPanels,
   validateLayout,
   type Layout,
 } from '../../shared/layoutTree.js';
@@ -22,6 +22,12 @@ export interface LayoutStoreOptions {
   /** 布局变化时通知(index.ts 用它广播 layout:changed 到所有窗口)。 */
   onChanged?: (layout: Layout) => void;
   log?: LayoutStoreLogger;
+}
+
+export interface LayoutMutationResult {
+  layout: Layout;
+  /** 内存布局已应用；该标记只说明同一布局是否也成功写入用户存档。 */
+  persisted: boolean;
 }
 
 /**
@@ -77,7 +83,7 @@ export class LayoutStore {
    * 写入新布局。输入非法时拒绝(返回 rejection 原因,文件与缓存均不变)——
    * IPC 层负责把 rejection 映射为 throwIpcError,store 保持纯业务返回。
    */
-  setLayout(raw: unknown): { layout: Layout } | { rejection: string } {
+  setLayout(raw: unknown): LayoutMutationResult | { rejection: string } {
     let cloned: Layout;
     try {
       cloned = structuredClone(raw) as Layout;
@@ -88,18 +94,18 @@ export class LayoutStore {
     if (!v.ok) return { rejection: v.reason };
 
     this.cached = cloned;
-    this.persist(cloned);
+    const persisted = this.persist(cloned);
     this.options.onChanged?.(cloned);
-    return { layout: cloned };
+    return { layout: cloned, persisted };
   }
 
   /** 重置为默认布局(等价 WoW /resetui):写盘 + 广播。 */
-  reset(): Layout {
-    const layout = createDefaultLayout();
+  reset(): LayoutMutationResult {
+    const layout = createDefaultLayoutPreservingGhostPanels(this.getLayout());
     this.cached = layout;
-    this.persist(layout);
+    const persisted = this.persist(layout);
     this.options.onChanged?.(layout);
-    return layout;
+    return { layout, persisted };
   }
 
   /** 启动时调用:文件不存在则落一份默认树(QA 口径:启动后 userData 出现 layout.v1.json)。 */
@@ -113,18 +119,25 @@ export class LayoutStore {
     this.persist(this.getLayout());
   }
 
-  /** 原子写盘。失败只记日志不抛 —— 布局写失败不应打断任何业务路径。 */
-  private persist(layout: Layout): void {
+  /** 原子写盘。失败只记日志并返回 false —— 调用方可反馈，但不打断布局内存态。 */
+  private persist(layout: Layout): boolean {
     const file = this.options.getFilePath();
     const tmp = `${file}.tmp`;
     try {
       fs.writeFileSync(tmp, JSON.stringify(layout, null, 2), 'utf-8');
       fs.renameSync(tmp, file);
+      return true;
     } catch (err) {
       this.options.log?.warn('layout store persist failed', {
         path: file,
         error: err instanceof Error ? err.message : String(err),
       });
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        // 临时文件可能从未创建，或清理本身被文件系统拒绝；两者都不掩盖原始失败。
+      }
+      return false;
     }
   }
 }

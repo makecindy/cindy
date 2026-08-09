@@ -300,6 +300,7 @@ import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { makerApiFor, makerApiForDevice } from '@/lib/makerTransport';
+import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
 const log = createLogger('ChatInput');
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
@@ -1730,7 +1731,7 @@ export function ChatInput({
           // 多行列表 "1. / 2. / 3." 的点和正文会逐行漂移;等宽数字让前缀宽度
           // 一致、列表自然对齐。ComposerListIndentDecoration 会额外为整条列表
           // 行保留换行后的视觉缩进。
-          'text-[15px] leading-[22px] font-normal tabular-nums',
+          'text-15 leading-[1.467] font-normal tabular-nums',
           'text-[var(--chat-input-text)]',
           'focus:outline-none',
           // Tailwind can't target ProseMirror placeholder pseudo — handled
@@ -1986,6 +1987,13 @@ export function ChatInput({
         return false;
       },
       handleDrop(_view, event) {
+        // Session-link drops are inserted by the outer composer drop handler.
+        // Consume the event here first so ProseMirror does not also insert the
+        // drag source's `text/plain` fallback (the raw session id).
+        if (event.dataTransfer?.getData(SESSION_LINK_DROP_MIME).trim()) {
+          event.preventDefault();
+          return true;
+        }
         const payload = decodeComposerMentionPayload(
           event.dataTransfer?.getData(COMPOSER_MENTION_MIME) ?? '',
         );
@@ -2350,6 +2358,20 @@ export function ChatInput({
         },
         { at },
       );
+      return true;
+    },
+    [editor],
+  );
+
+  const insertSessionLinkDrop = useCallback(
+    (e: ReactDragEvent<HTMLElement>): boolean => {
+      if (!editor || editor.isDestroyed) return false;
+      const href = e.dataTransfer.getData(SESSION_LINK_DROP_MIME).trim();
+      if (!href) return false;
+      const at = lastComposerSelectionFromRef.current ?? editor.state.selection.from;
+      appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
+      lastComposerSelectionFromRef.current = editor.state.selection.from;
+      resolveSessionChipTitles(editor);
       return true;
     },
     [editor],
@@ -6248,6 +6270,7 @@ export function ChatInput({
                       : 'focus-within:border-[var(--chat-input-border-focus)]',
                   ],
             )}
+            data-split-group-composer-drop-target
             // 卡片里的空白(文字行下方的空隙、工具栏两组按钮之间的空档、四周
             // padding)没有元素承接点击:浏览器默认会把焦点从 contenteditable 撤到
             // <body>,正在输入的光标凭空消失;而点空白又该能进入输入态。所以先
@@ -6337,6 +6360,9 @@ export function ChatInput({
               if (mentionInserted) {
                 return;
               }
+              if (insertSessionLinkDrop(e)) {
+                return;
+              }
               // 意识面板拖来的产物(cindy-ghost:// 媒体地址):走引渡链路——
               // main 验归属后,图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
               // 键用 storageKey(= draftKey ?? sessionId):新建会话草稿态没有
@@ -6394,7 +6420,7 @@ export function ChatInput({
               <div className="pb-1.5">
                 <div className="group/bcomment relative inline-flex">
                   <div
-                    className="inline-flex items-center gap-1.5 rounded-full border py-1 pl-2.5 pr-2.5 text-[12px] group-hover/bcomment:pr-7"
+                    className="inline-flex items-center gap-1.5 rounded-full border py-1 pl-2.5 pr-2.5 text-12 group-hover/bcomment:pr-7"
                     style={{
                       borderColor: 'var(--border-default)',
                       color: 'var(--text-secondary)',
@@ -6439,7 +6465,7 @@ export function ChatInput({
                         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                           <span className="flex items-center gap-1.5">
                             <span
-                              className="inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold"
+                              className="inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-10 font-semibold"
                               style={{
                                 backgroundColor: 'var(--focus-ring)',
                                 color: '#fff',
@@ -6448,7 +6474,7 @@ export function ChatInput({
                               {item.markerNumber}
                             </span>
                             <span
-                              className="inline-flex items-center rounded px-1 py-px font-mono text-[10px]"
+                              className="inline-flex items-center rounded px-1 py-px font-mono text-10"
                               style={{
                                 backgroundColor: 'var(--surface-chip)',
                                 color: 'var(--text-tertiary)',
@@ -6458,7 +6484,7 @@ export function ChatInput({
                             </span>
                           </span>
                           <span
-                            className="line-clamp-2 whitespace-pre-wrap text-[12px] leading-[1.5]"
+                            className="line-clamp-2 whitespace-pre-wrap text-12 leading-[1.5]"
                             style={{ color: 'var(--text-secondary)' }}
                           >
                             {item.comment || t('chat.browserComment.noText')}
@@ -6900,7 +6926,7 @@ export function ChatInput({
                   aria-label={t('newChat.folderPicker.selectFolder')}
                 >
                   <Folder size={18} className="shrink-0 text-[var(--folder-btn-icon)]" />
-                  <span className="text-[15px] font-normal text-[var(--folder-btn-text)]">
+                  <span className="text-15 font-normal text-[var(--folder-btn-text)]">
                     {folderBasename ?? t('newChat.folderPicker.selectFolder')}
                   </span>
                 </button>
@@ -7183,7 +7209,7 @@ function VoiceInputButton({
         <span
           ref={pillLabelRef}
           className={cn(
-            'whitespace-nowrap pr-3 text-[12.5px] tabular-nums',
+            'whitespace-nowrap pr-3 text-12 tabular-nums',
             '-translate-x-1 opacity-0 transition-[opacity,transform] duration-[180ms] ease-out',
             expanded && 'translate-x-0 opacity-100',
             'motion-reduce:transition-none',
@@ -7221,7 +7247,7 @@ function AttachmentRejectionStrip({
           className={cn(
             'pointer-events-auto inline-flex max-w-[640px] items-center gap-2',
             'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-            'px-4 py-[10px] text-[13px] font-medium leading-snug text-[var(--cmd-palette-item-text)]',
+            'px-4 py-[10px] text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)]',
             'shadow-[var(--shadow-menu)]',
           )}
         >
@@ -7428,7 +7454,7 @@ function ThumbnailItem({
                 {file.name}
               </span>
               {metaLine ? (
-                <span className="truncate text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                <span className="truncate text-11" style={{ color: 'var(--text-secondary)' }}>
                   {metaLine}
                 </span>
               ) : null}
@@ -7441,7 +7467,7 @@ function ThumbnailItem({
       <button
         type="button"
         className={cn(
-          'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-white',
+          'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-10 text-white',
           'opacity-0 transition-opacity group-hover:opacity-100',
         )}
         style={{ backgroundColor: 'var(--file-remove-bg)' }}

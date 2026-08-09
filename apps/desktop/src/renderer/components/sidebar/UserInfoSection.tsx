@@ -203,7 +203,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               <div
                 className={cn(
                   'flex h-[27px] w-[27px] items-center justify-center rounded-full',
-                  'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] text-[14px] font-medium text-[var(--sidebar-user-card-text)]',
+                  'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] text-14 font-medium text-[var(--sidebar-user-card-text)]',
                 )}
               >
                 {showNotSignedInGlyph ? (
@@ -238,12 +238,12 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               'opacity-100',
             )}
           >
-            <p className="truncate text-[14px] font-semibold leading-[18px] text-[var(--sidebar-user-card-text)]">
+            <p className="truncate text-14 font-semibold leading-[1.286] text-[var(--sidebar-user-card-text)]">
               {displayName}
             </p>
             {/* 2px gap 与同栏 userNameContainer 保持一致。 */}
             <p
-              className="truncate text-[10.5px] leading-[13px] text-[var(--sidebar-user-card-text)] opacity-80"
+              className="truncate text-10 leading-[1.3] text-[var(--sidebar-user-card-text)] opacity-80"
               title={appVersionLabelDetail}
             >
               {appVersionLabel}

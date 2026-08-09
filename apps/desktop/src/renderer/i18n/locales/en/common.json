@@ -464,6 +464,15 @@
         "label": "Sidebar card mode",
         "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
         "aria": "Toggle sidebar card mode"
+      },
+      "layout": {
+        "label": "Panel layout",
+        "hint": "Panel positions and widths persist across restarts. Restore the default arrangement if the layout becomes difficult to use.",
+        "reset": "Restore default layout",
+        "resetSuccess": "Default panel layout restored",
+        "resetFailed": "Could not restore the default panel layout",
+        "saved": "Panel position saved. Restore the default layout in Settings → Appearance.",
+        "saveFailed": "Could not save the panel position"
       }
     },
     "notifications": {
@@ -2041,6 +2050,7 @@
         "project": "Switch project workspace",
         "model": "Show or switch the model",
         "permission": "Show or switch the permission mode",
+        "settings": "Show project and agent settings",
         "ctr": "Remotely control a desktop session",
         "exctr": "Exit remote control"
       },
@@ -3241,6 +3251,14 @@
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "upgradeNotice": {
+          "single": "Automatically updated organization plugin “{{name}}”.",
+          "multiple_one": "Automatically updated {{count}} organization plugin.",
+          "multiple_other": "Automatically updated {{count}} organization plugins.",
+          "singleWithPermissions": "Automatically updated organization plugin “{{name}}”; new permissions: {{permissions}}.",
+          "multipleWithPermissions_one": "Automatically updated {{count}} organization plugin; it includes new permissions.",
+          "multipleWithPermissions_other": "Automatically updated {{count}} organization plugins; some plugins include new permissions."
+        },
         "removalNotice": {
           "single": "The organization removed the plugin “{{name}}”. Its local copy and data on this device have been cleaned up.",
           "multiple_one": "The organization removed {{count}} plugin. Its local copy and data on this device have been cleaned up.",
@@ -4254,6 +4272,8 @@
     "tokenLabel": "Tokens",
     "tokenBreakdown": "(input {{input}} · output {{output}})",
     "cacheLabel": "Cache",
+    "timeLabel": "Time",
+    "timeAndRateValue": "{{duration}} TPS:{{rate}}",
     "modelLabel": "Model",
     "staleData": "Data updated {{minutes}} minutes ago",
     "paceTrendFast": "Trending fast at the current average pace (rough estimate)",
@@ -4262,6 +4282,11 @@
     "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}s",
+    "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
+    "performanceLine": "TPS {{rate}} · Time {{duration}}",
+    "performanceRateLine": "TPS {{rate}}",
+    "timeLine": "Time {{duration}}",
     "costLine": "Cost this turn: {{cost}}",
     "valueLine": "Token value this turn: {{cost}}",
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",
@@ -5620,7 +5645,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",
-    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Open the ChatGPT App, sign in again, then retry.",
+    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
     "recovered": "ChatGPT sign-in has been restored. Please retry.",

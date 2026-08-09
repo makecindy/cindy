@@ -1,6 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  COMPOSER_SINGLE_LINE_HEIGHT,
+  COMPOSER_TEXT_LINE_HEIGHT,
+  COMPOSER_TEXT_OPTICAL_OFFSET_Y,
+  COMPOSER_TEXT_PADDING_BOTTOM,
+  COMPOSER_TEXT_PADDING_TOP,
+  COMPOSER_TEXT_VERTICAL_PADDING,
+  composerTextPaddingForPlatform,
+} from '@/session/composerTextMetrics';
 
 /**
  * Composer 三个文本渲染器的度量一致性守护。
@@ -55,17 +64,37 @@ describe('composer voice draft text metrics', () => {
     expect(source).toContain('export const MOBILE_COMPOSER_INPUT_LINE_HEIGHT = COMPOSER_TEXT_LINE_HEIGHT;');
   });
 
+  it('optically lowers composer glyphs without changing the single-line height', () => {
+    expect(COMPOSER_TEXT_OPTICAL_OFFSET_Y).toBe(3);
+    expect(COMPOSER_TEXT_PADDING_TOP).toBe(6);
+    expect(COMPOSER_TEXT_PADDING_BOTTOM).toBe(0);
+    expect(COMPOSER_TEXT_PADDING_TOP + COMPOSER_TEXT_PADDING_BOTTOM)
+      .toBe(COMPOSER_TEXT_VERTICAL_PADDING * 2);
+    expect(COMPOSER_SINGLE_LINE_HEIGHT)
+      .toBe(COMPOSER_TEXT_LINE_HEIGHT + COMPOSER_TEXT_PADDING_TOP + COMPOSER_TEXT_PADDING_BOTTOM);
+  });
+
+  it('keeps the optical offset iOS-only because Android has different font padding', () => {
+    expect(composerTextPaddingForPlatform('ios')).toEqual({ top: 6, bottom: 0 });
+    expect(composerTextPaddingForPlatform('android')).toEqual({ top: 3, bottom: 3 });
+    expect(composerTextPaddingForPlatform('default')).toEqual({ top: 3, bottom: 3 });
+  });
+
   it('renders the real composer TextInput with the shared metrics', () => {
-    const block = styleBlock(read(COMPOSER_ROW), 'input');
+    const composerRowSource = read(COMPOSER_ROW);
+    const block = styleBlock(composerRowSource, 'input');
+    expect(composerRowSource).toContain("from '@/session/composerTextPlatformMetrics'");
     expect(block).toContain('...COMPOSER_TEXT_STYLE');
+    expect(block).toContain('paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM');
     expect(block).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
+    expect(block).toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
   });
 
   it('renders the WebView rich composer with the shared metrics instead of CSS literals', () => {
     const source = read(RICH_INPUT_HTML);
     expect(source).toContain('font-size: ${COMPOSER_TEXT_FONT_SIZE}px');
     expect(source).toContain('line-height: ${COMPOSER_TEXT_LINE_HEIGHT}px');
-    expect(source).toContain('padding: ${COMPOSER_TEXT_VERTICAL_PADDING}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px');
+    expect(source).toContain('padding: ${composerTextPadding.top}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px ${composerTextPadding.bottom}px');
     // #editor 的排版不得回退成字面量(CSS 不在 typographyTokenDiscipline 的扫描面内)。
     const editorBlock = /#editor \{([^}]*)\}/.exec(source)?.[1] ?? '';
     expect(editorBlock).not.toMatch(/font-size:\s*\d/);
@@ -81,8 +110,12 @@ describe('composer voice draft text metrics', () => {
         expect(block, `${rel} ${name} 不得自带字号 / 行高`).not.toMatch(/fontSize|lineHeight/);
       }
       const overlayContent = styleBlock(source, 'voiceDraftOverlayContent');
+      expect(overlayContent, `${rel} 覆盖层底部内边距必须与输入框同源`)
+        .toContain('paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM');
       expect(overlayContent, `${rel} 覆盖层水平内边距必须与输入框同源`)
         .toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
+      expect(overlayContent, `${rel} 覆盖层顶部内边距必须与输入框同源`)
+        .toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
     }
   });
 

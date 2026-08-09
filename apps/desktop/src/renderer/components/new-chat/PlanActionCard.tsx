@@ -83,7 +83,13 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   const handleFeedbackInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
     const el = e.currentTarget;
     el.style.height = 'auto';
-    const maxHeight = 6 * 22; // ~6 rows at line-height ~22px
+    // 行高改成无单位比例后会随「外观 → UI 字号」缩放,6 行上限必须按实际计算值算:
+    // 写死 6×22 会让放大字号时仍按 132px 截断,可见行数反而变少。取不到计算值
+    // (如 jsdom 返回 'normal')时回落到默认字号下的 22px。
+    const computedLineHeight = Number.parseFloat(window.getComputedStyle(el).lineHeight);
+    const rowHeight =
+      Number.isFinite(computedLineHeight) && computedLineHeight > 0 ? computedLineHeight : 22;
+    const maxHeight = 6 * rowHeight;
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, []);
 
@@ -217,7 +223,8 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
               'flex-1 resize-none bg-transparent text-14 outline-none',
               'text-[var(--plan-action-fb-text)]',
               'placeholder:text-[var(--plan-action-fb-placeholder)]',
-              'leading-[22px]', // lock line-height so auto-grow math stays accurate
+              // 22 ÷ 14:与 text-14 等比,随 UI 字号缩放(auto-grow 上限按计算值取)
+              'leading-[1.571]',
               submitted && 'cursor-not-allowed opacity-60',
             )}
           />

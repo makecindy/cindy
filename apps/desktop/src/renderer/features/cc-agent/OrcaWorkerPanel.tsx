@@ -155,7 +155,7 @@ export function OrcaWorkerPanel({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-content-area">
-      <div className="flex h-8 shrink-0 items-center border-b border-border/40 px-3 text-[11px] font-medium leading-none text-muted-foreground">
+      <div className="flex h-8 shrink-0 items-center border-b border-border/40 px-3 text-11 font-medium leading-none text-muted-foreground">
         <WorkerListToolbar
           worker={selectedWorkerRecord ?? focusedWorker}
           workers={workers}

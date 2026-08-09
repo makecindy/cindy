@@ -464,6 +464,15 @@
         "label": "사이드바 카드 모드",
         "hint": "고정된 세션을 작업 현황 요약이 담긴 카드로 표시합니다. 카드 높이는 요약 길이에 따라 달라지며, 사이드바를 넓히면 2~3열로 자동 배치됩니다.",
         "aria": "사이드바 카드 모드 전환"
+      },
+      "layout": {
+        "label": "패널 레이아웃",
+        "hint": "패널 위치와 너비는 다음 실행에도 유지됩니다. 사용하기 어려운 배치가 되면 기본 레이아웃으로 복원할 수 있습니다.",
+        "reset": "기본 레이아웃 복원",
+        "resetSuccess": "기본 패널 레이아웃을 복원했습니다",
+        "resetFailed": "기본 패널 레이아웃을 복원하지 못했습니다",
+        "saved": "패널 위치를 저장했습니다. 설정 → 외관에서 기본 레이아웃으로 복원할 수 있습니다.",
+        "saveFailed": "패널 위치를 저장하지 못했습니다"
       }
     },
     "notifications": {
@@ -2040,6 +2049,7 @@
         "project": "프로젝트 워크스페이스 전환",
         "model": "모델 보기·전환",
         "permission": "권한 모드 보기·전환",
+        "settings": "프로젝트와 Agent 설정 보기",
         "ctr": "데스크톱 세션 원격 제어",
         "exctr": "원격 제어 종료"
       },
@@ -3240,6 +3250,14 @@
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "upgradeNotice": {
+          "single": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다.",
+          "multiple_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "multiple_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "singleWithPermissions": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다. 새 권한: {{permissions}}",
+          "multipleWithPermissions_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 새 권한이 추가되었습니다.",
+          "multipleWithPermissions_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 일부 플러그인에 새 권한이 추가되었습니다."
+        },
         "removalNotice": {
           "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
           "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",
@@ -4252,6 +4270,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
     "cacheLabel": "캐시",
+    "timeLabel": "시간",
+    "timeAndRateValue": "{{duration}} 속도:{{rate}} 토큰/초",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
     "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
@@ -4260,6 +4280,11 @@
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}초",
+    "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "performanceLine": "속도 {{rate}} 토큰/초 · 시간 {{duration}}",
+    "performanceRateLine": "속도 {{rate}} 토큰/초",
+    "timeLine": "시간 {{duration}}",
     "costLine": "이번 턴 비용: {{cost}}",
     "valueLine": "이번 턴 토큰 가치: {{cost}}",
     "tokenLine": "Token: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
@@ -5618,7 +5643,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 로그인이 더 이상 유효하지 않습니다",
-    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. ChatGPT App을 열어 다시 로그인한 후 재시도하세요.",
+    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "instanceIsolatedInvalidated": "Cindy는 현재 별도로 로그인한 ChatGPT 계정을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "unknownInvalidated": "Cindy의 현재 ChatGPT 로그인이 만료되었습니다. 다시 로그인한 후 재시도하세요.",
     "recovered": "ChatGPT 로그인이 복구되었습니다. 다시 시도하세요.",

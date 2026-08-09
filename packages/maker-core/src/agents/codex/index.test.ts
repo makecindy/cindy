@@ -433,11 +433,12 @@ function installFakeHost(
     discardPendingDescendantLineage: vi.fn(),
   };
 
+  const getHost = vi.fn(async () => host);
   Object.defineProperty(agent, 'getHost', {
-    value: async () => host,
+    value: getHost,
   });
 
-  return host;
+  return Object.assign(host, { getHost });
 }
 
 async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEvent> {
@@ -3170,11 +3171,14 @@ describe('CodexAgent.startSession developerInstructions', () => {
       'ALWAYS call send_to_lead when complete or blocked.',
       'worker_id=worker-test-id',
     ].join('\n');
-    const baselineAgent = new CodexAgent(createDeps(runtimeConfig));
+    const baselineAgent = new CodexAgent(createDeps(runtimeConfig, {
+      getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
+    }));
     const baselineHost = installFakeHost(baselineAgent);
     const registerCodexSystemPromptForThread = vi.fn();
     const proxyAgent = new CodexAgent(createDeps(runtimeConfig, {
       registerCodexSystemPromptForThread,
+      getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
     }));
     const proxyHost = installFakeHost(proxyAgent, undefined, { codexProxyActive: true });
 
@@ -3209,6 +3213,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
       historyHasProductPrompt: false,
     });
     expect(baselineParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(baselineParams.developerInstructions).toContain('GHOST ROSTER PROMPT');
     expect(baselineParams.developerInstructions).toContain('send_to_lead');
     expect(baselineParams.developerInstructions).toContain('worker_id=worker-test-id');
 
@@ -3284,7 +3289,10 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
-      { registerCodexSystemPromptForThread },
+      {
+        registerCodexSystemPromptForThread,
+        getGhostRosterPrompt: vi.fn(() => 'GHOST ROSTER PROMPT'),
+      },
     ));
     const host = installFakeHost(agent, undefined, {
       codexProxyActive: true,
@@ -3305,6 +3313,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     expect(params.modelProvider).toBe('cindy_openai');
     expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('GHOST ROSTER PROMPT');
     expect(params.developerInstructions).toContain('USER PROMPT');
     expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
     expect(handle.codexProductPromptDelivery).toEqual({
@@ -3681,10 +3690,12 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
   it('keeps developerInstructions for remote sessions when their host is not proxy-active', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
+    const getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
       {
         registerCodexSystemPromptForThread,
+        getGhostRosterPrompt,
       },
     ));
     const host = installFakeHost(agent);
@@ -3701,6 +3712,8 @@ describe('CodexAgent.startSession developerInstructions', () => {
       developerInstructions?: string;
     };
     expect(startParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(startParams.developerInstructions).not.toContain('GHOST ROSTER PROMPT');
+    expect(getGhostRosterPrompt).not.toHaveBeenCalled();
     expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
     await handle.close();
   });
@@ -4524,6 +4537,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const iterator = handle.events()[Symbol.asyncIterator]();
     const transport = createdTransports[0];
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
 
     transport.emitMockLine({
       method: 'turn/started',
@@ -4535,6 +4549,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     await agent.forceDisposeLocalHostForAuthChange('test forced retire');
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(handle.isTurnRunning?.()).toBe(false);
     expect(transport.closed).toBe(true);
     await expect(nextEvent(iterator)).resolves.toMatchObject({
@@ -4994,8 +5009,12 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     expect(result.newSdkSessionId).toMatch(/^fork-thread-/);
-    expect(createdTransports).toHaveLength(1);
+    // Fork runs on its own ephemeral host (fault-radius isolation): a second
+    // transport is spawned for the fork and retired when it finishes, while
+    // the explicit credential session host stays untouched and open.
+    expect(createdTransports).toHaveLength(2);
     expect(createdTransports[0].closed).toBe(false);
+    expect(createdTransports[1].closed).toBe(true);
     expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
 
     await handle.close();
@@ -6097,9 +6116,18 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const transport = createdTransports[0];
     expect(transport).toBeDefined();
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    transport!.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-close-heartbeat' } },
+    });
+    await waitForExpectation(() => {
+      expect(handle.isTurnRunning?.()).toBe(true);
+    });
 
     await handle.close();
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     const unsubscribe = transport!.lines
       .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
       .find((request) => request.method === Method.ThreadUnsubscribe);
@@ -12130,6 +12158,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
     expect(startParams.dynamicTools?.[0]?.description).toContain('provide a generic list');
     expect(startParams.dynamicTools?.[0]?.description).toContain('Ask 1 to 3 short questions in a single call');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('returns the awaited result as a JSON string');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('JSON.parse(raw)');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Do not read .content or .structuredContent');
     expect(startParams.dynamicTools?.[0]?.inputSchema?.properties?.questions?.description).toContain('Bundle independent choices');
 
     const openAiAgent = new CodexAgent(createDeps());
@@ -12404,6 +12435,284 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     expect(result).toEqual({ decision: 'accept' });
     await handle.close();
+  });
+
+  it('excludes a server-resolved approval wait from the completed turn duration', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-approval-generation-timing',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.commandExecutionApproval ||
+        !handlers.serverRequestResolved ||
+        !handlers.turnStarted ||
+        !handlers.turnCompleted
+      ) {
+        throw new Error('expected approval timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+      handle.setInteractionResolver(interactionResolver);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      const approvalPromise = handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        itemId: 'approval-item-1',
+        command: 'pwd',
+        cwd: '/repo',
+      });
+      await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+
+      now = 10_000;
+      handlers.serverRequestResolved({
+        threadId: 'start-thread-id',
+        requestId: 'approval-item-1',
+      });
+      await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
+
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keeps descendant approval waits out of the root generation timer', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-descendant-approval-generation-timing',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.commandExecutionApproval
+        || !handlers.itemStarted
+        || !handlers.itemCompleted
+        || !handlers.turnStarted
+        || !handlers.turnCompleted
+      ) {
+        throw new Error('expected descendant approval timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const decision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(() => decision.promise);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'root-turn' } });
+      now = 2_000;
+      const collabItem = {
+        id: 'root-collab-item',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        agentsStates: {},
+      };
+      handlers.itemStarted({
+        threadId: 'start-thread-id',
+        turnId: 'root-turn',
+        item: collabItem,
+      } as never);
+
+      now = 3_000;
+      const approvalPromise = handlers.commandExecutionApproval({
+        threadId: 'child-thread',
+        turnId: 'child-turn',
+        itemId: 'child-command',
+        command: 'pwd',
+        cwd: '/repo',
+      });
+      now = 9_000;
+      decision.resolve({ kind: 'permission', behavior: 'allow' });
+      await expect(approvalPromise).resolves.toEqual({ decision: 'accept' });
+
+      now = 10_000;
+      handlers.itemCompleted({
+        threadId: 'start-thread-id',
+        turnId: 'root-turn',
+        item: { ...collabItem, status: 'completed' },
+      } as never);
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'root-turn', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each(['answered', 'server-resolved', 'resolver-failed'] as const)(
+    'excludes a native requestUserInput wait when it is %s',
+    async (outcome) => {
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installFakeHost(agent);
+        const handle = await agent.startSession({
+          sessionId: `session-native-user-input-timing-${outcome}`,
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const handlers = host.getThreadHandlers();
+        if (
+          !handlers?.requestUserInput
+          || !handlers.serverRequestResolved
+          || !handlers.turnStarted
+          || !handlers.turnCompleted
+        ) {
+          throw new Error('expected native user-input timing handlers');
+        }
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        const decision = deferred<InteractionDecision>();
+        const interactionResolver = vi.fn(() => decision.promise);
+        handle.setInteractionResolver(interactionResolver);
+
+        handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+        now = 2_000;
+        const responsePromise = handlers.requestUserInput({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          itemId: 'native-question-1',
+          questions: [{
+            id: 'q1',
+            header: 'Question',
+            question: 'Pick one',
+            isOther: false,
+            isSecret: false,
+            options: null,
+          }],
+        }, { requestId: `native-question-${outcome}` });
+        await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+
+        now = 10_000;
+        if (outcome === 'answered') {
+          decision.resolve({
+            kind: 'ask_user_question',
+            answers: { 'Pick one': 'yes' },
+          });
+        } else if (outcome === 'server-resolved') {
+          handlers.serverRequestResolved({
+            threadId: 'start-thread-id',
+            requestId: `native-question-${outcome}`,
+          });
+        } else {
+          decision.reject(new Error('interaction resolver failed'));
+        }
+        await responsePromise;
+
+        now = 12_000;
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+        });
+        await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+        const done = events.find((event) => event.type === 'done');
+        expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+        if (outcome === 'server-resolved') {
+          decision.resolve({ kind: 'ask_user_question', answers: {} });
+        }
+        await handle.close();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it('omits native requestUserInput timing when the turn id is missing', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-native-user-input-missing-turn-id',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.requestUserInput || !handlers.turnStarted || !handlers.turnCompleted) {
+        throw new Error('expected native user-input timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const decision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(() => decision.promise);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      const responsePromise = handlers.requestUserInput({
+        threadId: 'start-thread-id',
+        turnId: null as never,
+        itemId: 'native-question-without-turn',
+        questions: [{
+          id: 'q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          isSecret: false,
+          options: null,
+        }],
+      }, { requestId: 'native-question-without-turn' });
+      now = 10_000;
+      decision.resolve({ kind: 'ask_user_question', answers: { 'Pick one': 'yes' } });
+      await responsePromise;
+
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBeUndefined();
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('routes dynamic ask_user_question tool calls through ask_user_question', async () => {
@@ -13415,7 +13724,7 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
   });
 
-  it('retires the captured host and rejects when a forked child cannot be unloaded', async () => {
+  it('retires the ephemeral fork host and rejects when a forked child cannot be unloaded', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
     host.unsubscribeThread.mockRejectedValueOnce(new Error('unsubscribe failed'));
@@ -13433,15 +13742,100 @@ describe('CodexAgent.forkSdkSession', () => {
     })).rejects.toThrow('unsubscribe failed');
 
     expect(retireHostKey).toHaveBeenCalledWith(
-      'local',
-      'Codex fork child fork-thread-id could not be unloaded safely',
+      expect.stringMatching(/^local-fork:/),
+      'Codex fork host is single-use',
       expect.objectContaining({
         failIfActive: false,
-        logPrefix: 'codex fork child cleanup',
-        expectedGeneration: 0,
+        logPrefix: 'codex fork host cleanup',
       }),
     );
     expect(host.unsubscribeThread).not.toHaveBeenCalledWith('source-thread-id');
+  });
+
+  it('retires the ephemeral fork host after a successful fork', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent);
+    const retireHostKey = vi
+      .spyOn(
+        agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+        'retireHostKey',
+      )
+      .mockResolvedValue(undefined);
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    expect(retireHostKey).toHaveBeenCalledTimes(1);
+    expect(retireHostKey).toHaveBeenCalledWith(
+      expect.stringMatching(/^local-fork:/),
+      'Codex fork host is single-use',
+      expect.objectContaining({
+        failIfActive: false,
+        logPrefix: 'codex fork host cleanup',
+      }),
+    );
+  });
+
+  it('requests excludeTurns on thread/fork when the daemon supports it', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'source-thread-id',
+      persistExtendedHistory: true,
+      excludeTurns: true,
+    });
+  });
+
+  it('omits excludeTurns for daemons older than 0.145.0', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.144.6' });
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    const forkParams = host.request.mock.calls.find(([m]) => m === Method.ThreadFork)?.[1] as
+      | { excludeTurns?: boolean }
+      | undefined;
+    expect(forkParams).toBeDefined();
+    expect(forkParams?.excludeTurns).toBeUndefined();
+  });
+
+  it('preserves source provider credentials on an isolated fork host', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+
+    await agent.forkSdkSession({
+      sourceSdkSessionId: 'source-thread-id',
+      model: 'gpt-5.4',
+      providerId: 'custom-provider',
+      upToMessageId: undefined,
+      tailTurnsToDrop: 0,
+    });
+
+    expect(host.getHost).toHaveBeenCalledWith(
+      undefined,
+      'provider-oauth',
+      expect.objectContaining({
+        keyOverride: expect.stringMatching(/^local-fork:/),
+        hostPurpose: 'control-plane',
+      }),
+    );
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+      threadId: 'source-thread-id',
+    }));
   });
 
   it('forks from a temporary rollout copy without unsafe payload lines', async () => {

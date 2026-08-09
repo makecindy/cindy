@@ -147,7 +147,10 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       "'group flex flex-col items-start justify-between gap-1 rounded-xl border",
     );
     expect(source).toContain("isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4'");
-    expect(source).toContain('className="w-full min-w-0 text-13 font-semibold leading-[16px]"');
+    // 行高从 `leading-[16px]` 改成无单位 `leading-[1.231]`(= 16 ÷ 13):`text-13` 会随
+    // 「外观 → UI 字号」缩放,固定 px 行框不跟随,放大字号时标签会裁切。默认字号下
+    // 渲染不变(13 × 1.231 ≈ 16.003px)。见 DESIGN.md §3 non-goals 的行高例外条款。
+    expect(source).toContain('className="w-full min-w-0 text-13 font-semibold leading-[1.231]"');
     // 旧的窄态横排(items-center)/常态竖排(gap-3)特判已被统一竖排取代。
     expect(source).not.toContain("'flex min-h-[84px] items-center gap-3 p-3'");
     expect(source).not.toContain("'flex min-h-[112px] flex-col items-start gap-3 p-4'");

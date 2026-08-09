@@ -50,10 +50,10 @@ export function WorktreeCreatingOverlay({ branchName }: WorktreeCreatingOverlayP
           <Spinner size={16} className="text-[var(--workingdir-icon)]" />
         </div>
         <div className="flex flex-col gap-[2px]">
-          <div className="text-[14px] font-medium leading-tight text-[var(--msg-assistant-text)]">
+          <div className="text-14 font-medium leading-tight text-[var(--msg-assistant-text)]">
             {t('newChat.worktreeCreatingOverlay.heading')}
           </div>
-          <div className="text-[12px] font-normal leading-tight text-[var(--workingdir-text)]">
+          <div className="text-12 font-normal leading-tight text-[var(--workingdir-text)]">
             {t('newChat.worktreeCreatingOverlay.subtitle', { branch: branchName })}
           </div>
         </div>

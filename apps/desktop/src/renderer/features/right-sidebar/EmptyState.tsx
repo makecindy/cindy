@@ -43,13 +43,13 @@ export function EmptyState({
   return (
     <div className="flex min-h-0 flex-1 flex-col items-start gap-8 overflow-y-auto px-10 pb-8 pt-16">
       <div className="flex w-full flex-col gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
+        <span className="text-11 font-semibold uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
           {t('rightSidebar.tabs.empty.eyebrow')}
         </span>
-        <span className="text-[22px] font-semibold leading-tight text-[var(--text-primary)]">
+        <span className="text-20 font-semibold leading-tight text-[var(--text-primary)]">
           {t('rightSidebar.tabs.empty.title')}
         </span>
-        <span className="text-[13px] leading-relaxed text-[var(--text-tertiary)]">
+        <span className="text-13 leading-relaxed text-[var(--text-tertiary)]">
           {t('rightSidebar.tabs.empty.desc')}
         </span>
       </div>
@@ -97,7 +97,7 @@ export function EmptyState({
           onClick={onAddTerminalTab}
         />
       </div>
-      <p className="px-1 text-[11px] text-[var(--text-tertiary)]">
+      <p className="px-1 text-11 text-[var(--text-tertiary)]">
         {t('rightSidebar.tabs.empty.addMoreHint')}
       </p>
     </div>
@@ -129,8 +129,8 @@ function ActionRow({
     >
       <Icon size={16} className="text-[var(--text-secondary)]" />
       <span className="flex flex-1 flex-col gap-0.5">
-        <span className="text-[14px] font-medium text-[var(--text-primary)]">{label}</span>
-        <span className="text-[11px] text-[var(--text-tertiary)]">{sub}</span>
+        <span className="text-14 font-medium text-[var(--text-primary)]">{label}</span>
+        <span className="text-11 text-[var(--text-tertiary)]">{sub}</span>
       </span>
       <ChevronRight
         size={14}

@@ -90,6 +90,8 @@ import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLi
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import {
   buildTurnUsageTooltipLines,
+  formatOutputTokenRate,
+  formatTurnDuration,
   getTurnUsageSuggestion,
 } from '@/lib/turnUsageTooltip';
 import { aggregateAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
@@ -743,6 +745,11 @@ function toQuotaHoverCardTurnUsage(
     totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
     inputTokensText: formatCompactTokens(details.inputTokens),
     outputTokensText: formatCompactTokens(details.outputTokens),
+    outputRateText: formatOutputTokenRate(details),
+    turnDurationText:
+      typeof details.turnDurationMs === 'number'
+        ? formatTurnDuration(details.turnDurationMs, t)
+        : null,
     cacheLineText: formatQuotaCacheLine(details, t),
     model: quotaTurnModel(details, t),
     ...(details.perModelCost
@@ -1612,7 +1619,7 @@ export function TodaySpendChip({
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
     'inline-flex h-5 shrink-0 items-center',
-    'text-[12px] font-medium leading-none tabular-nums',
+    'text-12 font-medium leading-none tabular-nums',
     claudeSubscriptionAlerting
       ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
       // 不可点(网关账号)时不加 hover 变色,避免暗示可交互。

@@ -29,7 +29,7 @@ describe('Plugin Market IPC error boundary', () => {
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
-    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(11);
+    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(12);
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {

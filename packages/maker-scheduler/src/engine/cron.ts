@@ -58,10 +58,14 @@ function parseField(token: string, range: FieldRange, allowDowSeven = false): nu
     if (part.length === 0) {
       throw new Error(`Empty cron field segment in "${token}"`);
     }
-    const [rangePart, stepPart] = part.split('/');
+    const stepSegments = part.split('/');
+    if (stepSegments.length > 2) {
+      throw new Error(`Invalid step syntax in "${part}"`);
+    }
+    const [rangePart, stepPart] = stepSegments;
     let step = 1;
     if (stepPart !== undefined) {
-      step = parseInt(stepPart, 10);
+      step = parseDecimalInteger(stepPart);
       if (!Number.isInteger(step) || step <= 0) {
         throw new Error(`Invalid step "${stepPart}" in "${part}"`);
       }
@@ -72,20 +76,24 @@ function parseField(token: string, range: FieldRange, allowDowSeven = false): nu
       lo = range.min;
       hi = range.max;
     } else if (rangePart.includes('-')) {
-      const [aStr, bStr] = rangePart.split('-');
-      lo = parseInt(aStr, 10);
-      hi = parseInt(bStr, 10);
+      const rangeSegments = rangePart.split('-');
+      if (rangeSegments.length !== 2) {
+        throw new Error(`Invalid range "${rangePart}" in "${part}"`);
+      }
+      const [aStr, bStr] = rangeSegments;
+      lo = parseDecimalInteger(aStr);
+      hi = parseDecimalInteger(bStr);
       if (!Number.isInteger(lo) || !Number.isInteger(hi) || lo > hi) {
         throw new Error(`Invalid range "${rangePart}" in "${part}"`);
       }
     } else {
-      const v = parseInt(rangePart, 10);
+      const v = parseDecimalInteger(rangePart);
       if (!Number.isInteger(v)) {
         throw new Error(`Invalid value "${rangePart}" in "${part}"`);
       }
       lo = v;
       // "N/S" expands as "N,N+S,N+2S,...,max"
-      hi = stepPart !== undefined ? range.max : v;
+      hi = stepPart !== undefined ? effectiveMax : v;
     }
     if (lo < range.min || hi > effectiveMax) {
       throw new Error(`Field "${part}" out of range [${range.min}, ${effectiveMax}]`);
@@ -96,6 +104,10 @@ function parseField(token: string, range: FieldRange, allowDowSeven = false): nu
     }
   }
   return [...out].sort((a, b) => a - b);
+}
+
+function parseDecimalInteger(value: string): number {
+  return /^\d+$/.test(value) ? Number(value) : Number.NaN;
 }
 
 // ---------- timezone helpers ----------

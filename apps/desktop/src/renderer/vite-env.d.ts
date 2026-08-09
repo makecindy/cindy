@@ -1146,8 +1146,11 @@ interface ElectronAPI {
     getStateSync: () => { layout: import('../shared/layoutTree').Layout };
     set: (
       layout: import('../shared/layoutTree').Layout,
-    ) => Promise<{ layout: import('../shared/layoutTree').Layout }>;
-    reset: () => Promise<{ layout: import('../shared/layoutTree').Layout }>;
+    ) => Promise<{ layout: import('../shared/layoutTree').Layout; persisted: boolean }>;
+    reset: () => Promise<{
+      layout: import('../shared/layoutTree').Layout;
+      persisted: boolean;
+    }>;
     onChanged: (
       callback: (payload: { layout: import('../shared/layoutTree').Layout }) => void,
     ) => () => void;
@@ -1518,6 +1521,10 @@ interface ElectronAPI {
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     >;
     onRemovalNoticeAvailable: (callback: () => void) => () => void;
+    consumeUpgradeNotice: () => Promise<
+      import('../shared/pluginMarket').PluginUpgradeUserNotice | null
+    >;
+    onUpgradeNoticeAvailable: (callback: () => void) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,

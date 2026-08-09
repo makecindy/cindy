@@ -138,6 +138,9 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 
 ## 7. 上线后路线图(已与 Chris 对齐)
 
+项目 trust 的输入/输出契约见 [`pi-project-trust.md`](pi-project-trust.md)。该契约不改变本节
+所述运行时默认，也不授权 `--approve`、trust.json 或用户 Pi home 复用；这些属于后续装配 PR。
+
 > 续做指南(每项怎么接着做 + file:line 锚点 + 坑)见 `docs/dev-rules/pi-remaining-work.md`。
 
 - ✅ **HTML 导出**(已交付):`export_html` RPC 全链路,会话头部菜单「导出为 HTML」,

@@ -2,7 +2,7 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
-import type { AutoResumeInfo } from '../../shared/agentInputQueue';
+import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -95,6 +95,9 @@ export interface CcMeta {
    * 所以这是中断原因唯一的用户可见出口。
    */
   autoResumeInfo?: AutoResumeInfo;
+
+  /** Bounded handoff shared by manual Retry and automatic resume. */
+  recoveryCheckpoint?: RecoveryCheckpoint;
 
   /**
    * 这次自动续跑的**结果**,由后续事件回填(见 main 的 markAutoResumeOutcome)。

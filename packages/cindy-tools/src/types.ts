@@ -6,9 +6,10 @@
  * 包内不感知 Electron / 沙箱 / DB(设计规范规则 2:package 解耦)。
  *
  * 首个成员:ghost 总机(docs/dev-rules/plugin-security-and-authoring.md 的网关模式)——
- * agent 工具箱里永远只有 ghost_list / ghost_call 两件固定工具,
- * 已装意识的增删即时反映在 ghost_list 的**返回内容**里,
- * 工具定义(缓存前缀)自始至终零变化。
+ * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_call,
+ * 已装意识的增删即时反映在 ghost_info / ghost_list 的**返回内容**里。
+ * 工具面(名称/schema/基线描述)版本内恒定;完整描述(含花名册快照)
+ * 会话内恒定。
  */
 
 /** 意识注册的单个工具(来自 ghost.json 的 tools 声明,host 透传)。 */
@@ -62,7 +63,7 @@ export type CindyGhostSetupAllowedAction =
     };
 
 /**
- * ghost_list 返回的 Host 权威配置评估。只含引用、展示信息和允许动作，
+ * ghost_info / ghost_list 返回的 Host 权威配置评估。只含引用、展示信息和允许动作，
  * 禁止携带 Secret、Token、OAuth client secret 或 Connection 内容。
  */
 export interface CindyGhostSetupAssessment {
@@ -117,12 +118,14 @@ export interface CindyGhostSetupPlan {
   }>;
 }
 
-/** ghost_list 返回的单段意识条目(仅"已装且唤醒"的意识在列)。 */
+/** ghost_info / ghost_list 共用的单段意识条目。 */
 export interface CindyGhostInfo {
   id: string;
   name: string;
   /** 显式触发指令(用户敲 /<command> 点名调用);未声明则省略。 */
   command?: string;
+  /** 插件作者提供的召回线索，仅作数据；Host 优先取 whenToUse，缺省回落 description。 */
+  recall?: string;
   tools: CindyGhostToolInfo[];
   /**
    * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
@@ -144,6 +147,21 @@ export type CindyGhostCallErrorCode =
   | 'ATTACHMENT_INVALID' // attachments 里的图片地址无法过户(格式/找不到/超数)
   | 'DIR_INVALID' // dir 目录无法过户(不存在/不在会话 workdir 内/超限额)
   | 'INTERNAL'; // 其它 host 侧错误
+
+export type CindyGhostInfoErrorCode = Extract<
+  CindyGhostCallErrorCode,
+  'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR'
+>;
+
+/** host 可见性判序回调(getAwakeGhost)的返回:只产可见性三码,不产 INTERNAL。 */
+export type CindyGhostInfoHostResult =
+  | { ok: true; ghost: CindyGhostInfo }
+  | { ok: false; errorCode: CindyGhostInfoErrorCode; message: string };
+
+/** ghost_info 给模型的 wire 结果:host 结果之上,handler 兜底 catch 可产 INTERNAL。 */
+export type CindyGhostInfoResult =
+  | CindyGhostInfoHostResult
+  | { ok: false; errorCode: 'INTERNAL'; message: string; errorType?: string };
 
 export type CindyGhostCallResult =
   | {
@@ -220,6 +238,11 @@ export interface CindyGhostsMcpDeps {
    */
   listAwakeGhosts(): Promise<CindyGhostInfo[]>;
   /**
+   * 按 id 现查单个当前可用插件；与 ghost_call 共享同一可见性判定。
+   * 判序：不存在 → 未登录 → 当前工作目录停用 → 未启用。
+   */
+  getAwakeGhost(ghostId: string): Promise<CindyGhostInfoHostResult>;
+  /**
    * 把工具调用派进目标意识的电子脑并等待结果(按需拉起沙箱、超时、
    * 崩溃分类全在 host 侧处理)。
    */
@@ -266,7 +289,7 @@ export interface CindyGhostsMcpDeps {
      */
     saveDir?: string;
     /**
-     * Agent 基于 ghost_list.setup 编排的展示计划。Host 必须按最新
+     * Agent 基于 ghost_info / ghost_list 返回的 setup 编排展示计划。Host 必须按最新
      * assessment 校验 revision、requirementRefs、actionId 和覆盖关系；
      * 本字段永不注入插件 args，也不代表授权或完成。
      */
@@ -281,12 +304,12 @@ export interface CindyGhostsMcpDeps {
   }): Promise<CindyGhostCallResult>;
   /**
    * 花名册快照(可选,同步):server 创建(= 会话装配)时调用一次,把
-   * "已装且唤醒"的意识名单 + 自我介绍写进 ghost_list / ghost_call 的工具
+   * "已装且唤醒"的意识名单 + 召回线索写进 ghost_list 的工具
    * 描述——模型开局即认识本机意识,语义召回不再依赖字面词表命中。
    * 会话内工具定义恒定(prompt 缓存安全);装/卸/唤醒/沉睡在新会话生效,
    * 实时清单仍以 ghost_list 为准。缺省 = 不注入(描述与今日基线一致)。
    */
-  getRosterItems?(): Array<{ id: string; name: string; command?: string; description?: string }>;
+  getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall'>>;
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**

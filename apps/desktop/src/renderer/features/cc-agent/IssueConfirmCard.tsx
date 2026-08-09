@@ -309,7 +309,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           )}
         >
           <span>{t('issueAgent.confirm.cancel')}</span>
-          <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-[11px] font-normal text-[var(--status-bar-meta)]">
+          <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
         </button>
@@ -326,7 +326,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           )}
         >
           <span>{t('issueAgent.confirm.submit')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-[11px] font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
           </kbd>
         </button>
