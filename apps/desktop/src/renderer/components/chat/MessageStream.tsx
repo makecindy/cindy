@@ -1074,8 +1074,8 @@ export function buildRenderItems(
       }
     }
     for (const changeSet of changeSets) {
-      // Zero-file entries without change evidence (e.g. only opaque tools ran)
-      // would render a card whose review pane is empty — skip the dead end.
+      // Zero-file entries have nothing the user can inspect or act on. Keep their
+      // diagnostic sidecars in Main, but do not add a warning-only chat card.
       if (!hasReviewableTurnChanges(changeSet)) continue;
       items.push({
         type: 'turn_changes',
