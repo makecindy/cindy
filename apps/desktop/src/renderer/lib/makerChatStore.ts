@@ -12202,7 +12202,9 @@ function retryLastError(sessionId: string): Promise<void> {
   // 人工 retry 的零产出克隆项自带 `supersedesUserClientId`（仅 manual 非 auto
   // 路径设置，见 agent-input-coordinator.ts），直接按字段辨认——不猜队首差分
   // （异步窗口内可能混入外部入队）、不做文本猜测（维护者口径，#2222）。
-  // 有产出分支的隐藏续跑指令不带该字段也不产生可见气泡，无需标记。
+  // 有产出分支的隐藏续跑指令由 main 显式清掉 supersedes 字段，但它同样是本次
+  // 点击的产物：按 `originalSyntheticTrigger === 'continue'` 且非 autoResume
+  // 辨认（auto 自动续跑不是用户动作，不标记；Codex review P1）。
   // queue-head（派发前失败）分支 main 原样重发**既有队首项**——没有新
   // clientId、没有 supersedesUserClientId。以点击时刻镜像的 inputRecovery
   // （projection 线上自带字段）取权威 clientId；重载后内存标记丢失时，续跑
@@ -12223,15 +12225,23 @@ function retryLastError(sessionId: string): Promise<void> {
     // 条目重新创建出来（泄漏 + 同 id 会话重建后旧标记复活，Copilot review nit）。
     if (!sessions.has(sessionId)) return;
     for (const item of projection.pendingQueue) {
-      if (item.supersedesUserClientId) markLocalSentUserMessage(sessionId, item.clientId);
+      if (item.supersedesUserClientId) {
+        markLocalSentUserMessage(sessionId, item.clientId);
+      } else if (item.originalSyntheticTrigger === 'continue' && item.autoResume !== true) {
+        // 有产出人工 retry 的隐藏续跑指令：合成行渲染 null，不登记则续跑产出
+        // 在屏幕外开始（Codex review P1）。auto 自动续跑不标记。
+        markLocalSentUserMessage(sessionId, item.clientId);
+      }
     }
-    // queue-head 重试：仅当回执确认本次重试生效（error 清空且 recovery 已清 /
-    // 易主）才登记；superseded（recovery 原样保留）时不标记，避免把无关队首
-    // 误记为本端。
+    // queue-head 重试：仅当回执确认本次重试生效（error 清空且 recovery 已清）
+    // 且**队首项仍在回执队列**（被本次 retry 重新武装，main 同步 getProjection
+    // 先于 drain）才登记；若已被并发 drain 消费派发（不在队列），本次 retry 实为
+    // superseded，登记会让该外部行落库时误触发强制回底（Greptile review P1）。
     if (
       preRetryQueueHeadClientId &&
       projection.error === null &&
-      projection.recovery === null
+      projection.recovery === null &&
+      projection.pendingQueue.some((item) => item.clientId === preRetryQueueHeadClientId)
     ) {
       markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
     }

@@ -99,7 +99,11 @@ function projection(
 function queuedItem(
   clientId: string,
   text: string,
-  opts?: { supersedesUserClientId?: string },
+  opts?: {
+    supersedesUserClientId?: string;
+    originalSyntheticTrigger?: 'continue';
+    autoResume?: boolean;
+  },
 ): AgentInputQueuedMessage {
   return {
     clientId,
@@ -112,6 +116,10 @@ function queuedItem(
     ...(opts?.supersedesUserClientId && {
       supersedesUserClientId: opts.supersedesUserClientId,
     }),
+    ...(opts?.originalSyntheticTrigger && {
+      originalSyntheticTrigger: opts.originalSyntheticTrigger,
+    }),
+    ...(opts?.autoResume ? { autoResume: true } : {}),
     chatMessage: {
       clientId,
       role: 'user',
@@ -467,5 +475,62 @@ describe('isLocalSentUserMessage (#2194)', () => {
 
     expect(makerChatStore.isLocalSentUserMessage(sid, 'head-ext')).toBe(false);
     expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-item')).toBe(false);
+  });
+
+  // Greptile review P1（第十轮）: 并发 drain 抢在 Retry 回执前消费并派发
+  // queue-head（recovery 随之清空）时，本次 Retry 实为 superseded——仅凭
+  // error / recovery 为空会误登记。真正的 queue-head 重试项在回执快照里
+  // 仍在队列（main 同步 getProjection 先于 drain），不在队列即不登记。
+  it('queue-head 被并发 drain 抢先消费（回执队列已无该项）时不登记', async () => {
+    const sid = `retry-qh-drain-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [queuedItem('head-3', 'stuck head')],
+        error: 'dispatch failed',
+        recovery: { kind: 'queue-head', clientId: 'head-3' },
+      }),
+    );
+    // 并发 drain 已消费并派发 head-3：回执 error / recovery 为空，但队列空了。
+    retryLastError.mockResolvedValueOnce(projection(sid, { pendingQueue: [] }));
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'head-3')).toBe(false);
+  });
+
+  // Codex review P1（第十轮）: 有产出人工 Retry 的隐藏续跑指令由 main 生成
+  // （originalSyntheticTrigger='continue' 且非 autoResume），合成行渲染 null，
+  // 不登记则续跑产出在屏幕外开始。auto 自动续跑不标记。
+  it('有产出人工 Retry 的隐藏续跑指令登记为本端意图，auto 续跑不登记', async () => {
+    const sid = `retry-cont-${Math.random().toString(36).slice(2, 8)}`;
+
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('continue-manual', 'continue', { originalSyntheticTrigger: 'continue' }),
+        ],
+      }),
+    );
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-manual')).toBe(true);
+
+    const sid2 = `retry-cont-auto-${Math.random().toString(36).slice(2, 8)}`;
+    retryLastError.mockResolvedValueOnce(
+      projection(sid2, {
+        pendingQueue: [
+          queuedItem('continue-auto', 'continue', {
+            originalSyntheticTrigger: 'continue',
+            autoResume: true,
+          }),
+        ],
+      }),
+    );
+    await makerChatStore.retryLastError(sid2);
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid2, 'continue-auto')).toBe(false);
   });
 });
