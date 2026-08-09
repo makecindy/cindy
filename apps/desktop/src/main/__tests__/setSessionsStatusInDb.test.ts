@@ -162,7 +162,10 @@ describe('setSessionsStatusInDb', () => {
 
     expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
     expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(2);
-    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith('s1');
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ scanOwners: true, recycleOwner: expect.any(Function) }),
+    );
   });
 
   it('broadcasts worktree:changed only after the recycle chain finishes', async () => {
@@ -181,7 +184,10 @@ describe('setSessionsStatusInDb', () => {
 
     await setSessionsStatusInDb(['s1'], 'archived');
     await vi.waitFor(() => {
-      expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith('s1');
+      expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+        's1',
+        expect.objectContaining({ scanOwners: true, recycleOwner: expect.any(Function) }),
+      );
     });
 
     // 回收还没结束 —— 此时只该有 sessions:patched，不能提前报 worktree 已变。
@@ -236,7 +242,10 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
     expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(2);
     expect(h.closeSession).toHaveBeenCalledWith('s1');
-    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith('s1');
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ scanOwners: true, recycleOwner: expect.any(Function) }),
+    );
     expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
   });
 
@@ -247,5 +256,47 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
     expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
+  });
+
+  it('routes scanned owners through lock and close before low-level recycle', async () => {
+    const order: string[] = [];
+    h.withSendToSessionLock.mockImplementation(
+      async (sessionId: string, task: () => Promise<unknown>) => {
+        order.push(`lock:${sessionId}`);
+        const result = await task();
+        order.push(`unlock:${sessionId}`);
+        return result;
+      },
+    );
+    h.closeSession.mockImplementation(async (sessionId: string) => {
+      order.push(`close:${sessionId}`);
+    });
+    h.recycleWorktreeForRemovedSession.mockImplementation(
+      async (
+        sessionId: string,
+        options?: { recycleOwner?: (ownerId: string) => Promise<void> },
+      ) => {
+        order.push(`remove:${sessionId}`);
+        if (sessionId === 'shared') await options?.recycleOwner?.('owner');
+      },
+    );
+
+    await recycleSessionWorktreeForStatusChange('shared', 'archived');
+
+    expect(order).toEqual([
+      'lock:shared',
+      'close:shared',
+      'unlock:shared',
+      'remove:shared',
+      'lock:owner',
+      'close:owner',
+      'unlock:owner',
+      'remove:owner',
+    ]);
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenNthCalledWith(
+      2,
+      'owner',
+      expect.objectContaining({ scanOwners: false, recycleOwner: expect.any(Function) }),
+    );
   });
 });

@@ -39,42 +39,62 @@ const log = createLogger('sessionRemovalRecycle');
 interface RecycleWorktreeOptions {
   /** Internal guard: owner retries reuse this entry point without starting another owner scan. */
   scanOwners?: boolean;
+  /**
+   * Owner retries must go back through the caller's route lock + CLI close chain before
+   * entering this low-level remover. Omitted callers preserve the owner rather than
+   * deleting it without the required runtime shutdown.
+   */
+  recycleOwner?: (sessionId: string) => Promise<void>;
 }
 
 export async function recycleWorktreeForRemovedSession(
   sessionId: string,
   options: RecycleWorktreeOptions = {},
 ): Promise<void> {
-  const meta = store.get(sessionId);
   try {
-    if (!meta) return;
-    if (meta.ephemeral) {
-      log.debug(
-        `[sessionRemovalRecycle] skip ephemeral worktree for session ${sessionId} (pool-managed)`,
-      );
-      return;
-    }
-    const status = await readCurrentSessionStatus(sessionId);
-    if (status !== 'deleted' && status !== 'archived') {
-      log.info(
-        `[sessionRemovalRecycle] skip worktree recycle for session ${sessionId}: current status=${status ?? 'missing'}`,
-      );
-      return;
-    }
-    await removeWorktreeForSession(sessionId, {
-      canRemove: async () => {
-        const currentStatus = await readCurrentSessionStatus(sessionId);
-        return currentStatus === 'deleted' || currentStatus === 'archived';
-      },
-    });
+    await recycleOwnWorktreeForRemovedSession(sessionId);
   } finally {
     if (options.scanOwners !== false) {
       const ownerSessionIds = await findOwningWorktreeSessionIds(sessionId);
       for (const ownerSessionId of ownerSessionIds) {
-        await recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+        if (options.recycleOwner) {
+          await options.recycleOwner(ownerSessionId);
+        } else {
+          log.warn(
+            `[sessionRemovalRecycle] preserving owner ${ownerSessionId}: no runtime-close callback`,
+          );
+        }
       }
     }
   }
+}
+
+/**
+ * 只处理 session 自身登记的 worktree。是否存在自身 meta、是否为 ephemeral，均不影响
+ * 顶层入口随后扫描共享 owner。
+ */
+async function recycleOwnWorktreeForRemovedSession(sessionId: string): Promise<void> {
+  const meta = store.get(sessionId);
+  if (!meta) return;
+  if (meta.ephemeral) {
+    log.debug(
+      `[sessionRemovalRecycle] skip ephemeral worktree for session ${sessionId} (pool-managed)`,
+    );
+    return;
+  }
+  const status = await readCurrentSessionStatus(sessionId);
+  if (status !== 'deleted' && status !== 'archived') {
+    log.info(
+      `[sessionRemovalRecycle] skip worktree recycle for session ${sessionId}: current status=${status ?? 'missing'}`,
+    );
+    return;
+  }
+  await removeWorktreeForSession(sessionId, {
+    canRemove: async () => {
+      const currentStatus = await readCurrentSessionStatus(sessionId);
+      return currentStatus === 'deleted' || currentStatus === 'archived';
+    },
+  });
 }
 
 /**

@@ -151,21 +151,35 @@ describe('sessionRemovalRecycle', () => {
       expect(removeMock).not.toHaveBeenCalled();
     });
 
-    it('shared session with its own store meta still retries the owner', async () => {
+    it('shared session with its own store meta still retries the owner after processing itself', async () => {
       const ownerMeta = makeMeta('owner');
       const sharedMeta = makeMeta('shared');
       storeMap.set('owner', ownerMeta);
       storeMap.set('shared', sharedMeta);
       addSession('owner', 'archived', { worktreePath: ownerMeta.path });
       addSession('shared', 'archived', { workingDir: ownerMeta.path });
+      const removalOrder: string[] = [];
+      removeMock.mockImplementation(async (sessionId: string) => {
+        removalOrder.push(sessionId);
+      });
+      const recycleOwner = vi.fn(async (ownerSessionId: string) => {
+        await mod.recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+      });
 
-      await mod.recycleWorktreeForRemovedSession('shared');
+      await mod.recycleWorktreeForRemovedSession('shared', { recycleOwner });
 
-      expect(removeMock).toHaveBeenCalledTimes(2);
-      expect(removeMock.mock.calls.map(([sessionId]) => sessionId).sort()).toEqual([
-        'owner',
+      expect(recycleOwner).toHaveBeenCalledWith('owner');
+      expect(removalOrder).toEqual(['shared', 'owner']);
+      expect(removeMock).toHaveBeenNthCalledWith(
+        1,
         'shared',
-      ]);
+        expect.objectContaining({ canRemove: expect.any(Function) }),
+      );
+      expect(removeMock).toHaveBeenNthCalledWith(
+        2,
+        'owner',
+        expect.objectContaining({ canRemove: expect.any(Function) }),
+      );
     });
 
     it('ephemeral terminal session still scans and retries a matching owner', async () => {
@@ -174,9 +188,13 @@ describe('sessionRemovalRecycle', () => {
       storeMap.set('owner', ownerMeta);
       addSession('shared', 'archived', { workingDir: ownerMeta.path });
       addSession('owner', 'archived', { worktreePath: ownerMeta.path });
+      const recycleOwner = vi.fn(async (ownerSessionId: string) => {
+        await mod.recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+      });
 
-      await mod.recycleWorktreeForRemovedSession('shared');
+      await mod.recycleWorktreeForRemovedSession('shared', { recycleOwner });
 
+      expect(recycleOwner).toHaveBeenCalledWith('owner');
       expect(removeMock).toHaveBeenCalledTimes(1);
       expect(removeMock).toHaveBeenCalledWith(
         'owner',
@@ -202,9 +220,13 @@ describe('sessionRemovalRecycle', () => {
         storeMap.set('owner', ownerMeta);
         addSession('owner', 'archived', { worktreePath: ownerMeta.path });
         addSession('shared', sharedStatus, { workingDir: ownerMeta.path });
+        const recycleOwner = vi.fn(async (ownerSessionId: string) => {
+          await mod.recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+        });
 
-        await mod.recycleWorktreeForRemovedSession('shared');
+        await mod.recycleWorktreeForRemovedSession('shared', { recycleOwner });
 
+        expect(recycleOwner).toHaveBeenCalledWith('owner');
         expect(removeMock).toHaveBeenCalledWith(
           'owner',
           expect.objectContaining({ canRemove: expect.any(Function) }),
@@ -222,9 +244,14 @@ describe('sessionRemovalRecycle', () => {
       addSession('shared', 'archived', {
         workingDir: path.join(ownerMeta.path, 'packages', 'desktop'),
       });
+      const recycleOwner = vi.fn(async (ownerSessionId: string) => {
+        await mod.recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+      });
 
-      await mod.recycleWorktreeForRemovedSession('shared');
+      await mod.recycleWorktreeForRemovedSession('shared', { recycleOwner });
 
+      expect(recycleOwner).toHaveBeenCalledTimes(1);
+      expect(recycleOwner).toHaveBeenCalledWith('owner');
       expect(removeMock).toHaveBeenCalledTimes(1);
       expect(removeMock).toHaveBeenCalledWith(
         'owner',
@@ -243,8 +270,12 @@ describe('sessionRemovalRecycle', () => {
 
       removeMock.mockClear();
       shared.status = 'archived';
-      await mod.recycleWorktreeForRemovedSession('shared');
+      const recycleOwner = vi.fn(async (ownerSessionId: string) => {
+        await mod.recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+      });
+      await mod.recycleWorktreeForRemovedSession('shared', { recycleOwner });
 
+      expect(recycleOwner).toHaveBeenCalledWith('owner');
       expect(removeMock).toHaveBeenCalledTimes(1);
       expect(removeMock).toHaveBeenCalledWith(
         'owner',
@@ -261,10 +292,13 @@ describe('sessionRemovalRecycle', () => {
       removeMock.mockImplementation(async (sessionId: string) => {
         storeMap.delete(sessionId);
       });
+      const recycleOwner = async (ownerSessionId: string): Promise<void> => {
+        await mod.recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+      };
 
-      await mod.recycleWorktreeForRemovedSession('shared-1');
-      await mod.recycleWorktreeForRemovedSession('shared-2');
-      await mod.recycleWorktreeForRemovedSession('shared-1');
+      await mod.recycleWorktreeForRemovedSession('shared-1', { recycleOwner });
+      await mod.recycleWorktreeForRemovedSession('shared-2', { recycleOwner });
+      await mod.recycleWorktreeForRemovedSession('shared-1', { recycleOwner });
 
       expect(removeMock).toHaveBeenCalledTimes(1);
       expect(removeMock).toHaveBeenCalledWith(

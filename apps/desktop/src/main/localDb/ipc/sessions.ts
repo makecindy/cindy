@@ -165,15 +165,21 @@ export async function recycleSessionWorktreeForStatusChange(
       import('../../worktree/sessionRemovalRecycle.js'),
       import('../../maker-ipc/register.js'),
     ]);
-    if (!(await recycle.isSessionStillRemovable(sessionId))) return;
-    await routeLock.withSendToSessionLock(sessionId, async () => {
-      if (!(await recycle.isSessionStillRemovable(sessionId))) return;
-      await mh
-        .getMakerIfReady()
-        ?.closeSession(sessionId)
-        .catch(() => undefined);
-    });
-    await recycle.recycleWorktreeForRemovedSession(sessionId);
+    const closeAndRecycle = async (targetSessionId: string, scanOwners: boolean): Promise<void> => {
+      if (!(await recycle.isSessionStillRemovable(targetSessionId))) return;
+      await routeLock.withSendToSessionLock(targetSessionId, async () => {
+        if (!(await recycle.isSessionStillRemovable(targetSessionId))) return;
+        await mh
+          .getMakerIfReady()
+          ?.closeSession(targetSessionId)
+          .catch(() => undefined);
+      });
+      await recycle.recycleWorktreeForRemovedSession(targetSessionId, {
+        scanOwners,
+        recycleOwner: (ownerSessionId) => closeAndRecycle(ownerSessionId, false),
+      });
+    };
+    await closeAndRecycle(sessionId, true);
   } catch (err) {
     log.warn('worktree recycle after session status change failed', {
       sessionId,
