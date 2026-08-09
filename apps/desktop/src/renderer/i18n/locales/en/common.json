@@ -485,6 +485,15 @@
       "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
       "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
       "feishuAria": "Toggle session-done FeiShu notifications",
+      "sessionEvent": {
+        "untitled": "Untitled session",
+        "done": "Completed ✓",
+        "error": "Failed",
+        "needsReply": "Reply needed",
+        "externalDone": "Cindy · Session “{{title}}” completed ✓",
+        "externalError": "Cindy · Session “{{title}}” failed",
+        "externalNeedsReply": "Cindy · Session “{{title}}” needs your reply"
+      },
       "wecomGroupLabel": "WeCom group notifications",
       "wecomGroupHint": "Used for automation completion notifications. Paste a WeCom group bot Webhook URL; it is encrypted on this device.",
       "wecomGroupConfiguredHint": "Configured (key {{maskedKey}}). Turn on the master switch, then enable it for each automation as needed.",
@@ -623,6 +632,7 @@
       "options": {
         "system": "Auto (follow system)",
         "zh-CN": "简体中文",
+        "zh-TW": "Traditional Chinese",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -934,6 +944,7 @@
         "optionDescriptions": {
           "auto": "Let the recognition service detect it",
           "zh-CN": "Simplified Chinese (Mainland China)",
+          "zh-TW": "Traditional Chinese (Taiwan)",
           "en": "English",
           "ja": "Japanese",
           "ko": "Korean"

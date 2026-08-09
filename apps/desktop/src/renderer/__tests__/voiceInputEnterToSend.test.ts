@@ -267,7 +267,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
   });
 
   it('defines the finish-and-send tooltip label in every locale', () => {
-    for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+    for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const raw = readFileSync(
         resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
         'utf8',

@@ -485,6 +485,15 @@
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
       "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
       "feishuAria": "切换任务完成的飞书通知",
+      "sessionEvent": {
+        "untitled": "未命名任务",
+        "done": "已完成 ✓",
+        "error": "执行失败",
+        "needsReply": "需要你回复",
+        "externalDone": "Cindy · 任务「{{title}}」已完成 ✓",
+        "externalError": "Cindy · 任务「{{title}}」执行失败",
+        "externalNeedsReply": "Cindy · 任务「{{title}}」需要你回复"
+      },
       "wecomGroupLabel": "企业微信群通知",
       "wecomGroupHint": "用于自动操作的完成通知。粘贴企微群机器人的 Webhook URL，URL 会加密保存在本机。",
       "wecomGroupConfiguredHint": "已配置（密钥 {{maskedKey}}）。开启总开关后，可在每个自动操作中按需发送。",
@@ -623,6 +632,7 @@
       "options": {
         "system": "跟随系统",
         "zh-CN": "简体中文",
+        "zh-TW": "繁体中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -934,6 +944,7 @@
         "optionDescriptions": {
           "auto": "由识别服务自动判断",
           "zh-CN": "简体中文（中国大陆）",
+          "zh-TW": "繁体中文（台湾）",
           "en": "English",
           "ja": "日本語",
           "ko": "한국어"

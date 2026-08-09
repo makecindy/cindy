@@ -485,6 +485,15 @@
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
       "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환",
+      "sessionEvent": {
+        "untitled": "제목 없는 세션",
+        "done": "완료됨 ✓",
+        "error": "실행 실패",
+        "needsReply": "답변이 필요합니다",
+        "externalDone": "Cindy · 세션 “{{title}}” 완료됨 ✓",
+        "externalError": "Cindy · 세션 “{{title}}” 실행 실패",
+        "externalNeedsReply": "Cindy · 세션 “{{title}}”에 답변이 필요합니다"
+      },
       "wecomGroupLabel": "WeCom 그룹 알림",
       "wecomGroupHint": "자동 작업 완료 알림에 사용됩니다. WeCom 그룹 봇 Webhook URL을 붙여넣으면 이 기기에 암호화되어 저장됩니다.",
       "wecomGroupConfiguredHint": "설정됨(키 {{maskedKey}}). 전체 스위치를 켠 후 각 자동 작업에서 필요할 때 전송할 수 있습니다.",
@@ -623,6 +632,7 @@
       "options": {
         "system": "자동 (시스템 따르기)",
         "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -934,6 +944,7 @@
         "optionDescriptions": {
           "auto": "인식 서비스가 자동 감지",
           "zh-CN": "중국어 간체(중국 본토)",
+          "zh-TW": "중국어 번체(대만)",
           "en": "영어",
           "ja": "일본어",
           "ko": "한국어"

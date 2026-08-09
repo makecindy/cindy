@@ -485,6 +485,15 @@
       "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
       "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
       "feishuAria": "セッション完了時の Feishu 通知を切り替え",
+      "sessionEvent": {
+        "untitled": "無題のセッション",
+        "done": "完了しました ✓",
+        "error": "実行に失敗しました",
+        "needsReply": "返信が必要です",
+        "externalDone": "Cindy · セッション「{{title}}」が完了しました ✓",
+        "externalError": "Cindy · セッション「{{title}}」の実行に失敗しました",
+        "externalNeedsReply": "Cindy · セッション「{{title}}」への返信が必要です"
+      },
       "wecomGroupLabel": "WeCom グループ通知",
       "wecomGroupHint": "自動操作の完了通知に使用します。WeCom グループボットの Webhook URL を貼り付けると、このデバイスに暗号化保存されます。",
       "wecomGroupConfiguredHint": "設定済み（キー {{maskedKey}}）。全体スイッチをオンにした後、自動操作ごとに必要に応じて送信できます。",
@@ -623,6 +632,7 @@
       "options": {
         "system": "自動 (システムに従う)",
         "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -934,6 +944,7 @@
         "optionDescriptions": {
           "auto": "認識サービスが自動判定",
           "zh-CN": "簡体字中国語（中国本土）",
+          "zh-TW": "繁体字中国語（台湾）",
           "en": "英語",
           "ja": "日本語",
           "ko": "韓国語"
