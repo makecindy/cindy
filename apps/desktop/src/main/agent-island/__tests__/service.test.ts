@@ -4448,6 +4448,67 @@ describe('AgentIslandService native publishing', () => {
     expect(framesById.get(2)).toMatchObject({ contentWidth: 500 });
   });
 
+  it('keeps an ambiguous preference detached when display order and bounds change', async () => {
+    const firstExternal = {
+      id: 1,
+      label: 'Mi Monitor',
+      bounds: { x: 0, y: 0, width: 1512, height: 982 },
+      internal: false,
+    };
+    const secondExternal = {
+      id: 2,
+      label: 'Mi Monitor',
+      bounds: { x: 1512, y: 0, width: 1512, height: 982 },
+      internal: false,
+    };
+    mocks.readLayoutPreferences.mockReturnValueOnce(
+      new Map<number, AgentIslandLayoutPreference>([
+        [
+          9,
+          {
+            compactContentWidth: 500,
+            centerXRatio: 0.25,
+            displayName: 'Mi Monitor',
+            displayIndex: 2,
+            displayInternal: false,
+            displayBounds: { x: 1728, y: 0, width: 1512, height: 982 },
+          },
+        ],
+      ]),
+    );
+    mocks.displays.splice(0, mocks.displays.length, firstExternal, secondExternal);
+    mocks.getPrimaryDisplay.mockReturnValue(firstExternal);
+
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(
+      (
+        state: AgentIslandDisplayState,
+        frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[],
+      ) => {
+        void state;
+        void frameOrFrames;
+        return true;
+      },
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    const persistedCall = mocks.writeLayoutPreferences.mock.calls.at(-1);
+    const persisted = persistedCall?.[0] as Map<number, AgentIslandLayoutPreference>;
+    expect(persisted.size).toBe(0);
+    expect(persistedCall?.[1]).toEqual([
+      expect.objectContaining({
+        compactContentWidth: 500,
+        displayIndex: 2,
+        displayName: 'Mi Monitor',
+      }),
+    ]);
+  });
+
   it('moves a pending layout write into detached storage when the display disconnects', async () => {
     vi.useFakeTimers();
     try {

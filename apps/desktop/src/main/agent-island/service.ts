@@ -2381,11 +2381,10 @@ function findDisplayByIdentity(
     }
   }
 
-  if (typeof identity.displayIndex === 'number' && identity.displayIndex >= 1) {
-    const byIndex = displays[identity.displayIndex - 1];
-    if (byIndex && candidates.includes(byIndex)) return byIndex;
-  }
-
+  // Display enumeration order is runtime-local and may change after reconnect,
+  // reboot, or topology changes. An index must never break an otherwise
+  // ambiguous physical-identity match; failing closed keeps the preference
+  // detached instead of assigning it to the wrong monitor.
   return candidates.length === 1 ? (candidates[0] ?? null) : null;
 }
 
