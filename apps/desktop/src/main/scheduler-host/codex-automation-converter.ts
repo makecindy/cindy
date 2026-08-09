@@ -276,7 +276,7 @@ export function convertCodexAutomation(
     blockingDiagnostics.push(message);
   }
   if (detail.cwds.length > 1) {
-    const message = 'automation has multiple cwds; only the first cwd will be imported';
+    const message = 'automation has multiple cwds; manual adjustment required before import';
     diagnostics.push(message);
     blockingDiagnostics.push(message);
   }

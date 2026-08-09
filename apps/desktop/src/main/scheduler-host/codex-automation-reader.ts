@@ -109,7 +109,11 @@ function parseCwds(raw: RawRecord, diagnostics: string[]): string[] {
     diagnostics.push('cwds must be an array of strings');
     return [];
   }
-  return value.filter((item): item is string => item.length <= 32_000);
+  const valid = value.filter((item): item is string => item.length <= 32_000);
+  if (valid.length !== value.length) {
+    diagnostics.push('cwds entries exceed maximum length of 32000 characters');
+  }
+  return valid;
 }
 
 function recurrenceDiagnostics(rrule: string): string[] {

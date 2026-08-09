@@ -132,6 +132,22 @@ describe('createCodexAutomationReader', () => {
     expect(item?.diagnostics).toContain('model exceeds maximum length of 1000 characters');
   });
 
+  it('reports overlong cwd entries instead of silently dropping them', async () => {
+    const root = await makeRoot();
+    await writeAutomation(
+      root,
+      'long-cwd',
+      ['version = 1', 'id = "long-cwd"', `cwds = [${JSON.stringify('C'.repeat(32_001))}]`].join(
+        '\n',
+      ),
+    );
+
+    const item = await createCodexAutomationReader({ rootDir: root }).get('long-cwd');
+
+    expect(item?.cwds).toEqual([]);
+    expect(item?.diagnostics).toContain('cwds entries exceed maximum length of 32000 characters');
+  });
+
   it('refuses non-regular automation.toml paths', async () => {
     const root = await makeRoot();
     await fs.mkdir(path.join(root, 'directory-file', 'automation.toml'), { recursive: true });

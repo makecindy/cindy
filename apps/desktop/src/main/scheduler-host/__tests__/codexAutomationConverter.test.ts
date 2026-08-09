@@ -182,14 +182,14 @@ describe('convertCodexAutomation', () => {
     expect(result.diagnostics.join(' ')).toContain('absolute');
   });
 
-  it('explains that only the first cwd is imported when multiple are present', () => {
+  it('explains that multiple cwds require manual adjustment before import', () => {
     const result = convertCodexAutomation(detail({ cwds: ['C:\\newlife', 'D:\\other-project'] }), {
       timezone: 'UTC',
     });
 
     expect(result.canImport).toBe(false);
     expect(result.diagnostics).toContain(
-      'automation has multiple cwds; only the first cwd will be imported',
+      'automation has multiple cwds; manual adjustment required before import',
     );
   });
 
