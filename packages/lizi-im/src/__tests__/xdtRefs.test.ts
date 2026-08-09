@@ -226,6 +226,34 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     }
   });
 
+  it('parses balanced parentheses in a plain file destination', () => {
+    const text = '[报告](xdt-file:///work/a(b)c.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告',
+        url: 'xdt-file:///work/a(b)c.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
+  });
+
+  it('parses nested brackets in an attachment label', () => {
+    const text = '[报告 [最终版]](xdt-file:///work/report.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告 [最终版]',
+        url: 'xdt-file:///work/report.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告 [最终版]');
+  });
+
   it('ignores file references inside inline code and fenced code blocks', () => {
     const inline = '`[报告](xdt-file:///tmp/inline.pdf)`';
     const fenced = '```md\n[报告](xdt-file:///tmp/fenced.pdf)\n```';

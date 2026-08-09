@@ -557,20 +557,66 @@ export function isMarkdownCodePosition(
   return codeRangeAt(ranges, position) !== null;
 }
 
-function markdownLabelEnd(text: string, start: number): { end: number; nested: boolean } {
-  let cursor = start;
-  while (cursor < text.length) {
+function markdownLabelEnd(
+  text: string,
+  start: number,
+  closeByOpen: Int32Array,
+): { end: number; nested: boolean } {
+  const closing = closeByOpen[start - 1];
+  if (closing !== -1 && text[closing + 1] === '(') {
+    return { end: closing, nested: false };
+  }
+  const firstNested = text.indexOf('[', closing === -1 ? start : closing + 1);
+  if (firstNested !== -1) return { end: firstNested, nested: true };
+  return { end: text.length, nested: false };
+}
+
+function markdownBracketPairs(text: string): Int32Array {
+  const closeByOpen = new Int32Array(text.length);
+  closeByOpen.fill(-1);
+  const stack: number[] = [];
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
     if (text[cursor] === '\\') {
-      cursor += 2;
+      if (text[cursor + 1] === '[' && stack.length === 0) {
+        cursor += 1;
+        stack.push(cursor);
+        continue;
+      }
+      cursor += 1;
       continue;
     }
-    if (text[cursor] === '[') return { end: cursor, nested: true };
-    if (text[cursor] === ']' && text[cursor + 1] === '(') {
-      return { end: cursor, nested: false };
+    if (text[cursor] === '[') {
+      stack.push(cursor);
+    } else if (text[cursor] === ']' && stack.length > 0) {
+      closeByOpen[stack.pop()!] = cursor;
     }
-    cursor += 1;
   }
-  return { end: text.length, nested: false };
+  return closeByOpen;
+}
+
+function markdownParenPairs(text: string): {
+  closeByOpen: Int32Array;
+  openByClose: Int32Array;
+} {
+  const closeByOpen = new Int32Array(text.length);
+  const openByClose = new Int32Array(text.length);
+  closeByOpen.fill(-1);
+  openByClose.fill(-1);
+  const stack: number[] = [];
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
+    if (text[cursor] === '\\') {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === '(') {
+      stack.push(cursor);
+    } else if (text[cursor] === ')' && stack.length > 0) {
+      const opening = stack.pop()!;
+      closeByOpen[opening] = cursor;
+      openByClose[cursor] = opening;
+    }
+  }
+  return { closeByOpen, openByClose };
 }
 
 function angleReferenceEnd(text: string, closingAngle: number): number {
@@ -599,23 +645,25 @@ function angleReferenceEnd(text: string, closingAngle: number): number {
 function plainReferenceBounds(
   text: string,
   schemeStart: number,
-  initialEndParen: number,
+  endParen: number,
+  openByClose: Int32Array,
 ): { endParen: number; urlEnd: number } {
-  let titleEnd = initialEndParen - 1;
+  let titleEnd = endParen - 1;
   while (text[titleEnd] === ' ' || text[titleEnd] === '\t') titleEnd -= 1;
 
   const closingTitle = text[titleEnd];
-  let endParen = initialEndParen;
-  let openingTitle: '"' | "'" | '(';
+  let openingTitle: '"' | "'";
   if (closingTitle === '"' || closingTitle === "'") {
     openingTitle = closingTitle;
+  } else if (closingTitle === ')') {
+    const titleStart = openByClose[titleEnd];
+    if (titleStart <= schemeStart) return { endParen, urlEnd: endParen };
+    let urlEnd = titleStart;
+    while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
+    if (urlEnd === titleStart || urlEnd <= schemeStart) return { endParen, urlEnd: endParen };
+    return { endParen, urlEnd };
   } else {
-    let outerParen = initialEndParen + 1;
-    while (text[outerParen] === ' ' || text[outerParen] === '\t') outerParen += 1;
-    if (text[outerParen] !== ')') return { endParen: initialEndParen, urlEnd: initialEndParen };
-    openingTitle = '(';
-    titleEnd = initialEndParen;
-    endParen = outerParen;
+    return { endParen, urlEnd: endParen };
   }
 
   let titleStart = titleEnd - 1;
@@ -626,37 +674,38 @@ function plainReferenceBounds(
       if (slashes % 2 === 0) break;
     }
     if (text[titleStart] === '\n' || text[titleStart] === '\r') {
-      return { endParen: initialEndParen, urlEnd: initialEndParen };
+      return { endParen, urlEnd: endParen };
     }
     titleStart -= 1;
   }
   if (text[titleStart] !== openingTitle) {
-    return { endParen: initialEndParen, urlEnd: initialEndParen };
+    return { endParen, urlEnd: endParen };
   }
   let urlEnd = titleStart;
   while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
   if (urlEnd === titleStart || urlEnd <= schemeStart) {
-    return { endParen: initialEndParen, urlEnd: initialEndParen };
+    return { endParen, urlEnd: endParen };
   }
   return { endParen, urlEnd };
 }
 
 /**
  * 判定 text[openBracket] 处是否**直接**开始一个 managed-media 引用。判据与
- * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 扫描遇 '[' 即
- * 放弃、']( ' 收尾、按 image 与否认 scheme), 只读、无副作用。
+ * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 方括号配对、
+ * '](' 收尾、按 image 与否认 scheme), 只读、无副作用。
  *
- * "直接"很关键: alt 里再出现 '[' 时返回 false —— 那个更内层的 '[' 才可能是
- * 起点, 外层的恢复循环会继续迭代到它。
+ * "直接"很关键: 合法嵌套方括号属于当前 label；畸形外层候选则由主循环从
+ * 后续 '[' 恢复。
  */
 function refStartsAt(
   text: string,
   openBracket: number,
   codeRanges: readonly MarkdownCodeRange[],
+  bracketCloseByOpen: Int32Array,
 ): boolean {
   if (codeRangeAt(codeRanges, openBracket)) return false;
   const image = openBracket > 0 && text[openBracket - 1] === '!';
-  const label = markdownLabelEnd(text, openBracket + 1);
+  const label = markdownLabelEnd(text, openBracket + 1, bracketCloseByOpen);
   if (label.end >= text.length || label.nested) return false;
 
   const urlStart = label.end + 2;
@@ -674,20 +723,9 @@ function refStartsAt(
 function parseXdtRefs(text: string): ParsedXdtRef[] {
   const refs: ParsedXdtRef[] = [];
   const codeRanges = markdownCodeRanges(text);
+  const bracketCloseByOpen = markdownBracketPairs(text);
+  const parenPairs = markdownParenPairs(text);
   let cursor = 0;
-  // ')' 查找的单调缓存。搜索起点跨候选严格递增(scheme 不匹配的路径根本不查
-  // 括号; 恢复后新候选的 urlStart 在恢复点之后; 收下引用后 cursor = endParen
-  // + 1 > 上次命中), 且 [上次起点, 上次命中) 区间内必无 ')' —— 所以起点仍
-  // ≤ 上次命中时可直接复用, 与每次重新 indexOf 等价, 每个文本位置至多被扫
-  // 一次。没有它, 形如 '[a](xdt-file://x'.repeat(N) + ')' 的对抗输入会让 N 个
-  // 候选各自重扫同一个尾括号, 退化成 Θ(n²)(#1856 review 第三轮: 这条平方
-  // 向量是畸形恢复引入的, 收敛前的解析器一次扫到 ')' 就整体跳过)。
-  let cachedParen = -2; // -2 = 尚无缓存
-  const nextParen = (from: number): number => {
-    if (cachedParen >= from) return cachedParen;
-    cachedParen = text.indexOf(')', from);
-    return cachedParen;
-  };
   let cachedAngle = -2;
   const nextAngle = (from: number): number => {
     if (cachedAngle === -1 || cachedAngle >= from) return cachedAngle;
@@ -707,11 +745,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     const image = openBracket > 0 && text[openBracket - 1] === '!';
     const start = image ? openBracket - 1 : openBracket;
     const altStart = openBracket + 1;
-    const label = markdownLabelEnd(text, altStart);
+    const label = markdownLabelEnd(text, altStart, bracketCloseByOpen);
     const altEnd = label.end;
 
-    // A nested opening bracket supersedes the malformed outer candidate. This
-    // both preserves later valid refs and keeps the scan strictly forward.
+    // A nested opening bracket only supersedes an unmatched outer label.
+    // Balanced nested brackets are already included in altEnd.
     if (label.nested) {
       cursor = altEnd;
       continue;
@@ -740,7 +778,7 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       ? closingAngle === -1
         ? -1
         : angleReferenceEnd(text, closingAngle)
-      : nextParen(schemeStart + scheme.length);
+      : parenPairs.closeByOpen[altEnd + 1];
     if (initialEndParen === -1) {
       // A malformed angle-wrapped candidate must not terminate the whole
       // scan: a later, independent managed-media reference may still be valid.
@@ -749,11 +787,12 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
         cursor = schemeStart + scheme.length;
         continue;
       }
-      break;
+      cursor = schemeStart + scheme.length;
+      continue;
     }
     const bounds = angleWrapped
       ? { endParen: initialEndParen, urlEnd: closingAngle }
-      : plainReferenceBounds(text, schemeStart, initialEndParen);
+      : plainReferenceBounds(text, schemeStart, initialEndParen, parenPairs.openByClose);
     const { endParen, urlEnd } = bounds;
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
@@ -765,16 +804,15 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     //
     // cursor 仍严格前进: recovery ≥ urlStart + scheme.length > openBracket。
     // 恢复判定本身是线性(本解析器防 ReDoS/防回扫的前提): refStartsAt 的 alt
-    // 扫描天然停在下一个 '[', 一段里相邻 '[' 的间距之和 ≤ 段长; 且恢复点是本段
-    // 第一个引用起点, 下一候选的 URL 段从它之后才开始, 各候选扫过的区间互不
-    // 重叠。恢复带来的 ')' 重复定位由上面的 nextParen 单调缓存兜住。
+    // 方括号和圆括号都在进入主循环前一次配对；且恢复点是本段第一个引用起点，
+    // 下一候选的 URL 段从它之后才开始，各候选扫描区间不重叠。
     let recovery = -1;
     for (
       let bracket = text.indexOf('[', schemeStart + scheme.length);
       bracket !== -1 && bracket < urlEnd;
       bracket = text.indexOf('[', bracket + 1)
     ) {
-      if (refStartsAt(text, bracket, codeRanges)) {
+      if (refStartsAt(text, bracket, codeRanges, bracketCloseByOpen)) {
         recovery = bracket;
         break;
       }
