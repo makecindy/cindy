@@ -19,6 +19,7 @@ import {
   Layers,
   ListTodo,
   LoaderCircle,
+  RefreshCw,
   PencilLine,
   Share as ShareIcon,
   Send,
@@ -274,6 +275,12 @@ import type {
 } from '@/session/mediaPlayerWebViewHtml';
 import { formatMobileSystemCard } from '@/session/systemCard';
 import {
+  getMobileAutoResumePresentation,
+  isMobileAutoResumeRowInFlight,
+  toggleMobileAutoResumeExpanded,
+} from '@/session/autoResumePresentation';
+import type { ContinuationInFlightProjectionCapability } from '@/session/types';
+import {
   projectMobileWorkActivities,
   projectRecentMobileWorkActivities,
   type MobileProjectedThinkingActivity,
@@ -476,6 +483,14 @@ interface MessageActions {
   screenWidth?: number;
   /** 会话是否流式中:驱动工具行 running/done 状态(未 settled 且流式中才显示进行中)。 */
   isSessionStreaming?: boolean;
+  /** 当前 maker vendor turn 是否仍在运行；旧端续跑归属兜底只允许使用这条窄信号。 */
+  makerTurnRunning?: boolean;
+  /** 当前 vendor turn 的自动续跑 owner。 */
+  continuationTurnClientId?: string | null;
+  /** 只有明确识别为 legacy 的投影才允许使用最后一条输入的兼容判据。 */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
+  /** 含自动续跑合成行、排除 steer 的最后一条用户输入。 */
+  lastUserInputClientId?: string | null;
 }
 
 export function MessageRenderer({
@@ -504,6 +519,9 @@ export function MessageRenderer({
   emptyTestID,
   bottomOverlayHeight,
   isSessionStreaming,
+  makerTurnRunning,
+  continuationTurnClientId,
+  continuationInFlightProjectionCapability,
   loadingEarlier,
   focusedRequestKey,
   queueFooter,
@@ -546,6 +564,7 @@ export function MessageRenderer({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const firstUserMessageClientId = findFirstUserMessageClientId(items);
+  const lastUserInputClientId = findLastUserInputClientId(items);
   const focusedItemKeyRef = useRef(focusedItemKey);
   focusedItemKeyRef.current = focusedItemKey;
   const listRef = useRef<LegendListRef>(null);
@@ -799,13 +818,21 @@ export function MessageRenderer({
     busyClientId,
     busyAction,
     firstUserMessageClientId,
+    lastUserInputClientId,
+    makerTurnRunning,
+    continuationTurnClientId,
+    continuationInFlightProjectionCapability,
     isSessionStreaming,
     screenWidth: viewportLayout.contentWidth,
   }), [
     busyClientId,
     busyAction,
+    continuationInFlightProjectionCapability,
+    continuationTurnClientId,
     firstUserMessageClientId,
     isSessionStreaming,
+    lastUserInputClientId,
+    makerTurnRunning,
     onCopyMessageLink,
     onAddMessageToComposer,
     onDeleteMessage,
@@ -1951,6 +1978,13 @@ function MessageBubble({
       ) : null}
       {item.message.systemCardType ? (
         <MobileSystemCard
+          autoResumeInFlight={isMobileAutoResumeRowInFlight({
+            isContinuationTurnOwner: clientId === actions.continuationTurnClientId,
+            makerTurnRunning: actions.makerTurnRunning === true,
+            isLastUserInput: clientId === actions.lastUserInputClientId,
+            projectionCapability:
+              actions.continuationInFlightProjectionCapability ?? 'unknown',
+          })}
           data={item.message.systemCardData}
           type={item.message.systemCardType}
         />
@@ -3228,15 +3262,22 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
 }
 
 function MobileSystemCard({
+  autoResumeInFlight,
   data,
   type,
 }: {
+  autoResumeInFlight?: boolean;
   data?: Record<string, unknown>;
   type: NonNullable<NormalizedRemoteMessage['systemCardType']>;
 }) {
   const styles = useThemedStyles(makeStyles);
   // agent-switch 走专用「分隔线 + 药丸」渲染(对齐桌面),不落通用盒子卡片。
   if (type === 'agent-switch') return <MobileAgentSwitchCard data={data} />;
+  // auto-resume 复用桌面 AgentActionRow 的单行状态布局:默认只显示当前状态和压缩后的
+  // 中断原因,完整诊断按需展开,避免底层错误全文把手机消息流撑成一张大卡片。
+  if (type === 'auto-resume') {
+    return <MobileAutoResumeActionRow data={data} inFlight={autoResumeInFlight === true} />;
+  }
   const card = formatMobileSystemCard(type, data);
   return (
     <View style={styles.systemCard} testID={`message.systemCard.${type}`}>
@@ -3251,6 +3292,125 @@ function MobileSystemCard({
               <Text style={styles.systemCardValue}>{row.value}</Text>
             </View>
           ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function MobileAutoResumeActionRow({
+  data,
+  inFlight,
+}: {
+  data?: Record<string, unknown>;
+  inFlight: boolean;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const presentation = getMobileAutoResumePresentation(data, inFlight);
+  const { canExpand, hasProgress, info, state, summary } = presentation;
+
+  if (state === 'separator') {
+    const label = t('message.systemCard.autoResume.separator');
+    return (
+      <View style={styles.autoResumeSeparator} testID="message.systemCard.auto-resume-separator">
+        <View style={styles.autoResumeDivider} />
+        <View style={styles.autoResumeSeparatorPill}>
+          <RefreshCw color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+          <Text style={styles.autoResumeSeparatorText}>{label}</Text>
+        </View>
+        <View style={styles.autoResumeDivider} />
+      </View>
+    );
+  }
+
+  const label = state === 'live'
+    ? hasProgress
+      ? t('message.systemCard.autoResume.pendingWithProgress', {
+          attempt: info.attempt,
+          total: info.maxAttempts,
+        })
+      : t('message.systemCard.autoResume.pending')
+    : state === 'succeeded'
+      ? t('message.systemCard.autoResume.succeeded')
+      : state === 'failed'
+        ? t('message.systemCard.autoResume.failed')
+        : t('message.systemCard.autoResume.neutral');
+  const accessibilityLabel = summary ? `${label}: ${summary}` : label;
+
+  return (
+    <View style={styles.autoResumeRow} testID="message.systemCard.auto-resume">
+      <Pressable
+        accessibilityLabel={accessibilityLabel}
+        accessibilityRole={canExpand ? 'button' : undefined}
+        accessibilityState={canExpand ? { expanded } : undefined}
+        disabled={!canExpand}
+        onPress={canExpand
+          ? () => setExpanded((value) => toggleMobileAutoResumeExpanded(value, canExpand))
+          : undefined}
+        style={({ pressed }) => [styles.autoResumeHeader, pressed && styles.pressed]}
+      >
+        <View
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={styles.autoResumeIconSlot}
+        >
+          {state === 'live' ? (
+            <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />
+          ) : state === 'succeeded' ? (
+            <Check color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : state === 'failed' ? (
+            <X color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : (
+            <RefreshCw color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          )}
+        </View>
+        <Text style={styles.autoResumeTitle} numberOfLines={1}>{label}</Text>
+        {summary ? (
+          <Text style={styles.autoResumeSummary} numberOfLines={1}>{summary}</Text>
+        ) : (
+          <View style={styles.autoResumeHeaderSpacer} />
+        )}
+        {canExpand ? (
+          expanded ? (
+            <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : (
+            <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          )
+        ) : null}
+      </Pressable>
+      {expanded && canExpand ? (
+        <View style={styles.autoResumeDetailPanel}>
+          {info.error ? (
+            <>
+              <Text style={styles.autoResumeDetailLabel}>
+                {t('message.systemCard.autoResume.detail.reason')}
+              </Text>
+              <Text selectable style={styles.autoResumeDetailText}>{info.error}</Text>
+            </>
+          ) : null}
+          {(hasProgress || info.sessionTotal !== undefined) ? (
+            <View style={[styles.autoResumeDetailMeta, info.error && styles.autoResumeDetailMetaWithReason]}>
+              {hasProgress ? (
+                <Text style={styles.autoResumeDetailMetaText}>
+                  {t('message.systemCard.autoResume.detail.attempt', {
+                    attempt: info.attempt,
+                    total: info.maxAttempts,
+                  })}
+                </Text>
+              ) : null}
+              {info.sessionTotal !== undefined ? (
+                <Text style={styles.autoResumeDetailMetaText}>
+                  {t('message.systemCard.autoResume.detail.sessionTotal', {
+                    count: info.sessionTotal,
+                  })}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -5797,6 +5957,30 @@ function findFirstUserMessageClientIdInItem(
   return undefined;
 }
 
+function findLastUserInputClientId(items: readonly MobileMessageRenderItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const found = findLastUserInputClientIdInItem(items[index]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findLastUserInputClientIdInItem(
+  item: MobileMessageRenderItem | MobileWorkChildItem,
+): string | null {
+  if (item.type === 'message' && item.message.role === 'user') {
+    const delivery = item.message.source.agentMeta?.delivery;
+    return delivery === 'steer' ? null : messageClientId(item);
+  }
+  if (item.type === 'work_group') {
+    for (let index = item.children.length - 1; index >= 0; index--) {
+      const found = findLastUserInputClientIdInItem(item.children[index]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function messageClientId(item: MobileMessageItem): string {
   return item.message.source.clientId || item.message.source.id || item.message.key;
 }
@@ -6067,6 +6251,102 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   systemCardValue: {
     color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+  },
+  autoResumeSeparator: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  autoResumeDivider: {
+    backgroundColor: colors.border,
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
+  autoResumeSeparatorPill: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    maxWidth: '78%',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  autoResumeSeparatorText: {
+    color: colors.textTertiary,
+    flexShrink: 1,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+  },
+  autoResumeRow: {
+    alignSelf: 'stretch',
+  },
+  autoResumeHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingHorizontal: spacing.xs,
+  },
+  autoResumeIconSlot: {
+    alignItems: 'center',
+    height: 18,
+    justifyContent: 'center',
+    width: iconSize.md,
+  },
+  autoResumeTitle: {
+    color: colors.textSecondary,
+    flexShrink: 1,
+    flexGrow: 0,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.medium,
+  },
+  autoResumeSummary: {
+    color: colors.textSecondary,
+    flex: 1,
+    fontSize: typeScale.footnote,
+    minWidth: 0,
+  },
+  autoResumeHeaderSpacer: {
+    flex: 1,
+    minWidth: spacing.xs,
+  },
+  autoResumeDetailPanel: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: radius.control,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginHorizontal: spacing.xs,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  autoResumeDetailLabel: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+  },
+  autoResumeDetailText: {
+    color: colors.textSecondary,
+    fontFamily: monoFont,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    marginTop: 2,
+  },
+  autoResumeDetailMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  autoResumeDetailMetaWithReason: {
+    marginTop: spacing.sm,
+  },
+  autoResumeDetailMetaText: {
+    color: colors.textTertiary,
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },

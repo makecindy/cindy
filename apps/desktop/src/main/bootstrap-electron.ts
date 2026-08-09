@@ -707,6 +707,7 @@ import { registerPluginMarketIpc, syncDefaultMarketPlugins } from './plugin-mark
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
+import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { setMainLocale, t } from './i18n.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -5947,14 +5948,31 @@ const registerIpcHandlers = () => {
 // schema_version + core tables, emit JSON to stdout, and exit. Electron's
 // native `--user-data-dir` flag is expected to be passed by the smoke script
 // so the fake DB lives in a scratch directory.
-function parseSmokeArgs(): { enabled: boolean; userId: string } {
-  const enabled = process.argv.includes('--smoke-test');
+function parseSmokeArgs(): {
+  enabled: boolean;
+  userId: string;
+  pluginStorage: boolean;
+  resultFile: string | null;
+} {
+  const resultFile = !app.isPackaged
+    ? process.env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE?.trim() || null
+    : null;
+  const enabled = process.argv.includes('--smoke-test') || resultFile !== null;
   const userFlag = process.argv.find((a) => a.startsWith('--smoke-user='));
   const userId = userFlag ? userFlag.slice('--smoke-user='.length) : '__smoke_test__';
-  return { enabled, userId };
+  return {
+    enabled,
+    userId,
+    pluginStorage: process.argv.includes('--smoke-plugin-storage') || resultFile !== null,
+    resultFile,
+  };
 }
 
-async function runSmokeTest(userId: string): Promise<void> {
+async function runSmokeTest(
+  userId: string,
+  pluginStorage: boolean,
+  resultFile: string | null,
+): Promise<void> {
   try {
     const result = await localDbEnsureReady(userId);
     if (!result.ready) {
@@ -5977,8 +5995,10 @@ async function runSmokeTest(userId: string): Promise<void> {
     const metaCount = (
       db.prepare('SELECT COUNT(*) AS c FROM migration_meta').get() as { c: number }
     ).c;
-    process.stdout.write(
-      `${JSON.stringify({
+    const pluginStorageResult = pluginStorage
+      ? await runPluginStorageSmoke(userId)
+      : undefined;
+    const payload = {
         ok: true,
         schema_version: schemaVersion,
         tables: {
@@ -5986,8 +6006,11 @@ async function runSmokeTest(userId: string): Promise<void> {
           messages: messagesCount,
           migration_meta: metaCount,
         },
-      })}\n`,
-    );
+        ...(pluginStorageResult ? { plugin_storage: pluginStorageResult } : {}),
+      };
+    const serialized = `${JSON.stringify(payload)}\n`;
+    if (resultFile) fs.writeFileSync(resultFile, serialized, { mode: 0o600 });
+    process.stdout.write(serialized);
     localDbCloseDb();
     app.quit();
   } catch (err) {
@@ -6085,7 +6108,7 @@ app.on('ready', async () => {
   // Smoke-test flag short-circuit: skip all normal init paths.
   const smoke = parseSmokeArgs();
   if (smoke.enabled) {
-    await runSmokeTest(smoke.userId);
+    await runSmokeTest(smoke.userId, smoke.pluginStorage, smoke.resultFile);
     return;
   }
 

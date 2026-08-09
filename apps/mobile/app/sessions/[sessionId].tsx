@@ -155,6 +155,7 @@ import {
 } from '@/session/ContextSheet';
 import { RecentPhotosStrip, ScreenshotsGrid } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalView, goalStatusLabel } from '@/session/ContextSheetGoalView';
+import { parseGoalLimitsRouteParam } from '@/session/goalLimitsRouteParam';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/session/ComposerAttachmentTray';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import { ImageLightbox } from '@/session/ImageLightbox';
@@ -741,6 +742,9 @@ export default function SessionScreen() {
     deviceId?: string;
     deviceName?: string;
     draft?: string;
+    goalError?: string;
+    goalObjective?: string;
+    goalLimits?: string;
     focusClientId?: string;
     focusComposerRequestKey?: string;
     focusRequestKey?: string;
@@ -839,7 +843,46 @@ export default function SessionScreen() {
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
   const [composerPreviewAttachmentId, setComposerPreviewAttachmentId] = useState<string | null>(null);
   const [goalBusy, setGoalBusy] = useState(false);
-  const [goalError, setGoalError] = useState<string | null>(null);
+  // 新建页 goal.set 失败接回时经路由参数带入(见 new.tsx 创建流程);
+  // 平时无参 → null,与旧行为一致。
+  const [goalError, setGoalError] = useState<string | null>(() => readRouteParam(params.goalError));
+  // 新建页 goal.set 失败接回时经路由参数带入的完整 Goal 输入(codex review P2):
+  // objective 原样、limits 经 parseGoalLimitsRouteParam 严格解析(坏参数忽略整个
+  // limits,不改写为 null——改写会让 limitsTouched=true 显式提交「全部无限」覆盖
+  // 被控端默认;独立审核者 P2)。平时无参 → null,与旧行为一致(表单仍从 composer
+  // 文字初始化)。
+  const [goalRestore, setGoalRestore] = useState<{ sessionId: string; objective: string; limits?: MobileGoalLimitsInput } | null>(() => {
+    const objective = readRouteParam(params.goalObjective);
+    if (!objective) return null;
+    const limits = parseGoalLimitsRouteParam(readRouteParam(params.goalLimits));
+    return { sessionId: readRouteParam(params.sessionId) ?? '', objective, ...(limits ? { limits } : {}) };
+  });
+  // 渲染期按当前 sessionId 过滤恢复值:非当前任务的接回值立即失效(不依赖换代
+  // effect 的 commit 后清理时序),新任务表单不会用旧 objective/limits 初始化。
+  const goalRestoreForSession =
+    goalRestore && goalRestore.sessionId === sessionId ? goalRestore : undefined;
+  // goal.set 失败接回(codex review P2):仅初始化 error 不打开面板,用户跳转后
+  // 看不到目标设置失败——带入错误时自动打开 Goal 视图,让失败提示可见。
+  useEffect(() => {
+    if (goalError) {
+      setContextSheetView('goal');
+      setContextSheetOpen(true);
+    }
+  }, [goalError]);
+  // goal 接回载荷按任务换代清理(codex review P2):任务抽屉 router.replace 原地
+  // 更新同一 SessionScreen 实例,goalRestore/goalError 只在首次挂载初始化——切
+  // 任务后残留会让新任务的 Goal 表单预填旧任务的 objective/limits,甚至把旧目标
+  // 提交到新任务。prevSessionIdRef 与当前 sessionId 同步初始化:首次挂载
+  // (prev===cur)不触发清理,保留路由带入的接回值;同一任务内 router.setParams
+  // 清参由 handleSetGoal 成功路径处理,不依赖本 effect。
+  const prevSessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      setGoalRestore(null);
+      setGoalError(null);
+    }
+  }, [sessionId]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   // 圈点标注接线 api 的 ref 中转:hook 实例声明在 removeRemoteFileAttachment 之后
   // (依赖它做再编辑替换),而 onUploaded 闭包在此之前就要引用 decorate——回调
@@ -3134,19 +3177,27 @@ export default function SessionScreen() {
       const activeSessions = await maker.listActiveSessions().catch(() => []);
       return { activeSessions, activityEpochAtFetchStart };
     };
+    const fetchProjection = async () => {
+      // Capture immediately before every request. Because this helper is invoked inside
+      // withTransientRemoteRetry, each retry receives a fresh projection authority fence.
+      const authorityEpochAtStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
+      const projection = await maker.input.getProjection(sessionId);
+      return { projection, authorityEpochAtStart };
+    };
     if (syncRun.isStale()) return;
     setLoading(true);
     setError(null);
     try {
       if (!isReopen) {
         // 首开 / 强制替换:A1 全量并行(含整窗 listMessages),不回退。
-        const [sessionMeta, history, pendingInteractions, projection, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
+        const [sessionMeta, history, pendingInteractions, projectionResult, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
           await openAndSubscribe();
           return Promise.all([
             maker.getSession(sessionId),
             listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit })),
             maker.getPendingInteractions(sessionId),
-            maker.input.getProjection(sessionId),
+            fetchProjection(),
             fetchActiveSessionSnapshot(),
           ]);
         });
@@ -3172,15 +3223,19 @@ export default function SessionScreen() {
         remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
         setHasOlderMessages(moreBeyondWindow);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
-        remoteSessionStore.setInputProjection(sessionId, projection);
+        remoteSessionStore.setInputProjectionIfCurrent(
+          sessionId,
+          projectionResult.projection,
+          projectionResult.authorityEpochAtStart,
+        );
       } else {
         // 重开:便宜并行(不含整窗 listMessages)拿 meta + pending + projection + active。
-        const [sessionMeta, pendingInteractions, projection, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
+        const [sessionMeta, pendingInteractions, projectionResult, activeSessionSnapshot] = await withTransientRemoteRetry(async () => {
           await openAndSubscribe();
           return Promise.all([
             maker.getSession(sessionId),
             maker.getPendingInteractions(sessionId),
-            maker.input.getProjection(sessionId),
+            fetchProjection(),
             fetchActiveSessionSnapshot(),
           ]);
         });
@@ -3224,7 +3279,11 @@ export default function SessionScreen() {
         }
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
-        remoteSessionStore.setInputProjection(sessionId, projection);
+        remoteSessionStore.setInputProjectionIfCurrent(
+          sessionId,
+          projectionResult.projection,
+          projectionResult.authorityEpochAtStart,
+        );
       }
       // 不变量:上面 setHasOlderMessages 的校正(:806/:841/:846)与这里的 setLastSyncedAt 之间必须保持
       // 同步尾、无 await —— 否则乐观点亮 effect(依赖 lastSyncedAt===null)会在 await 间隙把刚校正成 false
@@ -5018,6 +5077,8 @@ export default function SessionScreen() {
     markQueueItemSending(queued.clientId);
     try {
       // 弱网重试与写序边界同 send() 原路径(仅明确可安全重发的瞬时传输错误)。
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
       let projection: InputProjection | undefined;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -5032,14 +5093,25 @@ export default function SessionScreen() {
           await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));
         }
       }
-      remoteSessionStore.setInputProjection(item.sessionId, projection);
+      remoteSessionStore.setInputProjectionIfCurrent(
+        item.sessionId,
+        projection,
+        projectionEpochAtRequestStart,
+      );
     } catch (err) {
       // 与原路径同口径:先对账分辨「确实没应用」vs「已应用但响应丢了」。
       const applied = await (async () => {
         try {
+          const projectionEpochAtRequestStart =
+            remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
           const fresh = await maker.input.getProjection(item.sessionId);
-          remoteSessionStore.setInputProjection(item.sessionId, fresh);
-          return fresh.pendingQueue.some((entry) => entry.clientId === queued.clientId);
+          const accepted = remoteSessionStore.setInputProjectionIfCurrent(
+            item.sessionId,
+            fresh,
+            projectionEpochAtRequestStart,
+          );
+          const current = accepted ? fresh : remoteSessionStore.getInputProjection(item.sessionId);
+          return current.pendingQueue.some((entry) => entry.clientId === queued.clientId);
         } catch {
           return remoteSessionStore.getInputProjection(item.sessionId).pendingQueue
             .some((entry) => entry.clientId === queued.clientId);
@@ -5543,8 +5615,10 @@ export default function SessionScreen() {
           lockReady = true;
           editSaved = await commitQueueEdit(lockOwner, async () => {
             try {
+              const projectionEpochAtRequestStart =
+                remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
               const projection = await maker.input.updateContent(sessionId, editingQueueItem.clientId, updated);
-              applyProjection(projection);
+              applyProjectionIfCurrent(projection, projectionEpochAtRequestStart);
             } catch (err) {
               if (
                 isChannelNotAllowedError(err)
@@ -5558,6 +5632,8 @@ export default function SessionScreen() {
                 // RPC 之间断连)与其余失败分支对称:先还原编辑文本再抛,不许静默丢字
                 // (review P1)。
                 try {
+                  const projectionEpochAtRequestStart =
+                    remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
                   const projection = await maker.input.updateText(
                     sessionId,
                     editingQueueItem.clientId,
@@ -5565,7 +5641,7 @@ export default function SessionScreen() {
                     updated.sessionRefs,
                     updated.trustedSessionReferenceContexts,
                   );
-                  applyProjection(projection);
+                  applyProjectionIfCurrent(projection, projectionEpochAtRequestStart);
                 } catch (fallbackErr) {
                   restoreQueueEditDraftAfterFailure();
                   throw fallbackErr;
@@ -5755,6 +5831,8 @@ export default function SessionScreen() {
         // 不在 pendingQueue 里),盲重会双入队;这类歧义失败直接交给下方 catch
         // 的回滚/报错路径。BACKPRESSURE 在本地发送前或被控端 admission 拒绝
         // 执行时产生,可安全重发。被控端 enqueue 侧另有 clientId 幂等去重兜底。
+        const projectionEpochAtRequestStart =
+          remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
         let projection: InputProjection | undefined;
         for (let attempt = 0; ; attempt++) {
           try {
@@ -5769,7 +5847,11 @@ export default function SessionScreen() {
             await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));
           }
         }
-        remoteSessionStore.setInputProjection(sessionId, projection);
+        remoteSessionStore.setInputProjectionIfCurrent(
+          sessionId,
+          projection,
+          projectionEpochAtRequestStart,
+        );
       } catch (err) {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:弱网下 enqueue 的 invoke
         // 响应可能超时丢失而桌面端已入队——此时摘除气泡会让手机隐藏一条桌面将处理的
@@ -5777,9 +5859,18 @@ export default function SessionScreen() {
         // refetch 也失败再退回本地 store(订阅推送在此窗口内可能已带回该 clientId)。
         const applied = await (async () => {
           try {
+            const projectionEpochAtRequestStart =
+              remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
             const fresh = await maker.input.getProjection(sessionId);
-            remoteSessionStore.setInputProjection(sessionId, fresh);
-            return fresh.pendingQueue.some((item) => item.clientId === queued.clientId);
+            const accepted = remoteSessionStore.setInputProjectionIfCurrent(
+              sessionId,
+              fresh,
+              projectionEpochAtRequestStart,
+            );
+            // If a newer push/terminal boundary won the fence, the fetched value is
+            // stale for both the mirror and the applied decision; consult current state.
+            const current = accepted ? fresh : remoteSessionStore.getInputProjection(sessionId);
+            return current.pendingQueue.some((item) => item.clientId === queued.clientId);
           } catch {
             return remoteSessionStore.getInputProjection(sessionId).pendingQueue
               .some((item) => item.clientId === queued.clientId);
@@ -5852,8 +5943,8 @@ export default function SessionScreen() {
     sendLatestRef.current = send;
   });
 
-  const applyProjection = useCallback((projection: InputProjection) => {
-    remoteSessionStore.setInputProjection(sessionId, projection);
+  const applyProjectionIfCurrent = useCallback((projection: InputProjection, expectedEpoch: number) => {
+    remoteSessionStore.setInputProjectionIfCurrent(sessionId, projection, expectedEpoch);
   }, [sessionId]);
 
   const runQueueAction = useCallback(async (
@@ -5862,15 +5953,19 @@ export default function SessionScreen() {
     if (queueBusy) return;
     setQueueBusy(true);
     setError(null);
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
     try {
       const result = await action();
-      if (typeof result !== 'boolean') applyProjection(result);
+      if (typeof result !== 'boolean') {
+        applyProjectionIfCurrent(result, projectionEpochAtRequestStart);
+      }
     } catch (err) {
       setError(formatRemoteError(err));
     } finally {
       setQueueBusy(false);
     }
-  }, [applyProjection, queueBusy]);
+  }, [applyProjectionIfCurrent, queueBusy, sessionId]);
 
   /**
    * 乐观队列操作(remove / move 这类纯队列变换):先本地改 pendingQueue 当帧给反馈,
@@ -5890,9 +5985,13 @@ export default function SessionScreen() {
       sessionId,
       opts.optimistic(remoteSessionStore.getInputProjection(sessionId)),
     );
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
     try {
       const result = await opts.action();
-      if (typeof result !== 'boolean') applyProjection(result);
+      if (typeof result !== 'boolean') {
+        applyProjectionIfCurrent(result, projectionEpochAtRequestStart);
+      }
     } catch (err) {
       remoteSessionStore.setInputProjection(
         sessionId,
@@ -5902,7 +6001,7 @@ export default function SessionScreen() {
     } finally {
       setQueueBusy(false);
     }
-  }, [applyProjection, queueBusy, sessionId]);
+  }, [applyProjectionIfCurrent, queueBusy, sessionId]);
 
   // stop 的视觉状态派生自 run status / projection,只有往返后才变;这里补一个本地
   // pending 态让按钮当帧转圈,消除「点了没反应」的歧义。
@@ -6067,22 +6166,30 @@ export default function SessionScreen() {
         deviceId,
       );
       const accepted = await maker.input.steer(sessionId, prepared, { removeFromQueue: true, touchUserSend: true });
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
       const projection = await maker.input.getProjection(sessionId);
-      applyProjection(projection);
+      remoteSessionStore.setInputProjectionIfCurrent(
+        sessionId,
+        projection,
+        projectionEpochAtRequestStart,
+      );
       return accepted;
     });
   };
 
   const setQueueEditLock = useCallback((clientId: string, locked: boolean) => {
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
     return maker.input.setEditLock(sessionId, clientId, locked)
-      .then(applyProjection)
+      .then((projection) => applyProjectionIfCurrent(projection, projectionEpochAtRequestStart))
       .catch((err) => {
         if (queueEditingRef.current?.clientId === clientId) {
           setError(formatRemoteError(err));
         }
         throw err;
       });
-  }, [applyProjection, maker, sessionId]);
+  }, [applyProjectionIfCurrent, maker, sessionId]);
 
   const removeQueueItem = (clientId: string) => {
     const before = remoteSessionStore.getInputProjection(sessionId);
@@ -6407,8 +6514,14 @@ export default function SessionScreen() {
     try {
       const queued = buildQueuedTextMessage(sessionAtSend, prompt);
       queued.createOpts = { ...queued.createOpts, planMode: false };
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
       const projection = await maker.input.enqueue(sessionId, queued, { sendAtMs: Date.now() });
-      remoteSessionStore.setInputProjection(sessionId, projection);
+      remoteSessionStore.setInputProjectionIfCurrent(
+        sessionId,
+        projection,
+        projectionEpochAtRequestStart,
+      );
     } catch (err) {
       if (state.kind === 'error-tail') {
         setRetryHiddenTailClientId((current) => (current === state.clientId ? null : current));
@@ -6831,13 +6944,22 @@ export default function SessionScreen() {
         setContextSheetOpen(false);
         setContextSheetView('main');
         requestMessageListFollowLatest();
+        // 失败接回的恢复载荷一次性消费(独立审核者 P2):成功后清除 state 与路由
+        // 参数——否则以后清掉该 Goal 重新挂载表单,仍会用第一次失败时的旧
+        // objective/limits;路由参数未消费也会在页面重挂载时再次恢复旧值。
+        setGoalRestore(null);
+        router.setParams({
+          goalObjective: undefined,
+          goalLimits: undefined,
+          goalError: undefined,
+        });
       } catch (err) {
         setGoalError(formatRemoteError(err));
       } finally {
         setGoalBusy(false);
       }
     })();
-  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, sessionId, setComposerDraft, t]);
+  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, router, sessionId, setComposerDraft, t]);
   const handlePauseGoal = useCallback(() => {
     void runGoalAction(
       () => maker.goal.pause(sessionId),
@@ -7963,11 +8085,18 @@ export default function SessionScreen() {
               testID="session.contextSheetScreenshotsGrid"
             />
           ) : (
+            // goal 接回载荷按 sessionId 归属、渲染时同步过滤(codex review P1):
+            // key={sessionId} 重挂载发生在渲染新 sessionId 的瞬间,此时 goalRestore
+            // 仍是旧任务的残留值——新表单会先用旧 objective/limits 初始化,换代
+            // effect 在 commit 后才清空、晚于那次挂载。渲染时按 sessionId 过滤:
+            // 旧任务的值立即失效(不依赖 effect 时序),新表单从 composer 初始化。
             <ContextSheetGoalView
+              key={sessionId}
               busy={goalBusy}
               error={goalError}
               goal={goalStatus}
-              initialObjective={draft.trim() || undefined}
+              initial={goalRestoreForSession}
+              initialObjective={goalRestoreForSession ? undefined : (draft.trim() || undefined)}
               onClearGoal={handleClearGoal}
               onPauseGoal={handlePauseGoal}
               onResumeGoal={handleResumeGoal}
@@ -8098,6 +8227,11 @@ export default function SessionScreen() {
                     focusedRequestKey={focusedMessageRequestKey}
                     followLatestRequestKey={messageListFollowLatestRequestKey}
                     isSessionStreaming={isSessionStreaming}
+                    makerTurnRunning={makerTurnRunning}
+                    continuationTurnClientId={inputProjection.continuationTurnClientId}
+                    continuationInFlightProjectionCapability={
+                      inputProjection.continuationInFlightProjectionCapability
+                    }
                     items={messageListItems}
                     pendingSend={pendingSendActions}
                     loadingEarlier={loadingEarlier}

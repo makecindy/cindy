@@ -58,10 +58,11 @@ function parseArgs() {
   const arch = out.arch || process.arch;
   const outDir = out['out-dir'] || null;
   const appName = out['app-name'] || PACKAGED_APP_NAME;
-  return { platform, arch, outDir, appName };
+  const pluginStorage = args.includes('--plugin-storage');
+  return { platform, arch, outDir, appName, pluginStorage };
 }
 
-const { platform, arch, outDir, appName } = parseArgs();
+const { platform, arch, outDir, appName, pluginStorage } = parseArgs();
 
 if (!['win32', 'darwin', 'linux'].includes(platform)) {
   console.error(`[smoke] ERROR: unsupported --platform=${platform}`);
@@ -170,6 +171,7 @@ const child = spawn(
   [
     '--smoke-test',
     `--smoke-user=${SMOKE_USER}`,
+    ...(pluginStorage ? ['--smoke-plugin-storage'] : []),
     `--user-data-dir=${tmpUserData}`,
   ],
   {
@@ -252,6 +254,24 @@ child.on('exit', (code, signal) => {
       process.exit(1);
     }
   }
+  if (pluginStorage) {
+    const storage = parsed.plugin_storage || {};
+    if (storage.ownerGhostFound !== true) {
+      console.error('[smoke] FAIL: owner Plugin was not found after signed-out startup recovery');
+      cleanupUserData();
+      process.exit(1);
+    }
+    if (storage.ledgerInstalledAfterEmptySnapshot !== true) {
+      console.error('[smoke] FAIL: passive empty snapshot changed installed ledger state');
+      cleanupUserData();
+      process.exit(1);
+    }
+    if (storage.optOutAfterEmptySnapshot !== false) {
+      console.error('[smoke] FAIL: passive empty snapshot wrote a default-install opt-out');
+      cleanupUserData();
+      process.exit(1);
+    }
+  }
   if (code !== 0) {
     console.error(`[smoke] FAIL: child exit code ${code} (expected 0)`);
     cleanupUserData();
@@ -260,7 +280,8 @@ child.on('exit', (code, signal) => {
 
   console.log(
     `✅ smoke test passed: schema_version=${parsed.schema_version}, ` +
-      `sessions=${t.sessions}, messages=${t.messages}, migration_meta=${t.migration_meta}`,
+      `sessions=${t.sessions}, messages=${t.messages}, migration_meta=${t.migration_meta}` +
+      (pluginStorage ? ', plugin_storage=passed' : ''),
   );
   cleanupUserData();
   process.exit(0);

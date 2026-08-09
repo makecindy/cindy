@@ -242,6 +242,7 @@ interface UseCCAgentChatReturn {
           title: string;
           body: string;
           type: 'bug' | 'feature';
+          submissionIdentity: PendingIssueConfirm['submissionIdentity'];
           publicName?: string;
           uiLanguage: string;
         }
@@ -569,6 +570,7 @@ export function useCCAgentChat(
             title: string;
             body: string;
             type: 'bug' | 'feature';
+            submissionIdentity: PendingIssueConfirm['submissionIdentity'];
             publicName?: string;
             uiLanguage: string;
           }

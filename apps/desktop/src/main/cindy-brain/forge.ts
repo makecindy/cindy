@@ -2080,7 +2080,9 @@ cindy.onHostMessage(function (msg) {
   // 语义 = "主机停下来交给你做,做完继续":你可以在这窗口里做任何事(记账、
   // 经 network 槽过合规接口…),然后用三种动作之一收尾:
   if (msg.name === 'will-user-message') {
-    // msg.data = { sessionId, text };msg.hookId 原样带回。
+    // msg.data = { sessionId, text, model? };新 turn 时 model 是本轮已选模型 id,
+    // 同轮插话(steer)时是当前运行中 turn 的模型 id。
+    // msg.hookId 原样带回。
     if (/(内部代号|密钥)/.test(msg.data.text)) {
       // ① block:打回,不继续(reason 展示在被拦气泡上)。
       cindy.send({ type:'event-verdict', hookId: msg.hookId, action:'block', reason:'疑似包含敏感信息' });
@@ -2136,9 +2138,10 @@ cindy.onHostMessage(function (msg) {
   无弹窗**;空改写 / 改写等于原文一律被忽略;
 - **UI 全主机画**:红条、气泡都由主机绘制,你只提供 reason / text 文本,伪装不了、
   也冒充不了别的意识;
-- **钩子作用于"即将启动新 turn 的用户消息"**:运行中 turn 里的用户插话(steer)v1
-  **不经**你的钩子——拦下 = turn 压根不启动,这是钩子点的语义边界,别假设
-  能看到会话里的每一句话;
+- **钩子作用于发给 Agent 的用户消息**:即将启动新 turn 的消息和运行中 turn 里的
+  用户插话(steer)都经同一道钩子。新 turn 的 \`model\` 是本轮已选模型,steer 的
+  \`model\` 是当前运行中 turn 的模型;拦下新 turn = turn 不启动,拦下 steer = 不注入
+  当前 turn;
 - **没有绕过通道(v1)**:被拦消息用户只能编辑后重发,重发仍会经你再审。即便
   如此也别把拦截当硬性管控设计(意识是工具不是管理员):reason 要引导用户怎么
   改,而不是单纯说不;
@@ -2163,7 +2166,8 @@ AI 每轮回复完成后,主机把**全文**交给你——这是一个**通用�
 \`\`\`js
 cindy.onHostMessage(async function (msg) {
   if (msg.type !== 'event' || msg.name !== 'will-assistant-message') return;
-  // msg.data = { sessionId, text = 本轮 AI 回复全文 };msg.hookId 原样带回。
+  // msg.data = { sessionId, text = 本轮 AI 回复全文, model? };
+  // model 是生成本轮回复的模型 id;msg.hookId 原样带回。
   const polished = await cindy.fetch({ url: 'https://api.example.com/polish', method: 'POST',
                                        body: JSON.stringify({ text: msg.data.text }) });
   // ① rewrite:用改写正文替换回复(静默换文本,≤16000 字符)。

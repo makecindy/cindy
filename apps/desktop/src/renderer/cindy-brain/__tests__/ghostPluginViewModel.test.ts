@@ -249,12 +249,31 @@ describe('ghostPluginViewModel', () => {
     ]);
   });
 
-  it('treats a market null icon as an explicit presentation override', () => {
+  it('treats a server market null icon as an explicit presentation override', () => {
     const ghost = installed({ iconDataUrl: 'data:image/png;base64,OLD' });
     const presentation = marketPresentationForInstalledGhost(ghost, marketItem({ icon: null }));
 
     expect(presentation).not.toBeNull();
     expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+  });
+
+  it('uses the installed package icon for an exact Git market mapping', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const presentation = marketPresentationForInstalledGhost(
+      ghost,
+      marketItem({
+        sourceType: 'git-market',
+        sourceMarketName: 'community-plugins',
+        icon: null,
+      }),
+    );
+
+    expect(toGhostPluginListItem(ghost, presentation)).toMatchObject({
+      iconDataUrl: 'data:image/png;base64,LOCAL',
+    });
+    expect(toGhostPluginDetail(ghost, presentation)).toMatchObject({
+      iconDataUrl: 'data:image/png;base64,LOCAL',
+    });
   });
 
   it.each([

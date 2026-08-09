@@ -260,6 +260,12 @@ function interactionsByRequestId(list: readonly PendingInteraction[]): Map<strin
   return byId;
 }
 const inputProjections = new Map<string, InputProjection>();
+// Projection queries can resolve after a newer push or terminal boundary. Keep
+// a monotonic per-session authority epoch so late snapshots cannot overwrite
+// current queue / continuation state (mirrors Desktop makerChatStore).
+const inputProjectionAuthorityEpochs = new Map<string, number>();
+let nextInputProjectionAuthorityEpoch = 0;
+let inputProjectionAuthorityEpochFloor = 0;
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
 const sessionRunning = new Map<string, boolean>();
 const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
@@ -515,6 +521,19 @@ let deviceList: readonly { deviceId: string; name: string }[] | null = null;
 function emit(): void {
   storeVersion += 1;
   for (const sub of subs) sub();
+}
+
+function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
+  const epoch = ++nextInputProjectionAuthorityEpoch;
+  inputProjectionAuthorityEpochs.set(sessionId, epoch);
+  return epoch;
+}
+
+function commitInputProjection(sessionId: string, next: InputProjection): boolean {
+  if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) return false;
+  inputProjections.set(sessionId, next);
+  emit();
+  return true;
 }
 
 function recomputeSessions(): void {
@@ -1841,9 +1860,31 @@ export const remoteSessionStore = {
 
   setInputProjection(sessionId: string, projection: unknown): void {
     const next = normalizeInputProjection(projection, sessionId);
-    if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) return;
-    inputProjections.set(sessionId, next);
-    emit();
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    commitInputProjection(sessionId, next);
+  },
+
+  captureInputProjectionAuthorityEpoch(sessionId: string): number {
+    return inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
+  },
+
+  setInputProjectionIfCurrent(
+    sessionId: string,
+    projection: unknown,
+    expectedEpoch: number,
+  ): boolean {
+    const currentEpoch = inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
+    if (currentEpoch !== expectedEpoch) {
+      return false;
+    }
+    const next = normalizeInputProjection(projection, sessionId);
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    commitInputProjection(sessionId, next);
+    return true;
+  },
+
+  invalidateInputProjectionAuthority(sessionId: string): void {
+    bumpInputProjectionAuthorityEpoch(sessionId);
   },
 
   setSessionRunning(
@@ -1852,6 +1893,24 @@ export const remoteSessionStore = {
     boundaryAgentMeta?: Record<string, unknown> | null,
   ): void {
     if (!sessionId) return;
+    // A maker turn boundary supersedes any projection query that started
+    // before it. This is the terminal fence for late owner snapshots.
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    // The terminal event is also authoritative for the continuation owner. A
+    // paired projection clear push may be lost during a disconnect, so clear a
+    // known owner here instead of leaving the mobile row live until rehydrate.
+    let continuationOwnerCleared = false;
+    if (!running) {
+      const currentProjection = inputProjections.get(sessionId);
+      if (currentProjection?.continuationTurnClientId) {
+        const nextProjection: InputProjection = {
+          ...currentProjection,
+          continuationTurnClientId: null,
+        };
+        continuationOwnerCleared = !deepValueEqual(currentProjection, nextProjection);
+        if (continuationOwnerCleared) inputProjections.set(sessionId, nextProjection);
+      }
+    }
     // 本方法只被 maker 权威信号调用(done / terminal error / status-changed closed),
     // 与 maker turn 边界同步;activity / 快照流走 writeSessionRunStatus,不经过这里。
     // 边界变化必须独立参与 emit 判定:activity 流可能已把宽 run status 置 false,此时
@@ -1868,7 +1927,10 @@ export const remoteSessionStore = {
       sideTaskRunning: running ? current.sideTaskRunning : false,
       startedAt: running ? (current.startedAt ?? Date.now()) : null,
     };
-    if (writeSessionRunStatus(sessionId, next) || turnBoundaryChanged || streamingChanged) emit();
+    if (writeSessionRunStatus(sessionId, next)
+      || turnBoundaryChanged
+      || streamingChanged
+      || continuationOwnerCleared) emit();
   },
 
   captureActiveSessionSnapshotEpoch(): number {
@@ -2574,6 +2636,7 @@ export const remoteSessionStore = {
       // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
       changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
       changed = inputProjections.delete(sessionId) || changed;
+      bumpInputProjectionAuthorityEpoch(sessionId);
       changed = sessionLiveActivity.delete(sessionId) || changed;
       changed = sessionGoalStatus.delete(sessionId) || changed;
       changed = sessionTaskUpdates.delete(sessionId) || changed;
@@ -2603,6 +2666,7 @@ export const remoteSessionStore = {
         pendingInteractions.delete(sessionId);
         pendingInteractionsAuthoritative.delete(sessionId);
         inputProjections.delete(sessionId);
+        bumpInputProjectionAuthorityEpoch(sessionId);
         sessionLiveActivity.delete(sessionId);
         sessionRunning.delete(sessionId);
         sessionRunStatus.delete(sessionId);
@@ -2651,6 +2715,10 @@ export const remoteSessionStore = {
     confirmedInteractionDismissals.clear();
     interactionRevisionFloors.clear();
     inputProjections.clear();
+    inputProjectionAuthorityEpochFloor = ++nextInputProjectionAuthorityEpoch;
+    inputProjectionAuthorityEpochs.clear();
+    // Keep authority tombstones monotonic across a global store reset so an
+    // old in-flight query cannot be accepted after the session is recreated.
     sessionLiveActivity.clear();
     sessionRunning.clear();
     sessionRunStatus.clear();

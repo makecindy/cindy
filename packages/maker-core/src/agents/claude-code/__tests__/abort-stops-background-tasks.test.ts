@@ -1642,6 +1642,33 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     expect(fakeQueries).toHaveLength(2);
     expect(fakeQuery.close).toHaveBeenCalledTimes(1);
     expect(handle.listBackgroundTasks?.()).toEqual([]);
+  });
+
+  it('fresh Query does not inherit a thinking-only marker from the aborted turn', async () => {
+    const { handle, stream, events, fakeQuery, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'turn that will abort before result' });
+    stream.emit({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'still working', signature: 'sig-stale' }],
+      },
+    });
+    stream.emit(taskStarted('task-unconfirmed', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+
+    fakeQuery.stopTask!.mockRejectedValueOnce(new Error('remote stop rejected'));
+    await handle.abort();
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'synthetic foreground terminal observed');
+
+    await handle.send({ type: 'user', content: 'fresh result-only turn' });
+    expect(fakeQueries).toHaveLength(2);
+    stream.emit(turnResult(''));
+    await waitFor(() => events.filter((event) => event.type === 'done').length >= 2, 'fresh done observed');
+
+    const freshDone = events.filter((event) => event.type === 'done').at(-1);
+    expect((freshDone?.data as { silentStop?: boolean } | undefined)?.silentStop).toBeUndefined();
 
     stream.end();
     await handle.close().catch(() => undefined);

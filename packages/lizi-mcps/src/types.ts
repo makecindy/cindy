@@ -729,6 +729,8 @@ export interface AndroidMcpDeps {
   logger?: LiziMcpLogger;
 }
 
+export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
+
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
@@ -767,6 +769,10 @@ export interface LiziMcpSessionContext {
    * 模型或插件可控的工具参数。
    */
   sessionInstanceId?: string;
+  /** Host-owned caller provenance; never sourced from model tool arguments. */
+  mcpCallerKind?: LiziMcpCallerKind;
+  /** True only when the harness bridge has installed provenance enforcement. */
+  mcpCallerAttested?: boolean;
 }
 
 export interface CodexHttpMcpConfig {

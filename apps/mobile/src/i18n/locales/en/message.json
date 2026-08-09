@@ -183,7 +183,12 @@
       "neutral": "Reconnect",
       "pending": "Reconnecting…",
       "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
-      "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session"
+      "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session",
+      "detail": {
+        "reason": "Interruption reason",
+        "attempt": "Attempt {{attempt}}/{{total}}",
+        "sessionTotal": "{{count}} reconnects in this session"
+      }
     },
     "modelLabel": "Model",
     "sessionLabel": "Session",
