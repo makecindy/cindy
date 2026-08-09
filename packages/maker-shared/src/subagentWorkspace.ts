@@ -104,9 +104,17 @@ export interface SubagentRunDetail extends SubagentRun {
   returnedResultTruncated?: boolean;
 }
 
+/** Provider-scoped lookup for a Cindy run id or harness-native alias. */
+export interface SubagentRunDetailRequest {
+  sessionId: string;
+  provider: SubagentProvider;
+  runIdOrAlias: string;
+}
+
 /** Lazy transcript contract for long-lived child sessions. */
 export interface SubagentTranscriptPageRequest {
   sessionId: string;
+  provider: SubagentProvider;
   runIdOrAlias: string;
   /** Opaque provider/resolver cursor returned by the previous page. */
   cursor?: string;

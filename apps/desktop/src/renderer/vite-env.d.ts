@@ -4126,10 +4126,9 @@ interface ElectronAPI {
       list: (
         input: import('@cindy/maker-shared/subagent-workspace').SubagentRunsListRequest,
       ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunsListResponse>;
-      detail: (input: {
-        sessionId: string;
-        runId: string;
-      }) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailResponse>;
+      detail: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
+      ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailResponse>;
       onChanged: (
         callback: (
           payload: import('@cindy/maker-shared/subagent-workspace').SubagentRunsChangedPayload,

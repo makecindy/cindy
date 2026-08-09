@@ -4509,8 +4509,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       list: (input: { sessionId: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:subagent-runs:list', input),
       /** Activity and returned result for one durable Subagent record. */
-      detail: (input: { sessionId: string; runId: string }): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:subagent-runs:detail', input),
+      detail: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
+      ): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:detail', input),
       /** Small invalidation push; consumers re-read through list/detail. */
       onChanged: createIpcFanOut('local-db:subagent-runs:changed'),
     },

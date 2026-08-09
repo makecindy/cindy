@@ -3,6 +3,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import {
   SUBAGENT_RUNS_CHANGED_CHANNEL,
+  type SubagentProvider,
   type SubagentRunDetailResponse,
   type SubagentRunsChangedPayload,
   type SubagentRunsListResponse,
@@ -17,8 +18,19 @@ import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererWindow,
 } from '../../security/trustedAppRenderer.js';
-import { requireNonNegativeInt, requireObject, requireString } from '../../utils/ipcValidate.js';
+import {
+  requireEnum,
+  requireNonNegativeInt,
+  requireObject,
+  requireString,
+} from '../../utils/ipcValidate.js';
 import { getSubagentRunDetail, listSubagentRuns } from '../subagentRuns.js';
+
+const SUBAGENT_PROVIDERS = [
+  'claude-code',
+  'codex',
+  'pi',
+] as const satisfies readonly SubagentProvider[];
 
 export function broadcastSubagentRunsChanged(
   payload: SubagentRunsChangedPayload,
@@ -59,8 +71,9 @@ export function registerSubagentRunsIpc(): void {
     assertTrustedAppRendererEvent(event);
     const body = requireObject(input, 'subagent run detail input');
     const sessionId = requireString(body.sessionId, 'sessionId');
-    const runId = requireString(body.runId, 'runId');
-    const run = await getSubagentRunDetail(sessionId, runId);
+    const provider = requireEnum(body.provider, SUBAGENT_PROVIDERS, 'provider');
+    const runIdOrAlias = requireString(body.runIdOrAlias, 'runIdOrAlias');
+    const run = await getSubagentRunDetail(sessionId, provider, runIdOrAlias);
     return {
       supported: run !== undefined,
       run: run ?? null,

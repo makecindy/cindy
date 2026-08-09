@@ -43,13 +43,17 @@ describe('openSubagentsTab', () => {
   });
 
   it('opens a focused singleton and carries a harness alias to the durable view', async () => {
-    await openSubagentsTab('session-1', { focusRunId: 'native-child-1' });
+    await openSubagentsTab('session-1', {
+      focusRunId: 'native-child-1',
+      focusProvider: 'codex',
+    });
 
     expect(routeSidebarCommand).toHaveBeenCalledWith(
       {
         type: 'open-subagents-tab',
         sessionId: 'session-1',
         focusRunId: 'native-child-1',
+        focusProvider: 'codex',
         focusTab: true,
         revealSidebar: true,
       },
@@ -58,6 +62,7 @@ describe('openSubagentsTab', () => {
     expect(routeSidebarCommand).toHaveBeenCalledTimes(4);
     expect(ensureSingletonTab).toHaveBeenCalledWith('session-1', 'subagents', {
       selectedRunId: null,
+      selectedProvider: null,
     });
     expect(patchTabState).toHaveBeenCalledWith('session-1', 'subagents-new', expect.any(Function));
     expect(setActiveTab).toHaveBeenCalledWith('session-1', 'subagents-new');
@@ -82,6 +87,7 @@ describe('openSubagentsTab', () => {
         type: 'open-subagents-tab',
         sessionId: 'session-1',
         focusRunId: null,
+        focusProvider: null,
         focusTab: false,
         revealSidebar: false,
       },
@@ -89,6 +95,7 @@ describe('openSubagentsTab', () => {
     );
     expect(ensureSingletonTab).toHaveBeenCalledWith('session-1', 'subagents', {
       selectedRunId: null,
+      selectedProvider: null,
     });
     expect(setActiveTab).not.toHaveBeenCalled();
     expect(requestRightSidebarVisibility).not.toHaveBeenCalled();
@@ -100,10 +107,14 @@ describe('openSubagentsTab', () => {
     ];
     mocks.bucket.activeTabId = null;
 
-    await openSubagentsTab('session-1', { focusRunId: 'parent-tool-1' });
+    await openSubagentsTab('session-1', {
+      focusRunId: 'parent-tool-1',
+      focusProvider: 'claude-code',
+    });
 
     expect(ensureSingletonTab).toHaveBeenCalledWith('session-1', 'subagents', {
       selectedRunId: null,
+      selectedProvider: null,
     });
     expect(patchTabState).toHaveBeenCalledWith(
       'session-1',
@@ -111,7 +122,11 @@ describe('openSubagentsTab', () => {
       expect.any(Function),
     );
     const patcher = vi.mocked(patchTabState).mock.calls[0]?.[2];
-    expect(patcher?.({ kept: true })).toEqual({ kept: true, selectedRunId: 'parent-tool-1' });
+    expect(patcher?.({ kept: true })).toEqual({
+      kept: true,
+      selectedRunId: 'parent-tool-1',
+      selectedProvider: 'claude-code',
+    });
     expect(setActiveTab).toHaveBeenCalledWith('session-1', 'subagents-existing');
   });
 
@@ -120,7 +135,7 @@ describe('openSubagentsTab', () => {
       .mockResolvedValueOnce('attached')
       .mockResolvedValueOnce('routed');
 
-    await openSubagentsTab('session-1', { focusRunId: 'child-1' });
+    await openSubagentsTab('session-1', { focusRunId: 'child-1', focusProvider: 'pi' });
 
     expect(ensureSingletonTab).toHaveBeenCalledTimes(1);
     expect(patchTabState).not.toHaveBeenCalled();
@@ -134,7 +149,7 @@ describe('openSubagentsTab', () => {
       .mockResolvedValueOnce('attached')
       .mockResolvedValueOnce('routed');
 
-    await openSubagentsTab('session-1', { focusRunId: 'child-1' });
+    await openSubagentsTab('session-1', { focusRunId: 'child-1', focusProvider: 'pi' });
 
     expect(patchTabState).toHaveBeenCalledTimes(1);
     expect(setActiveTab).not.toHaveBeenCalled();
@@ -148,7 +163,7 @@ describe('openSubagentsTab', () => {
       .mockResolvedValueOnce('attached')
       .mockResolvedValueOnce('routed');
 
-    await openSubagentsTab('session-1', { focusRunId: 'child-1' });
+    await openSubagentsTab('session-1', { focusRunId: 'child-1', focusProvider: 'pi' });
 
     expect(patchTabState).toHaveBeenCalledTimes(1);
     expect(setActiveTab).toHaveBeenCalledTimes(1);

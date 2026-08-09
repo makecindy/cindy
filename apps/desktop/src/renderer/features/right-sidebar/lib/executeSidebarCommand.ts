@@ -54,7 +54,9 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
   }
   if (command.type === 'open-subagents-tab') {
     await openSubagentsTab(command.sessionId, {
-      ...(command.focusRunId ? { focusRunId: command.focusRunId } : {}),
+      ...(command.focusRunId && command.focusProvider
+        ? { focusRunId: command.focusRunId, focusProvider: command.focusProvider }
+        : {}),
       focusTab: command.focusTab !== false,
       revealSidebar: command.revealSidebar !== false,
       userInitiated: false,

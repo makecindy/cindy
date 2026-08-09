@@ -89,14 +89,14 @@ function StatusGlyph({ status, label }: { status: SubagentRun['status']; label: 
   );
 }
 
-function RunRow({ run, onOpen }: { run: SubagentRun; onOpen: (id: string) => void }) {
+function RunRow({ run, onOpen }: { run: SubagentRun; onOpen: (run: SubagentRun) => void }) {
   const { t } = useTranslation();
   const title = runTitle(run, t('rightSidebar.subagents.untitled'));
   const statusLabel = t(`chat.agentTask.status.${run.status}`);
   return (
     <button
       type="button"
-      onClick={() => onOpen(run.id)}
+      onClick={() => onOpen(run)}
       className="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
     >
       <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)]">
@@ -357,28 +357,29 @@ function ScopedSubagentsBody({
   const [detail, setDetail] = useState<SubagentRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const selectedRunAlias = state.selectedRunId ?? null;
+  const selectedProviderHint = state.selectedProvider ?? null;
   const remoteDevice = ctx.deviceLinkDeviceId !== null;
 
-  // Programmatic entrances often know the harness task/thread id or parent
-  // toolUseId before they know Cindy's durable run id. Resolve all stable
-  // aliases here so callers and future harness adapters share one entrance.
-  const selectedRunId = useMemo(() => {
+  // New focus entrances always carry the harness. Old persisted tab state may
+  // not; infer it only when the loaded page identifies one unambiguous
+  // provider. Alias-to-run resolution itself remains host-owned and scoped by
+  // (session, provider, alias), so a same-named run in another harness cannot
+  // win because it happened to update later.
+  const selectedProvider = useMemo(() => {
     if (!selectedRunAlias) return null;
-    const match = runs.find(
+    if (selectedProviderHint) return selectedProviderHint;
+    const exact = runs.find((run) => run.id === selectedRunAlias);
+    if (exact) return exact.provider;
+    const matches = runs.filter(
       (run) =>
-        run.id === selectedRunAlias ||
         run.logicalAgentId === selectedRunAlias ||
         run.parentToolUseId === selectedRunAlias ||
         run.identityAliases.includes(selectedRunAlias) ||
         run.providerRunIds.includes(selectedRunAlias),
     );
-    return match?.id ?? selectedRunAlias;
-  }, [runs, selectedRunAlias]);
-
-  useEffect(() => {
-    if (!selectedRunAlias || selectedRunId === selectedRunAlias) return;
-    ctx.patchState({ selectedRunId });
-  }, [ctx, selectedRunAlias, selectedRunId]);
+    const providers = new Set(matches.map((run) => run.provider));
+    return providers.size === 1 ? matches[0]?.provider ?? null : null;
+  }, [runs, selectedProviderHint, selectedRunAlias]);
 
   const loadRuns = useCallback(
     async (cursor?: string) => {
@@ -437,7 +438,7 @@ function ScopedSubagentsBody({
   }, [ctx.sessionId, loadRuns, visible]);
 
   useEffect(() => {
-    if (!visible || !selectedRunId || loadState === 'unsupported') {
+    if (!visible || !selectedRunAlias || !selectedProvider || loadState === 'unsupported') {
       setDetail(null);
       setDetailLoading(false);
       return;
@@ -446,10 +447,23 @@ function ScopedSubagentsBody({
     const requestOwner = getDataOwnerGeneration();
     setDetailLoading(true);
     void window.electronAPI.localDb.subagentRuns
-      .detail({ sessionId: ctx.sessionId, runId: selectedRunId })
+      .detail({
+        sessionId: ctx.sessionId,
+        provider: selectedProvider,
+        runIdOrAlias: selectedRunAlias,
+      })
       .then((response) => {
         if (disposed || !isCurrentSubagentReadOwner(requestOwner)) return;
         setDetail(response.supported ? response.run : null);
+        if (
+          response.run
+          && (response.run.id !== selectedRunAlias || response.run.provider !== selectedProviderHint)
+        ) {
+          ctx.patchState({
+            selectedRunId: response.run.id,
+            selectedProvider: response.run.provider,
+          });
+        }
       })
       .catch(() => {
         if (!disposed && isCurrentSubagentReadOwner(requestOwner)) setDetail(null);
@@ -460,7 +474,7 @@ function ScopedSubagentsBody({
     return () => {
       disposed = true;
     };
-  }, [ctx.sessionId, loadState, runs, selectedRunId, visible]);
+  }, [ctx, loadState, selectedProvider, selectedProviderHint, selectedRunAlias, visible]);
 
   const grouped = useMemo(
     () => ({
@@ -470,8 +484,17 @@ function ScopedSubagentsBody({
     [runs],
   );
 
-  const openRun = useCallback((runId: string) => ctx.patchState({ selectedRunId: runId }), [ctx]);
-  const back = useCallback(() => ctx.patchState({ selectedRunId: null }), [ctx]);
+  const openRun = useCallback(
+    (run: SubagentRun) => ctx.patchState({
+      selectedRunId: run.id,
+      selectedProvider: run.provider,
+    }),
+    [ctx],
+  );
+  const back = useCallback(
+    () => ctx.patchState({ selectedRunId: null, selectedProvider: null }),
+    [ctx],
+  );
 
   if (loadState === 'idle' || loadState === 'loading') {
     return (
@@ -487,7 +510,7 @@ function ScopedSubagentsBody({
       />
     );
   }
-  if (selectedRunId) {
+  if (selectedRunAlias) {
     return (
       <DetailView
         detail={detail}

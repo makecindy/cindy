@@ -1865,7 +1865,12 @@ function handleCollabAgentToolCall(
   });
   queue.push({
     type: 'agent_task_update',
-    data: toCodexTaskUpdate(item, isError ? 'failed' : 'completed', fullText),
+    data: toCodexTaskUpdate(
+      item,
+      isError ? 'failed' : 'completed',
+      fullText,
+      !hadToolUse,
+    ),
     source: 'codex',
   });
 }
@@ -2016,14 +2021,17 @@ function toCodexTaskUpdate(
   item: CollabAgentToolCallItem,
   status: AgentTaskStatus,
   summary?: string,
+  completedOnly = false,
 ): AgentTaskUpdateEventData {
   const isSpawn = item.tool.toLowerCase().startsWith('spawn');
-  const subagentObservation = isSpawn && status !== 'completed'
+  const subagentObservation = isSpawn && (status !== 'completed' || completedOnly)
     ? {
-        kind: status === 'running' ? 'spawn' as const : 'terminal' as const,
+        kind: status === 'running' || completedOnly ? 'spawn' as const : 'terminal' as const,
         logicalSubagentId: item.id,
         parentToolUseId: item.id,
-        ...(status === 'running' ? { providerRunIds: item.receiverThreadIds } : {}),
+        ...(status === 'running' || completedOnly
+          ? { providerRunIds: item.receiverThreadIds }
+          : {}),
       }
     : undefined;
   return {

@@ -316,8 +316,11 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   }, [sessionId, workflowTaskId]);
   const openSubagentPanel = useCallback(() => {
     if (!sessionId || !subagentFocusId) return;
-    void openSubagentsTab(sessionId, { focusRunId: subagentFocusId });
-  }, [sessionId, subagentFocusId]);
+    void openSubagentsTab(sessionId, {
+      focusRunId: subagentFocusId,
+      focusProvider: provider,
+    });
+  }, [provider, sessionId, subagentFocusId]);
   const handleHeaderClick = canOpenWorkflowPanel
     ? openWorkflowPanel
     : canOpenSubagentPanel

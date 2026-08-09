@@ -158,7 +158,7 @@ describe('durable Subagent runs', () => {
       summary: 'Found the reusable lifecycle contract',
       usage: { totalTokens: 1234, toolUses: 7, durationMs: 8000 },
     });
-    const detail = await getSubagentRunDetail('session-1', created!.runId);
+    const detail = await getSubagentRunDetail('session-1', 'pi', created!.runId);
     expect(detail?.activity.map((entry) => entry.kind)).toEqual(['started', 'completed']);
     expect(detail?.returnedResult).toBe('Durable result returned to the parent');
     expect(detail?.capabilities).toMatchObject({
@@ -168,8 +168,12 @@ describe('durable Subagent runs', () => {
       resume: false,
       steer: false,
     });
-    expect((await getSubagentRunDetail('session-1', 'parent-tool-1'))?.id).toBe(created!.runId);
-    expect((await getSubagentRunDetail('session-1', 'pi-session-1'))?.id).toBe(created!.runId);
+    expect((await getSubagentRunDetail('session-1', 'pi', 'parent-tool-1'))?.id).toBe(
+      created!.runId,
+    );
+    expect((await getSubagentRunDetail('session-1', 'pi', 'pi-session-1'))?.id).toBe(
+      created!.runId,
+    );
   });
 
   it('keeps equal native aliases from different harnesses as separate Cindy runs', async () => {
@@ -193,6 +197,13 @@ describe('durable Subagent runs', () => {
       'codex',
       'claude-code',
     ]);
+    expect(
+      (await getSubagentRunDetail('session-1', 'claude-code', 'shared-native-id'))?.id,
+    ).toBe(claude!.runId);
+    expect((await getSubagentRunDetail('session-1', 'codex', 'shared-native-id'))?.id).toBe(
+      codex!.runId,
+    );
+    expect(await getSubagentRunDetail('session-1', 'codex', claude!.runId)).toBeNull();
   });
 
   it('uses the terminal Codex summary instead of a spawn receipt as the returned result', async () => {
@@ -225,13 +236,13 @@ describe('durable Subagent runs', () => {
       },
       'codex',
     );
-    expect(await getSubagentRunDetail('session-1', spawned!.runId)).toMatchObject({
+    expect(await getSubagentRunDetail('session-1', 'codex', spawned!.runId)).toMatchObject({
       status: 'running',
       title: 'Audit auth',
       summary: 'The audit found no upstream conflict.',
     });
     expect(
-      (await getSubagentRunDetail('session-1', spawned!.runId))?.returnedResult,
+      (await getSubagentRunDetail('session-1', 'codex', spawned!.runId))?.returnedResult,
     ).toBeUndefined();
     await persistSubagentTaskUpdate(
       'session-1',
@@ -254,9 +265,79 @@ describe('durable Subagent runs', () => {
       1100,
     );
 
-    expect((await getSubagentRunDetail('session-1', spawned!.runId))?.returnedResult).toBe(
-      'The audit found no upstream conflict.',
+    expect(
+      (await getSubagentRunDetail('session-1', 'codex', spawned!.runId))?.returnedResult,
+    ).toBe('The audit found no upstream conflict.');
+  });
+
+  it('creates a completed-only Codex spawn before later progress and terminal updates', async () => {
+    // The translator reconstructs this parent tool boundary before emitting
+    // the completed-only task update.
+    insertMessage(
+      'completed-only-tool-use',
+      'tool_use',
+      '{}',
+      'completed-only-spawn',
+      900,
     );
+    const completedOnly = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'codex',
+          taskId: 'completed-only-spawn',
+          parentToolUseId: 'completed-only-spawn',
+          status: 'completed',
+          title: 'spawnAgent',
+          summary: 'Initial completed snapshot',
+          updatedAt: '1970-01-01T00:00:01.000Z',
+        },
+        { providerRunIds: ['completed-only-child'] },
+      ),
+    );
+
+    expect(completedOnly).toMatchObject({ created: true, firstForSession: true });
+    expect(await getSubagentRunDetail('session-1', 'codex', completedOnly!.runId)).toMatchObject({
+      status: 'completed',
+      summary: 'Initial completed snapshot',
+      providerRunIds: ['completed-only-child'],
+    });
+
+    const progressed = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'codex',
+          taskId: 'completed-only-spawn',
+          status: 'running',
+          usage: { totalTokens: 42 },
+          updatedAt: '1970-01-01T00:00:02.000Z',
+        },
+        { kind: 'progress', providerRunIds: ['completed-only-child'] },
+      ),
+    );
+    const terminal = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'codex',
+          taskId: 'completed-only-spawn',
+          status: 'completed',
+          summary: 'Final descendant summary',
+          updatedAt: '1970-01-01T00:00:03.000Z',
+        },
+        { kind: 'terminal', providerRunIds: ['completed-only-child'] },
+      ),
+    );
+
+    expect(progressed).toMatchObject({ runId: completedOnly!.runId, created: false });
+    expect(terminal).toMatchObject({ runId: completedOnly!.runId, created: false });
+    expect(await getSubagentRunDetail('session-1', 'codex', completedOnly!.runId)).toMatchObject({
+      status: 'completed',
+      summary: 'Final descendant summary',
+      usage: { totalTokens: 42 },
+      providerRunIds: ['completed-only-child'],
+    });
   });
 
   it('honors message rewind and clear boundaries without deleting audit rows', async () => {
@@ -297,14 +378,17 @@ describe('durable Subagent runs', () => {
     expect((await listSubagentRuns('session-1'))?.runs.map((run) => run.id)).toEqual([
       afterClear!.runId,
     ]);
-    expect(await getSubagentRunDetail('session-1', reusedParent!.runId)).toBeNull();
+    expect(
+      await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId),
+    ).toBeNull();
 
     insertMessage('tool-use-after-clear', 'tool_use', '{}', 'parent-tool-2', 2200);
     expect((await listSubagentRuns('session-1'))?.runs.map((run) => run.id)).toContain(
       reusedParent!.runId,
     );
     expect(
-      (await getSubagentRunDetail('session-1', reusedParent!.runId))?.returnedResult,
+      (await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId))
+        ?.returnedResult,
     ).toBeUndefined();
     insertMessage(
       'tool-result-after-clear',
@@ -314,7 +398,8 @@ describe('durable Subagent runs', () => {
       2300,
     );
     expect(
-      (await getSubagentRunDetail('session-1', reusedParent!.runId))?.returnedResult,
+      (await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId))
+        ?.returnedResult,
     ).toBe('new result');
 
     expect(
@@ -406,7 +491,7 @@ describe('durable Subagent runs', () => {
       ),
     ).toBeNull();
 
-    const run = await getSubagentRunDetail('session-1', spawned!.runId);
+    const run = await getSubagentRunDetail('session-1', 'codex', spawned!.runId);
     expect(run).toMatchObject({
       logicalAgentId: 'spawn-card-1',
       title: 'Audit auth',

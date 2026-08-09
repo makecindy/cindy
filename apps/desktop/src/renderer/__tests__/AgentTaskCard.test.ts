@@ -557,6 +557,7 @@ describe('AgentTaskCard', () => {
     expect(openBackgroundTasksTabMock).not.toHaveBeenCalled();
     expect(openSubagentsTabMock).toHaveBeenCalledWith('session-1', {
       focusRunId: 'task-1',
+      focusProvider: 'claude-code',
     });
     expect(progressLine(normal.container)).toBeNull();
   });

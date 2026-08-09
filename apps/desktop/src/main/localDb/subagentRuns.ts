@@ -652,12 +652,14 @@ function truncateUtf8(value: string, maxBytes: number): { value: string; truncat
 
 async function resolveDetailRow(
   sessionId: string,
+  provider: SubagentProvider,
   identifier: string,
   clearedAt: number | null,
 ): Promise<SubagentRunRow | undefined> {
   const db = getDbClient().drizzle;
   const visibility = [
     eq(subagentRuns.sessionId, sessionId),
+    eq(subagentRuns.provider, provider),
     isNull(subagentRuns.rewindAt),
     isNull(subagentRuns.deletedAt),
     ...(clearedAt !== null ? [gt(subagentRuns.startedAt, clearedAt)] : []),
@@ -676,6 +678,7 @@ async function resolveDetailRow(
     .where(
       and(
         eq(subagentRunAliases.sessionId, sessionId),
+        eq(subagentRunAliases.provider, provider),
         eq(subagentRunAliases.alias, identifier),
         ...visibility,
       ),
@@ -687,13 +690,14 @@ async function resolveDetailRow(
 
 export async function getSubagentRunDetail(
   sessionId: string,
+  provider: SubagentProvider,
   runIdOrAlias: string,
 ): Promise<SubagentRunDetail | null | undefined> {
   const session = await readableSession(sessionId);
   if (!session) return undefined;
   const normalizedIdentifier = boundedText(runIdOrAlias, TEXT_LIMITS.id);
   if (!normalizedIdentifier) return null;
-  const row = await resolveDetailRow(sessionId, normalizedIdentifier, session.clearedAt);
+  const row = await resolveDetailRow(sessionId, provider, normalizedIdentifier, session.clearedAt);
   if (!row) return null;
   if (row.parentToolUseId) {
     const visibleToolUseIds = await visibleParentToolUseIds(

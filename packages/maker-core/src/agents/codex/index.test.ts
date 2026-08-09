@@ -16940,7 +16940,16 @@ describe('CodexAgent turn lifecycle', () => {
     expect(reconstructedTaskUpdate).toMatchObject({
       type: 'agent_task_update',
       turnScope: 'background',
-      data: { taskId: 'collab-completed-only', status: 'completed' },
+      data: {
+        taskId: 'collab-completed-only',
+        status: 'completed',
+        subagentObservation: {
+          kind: 'spawn',
+          logicalSubagentId: 'collab-completed-only',
+          parentToolUseId: 'collab-completed-only',
+          providerRunIds: ['child-thread'],
+        },
+      },
     });
     expect([
       reconstructedFullResult.backgroundTurnStartedAt,

@@ -1,5 +1,7 @@
 /** Programmatic entry for the per-task durable Subagent workspace. */
 
+import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
+
 import { ensureSingletonTab, getBucket, patchTabState, setActiveTab } from '../store';
 import { routeSidebarCommand } from './detachedSidebarRouting';
 import { requestRightSidebarVisibility } from './sidebarCommands';
@@ -9,17 +11,22 @@ export async function openSubagentsTab(
   /** focusRunId accepts a Cindy run id or any stable harness/tool-call alias. */
   opts?: {
     focusRunId?: string;
+    focusProvider?: SubagentProvider;
     userInitiated?: boolean;
     focusTab?: boolean;
     revealSidebar?: boolean;
   },
 ): Promise<void> {
+  if (Boolean(opts?.focusRunId) !== Boolean(opts?.focusProvider)) {
+    throw new Error('focusRunId and focusProvider must be provided together');
+  }
   const focusTab = opts?.focusTab !== false;
   const revealSidebar = opts?.revealSidebar !== false;
   const command = {
     type: 'open-subagents-tab' as const,
     sessionId,
     focusRunId: opts?.focusRunId ?? null,
+    focusProvider: opts?.focusProvider ?? null,
     focusTab,
     revealSidebar,
   };
@@ -45,7 +52,10 @@ export async function openSubagentsTab(
     return;
   }
 
-  let tab = await ensureSingletonTab(sessionId, 'subagents', { selectedRunId: null });
+  let tab = await ensureSingletonTab(sessionId, 'subagents', {
+    selectedRunId: null,
+    selectedProvider: null,
+  });
 
   // Host ownership may change while hydrate/SQLite work is in flight. Ask
   // main again before mutating this renderer's active tab or selection; if a
@@ -55,13 +65,17 @@ export async function openSubagentsTab(
 
   let bucket = getBucket(sessionId);
   if (!bucket.tabs.some((candidate) => candidate.id === tab.id)) {
-    tab = await ensureSingletonTab(sessionId, 'subagents', { selectedRunId: null });
+    tab = await ensureSingletonTab(sessionId, 'subagents', {
+      selectedRunId: null,
+      selectedProvider: null,
+    });
     bucket = getBucket(sessionId);
   }
   if (opts?.focusRunId) {
     await patchTabState(sessionId, tab.id, (current) => ({
       ...(current && typeof current === 'object' ? (current as Record<string, unknown>) : {}),
       selectedRunId: opts.focusRunId,
+      selectedProvider: opts.focusProvider,
     }));
     if (await rerouteIfOwnershipMoved()) return;
   }

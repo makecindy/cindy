@@ -17,6 +17,9 @@ const h = vi.hoisted(() => {
     trusted,
     navigated,
     destroyed,
+    ipcHandlers: new Map<string, (event: unknown, payload: unknown) => unknown>(),
+    getSubagentRunDetail: vi.fn(),
+    listSubagentRuns: vi.fn(),
     scopeCurrent: true,
     activeStamp: { dataOwnerId: 'active-owner', ownerGeneration: 2 },
   };
@@ -26,7 +29,11 @@ vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: () => [h.trusted, h.navigated, h.destroyed],
   },
-  ipcMain: { handle: vi.fn() },
+  ipcMain: {
+    handle: vi.fn((channel: string, handler: (event: unknown, payload: unknown) => unknown) => {
+      h.ipcHandlers.set(channel, handler);
+    }),
+  },
 }));
 vi.mock('../../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => h.activeStamp,
@@ -41,13 +48,20 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
 vi.mock('../../client/current.js', () => ({
   getDbClient: vi.fn(),
 }));
+vi.mock('../../subagentRuns.js', () => ({
+  getSubagentRunDetail: h.getSubagentRunDetail,
+  listSubagentRuns: h.listSubagentRuns,
+}));
 
 import { SUBAGENT_RUNS_CHANGED_CHANNEL } from '@cindy/maker-shared/subagent-workspace';
-import { broadcastSubagentRunsChanged } from '../subagentRuns.js';
+import { broadcastSubagentRunsChanged, registerSubagentRunsIpc } from '../subagentRuns.js';
 
 describe('Subagent runs broadcast boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.ipcHandlers.clear();
+    h.getSubagentRunDetail.mockResolvedValue(null);
+    h.listSubagentRuns.mockResolvedValue({ runs: [] });
     h.scopeCurrent = true;
   });
 
@@ -103,5 +117,32 @@ describe('Subagent runs broadcast boundary', () => {
       payload,
       captured,
     );
+  });
+
+  it('validates and forwards provider-scoped detail lookups', async () => {
+    registerSubagentRunsIpc();
+    const detail = h.ipcHandlers.get('local-db:subagent-runs:detail');
+    if (!detail) throw new Error('Subagent detail handler not registered');
+
+    await expect(
+      detail({}, {
+        sessionId: 'session-1',
+        provider: 'codex',
+        runIdOrAlias: 'shared-native-id',
+      }),
+    ).resolves.toEqual({ supported: true, run: null });
+    expect(h.getSubagentRunDetail).toHaveBeenCalledWith(
+      'session-1',
+      'codex',
+      'shared-native-id',
+    );
+
+    await expect(
+      detail({}, {
+        sessionId: 'session-1',
+        provider: 'other-harness',
+        runIdOrAlias: 'shared-native-id',
+      }),
+    ).rejects.toThrow(/provider/);
   });
 });
