@@ -2,7 +2,7 @@
 // extract.mjs — cindy 登录链路「全端」QA demo 真值提取器(desk + phone + pad)。
 // 机械提取,不手抄:
 //  - desk:布局常量/缩放公式经 esbuild 编译产品 TS 后 import;颜色 token 正则解析
-//    themes/colors.ts;文案 JSON.parse 四语 common.json;协议链接/窗口最小尺寸/内联
+//    themes/colors.ts;文案 JSON.parse 五语 common.json;协议链接/窗口最小尺寸/内联
 //    SVG path 正则定位;adaptive.samples 用产品 loginScale.ts 真公式预计算(= 桌面基线
 //    docs/design-previews/login-flow-hifi/extract.mjs 同构,truth 命名空间迁入 desk.*)。
 //  - mobile(phone/pad 共用):loginSkinLayout.ts / theme/tokens.ts / loginMessages.ts
@@ -241,8 +241,8 @@ const desk = await (async () => {
   const colors = {};
   for (const [key, name] of Object.entries(colorNames)) colors[key] = tokenPair(name);
 
-  /* 四语文案:JSON.parse common.json */
-  const LANGS = ['zh-CN', 'en', 'ja', 'ko'];
+  /* 五语文案:JSON.parse common.json */
+  const LANGS = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'];
   const COPY_KEYS = [
     'title', 'subtitle', 'phonePlaceholder', 'emailPlaceholder', 'invalidEmail', 'invalidPhone',
     'working', 'continue', 'back', 'cancel', 'chooseMethod', 'orgDetected', 'enterpriseLogin',
@@ -538,8 +538,8 @@ const mobile = await (async () => {
     };
   }
 
-  /* 文案:loginMessages 4 语 catalog(demo 用到的登录键子集 + 错误码子集) */
-  const LANGS = ['zh-CN', 'en', 'ja', 'ko'];
+  /* 文案:loginMessages 5 语 catalog(demo 用到的登录键子集 + 错误码子集) */
+  const LANGS = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'];
   const COPY_KEYS = [
     // 移动侧无 skipLogin / globalRegion 文案键(前者随跳过登录入口一并移除,后者属未合入分支)
     'title', 'phonePlaceholder', 'emailPlaceholder', 'invalidEmail', 'invalidPhone', 'continue',
