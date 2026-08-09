@@ -10,6 +10,14 @@ export interface BufferedIpcFanOutOptions {
   ttlMs: number;
   /** Test seam; production callers use `Date.now`. */
   now?: () => number;
+  /** Called exactly once when an event is discarded instead of replayed. */
+  onDiscard?: (context: BufferedIpcDiscardContext) => void;
+}
+
+export interface BufferedIpcDiscardContext {
+  data: unknown;
+  ownerStamp: unknown;
+  reason: 'expired' | 'overflow' | 'reset';
 }
 
 export type BufferedIpcFanOut = ((callback: IpcCallback) => () => void) & {
@@ -36,7 +44,7 @@ export function createBufferedIpcFanOut(
   bind: (bridge: BufferedIpcBridge) => () => void,
   options: BufferedIpcFanOutOptions,
 ): BufferedIpcFanOut {
-  const { maxBufferedEvents, ttlMs, now = Date.now } = options;
+  const { maxBufferedEvents, ttlMs, now = Date.now, onDiscard } = options;
   if (!Number.isInteger(maxBufferedEvents) || maxBufferedEvents < 1) {
     throw new RangeError('maxBufferedEvents must be a positive integer');
   }
@@ -48,9 +56,25 @@ export function createBufferedIpcFanOut(
   let backlog: BufferedEvent[] = [];
   let unbind: (() => void) | null = null;
 
+  const discard = (entry: BufferedEvent, reason: BufferedIpcDiscardContext['reason']): void => {
+    try {
+      onDiscard?.({ data: entry.data, ownerStamp: entry.ownerStamp, reason });
+    } catch {
+      // A discard observer must never break buffering or subscription delivery.
+    }
+  };
+
   const pruneExpired = (currentTime: number): void => {
     const cutoff = currentTime - ttlMs;
-    backlog = backlog.filter((entry) => entry.receivedAt >= cutoff);
+    const retained: BufferedEvent[] = [];
+    for (const entry of backlog) {
+      if (entry.receivedAt >= cutoff) {
+        retained.push(entry);
+      } else {
+        discard(entry, 'expired');
+      }
+    }
+    backlog = retained;
   };
 
   const bridge: BufferedIpcBridge = (_event, data, ownerStamp) => {
@@ -63,7 +87,8 @@ export function createBufferedIpcFanOut(
     pruneExpired(receivedAt);
     backlog.push({ data, ownerStamp, receivedAt });
     if (backlog.length > maxBufferedEvents) {
-      backlog.splice(0, backlog.length - maxBufferedEvents);
+      const evicted = backlog.splice(0, backlog.length - maxBufferedEvents);
+      for (const entry of evicted) discard(entry, 'overflow');
     }
   };
 
@@ -92,7 +117,9 @@ export function createBufferedIpcFanOut(
 
   subscribe.__reset = (): void => {
     listeners.clear();
+    const resetEntries = backlog;
     backlog = [];
+    for (const entry of resetEntries) discard(entry, 'reset');
     unbind?.();
     unbind = null;
   };

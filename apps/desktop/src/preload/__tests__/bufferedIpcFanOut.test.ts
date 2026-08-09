@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBufferedIpcFanOut, type BufferedIpcBridge } from '../bufferedIpcFanOut';
+import {
+  createBufferedIpcFanOut,
+  type BufferedIpcBridge,
+  type BufferedIpcDiscardContext,
+} from '../bufferedIpcFanOut';
 
-function makeHarness(options: { maxBufferedEvents?: number; ttlMs?: number } = {}) {
+function makeHarness(
+  options: {
+    maxBufferedEvents?: number;
+    ttlMs?: number;
+    onDiscard?: (context: BufferedIpcDiscardContext) => void;
+  } = {},
+) {
   let bridge: BufferedIpcBridge | null = null;
   let now = 1_000;
   const unbind = vi.fn();
@@ -15,6 +25,7 @@ function makeHarness(options: { maxBufferedEvents?: number; ttlMs?: number } = {
       maxBufferedEvents: options.maxBufferedEvents ?? 3,
       ttlMs: options.ttlMs ?? 100,
       now: () => now,
+      onDiscard: options.onDiscard,
     },
   );
 
@@ -33,7 +44,8 @@ function makeHarness(options: { maxBufferedEvents?: number; ttlMs?: number } = {
 
 describe('createBufferedIpcFanOut', () => {
   it('buffers before the first subscriber and flushes each event exactly once', () => {
-    const { fanOut, emit } = makeHarness();
+    const discarded: BufferedIpcDiscardContext[] = [];
+    const { fanOut, emit } = makeHarness({ onDiscard: (context) => discarded.push(context) });
     const first = vi.fn();
     const second = vi.fn();
 
@@ -48,6 +60,7 @@ describe('createBufferedIpcFanOut', () => {
 
     fanOut(second);
     expect(second).not.toHaveBeenCalled();
+    expect(discarded).toEqual([]);
   });
 
   it('delivers live events to every active subscriber without buffering duplicates', () => {
@@ -65,7 +78,11 @@ describe('createBufferedIpcFanOut', () => {
   });
 
   it('keeps only the newest bounded backlog while no subscriber exists', () => {
-    const { fanOut, emit } = makeHarness({ maxBufferedEvents: 2 });
+    const discarded: BufferedIpcDiscardContext[] = [];
+    const { fanOut, emit } = makeHarness({
+      maxBufferedEvents: 2,
+      onDiscard: (context) => discarded.push(context),
+    });
     const listener = vi.fn();
     emit('oldest');
     emit('middle');
@@ -77,10 +94,15 @@ describe('createBufferedIpcFanOut', () => {
       ['middle', undefined],
       ['newest', undefined],
     ]);
+    expect(discarded).toEqual([{ data: 'oldest', ownerStamp: undefined, reason: 'overflow' }]);
   });
 
   it('drops backlog entries after their TTL instead of replaying stale OAuth URLs', () => {
-    const { fanOut, emit, advance } = makeHarness({ ttlMs: 100 });
+    const discarded: BufferedIpcDiscardContext[] = [];
+    const { fanOut, emit, advance } = makeHarness({
+      ttlMs: 100,
+      onDiscard: (context) => discarded.push(context),
+    });
     const listener = vi.fn();
     emit('expired');
     advance(101);
@@ -89,6 +111,32 @@ describe('createBufferedIpcFanOut', () => {
     fanOut(listener);
 
     expect(listener.mock.calls).toEqual([['fresh', undefined]]);
+    expect(discarded).toEqual([{ data: 'expired', ownerStamp: undefined, reason: 'expired' }]);
+  });
+
+  it('prunes expired entries on subscribe exactly once', () => {
+    const discarded: BufferedIpcDiscardContext[] = [];
+    const { fanOut, emit, advance } = makeHarness({
+      ttlMs: 100,
+      onDiscard: (context) => discarded.push(context),
+    });
+    const listener = vi.fn();
+    emit('expired');
+    advance(101);
+    fanOut(listener);
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(discarded).toEqual([{ data: 'expired', ownerStamp: undefined, reason: 'expired' }]);
+  });
+
+  it('disposes a real backlog during reset without affecting live listeners', () => {
+    const discarded: BufferedIpcDiscardContext[] = [];
+    const { fanOut, emit } = makeHarness({ onDiscard: (context) => discarded.push(context) });
+    emit('reset-me');
+
+    fanOut.__reset();
+
+    expect(discarded).toEqual([{ data: 'reset-me', ownerStamp: undefined, reason: 'reset' }]);
   });
 
   it('keeps the eager IPC binding after the last renderer subscriber leaves', () => {
