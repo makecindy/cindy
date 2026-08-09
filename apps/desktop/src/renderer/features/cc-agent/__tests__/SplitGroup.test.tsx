@@ -1206,6 +1206,43 @@ describe('SplitGroup', () => {
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
   });
 
+  it('未启用 pane drop 的单窗格目标不会吞掉 pane 拖放', async () => {
+    const view = renderSplitGroup('session-a');
+    const dropTarget = view.container.querySelector('[data-split-drop-target="single"]');
+    if (!(dropTarget instanceof HTMLElement)) throw new Error('single drop target missing');
+
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+    const dataTransfer = {
+      types: ['application/x-cindy-split-pane'],
+      dropEffect: 'none',
+      getData: () => 'session-b',
+    };
+
+    await act(async () => {
+      fireEvent.dragOver(dropTarget, {
+        clientX: 120,
+        clientY: 180,
+        dataTransfer,
+        preventDefault,
+        stopPropagation,
+      });
+      fireEvent.drop(dropTarget, {
+        clientX: 120,
+        clientY: 180,
+        dataTransfer,
+        preventDefault,
+        stopPropagation,
+      });
+      await Promise.resolve();
+    });
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(stopPropagation).not.toHaveBeenCalled();
+    expect(dropTarget.querySelector('[data-split-drop-side]')).toBeNull();
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root)).toHaveLength(0);
+  });
+
   it('关闭分支后提升 sibling 时保留其它 pane 的已挂载视图', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');

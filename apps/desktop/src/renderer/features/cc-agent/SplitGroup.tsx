@@ -981,6 +981,10 @@ function SplitDropTarget({
     const isPaneDrag = hasSplitGroupPaneType(event.dataTransfer.types);
     const isSessionDrag = hasSplitGroupSessionType(event.dataTransfer.types);
     if (!isPaneDrag && !isSessionDrag) return;
+    if (isPaneDrag && !onPaneDropped) {
+      setDropSide(null);
+      return;
+    }
     if (isSessionDrag && isSplitGroupComposerDropTarget(event.target)) {
       setDropSide(null);
       return;
@@ -994,7 +998,7 @@ function SplitDropTarget({
       event.clientY,
     );
     setDropSide((currentSide) => (currentSide === nextSide ? currentSide : nextSide));
-  }, []);
+  }, [onPaneDropped]);
 
   const handleDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
@@ -1006,6 +1010,10 @@ function SplitDropTarget({
       const isPaneDrag = hasSplitGroupPaneType(event.dataTransfer.types);
       const isSessionDrag = hasSplitGroupSessionType(event.dataTransfer.types);
       if (!isPaneDrag && !isSessionDrag) return;
+      if (isPaneDrag && !onPaneDropped) {
+        setDropSide(null);
+        return;
+      }
       if (isSessionDrag && isSplitGroupComposerDropTarget(event.target)) {
         setDropSide(null);
         return;
