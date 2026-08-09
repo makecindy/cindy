@@ -131,6 +131,7 @@
       "terminalShell": "默认终端 shell",
       "composer": "消息输入",
       "linkOpen": "链接打开方式",
+      "streamFade": "流式动效",
       "compatMode": "小技巧",
       "voiceInput": "语音输入",
       "import": "任务导入",
@@ -2295,6 +2296,12 @@
         "sidebar": "内置侧边栏浏览器",
         "external": "系统默认浏览器"
       }
+    },
+    "streamFade": {
+      "title": "流式动效",
+      "label": "输出文字淡入浮现",
+      "hint": "回复流式输出时，新文字逐词淡入浮现；开启后生效，关闭时内容直接显示。系统开启「减弱动态效果」时此动效始终关闭。",
+      "toggleAria": "开启或关闭流式输出淡入动效"
     },
     "personalization": {
       "title": "个性化",

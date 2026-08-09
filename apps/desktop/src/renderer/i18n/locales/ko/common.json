@@ -131,6 +131,7 @@
       "terminalShell": "기본 터미널 셸",
       "composer": "메시지 입력",
       "linkOpen": "링크 열기 방식",
+      "streamFade": "스트리밍 모션",
       "compatMode": "팁",
       "voiceInput": "음성 입력",
       "import": "세션 가져오기",
@@ -2330,6 +2331,12 @@
         "sidebar": "내장 사이드바 브라우저",
         "external": "시스템 기본 브라우저"
       }
+    },
+    "streamFade": {
+      "title": "스트리밍 모션",
+      "label": "출력 텍스트 페이드 인",
+      "hint": "답변이 스트리밍되는 동안 새 텍스트가 단어 단위로 차례로 페이드 인됩니다. 켜면 효과가 적용되고, 끄면 내용이 즉시 표시됩니다. 시스템의 동작 줄이기 설정이 켜져 있으면 항상 꺼집니다.",
+      "toggleAria": "스트리밍 페이드 인 모션 전환"
     },
     "chatEmbedding": {
       "cell": {

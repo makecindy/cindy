@@ -131,6 +131,7 @@
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
       "linkOpen": "Link open behavior",
+      "streamFade": "Streaming motion",
       "compatMode": "Tips",
       "voiceInput": "Voice input",
       "import": "Session Import",
@@ -2331,6 +2332,12 @@
         "sidebar": "Sidebar browser",
         "external": "System browser"
       }
+    },
+    "streamFade": {
+      "title": "Streaming motion",
+      "label": "Fade in streamed text",
+      "hint": "While a reply streams, new words fade in one after another. Turn on to enable the effect; content shows instantly when off. Always off when the system reduce-motion setting is on.",
+      "toggleAria": "Toggle streaming fade-in motion"
     },
     "chatEmbedding": {
       "cell": {

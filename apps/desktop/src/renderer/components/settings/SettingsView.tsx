@@ -28,6 +28,7 @@ import { MemorySection } from './MemorySection';
 import { CompactionSection } from './CompactionSection';
 import { TerminalShellSection } from './TerminalShellSection';
 import { LinkOpenSection } from './LinkOpenSection';
+import { StreamFadeSection } from './StreamFadeSection';
 import { TipsSection } from './TipsSection';
 import { ExperimentalSection } from './ExperimentalSection';
 import { GitSafetySection } from './GitSafetySection';
@@ -396,6 +397,10 @@ export function SettingsView() {
                 {/* 消息流链接/HTML 文件左键的默认打开位置(内置侧边栏 / 系统浏览器) */}
                 <section className="pb-[18px]" aria-label={t('settings.sections.linkOpen')}>
                   <LinkOpenSection />
+                </section>
+                {/* 流式输出淡入动效开关(默认开;reduced-motion 时无条件关) */}
+                <section className="pb-[18px]" aria-label={t('settings.sections.streamFade')}>
+                  <StreamFadeSection />
                 </section>
                 {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
                     (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,

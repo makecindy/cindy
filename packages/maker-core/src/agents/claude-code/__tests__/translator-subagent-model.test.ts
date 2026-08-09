@@ -56,6 +56,126 @@ async function collect(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): 
   return events;
 }
 
+describe('Claude Code assistant text streaming contract', () => {
+  it('emits live deltas before the final assistant text block', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    for (const [uuid, text] of [
+      ['stream-1', 'Hello '],
+      ['stream-2', 'world'],
+    ] as const) {
+      translateSdkMessage(
+        {
+          type: 'stream_event',
+          uuid,
+          session_id: 'sdk-session',
+          parent_tool_use_id: null,
+          event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
+        },
+        queue,
+        ctx,
+      );
+    }
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'assistant-final',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        message: {
+          model: 'claude-opus-4-6',
+          content: [{ type: 'text', text: 'Hello world' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const textEvents = (await collect(queue)).filter((event) => event.type === 'text');
+    expect(textEvents).toEqual([
+      expect.objectContaining({
+        type: 'text',
+        data: { text: 'Hello ', isFinal: false },
+        source: 'claude-code',
+      }),
+      expect.objectContaining({
+        type: 'text',
+        data: { text: 'world', isFinal: false },
+        source: 'claude-code',
+      }),
+      expect.objectContaining({
+        type: 'text',
+        data: { text: 'Hello world', isFinal: true },
+        source: 'claude-code',
+      }),
+    ]);
+    expect(textEvents[2]?.data).not.toHaveProperty('isFullText');
+  });
+
+  it('keeps multiple final text blocks marked as local blocks rather than full-message replacements', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'assistant-multi-block',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        message: {
+          model: 'claude-opus-4-6',
+          content: [
+            { type: 'text', text: 'first' },
+            { type: 'text', text: 'second' },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const textEvents = (await collect(queue)).filter((event) => event.type === 'text');
+    expect(textEvents.map((event) => event.data)).toEqual([
+      { text: 'first', isFinal: true },
+      { text: 'second', isFinal: true },
+    ]);
+  });
+
+  it('keeps a result fallback tail unmarked so it cannot replace accumulated streaming text', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        uuid: 'stream-prefix',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello ' } },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        result: 'Hello world',
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      queue,
+      ctx,
+    );
+
+    const textEvents = (await collect(queue)).filter((event) => event.type === 'text');
+    expect(textEvents.map((event) => event.data)).toEqual([
+      { text: 'Hello ', isFinal: false },
+      { text: 'world', isFinal: false },
+    ]);
+  });
+});
+
 describe('Claude Code translator subagent model attribution', () => {
   it('keeps two concurrent subagent stream models isolated from the parent agent', async () => {
     const queue = createAsyncQueue<AgentEvent>();

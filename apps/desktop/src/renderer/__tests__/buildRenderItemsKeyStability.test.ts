@@ -327,7 +327,7 @@ describe('buildRenderItems — key stability', () => {
     expect(items.indexOf(cards[0])).toBeGreaterThan(items.findIndex((item) => item.key === 'msg-a1'));
   });
 
-  it('hides zero-file cards without change evidence but keeps evidence-bearing ones', () => {
+  it('hides all zero-file change cards because they have no reviewable content', () => {
     const base: TurnChangeSetSummary = {
       id: 'cs-base',
       sessionId: 's1',
@@ -346,13 +346,11 @@ describe('buildRenderItems — key stability', () => {
       additions: 0,
       deletions: 0,
     };
-    // Only "we might not have seen everything" reasons: review pane would be empty.
-    const noEvidence: TurnChangeSetSummary = {
+    const opaque: TurnChangeSetSummary = {
       ...base,
       id: 'cs-noise',
       incompleteReasons: ['opaque-tool', 'turn-failed', 'concurrent-workspace'],
     };
-    // Proof that real changes existed but were not recorded: card must stay.
     const truncated: TurnChangeSetSummary = {
       ...base,
       id: 'cs-too-large',
@@ -360,8 +358,6 @@ describe('buildRenderItems — key stability', () => {
       createdAt: 3,
       completedAt: 4,
     };
-    // The store only records 'outside-workspace' for suspicious captures (symlink
-    // escapes, fail-closed provider diff blocks) — that evidence must stay visible.
     const escaped: TurnChangeSetSummary = {
       ...base,
       id: 'cs-escape',
@@ -374,12 +370,12 @@ describe('buildRenderItems — key stability', () => {
       [mkUser('u1'), mkAssistant('a1'), mkUser('u2')],
       undefined,
       undefined,
-      { turnChangeSets: [noEvidence, truncated, escaped] },
+      { turnChangeSets: [opaque, truncated, escaped] },
     );
     const cards = items.filter(
       (item): item is Extract<RenderItem, { type: 'turn_changes' }> => item.type === 'turn_changes',
     );
-    expect(cards.map((card) => card.changeSet.id)).toEqual(['cs-too-large', 'cs-escape']);
+    expect(cards).toEqual([]);
   });
 
   it('keeps opaque command artifacts as fallback chips without duplicating exact files', () => {

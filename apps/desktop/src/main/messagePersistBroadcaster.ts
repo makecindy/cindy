@@ -1303,18 +1303,26 @@ export function resetTurnPersistState(sessionId: string): void {
  */
 export function onAssistantTextEvent(
   sessionId: string,
-  data: { text?: unknown; isFinal?: unknown },
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown },
   agentMeta: AgentMeta | null,
 ): string | undefined {
   const text = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
+  const isFullText = data.isFullText === true;
 
   if (isFinal) {
     const block = assistantBlocks.get(sessionId);
     if (block) {
-      // 流式确认:不落库,留给边界 flush。delta 已累积全文,isFinal.text 是冗余确认;
-      // 仅当 isFinal 带了更全的文本时兜底覆盖。meta 若带则更新。
-      if (text.length > block.text.length) block.text = text;
+      // 流式确认:不落库,留给边界 flush。显式 isFullText 表示 SDK 权威全文；
+      // Claude Code 的 local text block 没有该标记，但在 text_delta 丢失时仍可能携带
+      // 已完整的、更长前缀文本。只接受以当前增量为前缀的更长文本，避免同一 assistant
+      // 消息中相邻 text block 互相覆盖。
+      if (
+        isFullText ||
+        (text.length > block.text.length && text.startsWith(block.text))
+      ) {
+        block.text = text;
+      }
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
     }

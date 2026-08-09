@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type AnimationEvent as ReactAnimationEvent, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -32,6 +32,14 @@ import remarkPreserveRawLocalDestinations, {
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
+import {
+  createWordFadeState,
+  markSettledFromAnimationEnd,
+  rehypeStreamWordFade,
+} from './rehypeStreamWordFade';
+import { repairStreamingMarkdown } from './repairStreamingMarkdown';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
@@ -870,6 +878,7 @@ function LightboxImage({
           <DropdownMenuTrigger asChild>
             <span
               aria-hidden
+              data-fixed-menu-anchor
               style={{
                 position: 'fixed',
                 left: menuPos?.x ?? 0,
@@ -1621,14 +1630,48 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
+  // 流式逐词淡入(rehypeStreamWordFade,§14.4 第五个 sanctioned motion class):
+  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。state 按渲染器
+  // 实例持有(useMemo 键 isStreaming):流式期间跨 parse tick 记住每个词的 delay
+  // 保证不重播;根节点监听冒泡的 animationend 把播完的词落袋(settled),下一次
+  // parse 直接还原纯文本 —— 结构性 remount 也无从重播(双保险,详见插件头注释)。
+  // isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS —— 终版渲染无
+  // 任何 span 包装,插件、state 与监听一起被回收,静态路径零开销。
+  // 用户开关(Settings → 个性化 → 流式动效,默认关)与 reduced-motion 取 AND:
+  // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
+  const reducedMotion = useReducedMotion();
+  const streamFadeEnabled = useStreamFadeEnabled();
+  const streamFade = isStreaming && !reducedMotion && streamFadeEnabled;
+  const wordFade = useMemo(() => {
+    if (!streamFade) return null;
+    const state = createWordFadeState();
+    return {
+      state,
+      plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, state]] as PluggableList,
+    };
+  }, [streamFade]);
+  const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
+  const handleWordFadeAnimationEnd = useMemo(() => {
+    if (!wordFade) return undefined;
+    return (event: ReactAnimationEvent<HTMLDivElement>) =>
+      markSettledFromAnimationEnd(wordFade.state, event.nativeEvent);
+  }, [wordFade]);
   // LaTeX 定界符归一化(`\(...\)` / `\[...\]` → `$...$` / `$$...$$`)。
   // emitSourceLines(TextLightbox 行锚点 doc 模式,依赖 data-source-line 与
   // 源文件行号一致)时走保行数模式:单行 inline 照常转换(同行替换不改行
   // 号),会插行的 display 保持源码展示。无定界符时函数原样返回原引用,
   // useMemo + react-markdown 缓存不失效。
+  // 流式 markdown 临时修复(未闭合围栏 / 强调符补齐、半截图片/链接降级文本):
+  // 减少半个语法符号引起的结构翻转与样式跳变。跟随 streamFade 总开关(而不是
+  // 只看 isStreaming):它是淡入动效的配套层(消除触发重淡的结构翻转源头),
+  // 用户关闭流式动效后应回到与改动前完全一致的原始渲染路径;终版渲染恒用原文。
+  const repairedContent = useMemo(
+    () => (streamFade ? repairStreamingMarkdown(throttledContent) : throttledContent),
+    [throttledContent, streamFade],
+  );
   const renderedContent = useMemo(
-    () => normalizeMathDelimiters(throttledContent, { preserveLineCount: emitSourceLines }),
-    [throttledContent, emitSourceLines],
+    () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
+    [repairedContent, emitSourceLines],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
@@ -1822,10 +1865,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   );
 
   return (
-    <div className="msg-markdown select-text">
+    <div className="msg-markdown select-text" onAnimationEnd={handleWordFadeAnimationEnd}>
       <ReactMarkdown
         remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={components}
         urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
         skipHtml

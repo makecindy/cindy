@@ -1242,6 +1242,114 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
   });
 });
 
+describe('streamed assistant final calibration', () => {
+  it('persists the authoritative final text even when it is shorter than accumulated deltas', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello worxderful', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello wonderful', isFinal: true, isFullText: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'assistant',
+        content: 'Hello wonderful',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('drops stale streamed deltas when the authoritative final text is empty', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: '撤回前的流式内容', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: '', isFinal: true, isFullText: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a shorter unmarked isFinal tail as a complete replacement', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello ', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'world', isFinal: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ content: 'Hello ' }),
+      broadcastGuard(),
+    );
+  });
+
+  it('accepts a longer unmarked final prefix when Claude deltas missed the tail', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello ', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello world', isFinal: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ clientId: persistId, content: 'Hello world' }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not replace a streamed block with a longer unrelated local text block', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'first', isFinal: false },
+      null,
+    );
+    onAssistantTextEvent(SESSION, { text: 'second block', isFinal: true }, null);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ clientId: persistId, content: 'first' }),
+      broadcastGuard(),
+    );
+  });
+});
+
 describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追踪)', () => {
   it('流式 block 经边界 flush 落库后能取到其 persistId,取后即清', () => {
     const persistId = onAssistantTextEvent(SESSION, { text: 'hello', isFinal: false }, null);
