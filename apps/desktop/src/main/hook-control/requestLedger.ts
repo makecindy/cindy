@@ -26,13 +26,14 @@ const MAX_ENTRY_BYTES = 8_000_000;
 /** Bound synchronous read/write work on Electron's main thread. */
 const DEFAULT_MAX_FILE_BYTES = 32_000_000;
 /**
- * How long an undelivered answer stays worth delivering (≈24h).
+ * How long a completed answer stays worth delivering (≈24h).
  *
- * Each record plays two roles, and only one of them should expire:
+ * Each terminal result plays two roles, and only one of them should expire:
  *  - tombstone (`get`): "this request was already answered, do not invoke the
  *    agent again". Worth keeping as long as capacity allows.
- *  - outbox item (`listPending`): "this answer still needs a transport
- *    attempt". Worth keeping only while sending it is still useful.
+ *  - outbox item (`listPending`, plus the dispatcher's in-memory queues): "this
+ *    answer still needs a transport attempt". Worth keeping only while sending
+ *    it is still useful.
  *
  * Binding the two together is what lets an outbox item become immortal: a
  * connection that never comes back (unbound account, deleted bot, replaced
@@ -44,8 +45,31 @@ const DEFAULT_MAX_FILE_BYTES = 32_000_000;
  * The horizon matches x-hook-server's reply horizon (OUTBOX_MAX_ATTEMPTS ×
  * OUTBOX_MAX_DELAY_MS): the server already gives up on publishing a reply this
  * old, so a client that reconnects later has nothing useful left to hand over.
+ *
+ * INVARIANT: the horizon must hold at *every* exit that pushes a terminal frame
+ * on our own initiative — the durable outbox here, the dispatcher's ACK retry
+ * timer, and its offline `turn.end` buffer. Guarding only the durable one makes
+ * the behaviour depend on whether the process happened to restart during the
+ * outage. Serving an explicit server re-dispatch is *not* one of those exits:
+ * there the server is asking, and it owns its own staleness policy.
  */
-const DEFAULT_PENDING_TTL_MS = 24 * 60 * 60_000;
+export const HOOK_TERMINAL_DELIVERY_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * The single age predicate behind that invariant. Exported so the dispatcher's
+ * in-memory queues judge staleness exactly like the durable outbox does.
+ *
+ * A clock that moved backwards yields a negative age and keeps the result live,
+ * which is the safe direction (delivering late beats discarding an answer that
+ * is actually fresh).
+ */
+export function terminalDeliveryExpired(
+  completedAt: number,
+  nowMs: number,
+  ttlMs: number = HOOK_TERMINAL_DELIVERY_TTL_MS,
+): boolean {
+  return nowMs - completedAt > ttlMs;
+}
 
 export interface HookTerminalRecord {
   connectionId: string;
@@ -153,18 +177,19 @@ export function createHookRequestLedger(deps: {
 }): HookRequestLedger {
   const maxEntries = Math.max(1, Math.floor(deps.maxEntries ?? DEFAULT_MAX_ENTRIES));
   const maxFileBytes = Math.max(1_024, Math.floor(deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES));
-  const pendingTtlMs = Math.max(0, Math.floor(deps.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS));
+  const pendingTtlMs = Math.max(0, Math.floor(deps.pendingTtlMs ?? HOOK_TERMINAL_DELIVERY_TTL_MS));
   const now = deps.now ?? Date.now;
   let cachedEntries: HookTerminalRecord[] | undefined;
 
   /**
    * A `pending` entry past the horizon is no longer an outbox item: nothing will
-   * be delivered from it. A clock that moved backwards yields a negative age and
-   * keeps the entry live, which is the safe direction (delivering late beats
-   * discarding an answer that is actually fresh).
+   * be delivered from it.
    */
   function pendingExpired(entry: HookTerminalRecord, nowMs: number): boolean {
-    return entry.delivery === 'pending' && nowMs - entry.completedAt > pendingTtlMs;
+    return (
+      entry.delivery === 'pending' &&
+      terminalDeliveryExpired(entry.completedAt, nowMs, pendingTtlMs)
+    );
   }
 
   /**

@@ -67,6 +67,7 @@ import { isPathWithin } from './paths.js';
 import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
+import { terminalDeliveryExpired } from './requestLedger.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
 
 /** 会话执行器抽象 —— 生产实现 session-runner.ts(包 maker), 测试注入假的。 */
@@ -572,6 +573,12 @@ interface PendingTask {
 interface PendingTurnEnd {
   message: HookTurnEndMessage;
   terminal: Omit<HookTerminalRecord, 'completedAt' | 'delivery'>;
+  /**
+   * 与账本行同一个时间戳 —— 这条缓冲项是「我方主动补发」的出箱项, 同样受投递
+   * 时效约束(见 HOOK_TERMINAL_DELIVERY_TTL_MS 的不变量)。缺了它, 守卫就只对
+   * 落盘那份生效, 行为取决于断线期间进程有没有重启过。
+   */
+  completedAt: number;
 }
 
 /** 一条等待续跑的失败任务(见 pendingReopens)。 */
@@ -703,6 +710,23 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       message: HookTurnEndMessage;
       attempts: number;
       timer: ReturnType<typeof setTimeout> | null;
+      /** 这份结果算完的时刻(与账本行同一个数)。 */
+      completedAt: number;
+      /**
+       * 这条缓冲项是**谁的主动**——投递时效只约束我方主动推送的那一半。
+       *
+       * - `local`: 我方算完后自己排的队。退避重发没有次数上限(只有延迟上限),
+       *   所以时效是它唯一的收口条件, 否则长期不重启 + 长期断连的进程会一直重发
+       *   隔日回复。
+       * - `server-request`: 为应答 server 显式重投同一个 requestId 而排的队。既然
+       *   决定应答这次索取, 就要答完整 —— 包含 ACK 握手的重发; 半途停手会让 server
+       *   既拿不到终态也拿不到拒绝。入口时效归它自己管(X 侧见 x-hook-server 的
+       *   onMention 陈旧守卫)。
+       *
+       * 刻意不拿 `completedAt` 或 `attempts` 反推这件事: 用一个字段表达两件事正是
+       * 本 PR 在修的那个毛病。
+       */
+      origin: 'local' | 'server-request';
     }
   >();
   /** 正在执行 turn 的 session(本模块发起的)。 */
@@ -930,8 +954,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
   }
 
-  function persistTerminal(record: Omit<HookTerminalRecord, 'completedAt'>): boolean {
-    return persistTerminalRecord({ ...record, completedAt: Date.now() });
+  function persistTerminal(
+    record: Omit<HookTerminalRecord, 'completedAt'>,
+    completedAt: number = Date.now(),
+  ): boolean {
+    return persistTerminalRecord({ ...record, completedAt });
   }
 
   function markTerminalSent(connectionId: string, requestId: string): boolean {
@@ -990,6 +1017,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (pendingDeliveryTurnEnds.get(key) !== pending) return;
     if (pending.timer) clearTimeout(pending.timer);
     pending.timer = null;
+    // 我方主动排的队(origin='local')受投递时效收口 —— 退避重发只有延迟上限、没有
+    // 次数上限, 时效是唯一的终止条件。应答 server 显式重投的那些(server-request)
+    // 不受约束: 决定应答就要答完整, 半途停手会让它既拿不到终态也拿不到拒绝。
+    if (pending.origin === 'local' && terminalDeliveryExpired(pending.completedAt, Date.now())) {
+      log.warn(
+        `turn.end ACK retry abandoned (past delivery horizon): ${pending.message.payload.requestId}`,
+      );
+      pendingDeliveryTurnEnds.delete(key);
+      return;
+    }
     const send = sendOverride ?? sendFns.get(pending.connectionId);
     if (!send || !send(pending.message)) return;
     pending.attempts += 1;
@@ -1009,14 +1046,19 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     pending.timer = timer;
   }
 
-  function trackPendingDelivery(connectionId: string, msg: HookTurnEndMessage): void {
+  function trackPendingDelivery(
+    connectionId: string,
+    msg: HookTurnEndMessage,
+    completedAt: number,
+    origin: 'local' | 'server-request',
+  ): void {
     const key = ackKey(connectionId, msg.payload.requestId);
     const existing = pendingDeliveryTurnEnds.get(key);
     if (existing !== undefined) {
       sendPendingDelivery(key, existing);
       return;
     }
-    const pending = { connectionId, message: msg, attempts: 0, timer: null };
+    const pending = { connectionId, message: msg, attempts: 0, timer: null, completedAt, origin };
     pendingDeliveryTurnEnds.set(key, pending);
     enforcePendingDeliveryLimit(connectionId);
     if (pendingDeliveryTurnEnds.get(key) === pending) sendPendingDelivery(key, pending);
@@ -1027,27 +1069,30 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     message: HookTurnEndMessage,
     terminal: Omit<HookTerminalRecord, 'completedAt' | 'delivery'>,
   ): void {
-    const durable = persistTerminal({ ...terminal, delivery: 'pending' });
+    // 一次取时, 账本行与两条内存队列共用同一个 completedAt —— 三个出口据以判定
+    // 时效的年龄必须是同一个数, 否则「同一份结果」在不同出口有不同寿命。
+    const completedAt = Date.now();
+    const durable = persistTerminal({ ...terminal, delivery: 'pending' }, completedAt);
     if (supportsDeliveryAck(connectionId)) {
       // ACK 模式: 会话内重发由 pendingDeliveryTurnEnds 负责; 账本保持 pending,
       // 收到任一 turn.delivery 回执才收口为 sent(见 handleTurnDelivery), 跨重启
       // 由账本补发兜底「accepted 前进程崩溃」的窗口。
-      trackPendingDelivery(connectionId, message);
+      trackPendingDelivery(connectionId, message, completedAt, 'local');
       return;
     }
     const send = sendFns.get(connectionId);
     if (send && send(message)) {
       if (durable) {
         if (!markTerminalSent(terminal.connectionId, terminal.requestId)) {
-          persistTerminal({ ...terminal, delivery: 'sent' });
+          persistTerminal({ ...terminal, delivery: 'sent' }, completedAt);
         }
       } else {
-        persistTerminal({ ...terminal, delivery: 'sent' });
+        persistTerminal({ ...terminal, delivery: 'sent' }, completedAt);
       }
       return;
     }
     const buf = pendingTurnEnds.get(connectionId) ?? [];
-    buf.push({ message, terminal });
+    buf.push({ message, terminal, completedAt });
     if (buf.length > MAX_PENDING_TURN_ENDS) buf.shift();
     pendingTurnEnds.set(connectionId, buf);
     log.warn(`turn.end buffered (connection offline): ${connectionId}`);
@@ -1519,7 +1564,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 表情换终态。连接断了也要**调**一次 —— 传一个必然失败的发送器, 让
     // ackReactions 把它记进待补发队列; 直接跳过的话那条消息会永远挂着 👀,
     // 而重连补发拿不到任何东西可补。
-    ackReactions.onFinished(ackTaskOf(task), status, sendFns.get(task.connectionId) ?? OFFLINE_SEND);
+    ackReactions.onFinished(
+      ackTaskOf(task),
+      status,
+      sendFns.get(task.connectionId) ?? OFFLINE_SEND,
+    );
     running.delete(sessionId);
     // 失败收口 -> 记一笔"等着被续跑"。只有 error 记: cancelled 是用户按了停止,
     // ok 没什么可续的。用户之后在桌面端点「重试」时, 这一轮的进展与结果就能接回
@@ -2043,6 +2092,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // gap without invoking the runner again. The server owns requestId
     // idempotency, so replaying a persisted terminal frame is safe even when
     // the local transport had already accepted an earlier attempt.
+    //
+    // 这条路径**刻意不套投递时效**(HOOK_TERMINAL_DELIVERY_TTL_MS): 时效约束的是
+    // 「我方主动推送」的出口(ACK 重试、离线缓冲、持久出箱), 而这里是 server 显式
+    // 重投同一个 requestId —— 它在索取这份结果, 且入口时效是它自己的策略(X 侧见
+    // x-hook-server 的 onMention 陈旧守卫)。在这里回绝会让它拿不到终态、继续重投,
+    // 我们却既不给答案也不给拒绝。所以入 ACK 缓冲时标 origin='server-request',
+    // 连 ACK 握手的重发一起豁免 —— 决定应答就答完整, 半途停手等于半个答案。
     const rKey = ackKey(connectionId, payload.requestId);
     let terminalReplay: HookTerminalRecord | null = null;
     try {
@@ -2061,7 +2117,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (terminalReplay.delivery === 'sent') {
           persistTerminalRecord({ ...terminalReplay, delivery: 'pending' });
         }
-        trackPendingDelivery(connectionId, makeTurnEnd(terminalReplay.turnEnd));
+        trackPendingDelivery(
+          connectionId,
+          makeTurnEnd(terminalReplay.turnEnd),
+          terminalReplay.completedAt,
+          'server-request',
+        );
         return;
       }
       if (!ackDelivered) {
@@ -2566,16 +2627,27 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         // 新 server 转入 ACK 缓冲重放, 老 server 沿用 fire-and-forget。
         while (buf.length > 0) {
           const pending = buf[0];
+          // 与持久出箱同一条时效判据: 过线的结果不再主动补发。少了这一条, 一个
+          // 长期不重启的进程会在重连瞬间把隔日回复一起吐出去 —— 而重启过的进程
+          // 不会, 同一件事有两种行为。
+          if (terminalDeliveryExpired(pending.completedAt, Date.now())) {
+            log.warn(
+              `buffered turn.end dropped (past delivery horizon): ${pending.terminal.requestId}`,
+            );
+            buf.shift();
+            flushedRequestIds.add(pending.terminal.requestId);
+            continue;
+          }
           if (deliveryAck) {
             // 账本保持 pending, 收到 turn.delivery 回执才收口(见 handleTurnDelivery)。
-            trackPendingDelivery(connectionId, pending.message);
+            trackPendingDelivery(connectionId, pending.message, pending.completedAt, 'local');
           } else {
             if (!send(pending.message)) return;
             if (!markTerminalSent(connectionId, pending.terminal.requestId)) {
               persistTerminalRecord({
                 ...pending.terminal,
                 delivery: 'sent',
-                completedAt: Date.now(),
+                completedAt: pending.completedAt,
               });
             }
           }
@@ -2599,7 +2671,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (deliveryAck) {
           // 已在 ACK 缓冲中的条目由本函数开头的循环重放, 不再用文本帧重复补发。
           if (pendingDeliveryTurnEnds.has(ackKey(connectionId, pending.requestId))) continue;
-          trackPendingDelivery(connectionId, makeTurnEnd(pending.turnEnd));
+          trackPendingDelivery(
+            connectionId,
+            makeTurnEnd(pending.turnEnd),
+            pending.completedAt,
+            'local',
+          );
           continue;
         }
         if (!send(makeTurnEnd(pending.turnEnd))) return;

@@ -2417,6 +2417,71 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
+  it('ACK 退避重发超过投递时效后放弃，不再无限重发隔日结果', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const warnings: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log: { info: () => {}, warn: (message: string) => warnings.push(message) },
+    });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '等待接管' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+
+      // 一直不回 turn.delivery: 退避重发只有延迟上限、没有次数上限, 所以时效是
+      // 唯一的收口条件。
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
+      const afterHorizon = c.ofType('turn.end').length;
+      expect(afterHorizon).toBeGreaterThan(1);
+      expect(warnings.some((m) => m.includes('turn.end ACK retry abandoned'))).toBe(true);
+
+      // 过线后彻底停手。
+      await vi.advanceTimersByTimeAsync(6 * 60 * 60_000);
+      expect(c.ofType('turn.end')).toHaveLength(afterHorizon);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('离线缓冲里超过投递时效的 turn.end 重连时丢弃，不因进程是否重启而分叉', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const warnings: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log: { info: () => {}, warn: (message: string) => warnings.push(message) },
+    });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      c.setOnline(false); // 连接掉了, 但进程没重启 —— 帧留在内存缓冲里
+      fr.finish({ finalText: '隔日回复' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
+      c.setOnline(true);
+      d.onConnected('conn-1', c.send);
+      await tick();
+
+      // 重启过的进程会走持久出箱、被时效挡住; 没重启的这条内存路径必须同样挡住。
+      expect(c.ofType('turn.end')).toHaveLength(0);
+      expect(warnings.some((m) => m.includes('buffered turn.end dropped'))).toBe(true);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('ACK server 断线期间完成的 turn.end 在重连后进入 ACK 缓冲，retrying 也视为已接管', async () => {
     vi.useFakeTimers();
     const fr = fakeRunner();
