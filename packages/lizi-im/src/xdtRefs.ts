@@ -123,9 +123,10 @@ function lineContainerPrefix(text: string, lineStart: number, lineEnd: number): 
       // not to the indentation that keeps a continuation inside a list.
       cursor = indentStart;
       indent = 0;
-      while (cursor < lineEnd && text[cursor] === ' ') {
+      while (cursor < lineEnd && (text[cursor] === ' ' || text[cursor] === '\t')) {
+        if (text[cursor] === '\t') indent += 4 - (indent % 4);
+        else indent += 1;
         cursor += 1;
-        indent += 1;
       }
       break;
     }
@@ -214,6 +215,12 @@ const HTML_BLOCK_TAG_RE = new RegExp(
   `^</?(?:${HTML_BLOCK_TAGS})(?:\\s|/?>|$)`,
   'i',
 );
+const HTML_TAG_NAME = '[A-Za-z][A-Za-z0-9-]*';
+const HTML_ATTRIBUTE_NAME = '[A-Za-z_:][A-Za-z0-9_.:-]*';
+const HTML_ATTRIBUTE_VALUE = `(?:[^\\s"'=<>\\x60]+|'[^']*'|"[^"]*")`;
+const COMPLETE_HTML_TAG_RE = new RegExp(
+  `^(?:<${HTML_TAG_NAME}(?:\\s+${HTML_ATTRIBUTE_NAME}(?:\\s*=\\s*${HTML_ATTRIBUTE_VALUE})?)*\\s*/?>|</${HTML_TAG_NAME}\\s*>)[ \\t]*(?:\\r?\\n)?$`,
+);
 
 interface HtmlBlockLineStart {
   contentStart: number;
@@ -293,6 +300,7 @@ function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
       const rawTag = contentLower.match(/^<(pre|script|style|textarea)(?:\s|>|$)/)?.[1];
       if (rawTag) closingMarker = `</${rawTag}>`;
       else if (HTML_BLOCK_TAG_RE.test(content)) blankTerminated = true;
+      else if (COMPLETE_HTML_TAG_RE.test(content)) blankTerminated = true;
       else {
         lineStart = lineEnd;
         continue;

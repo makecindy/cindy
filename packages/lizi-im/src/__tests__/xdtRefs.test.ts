@@ -322,6 +322,14 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
   });
 
+  it('ignores managed media references inside tab-indented code blocks', () => {
+    const text = `\t[报告](xdt-file:///tmp/tabbed.pdf)\n\t![图片](${BLOB})`;
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtImageRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件', image: () => '图片' })).toBe(text);
+  });
+
   it('ignores file references inside blockquote indented code', () => {
     const text = '>     [报告](xdt-file:///tmp/private.pdf)';
 
@@ -339,6 +347,18 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
       '<!--',
       '[注释](xdt-file:///tmp/comment.pdf)',
       '-->',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtImageRefs(text)).toEqual([]);
+  });
+
+  it('ignores managed media references inside generic type-7 HTML blocks', () => {
+    const text = [
+      '<span class="example">',
+      '[报告](xdt-file:///tmp/generic-html.pdf)',
+      `![图片](${BLOB})`,
+      '</span>',
     ].join('\n');
 
     expect(collectXdtFileRefs(text)).toEqual([]);
