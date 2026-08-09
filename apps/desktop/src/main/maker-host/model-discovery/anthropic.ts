@@ -50,6 +50,7 @@ import path from 'node:path';
 import type { CatalogModel, Effort, ProviderModelDiscoveryFailure } from '@cindy/model-providers';
 
 import { createLogger } from '../../logger.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import {
   getActiveCatalog,
   getCindyModelContextWindow,
@@ -155,6 +156,21 @@ function credentialContextFor(
 function currentCredentialContext(): AnthropicCredentialContext | null {
   const identity = readClaudeAiOAuth();
   return identity ? credentialContextFor(identity) : null;
+}
+
+/**
+ * A discovery request may outlive both the OAuth token and the app owner that
+ * started it.  Keep this guard deliberately read-only: calling the normal
+ * epoch activation path here would clear the replacement account's models
+ * while handling a stale account's 401.
+ */
+function requestEpochStillCurrent(
+  ownerScopeKey: string,
+  context: AnthropicCredentialContext,
+): boolean {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
+  const current = currentCredentialContext();
+  return current !== null && sameCredentialEpoch(current.epoch, context.epoch);
 }
 
 function accessTokenFingerprint(accessToken: string): string {
@@ -1319,6 +1335,10 @@ export function refreshAnthropicModelsFromHttp(options?: {
   afterForcedRefresh?: boolean;
 }): Promise<boolean> {
   if (!options?.fromRetry) cancelHttpRetry();
+  // Capture the owner at request creation.  OAuth revision alone is not an
+  // ownership fence: a late response must never refresh the credential that a
+  // different app owner now has in the shared credential store.
+  const requestOwnerScopeKey = activeOwnerScopeKey();
   const initialContext = currentCredentialContext();
   if (!initialContext) {
     deactivateCredentialEpoch();
@@ -1418,14 +1438,29 @@ export function refreshAnthropicModelsFromHttp(options?: {
       // 一次就能恢复 —— 否则用户明明只需静默续期,却被告知要断开重连,而且清单为空时他
       // 连个能用的模型都挑不出来(PR #548 review;运行时 401 回调走的也是这条路)。
       if (kind === 'unauthorized' && !options?.afterForcedRefresh) {
+        // The 401 belongs to the request epoch captured before the network
+        // await.  Do not enter force-refresh (or its cache / broadcast side
+        // effects) after either the owner or authorization revision changed.
+        if (!requestEpochStillCurrent(requestOwnerScopeKey, context)) {
+          log.info('anthropic /v1/models 401 ignored after owner or authorization change');
+          return false;
+        }
         let refreshError: unknown = null;
         const refreshed = await getValidClaudeAiOAuth({
           forceRefresh: true,
           staleToken: oauth.accessToken,
+          staleAuthorizationRevision: context.epoch.authorizationRevision,
         }).catch((err: unknown) => {
           refreshError = err;
           return null;
         });
+        // getValidClaudeAiOAuth performs its own owner transaction.  Re-check
+        // before consuming its result so a replacement that landed while it
+        // waited cannot trigger a retry with the replacement token.
+        if (!requestEpochStillCurrent(requestOwnerScopeKey, context)) {
+          log.info('anthropic /v1/models forced refresh result ignored after epoch change');
+          return false;
+        }
         const currentAfterRefresh = refreshed ? readClaudeAiOAuth() : null;
         if (
           refreshed?.accessToken &&

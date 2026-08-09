@@ -1891,6 +1891,36 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
     expect(getAnthropicModelDiscoveryFailure()).toBeNull();
   });
 
+  it('旧授权代次迟到的 401 不得强制刷新当前授权', async () => {
+    // q1 captured revision R1.  Before its 401 is handled, the browser
+    // authorization commits R2 (including a deliberately different token).
+    // The stale response must not enter forceRefresh, clear the current
+    // discovery state, or publish anything for R2.
+    oauthRefreshMock.getValidClaudeAiOAuth.mockReset();
+    oauthRefreshMock.getValidClaudeAiOAuth.mockResolvedValueOnce({
+      accessToken: 'stale-token',
+      cindyAuthorizationRevision: 'test-revision-1',
+      __fingerprint: 'a'.repeat(64),
+    });
+    const fetchMock = vi.fn(async () => {
+      credentialsMock.accessToken = 'fresh-token';
+      credentialsMock.refreshToken = 'fresh-refresh-token';
+      credentialsMock.credentialFingerprint = 'b'.repeat(64);
+      credentialsMock.authorizationRevision = 'test-revision-2';
+      return errorResponse(401);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(refreshAnthropicModelsFromHttp()).resolves.toBe(false);
+    expect(oauthRefreshMock.getValidClaudeAiOAuth).toHaveBeenCalledTimes(1);
+    expect(oauthRefreshMock.getValidClaudeAiOAuth).not.toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: true }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(anthropicIds()).toEqual([]);
+    expect(getAnthropicModelDiscoveryFailure()).toBeNull();
+  });
+
   it('强制换 token 后仍是 401 就如实报 unauthorized,不无限换', async () => {
     oauthRefreshMock.getValidClaudeAiOAuth.mockReset();
     oauthRefreshMock.getValidClaudeAiOAuth

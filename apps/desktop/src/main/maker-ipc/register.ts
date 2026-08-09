@@ -8239,14 +8239,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // The getter is invoked inside provider-service's final credential guard.
     // Keep the exact same late snapshot for modelRegistry identity derivation
     // after the provider views return.
-    let catalog = getDesktopSelectableCatalog();
+    let catalog: ReturnType<typeof getDesktopSelectableCatalog> | undefined;
     const views = await getDesktopProviderService().listProviders({
       allowSideEffects: true,
       getCatalog: () => {
-        catalog = getDesktopSelectableCatalog();
+        // Provider connection/claim/discovery may await.  Capture exactly one
+        // post-await catalog and use it for both ProviderView projection and
+        // modelRegistry/tombstone identity derivation below.
+        catalog ??= getDesktopSelectableCatalog();
         return catalog;
       },
     });
+    if (!catalog) throw new Error('provider service did not project a catalog snapshot');
     const modelRegistry = catalog.modelRegistry;
     // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
     // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
