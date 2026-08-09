@@ -431,6 +431,54 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(1);
   });
 
+  it('mongo 与 mongosh 只有显式禁用用户启动脚本时才可记忆', () => {
+    for (const command of [
+      "mongo --eval 'db.jobs.deleteMany({})'",
+      "mongosh --eval 'db.jobs.deleteMany({})'",
+      "mongo --noRC --eval 'db.jobs.deleteMany({})'",
+      "mongosh --no-rc --eval 'db.jobs.deleteMany({})'",
+      "mongosh -- --norc --eval 'db.jobs.deleteMany({})'",
+      "env mongosh --eval 'db.jobs.deleteMany({})'",
+      "mongosh.exe --eval 'db.jobs.deleteMany({})'",
+      "mongo --norc --eval 'db.jobs.findOne()'"
+        + " && mongosh --eval 'db.jobs.deleteMany({})'",
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      "mongo --norc --eval 'db.jobs.findOne()'",
+      "mongosh --norc --eval 'db.jobs.findOne()'",
+      "mongo.exe --norc --eval 'db.jobs.findOne()'",
+      "mongosh.exe --norc --eval 'db.jobs.findOne()'",
+      "env mongosh --norc --eval 'db.jobs.findOne()'",
+      "mongo --norc --eval 'db.jobs.findOne()'"
+        + " && mongosh --norc --eval 'db.jobs.findOne()'",
+      "echo mongosh --eval 'db.jobs.deleteMany({})'",
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    const defaultAction = exec("mongosh --eval 'db.jobs.findOne()'");
+    memory.rememberReviewerAllow(defaultAction, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(
+      defaultAction, defaultIntent, roots, reviewerRoute,
+    )).toBe(false);
+    expect(memory.size()).toBe(0);
+
+    const isolatedAction = exec("mongosh --norc --eval 'db.jobs.findOne()'");
+    memory.rememberReviewerAllow(isolatedAction, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(
+      isolatedAction, defaultIntent, roots, reviewerRoute,
+    )).toBe(true);
+    expect(memory.size()).toBe(1);
+  });
+
   it('MySQL 与 MariaDB 只有明确关闭各自启动配置时才可记忆', () => {
     for (const command of [
       "mysql app -e 'DELETE FROM jobs'",

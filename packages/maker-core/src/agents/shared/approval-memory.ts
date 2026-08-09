@@ -297,6 +297,14 @@ function psqlMayLoadMutableUserState(args: readonly string[]): boolean {
   return !options.includes('-X') && !options.includes('--no-psqlrc');
 }
 
+function mongoShellMayLoadMutableUserState(args: readonly string[]): boolean {
+  const optionTerminator = args.indexOf('--');
+  const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
+  // mongo / mongosh 默认执行用户目录中的启动脚本。只信任 `--` 前大小写精确的
+  // --norc；缩写、近似拼写或位置参数中的同名文本都不能证明启动脚本已被禁用。
+  return !options.includes('--norc');
+}
+
 const MYSQL_FAMILY_OPTION_FILE_CLIENTS: ReadonlySet<string> = new Set([
   'mysql', 'mysqladmin', 'mysqlcheck', 'mysqldump', 'mysqlimport', 'mysqlshow',
   'mysqlslap', 'mysqlpump', 'mysqlbinlog', 'mysql_upgrade', 'mysqltest',
@@ -549,6 +557,10 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (invocations.some(({ name, args }) =>
     // 默认 psqlrc 与 `psql -f FILE` 都会让同一 argv 执行可替换的外部 SQL。
     name === 'psql' && psqlMayLoadMutableUserState(args))) return true;
+  if (invocations.some(({ name, args }) =>
+    // mongo / mongosh 默认加载可替换的用户启动脚本；只有显式 --norc 才可稳定复用。
+    (name === 'mongo' || name === 'mongosh')
+    && mongoShellMayLoadMutableUserState(args))) return true;
   if (invocations.some(({ name, args }) =>
     MYSQL_FAMILY_OPTION_FILE_CLIENTS.has(name)
     && mysqlFamilyMayLoadMutableUserState(name, args))) return true;
