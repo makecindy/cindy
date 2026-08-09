@@ -61,7 +61,7 @@ import {
   RECOVERY_CHECKPOINT_MARKER,
   type RecoveryContextSnapshot,
 } from './recoveryCoordinator.js';
-import { requireCodexQueuedAppshots } from './appshotBoundary.js';
+import { sanitizeQueuedAppshotMetadata } from './appshotBoundary.js';
 
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
@@ -972,7 +972,7 @@ export class AgentInputCoordinator {
       items = (await this.deps.loadQueueSnapshot!(sessionId)).map(
         normalizeRestoredSyntheticTrigger,
       );
-      for (const item of items) requireCodexQueuedAppshots(item);
+      items = items.map(sanitizeQueuedAppshotMetadata) as typeof items;
     } catch (err) {
       log.warn('load queue snapshot failed; will retry on next entry', {
         sessionId,

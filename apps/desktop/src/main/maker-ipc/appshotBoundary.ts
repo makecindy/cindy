@@ -49,4 +49,28 @@ export function requireCodexQueuedAppshots(value: unknown): void {
   }
 }
 
+/**
+ * Crash-restore path: a persisted queue item may predate the Codex-only rule
+ * or belong to a session that switched away from Codex. Throwing during
+ * restore would poison the session's queue forever, so strip the Appshot
+ * metadata instead and keep the ordinary image attachment.
+ */
+export function sanitizeQueuedAppshotMetadata(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const queued = value as { createOpts?: { agentKind?: unknown }; files?: unknown };
+  if (queued.createOpts?.agentKind === 'codex') return value;
+  const files = Array.isArray(queued.files) ? queued.files : [];
+  let changed = false;
+  const sanitizedFiles = files.map((file) => {
+    if (!file || typeof file !== 'object' || !('appshot' in (file as Record<string, unknown>))) {
+      return file;
+    }
+    changed = true;
+    const next = { ...(file as Record<string, unknown>) };
+    delete next.appshot;
+    return next;
+  });
+  return changed ? { ...queued, files: sanitizedFiles } : value;
+}
+
 export { APPSHOT_ONLY_CODEX_ERROR };

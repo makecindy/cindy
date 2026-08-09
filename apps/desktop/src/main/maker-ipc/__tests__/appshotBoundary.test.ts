@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   requireCodexQueuedAppshots,
+  sanitizeQueuedAppshotMetadata,
   validateAndStripAppshotMetadata,
 } from '../appshotBoundary';
 
@@ -65,5 +66,32 @@ describe('Appshot send boundary', () => {
       'Appshots are only supported in Codex sessions',
     );
     expect(() => requireCodexQueuedAppshots({ ...queued, createOpts: { agentKind: 'codex' } })).not.toThrow();
+  });
+
+  it('sanitizes Appshot metadata from restored non-Codex queue items and keeps images', () => {
+    const queued = {
+      clientId: 'client-1',
+      text: '',
+      persistedContent: '{}',
+      createOpts: { agentKind: 'claude-code' },
+      files: [{ appshot: metadata }, { name: 'plain.png' }],
+    };
+    const sanitized = sanitizeQueuedAppshotMetadata(queued) as typeof queued;
+
+    expect(sanitized).not.toBe(queued);
+    expect(sanitized.files[0]).not.toHaveProperty('appshot');
+    expect(sanitized.files[1]).toEqual({ name: 'plain.png' });
+  });
+
+  it('leaves Codex queue items and appshot-free items untouched', () => {
+    const codexItem = {
+      clientId: 'client-1',
+      text: '',
+      persistedContent: '{}',
+      createOpts: { agentKind: 'codex' },
+      files: [{ appshot: metadata }],
+    };
+    expect(sanitizeQueuedAppshotMetadata(codexItem)).toBe(codexItem);
+    expect(sanitizeQueuedAppshotMetadata({ files: [] })).toEqual({ files: [] });
   });
 });
