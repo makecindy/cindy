@@ -43,6 +43,11 @@ const SUPPORTED_KEYS = new Set([
   'BYMONTHDAY',
 ]);
 
+const NON_BLOCKING_READER_DIAGNOSTICS = new Set([
+  'id must be a string',
+  'id does not match its automation directory',
+]);
+
 function parseRrule(rrule: string): { values: Map<string, string>; diagnostics: string[] } {
   const diagnostics: string[] = [];
   const values = new Map<string, string>();
@@ -212,7 +217,9 @@ export function convertCodexAutomation(
   options: CodexAutomationConversionOptions = {},
 ): CodexAutomationConversion {
   const diagnostics = [...detail.diagnostics];
-  const blockingDiagnostics: string[] = [];
+  const blockingDiagnostics = detail.diagnostics.filter(
+    (diagnostic) => !NON_BLOCKING_READER_DIAGNOSTICS.has(diagnostic),
+  );
   const status = statusForCodex(detail.status, diagnostics);
   if (!['ACTIVE', 'PAUSED', 'DISABLED', 'INACTIVE'].includes(detail.status.toUpperCase())) {
     blockingDiagnostics.push(`Codex status ${detail.status || '(empty)'} is not recognized`);

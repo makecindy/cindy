@@ -271,6 +271,14 @@ export function createCodexAutomationReader(
     },
     async get(id: string): Promise<CodexAutomationDetail | null> {
       if (!id || id === '.' || id.includes('..') || path.basename(id) !== id) return null;
+      const automationDir = path.join(rootDir, id);
+      try {
+        const directoryStats = await fs.lstat(automationDir);
+        if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) return null;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw new Error(filesystemDiagnostic('read', error));
+      }
       const sourcePath = path.join(rootDir, id, 'automation.toml');
       try {
         await fs.access(sourcePath);

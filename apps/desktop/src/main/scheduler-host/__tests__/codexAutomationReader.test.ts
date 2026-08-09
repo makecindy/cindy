@@ -222,6 +222,19 @@ describe('createCodexAutomationReader', () => {
     await expect(createCodexAutomationReader({ rootDir: root }).get('.')).resolves.toBeNull();
   });
 
+  it('rejects automation directories that are symbolic links outside the root', async () => {
+    const root = await makeRoot();
+    const outside = await makeRoot();
+    await writeAutomation(outside, 'target', 'id = "linked"\nname = "outside"');
+    await fs.symlink(
+      path.join(outside, 'target'),
+      path.join(root, 'linked'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    await expect(createCodexAutomationReader({ rootDir: root }).get('linked')).resolves.toBeNull();
+  });
+
   it('sanitizes root filesystem errors without exposing the root path', async () => {
     const root = await makeRoot();
     const sourcePath = path.join(root, 'automation.toml');
@@ -246,6 +259,7 @@ describe('createCodexAutomationReader', () => {
 
   it('sanitizes get access errors without exposing the source path', async () => {
     const root = await makeRoot();
+    await fs.mkdir(path.join(root, 'blocked'));
     const sourcePath = path.join(root, 'blocked', 'automation.toml');
     const access = vi.spyOn(fs, 'access').mockRejectedValueOnce(
       Object.assign(new Error(`EACCES: permission denied, access '${sourcePath}'`), {

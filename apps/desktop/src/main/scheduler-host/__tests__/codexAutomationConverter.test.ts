@@ -201,6 +201,18 @@ describe('convertCodexAutomation', () => {
     expect(result.diagnostics).toContain('id does not match its automation directory');
   });
 
+  it('blocks reader diagnostics that indicate execution fields were replaced with fallbacks', () => {
+    const result = convertCodexAutomation(
+      detail({ diagnostics: ['name must be a string', 'execution_environment must be a string'] }),
+    );
+
+    expect(result.canImport).toBe(false);
+    expect(result.input).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining(['name must be a string', 'execution_environment must be a string']),
+    );
+  });
+
   it('rejects an automation without a display name', () => {
     const result = convertCodexAutomation(detail({ name: '   ' }), { timezone: 'UTC' });
 
