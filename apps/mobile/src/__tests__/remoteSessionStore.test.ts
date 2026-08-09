@@ -2716,36 +2716,93 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');
   });
 
-  it('does not treat an optimistic queue item as remote acceptance', () => {
-    const optimisticProjection = projection('s1', 'q-local');
-    const expectedAuthorityEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
-    const expectedRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
-
-    remoteSessionStore.setInputProjectionOptimistically('s1', optimisticProjection);
-
-    expect(remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')).not.toBe(expectedAuthorityEpoch);
-    expect(remoteSessionStore.captureInputProjectionRemoteEpoch('s1')).toBe(expectedRemoteEpoch);
-    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', expectedRemoteEpoch)).toBe(false);
-    expect(remoteSessionStore.setInputProjectionIfCurrent(
-      's1',
-      projection('s1', 'q-stale'),
-      expectedAuthorityEpoch,
-    )).toBe(false);
-    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-local');
-
-    remoteSessionStore.applyRemotePush('dev-1', 'maker:input:projection', optimisticProjection);
-
-    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', expectedRemoteEpoch)).toBe(true);
+  it('keeps optimistic projection writes out of remote acceptance evidence', () => {
+    const local = projection('s1', 'q-local');
+    remoteSessionStore.setInputProjectionOptimistically('s1', local);
+    remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-local', local.pendingQueue[0]);
+    const authorityEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const remoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    remoteSessionStore.setInputProjectionOptimistically('s1', { ...local, queuePaused: true });
+    expect(remoteSessionStore.captureInputProjectionRemoteEpoch('s1')).toBe(remoteEpoch);
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', remoteEpoch)).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', local, authorityEpoch, remoteEpoch)).toBe(false);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId, remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size]).toEqual(['q-local', 0]);
   });
-
+  it('retains an unconfirmed row across empty projections and offline cleanup', () => {
+    const local = projection('s1', 'q-local');
+    remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-local', local.pendingQueue[0]);
+    const queryEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...local, pendingQueue: [] }, queryEpoch)).toBe(true);
+    const confirmed = projection('s1', 'q-confirmed');
+    remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-confirmed', confirmed.pendingQueue[0]);
+    const staleEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const staleRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    remoteSessionStore.setInputProjection('s1', confirmed);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', local, staleEpoch, staleRemoteEpoch, 'q-local')).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId)).toEqual(['q-local', 'q-confirmed']);
+    expect([[...remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1')], remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', staleRemoteEpoch)]).toEqual([['q-local'], true]);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const offlineEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const offlineRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', local, offlineEpoch, offlineRemoteEpoch)).toBe(false);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId), [...remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1')]]).toEqual([['q-local'], ['q-local']]);
+    const persisted = { ...message('q-local', 's1'), role: 'user' as const };
+    remoteSessionStore.appendMessage('s1', persisted);
+    const settledEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    remoteSessionStore.setInputProjectionIfCurrent('s1', local, offlineEpoch, offlineRemoteEpoch, 'q-local');
+    remoteSessionStore.setMessages('s1', [persisted]);
+    expect(remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')).toBe(settledEpoch);
+    const [removalEpoch, removalRemoteEpoch] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
+    remoteSessionStore.removeDevice('dev-1');
+    remoteSessionStore.setInputProjectionIfCurrent('s1', local, removalEpoch, removalRemoteEpoch, 'q-local');
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', removalRemoteEpoch)).toBe(false);
+    const reordered = { ...local, pendingQueue: ['a', 'r1', 'b', 'r2'].map((id) => projection('s1', id).pendingQueue[0]) };
+    remoteSessionStore.setInputProjectionOptimistically('s1', reordered);
+    for (const id of ['a', 'b']) remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', id);
+    remoteSessionStore.setInputProjection('s1', { ...reordered, pendingQueue: [reordered.pendingQueue[3], reordered.pendingQueue[1]] });
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId)).toEqual(['r2', 'a', 'b', 'r1']);
+  });
+  it('settles an unconfirmed row from persisted or stale positive evidence', () => {
+    const local = projection('s1', 'q-local');
+    remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-local', local.pendingQueue[0]);
+    remoteSessionStore.appendMessage('s1', message('q-local', 's1'));
+    expect(remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').has('q-local')).toBe(true);
+    const listener = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(listener);
+    remoteSessionStore.appendMessage('s1', { ...message('q-local', 's1'), role: 'user' });
+    unsubscribe();
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toEqual([]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-stale', projection('s1', 'q-stale').pendingQueue[0]);
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const expectedRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    remoteSessionStore.setInputProjectionOptimistically('s1', { ...remoteSessionStore.getInputProjection('s1'), queuePaused: true });
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...local, pendingQueue: [] }, expectedEpoch, expectedRemoteEpoch, 'q-stale')).toBe(false);
+    const beforePersistence = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const persisted = { ...message('q-stale', 's1'), role: 'user' as const };
+    remoteSessionStore.appendMessage('s1', persisted);
+    const [settledEpoch, settledRemoteEpoch] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...local, pendingQueue: [] }, settledEpoch, settledRemoteEpoch, 'q-stale')).toBe(true);
+    const reconciledEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    remoteSessionStore.setMessages('s1', [persisted]);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue, remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size, settledEpoch !== beforePersistence, remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')]).toEqual([[], 0, true, reconciledEpoch]);
+    remoteSessionStore.setInputProjection('s1', projection('s1', 'q-deleted'));
+    remoteSessionStore.setInputProjection('s1', { ...local, pendingQueue: [] });
+    const beforeDeletion = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    remoteSessionStore.removeMessages('s1', ['q-deleted']);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue, remoteSessionStore.captureInputProjectionAuthorityEpoch('s1') !== beforeDeletion]).toEqual([[], true]);
+  });
   it('clears a continuation owner at a terminal boundary without a projection clear push', () => {
     const ownerProjection = {
       ...projection('s1'),
       continuationTurnClientId: 'resume-1',
     };
     remoteSessionStore.setInputProjection('s1', ownerProjection);
+    remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-1', ownerProjection.pendingQueue[0]);
     remoteSessionStore.setSessionRunning('s1', true);
     const operationEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const operationRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
 
     remoteSessionStore.applyRemotePush('dev-1', 'maker:status-changed', {
       sessionId: 's1',
@@ -2754,7 +2811,8 @@ describe('remoteSessionStore', () => {
 
     expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
-    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, operationEpoch)).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, operationEpoch, operationRemoteEpoch, 'q-1')).toBe(false);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId), remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-1', operationRemoteEpoch), remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size]).toEqual([['q-1'], true, 1]);
   });
 
   it('soft-invalidates an offline device without deleting sessions or messages', () => {
