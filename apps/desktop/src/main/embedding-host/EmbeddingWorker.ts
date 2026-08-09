@@ -8,6 +8,7 @@
  *   4. 剩下有 text 的按 model_id 再分组, 同组一次 client.embed()
  *   5. 成功 → 一个事务内: INSERT INTO {vec_table}(rowid, embedding) + UPDATE jobs.status='done'
  *   6. 失败 → attempts++, last_error, scheduled_at += 退避; attempts >= MAX → status='failed'
+ *      INVALID_MODEL 是确定性配置错误:首批直接 failed,本进程内同模型后续批次不再请求 API。
  *
  * 重要约束 (better-sqlite3 同步事务 vs async embed):
  *   embed() 是 async, 不能在 db.transaction 内 await; 所以流程是
@@ -74,6 +75,12 @@ export class EmbeddingWorker {
   private lastTickProcessed: number | null = null;
   private vecWarned = false;
   private suspendedWarned = false;
+  /**
+   * INVALID_MODEL 原样重试不会自愈。按进程生命周期记住它:后续新 job 本地终止,
+   * 避免每 5 秒继续打同一个必败请求。应用重启会清空,让修复后的网关/模型配置
+   * 有一次重新探测的机会。
+   */
+  private readonly blockedModels = new Map<string, string>();
   // 关闭 / 切账号时由 stop() 置 true。in-flight tick 在每个 await 点之后检查它,
   // 一旦为 true 就立刻放弃后续写库直接返回 —— 那批 job 保持 status='pending',
   // 下次启动自动续跑 (零丢失)。目的是退出时让 worker 立即让出 SQLite 写连接,
@@ -283,6 +290,19 @@ export class EmbeddingWorker {
       // 4. 按 model_id 分组调 embed
       const byModel = groupBy(liveJobs, (j) => j.model_id);
       for (const [modelId, modelJobs] of byModel.entries()) {
+        const blockedError = this.blockedModels.get(modelId);
+        if (blockedError !== undefined) {
+          const fc = await this.recordFailureBatch(modelJobs, blockedError, true);
+          failCount += fc;
+          this.opts.log.debug?.(
+            JSON.stringify({
+              event: 'embeddingWorker.batch.skip.invalidModel',
+              modelId,
+              count: modelJobs.length,
+            }),
+          );
+          continue;
+        }
         // 逐模型停用(PR #744 review 第十九轮):该 embedding 模型被点名停用时本组
         // 不下单,job 保持 pending,恢复启用后续跑。
         if (this.opts.isRouteSuspended?.(modelId as string)) {
@@ -335,10 +355,19 @@ export class EmbeddingWorker {
               count: modelJobs.length,
             }),
           );
-          // AUTH_FAILED / INVALID_MODEL 在 client 内已经判断为不可重试 — 但 worker 这层
-          // 不分代码, 一律走 backoff + attempts 计数, MAX_ATTEMPTS 后 → 'failed'。
-          // 这样 INVALID_MODEL 不会立刻冲 5 次烧 token, 因为 client 抛错前没打 API。
-          const fc = await this.recordFailureBatch(modelJobs, `[${code}] ${msg}`);
+          const errorText = `[${code}] ${msg}`;
+          const terminal = code === 'INVALID_MODEL';
+          if (terminal) {
+            this.blockedModels.set(modelId, errorText);
+            this.opts.log.warn(
+              JSON.stringify({
+                event: 'embeddingWorker.model.blocked.invalidModel',
+                modelId,
+                reason: msg,
+              }),
+            );
+          }
+          const fc = await this.recordFailureBatch(modelJobs, errorText, terminal);
           failCount += fc;
         }
       }
@@ -390,12 +419,17 @@ export class EmbeddingWorker {
    * attempts >= MAX → status='failed' 终态。
    * 返回失败数量 (>= MAX 进 'failed' 终态的部分)。
    */
-  private async recordFailureBatch(jobs: JobRow[], errMsg: string): Promise<number> {
+  private async recordFailureBatch(
+    jobs: JobRow[],
+    errMsg: string,
+    terminal = false,
+  ): Promise<number> {
     const now = Date.now();
     const result = await this.opts.getDbClient().tx('embedding.recordFailures', {
       jobs: jobs.map((job) => ({ rowid: job.rowid, attempts: job.attempts })),
       errMsg: truncate(errMsg, 2000),
       now,
+      terminal,
     });
     return result.failCount;
   }

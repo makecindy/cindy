@@ -1910,6 +1910,31 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('embedding.recordFailures can immediately terminate a deterministic failure', async () => {
+    await withClient(async (client) => {
+      const rowid = await insertJob(client, { sourceId: 'invalid-model', attempts: 0 });
+      const result = await client.tx('embedding.recordFailures', {
+        jobs: [{ rowid, attempts: 0 }],
+        errMsg: '[INVALID_MODEL] unsupported model',
+        now: 10_000,
+        terminal: true,
+      });
+
+      expect(result).toEqual({ failCount: 1 });
+      await expect(
+        client.queryOne(
+          'SELECT status, attempts, scheduled_at, last_error FROM embedding_jobs WHERE rowid = ?',
+          [rowid],
+        ),
+      ).resolves.toEqual({
+        status: 'failed',
+        attempts: 1,
+        scheduled_at: 0,
+        last_error: '[INVALID_MODEL] unsupported model',
+      });
+    });
+  });
+
   it('embedding.enqueue inserts only new natural-key jobs', async () => {
     await withClient(async (client) => {
       const result = await client.tx('embedding.enqueue', {

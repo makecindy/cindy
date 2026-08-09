@@ -176,6 +176,8 @@ export interface EmbeddingRecordFailuresArgs {
   jobs: Array<{ rowid: number; attempts: number }>;
   errMsg: string;
   now: number;
+  /** Deterministic failures can bypass retry scheduling and fail this batch immediately. */
+  terminal?: boolean;
 }
 
 export interface EmbeddingEnqueueArgs {
