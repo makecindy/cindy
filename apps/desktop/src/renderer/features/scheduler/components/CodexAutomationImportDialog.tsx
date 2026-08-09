@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, Loader2 } from 'lucide-react';
+import { AlertTriangle, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Spinner } from '@/components/ui/spinner';
 
 type CodexAutomationPreviewItem = {
   id: string;
@@ -228,7 +229,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             {loading && (
               <div className="flex items-center justify-center gap-2 py-12 text-sm text-[var(--confirm-desc)]">
-                <Loader2 size={16} className="animate-spin" />
+                <Spinner size={16} />
                 {t('scheduler.codexImport.loading')}
               </div>
             )}
@@ -395,7 +396,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                 onClick={() => void runImport()}
                 className="inline-flex items-center gap-1.5 rounded-full bg-[var(--confirm-btn-primary-bg)] px-3.5 py-1.5 text-12 font-medium text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {importing && <Loader2 size={13} className="animate-spin" />}
+                {importing && <Spinner size={13} />}
                 {t('scheduler.codexImport.importSelected', { count: selectedCount })}
               </button>
             </div>

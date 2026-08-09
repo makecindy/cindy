@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import type { CreateScheduleInput, ScheduleStatus } from '@cindy/maker-scheduler';
+import { EFFORT_VALUES } from '@cindy/model-providers';
 
 import type { CodexAutomationDetail } from './codex-automation-reader.js';
 
@@ -32,6 +33,8 @@ const WEEKDAY_TO_CRON: Record<string, string> = {
   FR: '5',
   SA: '6',
 };
+
+const SUPPORTED_REASONING_EFFORTS = new Set<string>(EFFORT_VALUES);
 
 const SUPPORTED_KEYS = new Set([
   'FREQ',
@@ -116,6 +119,15 @@ function isAbsoluteWorkdir(value: string): boolean {
   return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value);
 }
 
+function cronWeekdayList(value: string, diagnostics: string[]): string | undefined {
+  const days = value.split(',').map((day) => day.trim().toUpperCase());
+  if (days.some((day) => !WEEKDAY_TO_CRON[day])) {
+    diagnostics.push('RRULE BYDAY must contain weekday names without ordinal prefixes');
+    return undefined;
+  }
+  return days.map((day) => WEEKDAY_TO_CRON[day]).join(',');
+}
+
 /** Convert the supported subset of RFC 5545 RRULE into Cindy's five-field cron. */
 export function codexRruleToCron(rrule: string): CodexRruleConversion {
   const { values, diagnostics } = parseRrule(rrule);
@@ -152,12 +164,7 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
     if (!byDay) {
       diagnostics.push('RRULE WEEKLY is missing BYDAY');
     } else {
-      const days = byDay.split(',').map((day) => day.trim().toUpperCase());
-      if (days.some((day) => !WEEKDAY_TO_CRON[day])) {
-        diagnostics.push('RRULE BYDAY must contain weekday names without ordinal prefixes');
-      } else {
-        dayOfWeek = days.map((day) => WEEKDAY_TO_CRON[day]).join(',');
-      }
+      dayOfWeek = cronWeekdayList(byDay, diagnostics) ?? dayOfWeek;
     }
   } else if (frequency === 'MONTHLY') {
     if (values.has('BYDAY')) {
@@ -184,8 +191,12 @@ export function codexRruleToCron(rrule: string): CodexRruleConversion {
         dayOfMonth = monthDays.join(',');
       }
     }
-  } else if (values.has('BYDAY') || values.has('BYMONTHDAY')) {
-    diagnostics.push('RRULE BYDAY/BYMONTHDAY is not valid for DAILY cron conversion');
+  } else if (frequency === 'DAILY') {
+    if (values.has('BYMONTHDAY')) {
+      diagnostics.push('RRULE DAILY BYMONTHDAY is not supported by Cindy cron conversion');
+    }
+    const byDay = values.get('BYDAY');
+    if (byDay) dayOfWeek = cronWeekdayList(byDay, diagnostics) ?? dayOfWeek;
   }
 
   if (hours === undefined || minutes === undefined || diagnostics.length > 0) {
@@ -240,6 +251,15 @@ export function convertCodexAutomation(
     diagnostics.push(message);
     blockingDiagnostics.push(message);
   }
+  const normalizedReasoningEffort = detail.reasoningEffort?.trim();
+  if (
+    detail.reasoningEffort !== undefined &&
+    !SUPPORTED_REASONING_EFFORTS.has(normalizedReasoningEffort ?? '')
+  ) {
+    const message = `reasoning_effort=${normalizedReasoningEffort || '(empty)'} is not supported`;
+    diagnostics.push(message);
+    blockingDiagnostics.push(message);
+  }
 
   if (detail.executionEnvironment && detail.executionEnvironment.toLowerCase() !== 'local') {
     const message = `execution_environment=${detail.executionEnvironment} is not supported; only local automations can be imported`;
@@ -278,7 +298,7 @@ export function convertCodexAutomation(
     manual: false,
     agentKind: 'codex',
     model: detail.model,
-    effort: detail.reasoningEffort,
+    effort: normalizedReasoningEffort || undefined,
     executionMode: 'agent',
     workspaceKind: 'project',
     workingDir: detail.cwds[0],

@@ -29,6 +29,15 @@ describe('codexRruleToCron', () => {
     });
   });
 
+  it('converts a daily weekday filter to an exact cron day-of-week list', () => {
+    expect(
+      codexRruleToCron('FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0'),
+    ).toEqual({
+      cronExpr: '0 9 * * 1,2,3,4,5',
+      diagnostics: [],
+    });
+  });
+
   it('accepts the optional RRULE prefix used by Codex automation files', () => {
     expect(codexRruleToCron('RRULE:FREQ=DAILY;BYHOUR=8;BYMINUTE=30;BYSECOND=0')).toEqual({
       cronExpr: '30 8 * * *',
@@ -211,6 +220,28 @@ describe('convertCodexAutomation', () => {
     expect(result.diagnostics).toEqual(
       expect.arrayContaining(['name must be a string', 'execution_environment must be a string']),
     );
+  });
+
+  it('trims a supported reasoning effort before importing', () => {
+    const result = convertCodexAutomation(detail({ reasoningEffort: ' high ' }));
+
+    expect(result.canImport).toBe(true);
+    expect(result.input?.effort).toBe('high');
+  });
+
+  it('rejects non-canonical reasoning effort casing', () => {
+    const result = convertCodexAutomation(detail({ reasoningEffort: 'HIGH' }));
+
+    expect(result.canImport).toBe(false);
+    expect(result.input).toBeUndefined();
+  });
+
+  it('rejects an unsupported reasoning effort before importing', () => {
+    const result = convertCodexAutomation(detail({ reasoningEffort: 'turbo' }));
+
+    expect(result.canImport).toBe(false);
+    expect(result.input).toBeUndefined();
+    expect(result.diagnostics.join(' ')).toContain('reasoning_effort=turbo');
   });
 
   it('rejects an automation without a display name', () => {
