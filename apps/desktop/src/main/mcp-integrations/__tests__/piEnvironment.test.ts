@@ -123,6 +123,8 @@ describe('piEnvironment per-session identity', () => {
       sessionInstanceId: 'pi-instance-1',
       workingDir: '/repo',
       vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
     });
     expect(config?.mcpBridge).toBeTruthy();
     const server = config!.mcpBridge!.servers[0]!;

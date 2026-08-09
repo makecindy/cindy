@@ -2637,6 +2637,55 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('rejects a late projection query after a newer push and terminal boundary', () => {
+    const ownerProjection = {
+      ...projection('s1'),
+      continuationTurnClientId: 'resume-1',
+    };
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    remoteSessionStore.setInputProjection('s1', ownerProjection);
+    const queryEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:input:projection', {
+      ...projection('s1'),
+      continuationTurnClientId: null,
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'done', data: {} },
+    });
+
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, queryEpoch)).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+    expect(remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')).not.toBe(expectedEpoch);
+  });
+
+  it('accepts a projection query result when no newer authority event arrived', () => {
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', projection('s1'), expectedEpoch)).toBe(true);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');
+  });
+
+  it('clears a continuation owner at a terminal boundary without a projection clear push', () => {
+    const ownerProjection = {
+      ...projection('s1'),
+      continuationTurnClientId: 'resume-1',
+    };
+    remoteSessionStore.setInputProjection('s1', ownerProjection);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const operationEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:status-changed', {
+      sessionId: 's1',
+      status: 'closed',
+    });
+
+    expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, operationEpoch)).toBe(false);
+  });
+
   it('soft-invalidates an offline device without deleting sessions or messages', () => {
     const meta = session('s1', {
       updatedAt: '2026-01-01T00:00:01.000Z',

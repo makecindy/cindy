@@ -714,9 +714,17 @@ async function isFirstMessageApplied(task: InternalTask): Promise<boolean | null
   )) return true;
   try {
     assertTaskOwnerCurrent(task);
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(task.sessionId);
     const projection = await maker.input.getProjection(task.sessionId);
     assertTaskOwnerCurrent(task);
-    if (projection?.pendingQueue?.some((item) => item.clientId === clientId)) return true;
+    const accepted = remoteSessionStore.setInputProjectionIfCurrent(
+      task.sessionId,
+      projection,
+      projectionEpochAtRequestStart,
+    );
+    const current = accepted ? projection : remoteSessionStore.getInputProjection(task.sessionId);
+    if (current.pendingQueue.some((item) => item.clientId === clientId)) return true;
   } catch (error) {
     if (isStaleNewSessionOwnerError(error)) throw error;
     return null;
@@ -881,9 +889,15 @@ async function runPipeline(task: InternalTask): Promise<void> {
     }
     try {
       assertTaskOwnerCurrent(task);
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
       const projection = await maker.input.enqueue(sessionId, queued, { sendAtMs: Date.now() });
       assertTaskOwnerCurrent(task);
-      remoteSessionStore.setInputProjection(sessionId, projection);
+      remoteSessionStore.setInputProjectionIfCurrent(
+        sessionId,
+        projection,
+        projectionEpochAtRequestStart,
+      );
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       // 有界轮询分辨(codex review P1):enqueue 超时时消息可能已被受理并瞬间

@@ -1141,6 +1141,8 @@ async function rebuildSessionSnapshot(
     responsivenessCohort:
       opts?.responsivenessCohort ?? createDeviceSendCohort(deviceId),
   };
+  const projectionEpochAtRequestStart =
+    remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
   // 四路快照独立拉取、独立落库:断连补齐窗口本就脆弱,一个子请求失败不应拖垮
   // 其余(旧实现共用一个 catch,任一失败三份快照全丢)。goal 覆盖断连窗口内
   // 丢失的 maker:goal:status-changed push;model-pref / turn-cost 无对应查询通道,
@@ -1184,7 +1186,11 @@ async function rebuildSessionSnapshot(
     remoteSessionStore.setPendingInteractions(sessionId, pending.value, { finalizeStreaming: true });
   }
   if (projection.status === 'fulfilled' && projection.value) {
-    remoteSessionStore.setInputProjection(sessionId, projection.value);
+    remoteSessionStore.setInputProjectionIfCurrent(
+      sessionId,
+      projection.value,
+      projectionEpochAtRequestStart,
+    );
   }
   // undefined = 未拿到/未知(兼容形态的空返回),不能当作权威「无 goal」落库——
   // 那会把在世的 goal 卡清掉直到下一条 push;只有显式 null 才代表确认无 goal。

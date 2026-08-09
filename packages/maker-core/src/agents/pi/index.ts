@@ -962,6 +962,8 @@ export class PiAgent extends BaseAgent {
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
           vendorOptions: mutableVendorOptions,
+          mcpCallerKind: 'root',
+          mcpCallerAttested: true,
         });
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
