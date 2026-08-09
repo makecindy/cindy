@@ -72,12 +72,13 @@ describe('createWorktree naming authority', () => {
     vi.clearAllMocks();
   });
 
-  async function create(name: string, sessionId = 'session-1') {
+  async function create(name: string, sessionId = 'session-1', recoveryKey?: string) {
     return manager.createWorktree({
       sessionId,
       baseRepo,
       name,
       sourceBranch: 'main',
+      ...(recoveryKey ? { recoveryKey } : {}),
     });
   }
 
@@ -106,6 +107,19 @@ describe('createWorktree naming authority', () => {
       },
     });
     expect(storeMap.get('session-1')).toEqual(result.ok ? result.meta : undefined);
+  });
+
+  it('replaces a legacy mobile auto-* fallback when recovery provenance is present', async () => {
+    const result = await create('auto-abc123', 'session-remote', 'recovery-key-1234567890');
+
+    expect(result).toMatchObject({
+      ok: true,
+      meta: {
+        name: 'pensive-lederberg',
+        path: path.join(baseRepo, '.cindy-worktrees', 'pensive-lederberg'),
+        branch: 'cindy/pensive-lederberg',
+      },
+    });
   });
 
   it('preserves an explicit legal name and still rejects an explicit illegal name', async () => {
@@ -138,14 +152,14 @@ describe('createWorktree naming authority', () => {
       createdAt: '2026-08-09T00:00:00.000Z',
     });
 
-    const result = await create('auto-a1');
+    const result = await create('');
 
     expect(result).toMatchObject({
       ok: true,
       meta: {
-        name: 'auto-a1',
-        path: path.join(baseRepo, '.cindy-worktrees', 'auto-a1'),
-        branch: 'cindy/auto-a1',
+        name: 'pensive-lederberg-2',
+        path: path.join(baseRepo, '.cindy-worktrees', 'pensive-lederberg-2'),
+        branch: 'cindy/pensive-lederberg-2',
       },
     });
   });
