@@ -103,6 +103,19 @@ describe('remote precreated worktree response parsers', () => {
     }
   });
 
+  it('accepts Main replacing a legacy auto-* hint with the final meta name/path/branch', () => {
+    const requestWithLegacyHint = { ...request, name: 'auto-abc123' };
+    const finalMeta = {
+      ...meta,
+      name: 'pensive-lederberg',
+      path: '/repo/.cindy-worktrees/pensive-lederberg',
+      branch: 'cindy/pensive-lederberg',
+    };
+
+    expect(parseRemoteWorktreeCreateResult({ ok: true, meta: finalMeta }, requestWithLegacyHint))
+      .toEqual({ ok: true, meta: finalMeta });
+  });
+
   it.each([
     ['sessionId', 'wrong-session'],
     ['baseRepo', '/wrong-repo'],
