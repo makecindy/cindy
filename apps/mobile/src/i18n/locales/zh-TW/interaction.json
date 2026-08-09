@@ -107,8 +107,8 @@
       "label": "Issue"
     },
     "plugin_setup": {
-      "title": "需要在電腦端配置外掛",
-      "label": "外掛"
+      "title": "需要在電腦端配置插件",
+      "label": "插件"
     },
     "fallback": {
       "title": "需要處理遠端請求",
@@ -209,7 +209,7 @@
       "INLINE_UNAVAILABLE": "當前版本無法在對話中儲存此配置，請更新 Cindy 後重試。",
       "SAVE_FAILED": "未能儲存配置，請重試。",
       "WINDOW_CLOSED": "發起設定的視窗已關閉，請回到該任務重試。",
-      "TARGET_UNAVAILABLE": "外掛已停用、解除安裝或不可用，請檢查外掛狀態後重試。",
+      "TARGET_UNAVAILABLE": "插件已停用、解除安裝或不可用，請檢查插件狀態後重試。",
       "ASSESSMENT_FAILED": "暫時無法重新整理配置狀態，請重試。",
       "TIMEOUT": "等待設定超時，請重試。"
     },

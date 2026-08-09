@@ -109,7 +109,7 @@
       "help": "幫助",
       "about": "關於",
       "imBot": "IM 機器人",
-      "ghosts": "外掛"
+      "ghosts": "插件"
     },
     "sections": {
       "user": "使用者",
@@ -3200,33 +3200,33 @@
       "cancel": "取消"
     },
     "ghosts": {
-      "title": "外掛",
+      "title": "插件",
       "description": "擴充套件 Cindy 能力的工具與整合。",
       "page": {
-        "search": "搜尋外掛",
-        "clearSearch": "清除外掛搜尋",
-        "addPlugin": "新增外掛",
-        "addPluginAria": "外掛新增選項",
+        "search": "搜尋插件",
+        "clearSearch": "清除插件搜尋",
+        "addPlugin": "新增插件",
+        "addPluginAria": "插件新增選項",
         "installedSection": "已安裝",
-        "installedExpand": "展開全部 {{count}} 個已安裝外掛",
-        "installedCollapse": "收起更多已安裝外掛",
+        "installedExpand": "展開全部 {{count}} 個已安裝插件",
+        "installedCollapse": "收起更多已安裝插件",
         "recommendedSection": "推薦",
-        "updatesAvailable": "{{count}} 個外掛有可用更新",
+        "updatesAvailable": "{{count}} 個插件有可用更新",
         "updateAll": "全部更新",
         "ignoreRound": "忽略本輪",
         "updateTo": "更新到 v{{version}}",
         "updateAria": "將 {{name}} 更新到 v{{version}}",
         "createWithCindy": "使用 Cindy 建立",
-        "createPrompt": "我要建立一個 Cindy 外掛。請先呼叫 ghost_forge_guide 獲取手冊目錄，先讀第 0 章「設計對齊」，再用 section 引數讀透相關章節（動手前至少讀完沙箱紅線與打包流程兩章），不要直接開始實現。先從提問開始：優先用帶選項的提問卡片，每張卡片聚焦一個關鍵決策並標註你的推薦項，把我可能不知道的設計選項主動擺出來讓我選——比如介面形態（停靠面板、外掛頁內面板、對話卡片還是無介面）、$ 點名詞、啟動模式、是否聯網、是否需要設定頁；並逐步確認外掛要解決的問題、目標使用者、互動流程、所需工具與連線、權限邊界和驗收標準。設計確認後，再按規範實現並自檢；最後呼叫 ghost_forge_pack 打包並安裝外掛。",
+        "createPrompt": "我要建立一個 Cindy 插件。請先呼叫 ghost_forge_guide 獲取手冊目錄，先讀第 0 章「設計對齊」，再用 section 引數讀透相關章節（動手前至少讀完沙箱紅線與打包流程兩章），不要直接開始實現。先從提問開始：優先用帶選項的提問卡片，每張卡片聚焦一個關鍵決策並標註你的推薦項，把我可能不知道的設計選項主動擺出來讓我選——比如介面形態（停靠面板、插件頁內面板、對話卡片還是無介面）、$ 點名詞、啟動模式、是否聯網、是否需要設定頁；並逐步確認插件要解決的問題、目標使用者、互動流程、所需工具與連線、權限邊界和驗收標準。設計確認後，再按規範實現並自檢；最後呼叫 ghost_forge_pack 打包並安裝插件。",
         "filterAll": "全部",
-        "filtersAria": "按來源篩選外掛",
+        "filtersAria": "按來源篩選插件",
         "origin": {
           "public": "公開",
           "organization": "團隊共享",
           "local": "本地",
           "custom": "自定義"
         },
-        "emptyFiltered": "沒有找到匹配的外掛",
+        "emptyFiltered": "沒有找到匹配的插件",
         "useAria": "使用 {{name}}",
         "usePanelAction": "使用",
         "chatAction": "對話",
@@ -3238,7 +3238,7 @@
         "installAria": "安裝 {{name}}"
       },
       "market": {
-        "scopeAria": "篩選外掛來源",
+        "scopeAria": "篩選插件來源",
         "scope": {
           "all": "全部",
           "public": "公開",
@@ -3254,46 +3254,46 @@
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
         "conflict": "暫不可用",
-        "conflictAria": "{{name}} 存在外掛標識衝突",
-        "conflictDescription": "外掛標識已被佔用，當前無法安裝",
-        "unavailable": "外掛市場暫時不可用；已安裝外掛仍可正常管理和使用。",
-        "authenticationRequired": "登入 Cindy 後才能檢視外掛市場。",
-        "notConfigured": "當前環境未配置外掛市場；已安裝外掛仍可正常管理和使用。",
+        "conflictAria": "{{name}} 存在插件標識衝突",
+        "conflictDescription": "插件標識已被佔用，當前無法安裝",
+        "unavailable": "插件市場暫時不可用；已安裝插件仍可正常管理和使用。",
+        "authenticationRequired": "登入 Cindy 後才能檢視插件市場。",
+        "notConfigured": "當前環境未配置插件市場；已安裝插件仍可正常管理和使用。",
         "upgradeNotice": {
-          "single": "已自動更新企業外掛「{{name}}」",
-          "multiple_one": "已自動更新 {{count}} 個企業外掛",
-          "multiple_other": "已自動更新 {{count}} 個企業外掛",
-          "singleWithPermissions": "已自動更新企業外掛「{{name}}」，新增權限：{{permissions}}",
-          "multipleWithPermissions_one": "已自動更新 {{count}} 個企業外掛，其中有外掛新增了權限",
-          "multipleWithPermissions_other": "已自動更新 {{count}} 個企業外掛，其中有外掛新增了權限"
+          "single": "已自動更新企業插件「{{name}}」",
+          "multiple_one": "已自動更新 {{count}} 個企業插件",
+          "multiple_other": "已自動更新 {{count}} 個企業插件",
+          "singleWithPermissions": "已自動更新企業插件「{{name}}」，新增權限：{{permissions}}",
+          "multipleWithPermissions_one": "已自動更新 {{count}} 個企業插件，其中有插件新增了權限",
+          "multipleWithPermissions_other": "已自動更新 {{count}} 個企業插件，其中有插件新增了權限"
         },
         "removalNotice": {
-          "single": "外掛“{{name}}”已被組織移除，本機副本與資料已清理",
-          "multiple_one": "{{count}} 個外掛已被組織移除，本機副本與資料已清理",
-          "multiple_other": "{{count}} 個外掛已被組織移除，本機副本與資料已清理"
+          "single": "插件“{{name}}”已被組織移除，本機副本與資料已清理",
+          "multiple_one": "{{count}} 個插件已被組織移除，本機副本與資料已清理",
+          "multiple_other": "{{count}} 個插件已被組織移除，本機副本與資料已清理"
         },
         "errors": {
-          "generic": "外掛市場操作失敗，請重試。",
-          "invalidRequest": "外掛請求無效。",
-          "notFound": "該外掛已不可用，請重新整理市場後重試。",
-          "conflict": "已有本地或市場外掛使用相同的外掛標識。",
-          "stateChanged": "操作期間帳號、外掛或版本已發生變化，請確認最新狀態後重試。",
-          "accessDenied": "當前外掛操作不被允許，或操作已取消。",
-          "notConfigured": "當前環境未提供外掛市場。",
-          "invalidPackage": "該外掛包無效，或當前 Cindy 版本不支援它。"
+          "generic": "插件市場操作失敗，請重試。",
+          "invalidRequest": "插件請求無效。",
+          "notFound": "該插件已不可用，請重新整理市場後重試。",
+          "conflict": "已有本地或市場插件使用相同的插件標識。",
+          "stateChanged": "操作期間帳號、插件或版本已發生變化，請確認最新狀態後重試。",
+          "accessDenied": "當前插件操作不被允許，或操作已取消。",
+          "notConfigured": "當前環境未提供插件市場。",
+          "invalidPackage": "該插件包無效，或當前 Cindy 版本不支援它。"
         },
         "securityTitle": "安裝與權限",
-        "securityDescription": "安裝包會在主處理程序中校驗大小與 SHA-256，再經 Cindy 外掛清單校驗後原子安裝。首次安裝完成後即自動開啟，可隨時在外掛頁停用；更新會保留當前生效狀態。",
-        "customSecurityDescription": "該外掛來自你新增的自定義市場，未經 Cindy 服務端完整性校驗。安裝前會在主處理程序校驗外掛清單；首次安裝完成後即自動開啟，可隨時在外掛頁停用。",
-        "noPermissions": "此外掛未宣告額外能力。",
+        "securityDescription": "安裝包會在主處理程序中校驗大小與 SHA-256，再經 Cindy 插件清單校驗後原子安裝。首次安裝完成後即自動開啟，可隨時在插件頁停用；更新會保留當前生效狀態。",
+        "customSecurityDescription": "該插件來自你新增的自定義市場，未經 Cindy 服務端完整性校驗。安裝前會在主處理程序校驗插件清單；首次安裝完成後即自動開啟，可隨時在插件頁停用。",
+        "noPermissions": "此插件未宣告額外能力。",
         "installConfirmTitle": "安裝「{{name}}」？",
-        "installConfirmDescription": "安裝包將經過完整性與清單校驗。安裝完成後外掛將自動開啟，你可以隨時在外掛頁停用或調整配置。",
-        "customInstallConfirmDescription": "外掛來自自定義市場，未經服務端完整性校驗，安裝前將校驗外掛清單。安裝完成後外掛將自動開啟，你可以隨時在外掛頁停用或調整配置。",
+        "installConfirmDescription": "安裝包將經過完整性與清單校驗。安裝完成後插件將自動開啟，你可以隨時在插件頁停用或調整配置。",
+        "customInstallConfirmDescription": "插件來自自定義市場，未經服務端完整性校驗，安裝前將校驗插件清單。安裝完成後插件將自動開啟，你可以隨時在插件頁停用或調整配置。",
         "updateConfirmDescription": "安裝包將經過完整性與清單校驗，並替換現有版本。當前生效狀態保持不變。",
         "sources": {
-          "addMarketplace": "新增外掛市場…",
-          "dialogTitle": "新增外掛市場",
-          "dialogDescription": "從 GitHub 倉庫、Git URL 或本地資料夾新增外掛市場。",
+          "addMarketplace": "新增插件市場…",
+          "dialogTitle": "新增插件市場",
+          "dialogDescription": "從 GitHub 倉庫、Git URL 或本地資料夾新增插件市場。",
           "learnMore": "瞭解更多",
           "sourceLabel": "來源",
           "sourcePlaceholder": "owner/repo 或 git@github.com:org/repo.git",
@@ -3303,21 +3303,21 @@
           "sparsePlaceholder": "每行一個路徑，如 team/tools",
           "gitUnavailable": "未檢測到 Git 或版本低於 2.25。Git 來源不可用，本地資料夾來源不受影響。",
           "listTitle": "已新增的市場",
-          "pluginCount": "{{count}} 個外掛",
+          "pluginCount": "{{count}} 個插件",
           "sourceError": "讀取失敗",
-          "empty": "市場清單中沒有外掛條目",
-          "skippedEntries": "已跳過 {{count}} 個無效外掛條目",
-          "unreadableEntries": "{{count}} 個外掛條目暫時無法讀取，請重新整理重試",
-          "addedReceipt": "已新增「{{name}}」，找到 {{count}} 個外掛",
-          "refreshedReceipt": "已重新整理「{{name}}」，找到 {{count}} 個外掛",
-          "emptyWithEntries": "清單中有條目，但找不到可用的外掛。常見原因是外掛目錄使用 git submodule（內容不會被抓取）——請市場作者將外掛目錄直接放入儲存庫。",
+          "empty": "市場清單中沒有插件條目",
+          "skippedEntries": "已跳過 {{count}} 個無效插件條目",
+          "unreadableEntries": "{{count}} 個插件條目暫時無法讀取，請重新整理重試",
+          "addedReceipt": "已新增「{{name}}」，找到 {{count}} 個插件",
+          "refreshedReceipt": "已重新整理「{{name}}」，找到 {{count}} 個插件",
+          "emptyWithEntries": "清單中有條目，但找不到可用的插件。常見原因是插件目錄使用 git submodule（內容不會被抓取）——請市場作者將插件目錄直接放入儲存庫。",
           "localBadge": "本地",
           "defaultRef": "預設分支",
           "neverSynced": "尚未同步",
           "refresh": "重新整理",
           "remove": "移除",
           "removeConfirmTitle": "移除市場「{{name}}」？",
-          "removeConfirmDescription": "移除後，來自該市場的外掛將不再顯示；已安裝的外掛保留。",
+          "removeConfirmDescription": "移除後，來自該市場的插件將不再顯示；已安裝的插件保留。",
           "close": "關閉",
           "add": "新增市場",
           "errors": {
@@ -3332,59 +3332,59 @@
             "notFound": "該市場不存在或已被移除。"
           },
           "guide": {
-            "title": "自定義外掛市場指南",
-            "intro": "外掛市場是一個帶有清單檔案的 Git 倉庫或本地資料夾，用來分發一組 Cindy 外掛。",
+            "title": "自定義插件市場指南",
+            "intro": "插件市場是一個帶有清單檔案的 Git 倉庫或本地資料夾，用來分發一組 Cindy 插件。",
             "structureTitle": "目錄結構",
-            "structureBody": "市場倉庫需要一份清單檔案，以及若干外掛目錄。每個外掛目錄必須包含合法的 ghost.json（外掛身份卡）。",
+            "structureBody": "市場倉庫需要一份清單檔案，以及若干插件目錄。每個插件目錄必須包含合法的 ghost.json（插件身份卡）。",
             "structureLabelManifest": "清單",
-            "structureLabelGhostCard": "外掛身份卡",
-            "structureLabelEntry": "外掛入口",
+            "structureLabelGhostCard": "插件身份卡",
+            "structureLabelEntry": "插件入口",
             "structureNote": "清單可以放在以下位置之一：",
             "manifestTitle": "清單格式",
-            "manifestBody": "name 是市場的唯一標識（新增後按它管理）。清單的外掛陣列裡，每個條目的 source 指向倉庫內的外掛目錄，使用相對路徑；也支援 {\"source\": \"local\", \"path\": \"…\"} 的物件寫法。",
+            "manifestBody": "name 是市場的唯一標識（新增後按它管理）。清單的插件陣列裡，每個條目的 source 指向倉庫內的插件目錄，使用相對路徑；也支援 {\"source\": \"local\", \"path\": \"…\"} 的物件寫法。",
             "sourceTitle": "來源格式",
             "sourceBody": "支援 GitHub 簡寫 owner/repo、完整 Git URL（https / ssh / git@）和本地資料夾路徑（含 ~）。Git 引用可填分支、標籤或 commit，不填則用預設分支。稀疏路徑每行一個，只檢出倉庫的指定子目錄，適合大型倉庫。",
             "authTitle": "私有倉庫",
             "authBody": "認證完全依賴系統的 Git 配置，Cindy 不儲存任何 Git 憑證。SSH 方式：本機已配置可用的 key；若組織開啟了 SAML SSO，還需在 GitHub 的 SSH key 設定裡為該組織點 Configure SSO 授權。HTTPS 方式：使用 Personal Access Token，並由系統 credential helper 儲存。",
             "rulesTitle": "安裝規則",
-            "rulesBody": "外掛 id 全域性唯一、先裝先得——與已安裝外掛衝突時會明確提示。使用 cindy- 等官方保留字首的外掛不能從自定義市場安裝。安裝前會逐項展示外掛宣告的權限，確認後即完成安裝並自動開啟。",
+            "rulesBody": "插件 id 全域性唯一、先裝先得——與已安裝插件衝突時會明確提示。使用 cindy- 等官方保留字首的插件不能從自定義市場安裝。安裝前會逐項展示插件宣告的權限，確認後即完成安裝並自動開啟。",
             "copy": "複製指南",
             "copied": "指南已複製到剪貼簿。",
             "copyFailed": "複製失敗，請重試。"
           }
         }
       },
-      "install": "安裝外掛…",
-      "empty": "還沒有安裝任何外掛",
-      "emptyHint": "可從外掛市場安裝，或點選右上角匯入 .cindy 檔案",
+      "install": "安裝插件…",
+      "empty": "還沒有安裝任何插件",
+      "emptyHint": "可從插件市場安裝，或點選右上角匯入 .cindy 檔案",
       "legacyRecovery": {
-        "title": "舊版本外掛正在等待恢復",
-        "deferred": "檢測到 {{count}} 箇舊外掛目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
-        "deferred_one": "檢測到 {{count}} 箇舊外掛目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
-        "deferred_other": "檢測到 {{count}} 箇舊外掛目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
-        "partial": "檢測到 {{count}} 箇舊外掛目錄。部分資料未能自動恢復，可以現在重試。",
-        "partial_one": "檢測到 {{count}} 箇舊外掛目錄。部分資料未能自動恢復，可以現在重試。",
-        "partial_other": "檢測到 {{count}} 箇舊外掛目錄。部分資料未能自動恢復，可以現在重試。",
-        "partialBlocked": "檢測到 {{count}} 箇舊外掛目錄，但 Cindy 無法安全地自動恢復。相關資料已原樣保留。",
-        "partialBlocked_one": "檢測到 {{count}} 箇舊外掛目錄，但 Cindy 無法安全地自動恢復。相關資料已原樣保留。",
-        "partialBlocked_other": "檢測到 {{count}} 箇舊外掛目錄，但 Cindy 無法安全地自動恢復。相關資料已原樣保留。",
-        "claimedByOtherOwner": "檢測到 {{count}} 箇舊外掛目錄，但這批資料已歸屬於最先認領它的帳號。請切回原身份恢復。",
-        "claimedByOtherOwner_one": "檢測到 {{count}} 箇舊外掛目錄，但這批資料已歸屬於最先認領它的帳號。請切回原身份恢復。",
-        "claimedByOtherOwner_other": "檢測到 {{count}} 箇舊外掛目錄，但這批資料已歸屬於最先認領它的帳號。請切回原身份恢復。",
+        "title": "舊版本插件正在等待恢復",
+        "deferred": "檢測到 {{count}} 箇舊插件目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
+        "deferred_one": "檢測到 {{count}} 箇舊插件目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
+        "deferred_other": "檢測到 {{count}} 箇舊插件目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
+        "partial": "檢測到 {{count}} 箇舊插件目錄。部分資料未能自動恢復，可以現在重試。",
+        "partial_one": "檢測到 {{count}} 箇舊插件目錄。部分資料未能自動恢復，可以現在重試。",
+        "partial_other": "檢測到 {{count}} 箇舊插件目錄。部分資料未能自動恢復，可以現在重試。",
+        "partialBlocked": "檢測到 {{count}} 箇舊插件目錄，但 Cindy 無法安全地自動恢復。相關資料已原樣保留。",
+        "partialBlocked_one": "檢測到 {{count}} 箇舊插件目錄，但 Cindy 無法安全地自動恢復。相關資料已原樣保留。",
+        "partialBlocked_other": "檢測到 {{count}} 箇舊插件目錄，但 Cindy 無法安全地自動恢復。相關資料已原樣保留。",
+        "claimedByOtherOwner": "檢測到 {{count}} 箇舊插件目錄，但這批資料已歸屬於最先認領它的帳號。請切回原身份恢復。",
+        "claimedByOtherOwner_one": "檢測到 {{count}} 箇舊插件目錄，但這批資料已歸屬於最先認領它的帳號。請切回原身份恢復。",
+        "claimedByOtherOwner_other": "檢測到 {{count}} 箇舊插件目錄，但這批資料已歸屬於最先認領它的帳號。請切回原身份恢復。",
         "retry": "重試恢復",
         "retrying": "正在恢復…"
       },
       "disabledTag": "未生效",
       "projectDisabledTag": "本專案未生效",
-      "projectSwitchLockedTip": "該外掛已在全域性停用；請先切回「全域性」檢視開啟",
+      "projectSwitchLockedTip": "該插件已在全域性停用；請先切回「全域性」檢視開啟",
       "projectBanner": {
         "title": "正在配置專案「{{name}}」",
-        "desc": "開關只影響此專案：關閉的外掛在該專案中不可用",
+        "desc": "開關只影響此專案：關閉的插件在該專案中不可用",
         "backToGlobal": "返回全域性"
       },
       "scopePicker": {
         "global": "全域性(預設)",
-        "ariaLabel": "選擇外掛生效範圍",
+        "ariaLabel": "選擇插件生效範圍",
         "browse": "選擇其它目錄…"
       },
       "enableAria": "使 {{name}} 生效",
@@ -3396,9 +3396,9 @@
       },
       "setupGate": {
         "title": "「{{name}}」還需要完成配置",
-        "descriptionMissing": "使用前還需要配置：{{items}}。現在前往外掛配置頁完成設定嗎？",
+        "descriptionMissing": "使用前還需要配置：{{items}}。現在前往插件配置頁完成設定嗎？",
         "descriptionReauth": "帳號授權已過期：{{items}}。重新連線後才能使用，現在前往嗎？",
-        "configure": "開啟外掛設定",
+        "configure": "開啟插件設定",
         "cancel": "取消",
         "anySeparator": " 或 ",
         "groupSeparator": "、"
@@ -3414,14 +3414,14 @@
         "projectEnabled": "「{{name}}」在此專案恢復跟隨全域性"
       },
       "panelError": {
-        "crashed": "這個外掛崩潰了",
-        "fused": "這個外掛反覆崩潰，已暫停",
-        "reload": "過載外掛",
-        "close": "關閉外掛"
+        "crashed": "這個插件崩潰了",
+        "fused": "這個插件反覆崩潰，已暫停",
+        "reload": "過載插件",
+        "close": "關閉插件"
       },
       "installConfirm": {
-        "title": "安裝外掛「{{name}}」？",
-        "confirm": "安裝外掛",
+        "title": "安裝插件「{{name}}」？",
+        "confirm": "安裝插件",
         "cancel": "取消",
         "meta": "版本 {{version}}。將安裝到本機，可隨時解除安裝。",
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。將安裝到本機，可隨時解除安裝。",
@@ -3431,7 +3431,7 @@
         "collapseDescription": "收起介紹"
       },
       "trust": {
-        "official": "Cindy 官方外掛",
+        "official": "Cindy 官方插件",
         "officialDetail": "由 Cindy 隨應用提供。",
         "reviewed": "釋出者已驗證 · 此版本已稽核",
         "reviewedDetail": "簽名有效，而且 Cindy 稽核簽名準確對應這個版本的全部檔案。",
@@ -3454,33 +3454,33 @@
         "cindyVideoGenerate": "影片生成(請 Cindy 代辦)",
         "cindyVideoEdit": "圖生影片(請 Cindy 代辦，參考圖僅限它名下的圖)",
         "cindyMediaDeposit": "可將它手中的圖片、影片或音訊存入你的媒體庫",
-        "cindyMediaDepositDetail": "用於讓你在外掛裡貼上或拖入的素材也能被 AI 加工。存入的內容記在這個外掛名下，最多佔用 {{quota}}，解除安裝外掛時一併清理。",
+        "cindyMediaDepositDetail": "用於讓你在插件裡貼上或拖入的素材也能被 AI 加工。存入的內容記在這個插件名下，最多佔用 {{quota}}，解除安裝插件時一併清理。",
         "cindyTextOneshot": "可向 Cindy 的快速通道提問並獲得文字回答",
         "cindyTextOneshotDetail": "走系統的輕量任務模型鏈(與自動起標題同一條通道)，不動用 Agent、碰不到你的檔案，可能產生模型費用。",
         "cindyEmbedText": "可把文字送去算成向量（用於語義檢索）",
-        "cindyEmbedTextDetail": "文字會送到系統的向量模型算成一串數字，單次最多 {{max}} 條，可能產生模型費用。算出的向量只交給外掛自己保管，不寫入你的資料庫。",
+        "cindyEmbedTextDetail": "文字會送到系統的向量模型算成一串數字，單次最多 {{max}} 條，可能產生模型費用。算出的向量只交給插件自己保管，不寫入你的資料庫。",
         "cindySearchWeb": "可使用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢會訪問公網，並可能消耗 Cindy AI 配額。",
-        "cindyTextOneshotModelDetail": "走系統的輕量任務模型鏈(與自動起標題同一條通道)，不動用 Agent、碰不到你的檔案，可能產生模型費用。外掛聲明瞭偏好模型：{{model}}(當前目錄可用時生效；你的釘檔優先)。",
-        "agentUserAction": "使用者點選外掛卡片後，可讓 Agent 開始新一輪工作",
+        "cindyTextOneshotModelDetail": "走系統的輕量任務模型鏈(與自動起標題同一條通道)，不動用 Agent、碰不到你的檔案，可能產生模型費用。插件聲明瞭偏好模型：{{model}}(當前目錄可用時生效；你的釘檔優先)。",
+        "agentUserAction": "使用者點選插件卡片後，可讓 Agent 開始新一輪工作",
         "agentUserActionDetail": "每次點選只允許啟動一次，並且只能使用這張卡所屬的任務。",
         "agentBackground": "可在後臺自動讓 Agent 開始新一輪工作",
-        "agentBackgroundDetail": "不需要當次點選，但只能使用你曾為這個外掛建立過關聯的任務，可能產生模型費用。",
+        "agentBackgroundDetail": "不需要當次點選，但只能使用你曾為這個插件建立過關聯的任務，可能產生模型費用。",
         "agentErrand": "可把任務交給 Cindy Agent 代辦並取回結果",
-        "agentErrandDetail": "這些代辦會在這個外掛的專屬任務裡進行，你隨時可以在側邊欄看到並叫停；預設只能讀不能改，要放開需你在外掛配置裡親手調整，可能產生模型費用。",
+        "agentErrandDetail": "這些代辦會在這個插件的專屬任務裡進行，你隨時可以在側邊欄看到並叫停；預設只能讀不能改，要放開需你在插件配置裡親手調整，可能產生模型費用。",
         "agentSchedule": "可以請你新建自動化",
         "agentScheduleDetail": "它只能為你開啟新建自動化的面板並把內容填好，是否建立由你在面板上選好模型後親手儲存決定。建立後由 Cindy 按你設定的時間執行，可能產生模型費用。",
-        "nodeRuntime": "可在本機執行隨外掛附帶的 Node 程式",
-        "nodeMcp": "可在本機執行隨外掛附帶的 stdio MCP",
+        "nodeRuntime": "可在本機執行隨插件附帶的 Node 程式",
+        "nodeMcp": "可在本機執行隨插件附帶的 stdio MCP",
         "nodeRuntimeDetail": "高風險：它和你本人一樣，可以讀取或修改你帳號能訪問的本機檔案、訪問網路並啟動其它程式。Cindy 不能用瀏覽器沙箱限制它。",
         "nodeSecret": "可將已儲存憑證「{{name}}」提供給本機 Node 程式",
-        "nodeSecretDetail": "Cindy 加密保管，僅在下列已宣告 Worker 方法執行時臨時注入。Node 程式會收到明文，也可以將其回傳、記錄、儲存或暴露給瀏覽器側外掛程式碼及 Agent 引數；請只安裝可信外掛。",
+        "nodeSecretDetail": "Cindy 加密保管，僅在下列已宣告 Worker 方法執行時臨時注入。Node 程式會收到明文，也可以將其回傳、記錄、儲存或暴露給瀏覽器側插件程式碼及 Agent 引數；請只安裝可信插件。",
         "nodeResident": "Node 程式可常駐後臺",
-        "nodeResidentDetail": "外掛啟用期間會一直執行；停用、更新、解除安裝或退出 Cindy 時關閉。",
+        "nodeResidentDetail": "插件啟用期間會一直執行；停用、更新、解除安裝或退出 Cindy 時關閉。",
         "tool": "工具「{{name}}」",
         "command": "對話指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 停靠主對話區左側",
-        "panelTab": "面板「{{title}}」· 外掛頁內開啟",
+        "panelTab": "面板「{{title}}」· 插件頁內開啟",
         "code": "可執行程式碼",
         "codeDetail": "在獨立沙箱中執行，無法訪問你的檔案與網路。",
         "resident": "常駐執行(生效後即啟動，不呼叫也保持後臺處理程序)",
@@ -3496,26 +3496,26 @@
         "cardExternalLink": "卡片內可宣告外鏈，經你確認後開啟瀏覽器",
         "cardExternalLinkDetail": "卡片中的連結點選後會彈出確認框，你同意後才會在系統瀏覽器中開啟；僅限 http/https 地址。",
         "notify": "可彈出系統提示(螢幕頂部的輕提示)",
-        "notifyDetail": "提示內容由這個外掛提供，提示上會標註它的名字；自動消失，不會打斷你的操作。",
-        "badge": "可在外掛入口點亮未讀提醒",
-        "badgeDetail": "有新內容時，它可以在側欄外掛入口和自己的卡片上點亮一個綠點，並附一句話摘要；你開啟它的面板即清零。綠點不出聲、不震動，也不會進入系統通知中心，和上面的系統提示是兩項獨立權限。",
+        "notifyDetail": "提示內容由這個插件提供，提示上會標註它的名字；自動消失，不會打斷你的操作。",
+        "badge": "可在插件入口點亮未讀提醒",
+        "badgeDetail": "有新內容時，它可以在側欄插件入口和自己的卡片上點亮一個綠點，並附一句話摘要；你開啟它的面板即清零。綠點不出聲、不震動，也不會進入系統通知中心，和上面的系統提示是兩項獨立權限。",
         "confirm": "可彈出確認框徵求你同意",
         "confirmDetail": "它動手前可以彈一個和 Cindy 同款的確認框來問你，問句由它提供、框上會標註它的名字；同意還是取消都由你親手點，它自己點不了。同時最多一個確認框，彈得太頻會被攔下。",
         "fsWrite": "可寫入檔案(建立/修改)",
-        "fsWriteDetail": "它自己的專屬資料目錄隨時可寫；當前任務的工作目錄跟隨任務的權限模式(免批模式直接寫，逐條確認模式先徵求你同意)；其它目錄每次都需要你確認。檔案始終由主機代寫，外掛本身無法直接訪問你的檔案系統。",
+        "fsWriteDetail": "它自己的專屬資料目錄隨時可寫；當前任務的工作目錄跟隨任務的權限模式(免批模式直接寫，逐條確認模式先徵求你同意)；其它目錄每次都需要你確認。檔案始終由主機代寫，插件本身無法直接訪問你的檔案系統。",
         "networkHost": "訪問網路域名 {{host}}",
         "networkSecret": "需要你提供憑證「{{name}}」",
-        "networkSecretGhostInputDetail": "憑證由這個外掛自己的設定介面收集，錄入時會經過外掛頁面；隨後一次性交給主機加密保管，存入後外掛無法讀回，主機只在請求它宣告的域名時注入。",
+        "networkSecretGhostInputDetail": "憑證由這個插件自己的設定介面收集，錄入時會經過插件頁面；隨後一次性交給主機加密保管，存入後插件無法讀回，主機只在請求它宣告的域名時注入。",
         "networkSecretIdentity": "將使用你的登入電子郵件作為憑證「{{name}}」",
-        "networkSecretIdentityDetail": "值取自當前登入帳號的電子郵件，請求時由主機自動派生注入；無需填寫。外掛可讀取該電子郵件，用於在它的設定介面裡展示當前身份。",
+        "networkSecretIdentityDetail": "值取自當前登入帳號的電子郵件，請求時由主機自動派生注入；無需填寫。插件可讀取該電子郵件，用於在它的設定介面裡展示當前身份。",
         "networkSecretGhCli": "將優先使用本機 GitHub CLI 登入作為憑證「{{name}}」",
-        "networkSecretGhCliDetail": "主機按需讀取本機 gh 登入令牌，並且只注入 GitHub API 請求；外掛程式碼無法讀取或儲存令牌。若 gh 不可用，可在外掛設定中配置備用 Personal Access Token。",
+        "networkSecretGhCliDetail": "主機按需讀取本機 gh 登入令牌，並且只注入 GitHub API 請求；插件程式碼無法讀取或儲存令牌。若 gh 不可用，可在插件設定中配置備用 Personal Access Token。",
         "networkSecretOrganizationIdentity": "將使用你的 Cindy 企業身份作為憑證「{{name}}」",
-        "networkSecretOrganizationIdentityDetail": "Cindy 會按需簽發短時身份斷言，僅由主機傳送給明確列出的服務域名；外掛程式碼無法讀取或儲存令牌。",
+        "networkSecretOrganizationIdentityDetail": "Cindy 會按需簽發短時身份斷言，僅由主機傳送給明確列出的服務域名；插件程式碼無法讀取或儲存令牌。",
         "networkSecretOauth": "將引導你在 {{host}} 完成 OAuth 授權({{name}})",
-        "networkSecretOauthDetail": "授權流程與全部令牌由主機代管，外掛程式碼無法讀取；客戶端憑證由你在本外掛詳情頁自填。下方為其申請的權限範圍(scopes)原文，請確認後再放行。",
+        "networkSecretOauthDetail": "授權流程與全部令牌由主機代管，插件程式碼無法讀取；客戶端憑證由你在本插件詳情頁自填。下方為其申請的權限範圍(scopes)原文，請確認後再放行。",
         "networkConnections": "可連線你新增的 {{label}}",
-        "networkConnectionsDetail": "地址在這個外掛的設定介面裡新增；每次新增地址都需要你確認，你提供的憑證只注入對應地址。",
+        "networkConnectionsDetail": "地址在這個插件的設定介面裡新增；每次新增地址都需要你確認，你提供的憑證只注入對應地址。",
         "codeDetailNetwork": "在獨立沙箱中執行，無法訪問你的檔案；網路僅限上方宣告的域名，由主機代發。",
         "codeDetailWithNode": "面板 UI 在獨立沙箱中執行；本地處理能力由上方宣告的 Node 執行時提供。",
         "added": "新增",
@@ -3530,31 +3530,31 @@
         "sessionContext": "可獲知當前任務正在使用的專案資料夾位置",
         "sessionContextDetail": "只在它為當前任務幹活時告知位置資訊(任務編號與專案資料夾路徑)，不包含檔案內容，也不因此獲得檔案訪問權。",
         "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
-        "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個外掛開啟的。",
+        "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個插件開啟的。",
         "nodeChildSpawn": "Node 程式可請宿主再啟動包內申報過的子處理程序",
-        "nodeChildSpawnDetail": "只能啟動它自己包裡申報過的 JS 檔案(與主程式同樣的本機權限)，不能執行任意命令；外掛停用或退出時子處理程序一併關閉。",
+        "nodeChildSpawnDetail": "只能啟動它自己包裡申報過的 JS 檔案(與主程式同樣的本機權限)，不能執行任意命令；插件停用或退出時子處理程序一併關閉。",
         "skill": "為 AI 助手新增技能「{{name}}」",
-        "skillDetail": "技能是一份指令檔案，AI 會把它當作自己的指令載入執行，擁有你的全部權限，對 Claude Code 與 Codex、所有專案都生效——不受本外掛沙箱約束。外掛啟用期間持續可用，停用或解除安裝即移除；僅對某個資料夾關閉本外掛不會隱藏它。此處無法預覽技能全文——請只安裝你信任的外掛。"
+        "skillDetail": "技能是一份指令檔案，AI 會把它當作自己的指令載入執行，擁有你的全部權限，對 Claude Code 與 Codex、所有專案都生效——不受本插件沙箱約束。插件啟用期間持續可用，停用或解除安裝即移除；僅對某個資料夾關閉本插件不會隱藏它。此處無法預覽技能全文——請只安裝你信任的插件。"
       },
       "connections": {
         "confirmTitle": "新增連線地址",
-        "confirmMessage": "外掛「{{name}}」請求新增連線地址 {{host}}",
-        "confirmDetail": "允許後，該外掛可經主機訪問此地址({{label}})；你提供的憑證只會注入這個地址的請求。",
+        "confirmMessage": "插件「{{name}}」請求新增連線地址 {{host}}",
+        "confirmDetail": "允許後，該插件可經主機訪問此地址({{label}})；你提供的憑證只會注入這個地址的請求。",
         "confirmAllow": "允許",
         "confirmCancel": "取消"
       },
       "errors": {
-        "fileInvalid": "不是合法的 .cindy 外掛檔案",
-        "alreadyInstalled": "這個外掛已經安裝",
-        "commandConflict": "它的指令和已裝外掛撞名了，先解除安裝佔用方或讓作者改名",
-        "idReserved": "該 id 使用了官方保留字首 cindy-，僅隨應用內建的外掛可用",
+        "fileInvalid": "不是合法的 .cindy 插件檔案",
+        "alreadyInstalled": "這個插件已經安裝",
+        "commandConflict": "它的指令和已裝插件撞名了，先解除安裝佔用方或讓作者改名",
+        "idReserved": "該 id 使用了官方保留字首 cindy-，僅隨應用內建的插件可用",
         "sourceMissing": "找不到所選檔案",
         "generic": "操作失敗，請稍後重試",
-        "updateIdMismatch": "所選檔案是外掛「{{id}}」，與當前外掛「{{expected}}」不一致"
+        "updateIdMismatch": "所選檔案是插件「{{id}}」，與當前插件「{{expected}}」不一致"
       },
       "detail": {
         "enable": "生效",
-        "backToList": "返回外掛列表",
+        "backToList": "返回插件列表",
         "infoTitle": "詳細資訊",
         "infoId": "標識",
         "infoAuthor": "作者",
@@ -3570,17 +3570,17 @@
         "openLocation": "開啟安裝位置",
         "panelDocked": "已停靠 · 最小寬 {{min}}px",
         "panelNotDocked": "未停靠(佈局中暫無位置記錄)",
-        "panelPageHosted": "從外掛頁開啟 · 離開外掛頁自動關閉",
-        "panelNone": "這個外掛不含面板",
-        "customSlotTitle": "外掛自定義設定區",
-        "dangerTitle": "解除安裝外掛",
+        "panelPageHosted": "從插件頁開啟 · 離開插件頁自動關閉",
+        "panelNone": "這個插件不含面板",
+        "customSlotTitle": "插件自定義設定區",
+        "dangerTitle": "解除安裝插件",
         "infoContents": "包含",
         "infoVersion": "版本",
         "updateTitle": "更新版本",
         "updateDesc": "選擇新的 .cindy 檔案原位替換；生效狀態與面板位置保持不變。",
         "cindyPrefs": {
           "title": "Cindy 能力",
-          "desc": "這個外掛申請的每項 Cindy 代辦能力，可單獨指定用哪個模型；預設跟隨系統(自帶 Proxy)。",
+          "desc": "這個插件申請的每項 Cindy 代辦能力，可單獨指定用哪個模型；預設跟隨系統(自帶 Proxy)。",
           "cap": {
             "image.generate": "出圖",
             "image.edit": "改圖",
@@ -3590,48 +3590,48 @@
             "embed.text": "文字轉向量"
           },
           "defaultOption": "{{model}}(預設)",
-          "defaultOptionDeclared": "{{model}}(外掛宣告)",
+          "defaultOptionDeclared": "{{model}}(插件宣告)",
           "searchPlaceholder": "搜尋模型或供應商",
           "budgetBadge": "折扣",
           "noModels": "暫無可用模型"
         },
         "errandPrefs": {
           "title": "AI 代辦",
-          "desc": "這個外掛把任務交給 Cindy Agent 時用哪套配置幹活。不配就跟隨你新建草稿時的選擇；幫工預設只能看不能改，工作目錄預設是外掛專屬資料夾。",
+          "desc": "這個插件把任務交給 Cindy Agent 時用哪套配置幹活。不配就跟隨你新建草稿時的選擇；幫工預設只能看不能改，工作目錄預設是插件專屬資料夾。",
           "agent": "Agent",
           "model": "模型",
           "permission": "動手權限",
           "permissionDisabled": "派活時不提供這一檔",
           "workdir": "工作目錄",
-          "workdirDefault": "外掛專屬資料夾(預設)",
+          "workdirDefault": "插件專屬資料夾(預設)",
           "workdirPick": "選擇…",
           "workdirClear": "恢復預設目錄"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "權限",
         "infoDescription": "描述",
-        "customSlotAsleep": "外掛未生效，生效後這裡將顯示它的設定介面。",
+        "customSlotAsleep": "插件未生效，生效後這裡將顯示它的設定介面。",
         "descriptionExpand": "展開",
         "descriptionCollapse": "收起",
         "useAction": "使用",
         "chatAction": "對話",
         "enabledLabel": "已啟用",
         "disabledLabel": "已停用",
-        "useDisabled": "請先開啟外掛",
-        "moreActions": "更多外掛操作",
+        "useDisabled": "請先開啟插件",
+        "moreActions": "更多插件操作",
         "updateFromFile": "從 .cindy 檔案更新…",
         "exportPackage": "匯出 .cindy 檔案…",
-        "exportFileType": "Cindy 外掛",
+        "exportFileType": "Cindy 插件",
         "settingsTitle": "{{name}} 設定",
-        "settingsUnavailableUntilRestore": "恢復外掛後可繼續使用這項配置。",
-        "oauthScopeStale": "當前授權未包含外掛新增權限，請重新連線補齊授權。",
+        "settingsUnavailableUntilRestore": "恢復插件後可繼續使用這項配置。",
+        "oauthScopeStale": "當前授權未包含插件新增權限，請重新連線補齊授權。",
         "configurationTitle": "配置",
         "openTool": "檢視 Tool {{name}} 的詳情",
         "noToolDescription": "該 Tool 暫無描述。",
         "viewAllTools": "檢視更多",
         "collapseTools": "收起 Tool",
         "viewAllPermissions": "檢視更多",
-        "permissionsDialogDescription": "該外掛申請的全部 {{count}} 項權限",
+        "permissionsDialogDescription": "該插件申請的全部 {{count}} 項權限",
         "closeDialog": "關閉彈窗"
       },
       "contents": {
@@ -3651,29 +3651,29 @@
         "slotSkill": "Agent 技能",
         "slotWorkspace": "工作區任務"
       },
-      "commandPaletteTag": "外掛指令",
+      "commandPaletteTag": "插件指令",
       "updateConfirm": {
-        "title": "更新外掛「{{name}}」？",
+        "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。將替換現有版本；生效狀態與面板位置保持不變。",
         "confirm": "更新",
         "cancel": "取消"
       },
       "pick": {
         "dialogTitle": "選擇資料夾",
-        "dialogMessage": "外掛「{{name}}」請求你選擇一個資料夾"
+        "dialogMessage": "插件「{{name}}」請求你選擇一個資料夾"
       },
       "confirm": {
-        "dialogTitle": "外掛「{{name}}」請你確認"
+        "dialogTitle": "插件「{{name}}」請你確認"
       },
       "workspace": {
         "dialogTitle": "選擇專案資料夾",
-        "dialogMessage": "外掛「{{name}}」請求你選擇一個專案資料夾，用於在側邊欄建立任務"
+        "dialogMessage": "插件「{{name}}」請求你選擇一個專案資料夾，用於在側邊欄建立任務"
       },
       "panelHost": {
         "close": "關閉面板"
       },
       "updateAll": {
-        "title": "全部更新 · {{count}} 個外掛",
+        "title": "全部更新 · {{count}} 個插件",
         "description": "權限無變化的更新會自動完成；涉及權限變更的需要你逐項確認。",
         "versionRange": "v{{from}} → v{{to}}",
         "permissionChanged": "權限有變更",
@@ -4379,23 +4379,23 @@
     "restoreAria": "還原面板大小",
     "detachAria": "在獨立視窗中開啟",
     "minimizeAria": "最小化為浮動氣泡",
-    "closeAria": "關閉面板並停用外掛"
+    "closeAria": "關閉面板並停用插件"
   },
   "ghostPanel": {
     "disableConfirm": {
       "title": "停用「{{name}}」？",
-      "body": "關閉這個面板會停用整個外掛，它的面板和能力都會暫停。之後可以隨時在側邊欄「外掛」裡重新開啟。",
+      "body": "關閉這個面板會停用整個插件，它的面板和能力都會暫停。之後可以隨時在側邊欄「插件」裡重新開啟。",
       "confirm": "停用"
     }
   },
   "ghostPanelWindow": {
     "mergeBack": "合併回主視窗",
-    "unavailable": "該外掛面板當前不可用"
+    "unavailable": "該插件面板當前不可用"
   },
   "ghostPanelBubble": {
     "restoreAria": "恢復 {{name}} 面板",
-    "stackExpandAria": "已收起 {{count}} 個外掛面板，點選展開",
-    "stackCollapseAria": "收攏外掛面板列表"
+    "stackExpandAria": "已收起 {{count}} 個插件面板，點選展開",
+    "stackCollapseAria": "收攏插件面板列表"
   },
   "rightSidebar": {
     "ariaLabel": "右側邊欄",
@@ -4424,7 +4424,7 @@
         "resourceUsage": "資源用量",
         "collaboration": "協同",
         "unknown": "未知標籤頁",
-        "ghostPanel": "外掛面板"
+        "ghostPanel": "插件面板"
       },
       "controls": {
         "maximizeAria": "最大化側欄",
@@ -4931,7 +4931,7 @@
     "tabs": {
       "projects": "專案",
       "skillhub": "技能",
-      "plugins": "外掛",
+      "plugins": "插件",
       "issues": "Issue"
     },
     "user": {
@@ -5043,9 +5043,9 @@
     },
     "pluginSetup": {
       "title": "{{name}} 設定",
-      "assessmentReadFailed": "無法讀取外掛配置狀態。",
-      "setupIncomplete": "外掛尚未完成配置。",
-      "setupChangedDuringResume": "外掛配置在呼叫恢復前發生變化，請完成設定後重試。",
+      "assessmentReadFailed": "無法讀取插件配置狀態。",
+      "setupIncomplete": "插件尚未完成配置。",
+      "setupChangedDuringResume": "插件配置在呼叫恢復前發生變化，請完成設定後重試。",
       "chooseOne": "選擇一種配置方式",
       "restoreAria": "展開 {{name}} 設定",
       "minimizeAria": "收起 {{name}} 設定",
@@ -5066,14 +5066,14 @@
         "INLINE_UNAVAILABLE": "當前版本無法在對話中儲存此配置，請更新 Cindy 後重試。",
         "SAVE_FAILED": "未能儲存配置，請重試。",
         "WINDOW_CLOSED": "發起設定的視窗已關閉，請回到該任務重試。",
-        "TARGET_UNAVAILABLE": "外掛已停用、解除安裝或不可用，請檢查外掛狀態後重試。",
+        "TARGET_UNAVAILABLE": "插件已停用、解除安裝或不可用，請檢查插件狀態後重試。",
         "ASSESSMENT_FAILED": "暫時無法重新整理配置狀態，請重試。",
         "TIMEOUT": "等待設定超時，請重試。"
       },
       "hostRequirements": {
         "modelProvider": {
           "label": "AI 模型服務",
-          "description": "使用外掛宣告的圖片或影片能力前，需要先連線可用的模型服務"
+          "description": "使用插件宣告的圖片或影片能力前，需要先連線可用的模型服務"
         }
       },
       "form": {
@@ -5101,15 +5101,15 @@
       "timeout": "等待超時",
       "oauthCancelled": "授權已取消",
       "oauthFailed": "授權失敗：{{detail}}",
-      "pluginUninstalledDuringOauth": "目標外掛已解除安裝或不可用",
+      "pluginUninstalledDuringOauth": "目標插件已解除安裝或不可用",
       "inlineSecretInvalid": "憑證內容無效",
-      "pluginUnavailable": "目標外掛已解除安裝或不可用",
+      "pluginUnavailable": "目標插件已解除安裝或不可用",
       "inlineActionExpired": "配置動作已失效，請重新嘗試",
       "inlineSecretDeclChanged": "憑證宣告已變更，請重新嘗試",
       "inlineSecretStoreFailed": "憑證儲存失敗",
-      "targetNotFound": "目標外掛已解除安裝或當前不可用",
-      "targetDisabled": "目標外掛已被停用",
-      "targetDisabledInWorkdir": "使用者已在當前工作目錄停用該外掛；不要重試。"
+      "targetNotFound": "目標插件已解除安裝或當前不可用",
+      "targetDisabled": "目標插件已被停用",
+      "targetDisabledInWorkdir": "使用者已在當前工作目錄停用該插件；不要重試。"
     },
     "createAgent": {
       "quickStart": "快速開始",
@@ -5507,13 +5507,13 @@
     },
     "atMention": {
       "add": "新增",
-      "plugins": "外掛",
+      "plugins": "插件",
       "filesAndFolders": "檔案和資料夾",
       "browserTab": "瀏覽器標籤",
       "desktopWindow": "應用視窗",
       "task": "任務",
-      "pluginResources": "外掛資源",
-      "pluginResource": "外掛資源",
+      "pluginResources": "插件資源",
+      "pluginResource": "插件資源",
       "backToAll": "返回全部 @ 內容",
       "scanFailed": "載入 @ 內容失敗",
       "retry": "重試",
@@ -6202,14 +6202,14 @@
     },
     "ghostSummon": {
       "directiveLabel": "追加給模型的指令",
-      "legend": "高亮 = 外掛注入(來自身份卡)· 其餘為系統固定模板",
+      "legend": "高亮 = 插件注入(來自身份卡)· 其餘為系統固定模板",
       "expandAria": "展開檢視追加給模型的指令",
       "collapseAria": "收起指令詳情",
-      "mention": "提及外掛 · {{names}}",
+      "mention": "提及插件 · {{names}}",
       "mentionExpandAria": "檢視追加給模型的提示原文",
       "mentionDirectiveLabel": "追加給模型的提示",
       "semanticExpandAria": "檢視本次呼叫說明",
-      "semanticNote": "AI 根據訊息語義自主呼叫了這個外掛；本條訊息未追加任何機器指令。",
+      "semanticNote": "AI 根據訊息語義自主呼叫了這個插件；本條訊息未追加任何機器指令。",
       "listSeparator": "、",
       "status": {
         "running": "呼叫中…",
@@ -6383,23 +6383,23 @@
       "cancelTitle": "取消等待並移除這條訊息"
     },
     "ghostCall": {
-      "verb": "呼叫外掛",
-      "cardRunning": "外掛繪製中",
+      "verb": "呼叫插件",
+      "cardRunning": "插件繪製中",
       "cardDone": "已完成",
-      "cardAria": "{{name}} 的外掛卡片({{tool}})",
+      "cardAria": "{{name}} 的插件卡片({{tool}})",
       "cardParams": "呼叫引數",
       "linkConfirmTitle": "開啟外部連結？",
-      "linkConfirmHint": "該連結由外掛提供，將在系統瀏覽器中開啟：",
+      "linkConfirmHint": "該連結由插件提供，將在系統瀏覽器中開啟：",
       "linkConfirmOpen": "開啟",
       "linkConfirmCancel": "取消",
       "linkOpenFailed": "連結開啟失敗"
     },
     "ghostHook": {
-      "blockedFallback": "訊息被外掛攔下，未傳送",
+      "blockedFallback": "訊息被插件攔下，未傳送",
       "fused": "「{{name}}」多次無響應，已暫停其攔截能力(僅旁聽)",
-      "processing": "外掛處理中…",
+      "processing": "插件處理中…",
       "viewOriginal": "檢視原文",
-      "viewGhostCard": "檢視外掛卡片"
+      "viewGhostCard": "檢視插件卡片"
     },
     "modelMismatch": {
       "notice": "本輪由 {{actual}} 響應，而非所選的 {{selected}}(服務端臨時降級)"
@@ -6595,7 +6595,7 @@
         "awaitingPermission": "等待授權",
         "awaitingQuestion": "等待你的回覆",
         "awaitingPlan": "等待計劃審閱",
-        "awaitingPluginSetup": "等待外掛設定"
+        "awaitingPluginSetup": "等待插件設定"
       },
       "showAllSessions": "顯示全部 {{count}} 項",
       "dialogues": "對話",
@@ -7343,8 +7343,8 @@
           "feishu_read": "列最近活躍對話；拉取指定對話(群/單聊)的最近訊息"
         },
         "capabilityWarn": {
-          "ghostMissing": "依賴「{{name}}」外掛，當前未裝入——任務執行時該能力會失敗",
-          "ghostAsleep": "依賴「{{name}}」外掛，當前未生效——任務執行時該能力會失敗"
+          "ghostMissing": "依賴「{{name}}」插件，當前未裝入——任務執行時該能力會失敗",
+          "ghostAsleep": "依賴「{{name}}」插件，當前未生效——任務執行時該能力會失敗"
         }
       },
       "fields": {
@@ -7664,7 +7664,7 @@
       "notSignedInHint": "登入 Cindy 帳號後，可以看到你提交過的全部 Issue 和它們的最新狀態。",
       "fetchFailedHint": "暫時取不到最新狀態，當前只顯示本機記錄的提交，列表可能不完整。",
       "fetchFailedPartialHint": "暫時取不到最新狀態，部分 Issue 的狀態可能顯示不全。",
-      "enhancementFailedHint": "暫時沒能讀取你 GitHub 帳號名下的 Issue。可能是 Cindy GitHub 外掛的訪問令牌權限不足，可到外掛頁檢查。",
+      "enhancementFailedHint": "暫時沒能讀取你 GitHub 帳號名下的 Issue。可能是 Cindy GitHub 插件的訪問令牌權限不足，可到插件頁檢查。",
       "enhancementFailedGenericHint": "暫時沒能讀取你 GitHub 帳號名下的 Issue，可能是網路問題或 GitHub 介面限流，稍後可以點右上角重試。",
       "truncatedHint": "Issue 較多，這裡只列出了一部分，完整列表請在 GitHub 上檢視。"
     },
@@ -7904,10 +7904,10 @@
     "confirm": {
       "title": "「{{name}}」請求使用你的檔案",
       "count": "{{count}} 個檔案",
-      "descriptionAttachments": "以下檔案在當前任務的工作目錄之外。允許後，這些檔案會交給該外掛處理(它只拿到內容指紋，拿不到路徑)。",
-      "descriptionDir": "以下目錄/檔案在當前任務的工作目錄之外。允許後，其中的檔案會交給該外掛上傳(它只拿到一次性票據，拿不到路徑)。",
-      "descriptionSaveDir": "以下目錄在當前任務的工作目錄之外。允許後，該外掛可以把下載的檔案存入其中(不會覆蓋已有檔案)。",
-      "descriptionFsWrite": "該外掛請求在當前任務的工作目錄寫入以下檔案。允許後，本任務內它寫同一目錄不再詢問。",
+      "descriptionAttachments": "以下檔案在當前任務的工作目錄之外。允許後，這些檔案會交給該插件處理(它只拿到內容指紋，拿不到路徑)。",
+      "descriptionDir": "以下目錄/檔案在當前任務的工作目錄之外。允許後，其中的檔案會交給該插件上傳(它只拿到一次性票據，拿不到路徑)。",
+      "descriptionSaveDir": "以下目錄在當前任務的工作目錄之外。允許後，該插件可以把下載的檔案存入其中(不會覆蓋已有檔案)。",
+      "descriptionFsWrite": "該插件請求在當前任務的工作目錄寫入以下檔案。允許後，本任務內它寫同一目錄不再詢問。",
       "descriptionWorkspace": "該資料夾在當前任務的工作目錄之外。允許後，Cindy 會以它為工作目錄在側邊欄建立一個空任務(已有任務時直接複用)，不會讀取其中的檔案。",
       "dirMeta": "{{count}} 個檔案 · {{size}}",
       "directory": "目錄",
@@ -8680,7 +8680,7 @@
     "tooltipEmpty": "更多操作",
     "tooltipCount": "{{count}} 個附加引用目錄",
     "addFiles": "新增檔案、圖片或影片…",
-    "pluginsTitle": "已安裝的外掛",
+    "pluginsTitle": "已安裝的插件",
     "pluginDisabled": "未生效",
     "pluginNoCommand": "不可直接使用",
     "sectionTitle": "引用目錄(只讀)",
@@ -8818,7 +8818,7 @@
     "exit": "退出計劃模式"
   },
   "globalDrop": {
-    "cindyHint": "鬆開安裝外掛",
+    "cindyHint": "鬆開安裝插件",
     "cshareHint": "鬆開匯入分享的任務"
   },
   "sessionShare": {

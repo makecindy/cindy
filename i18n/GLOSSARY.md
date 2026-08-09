@@ -40,7 +40,7 @@
 | **Effort** | 推理强度 | 推理強度 | 推論強度 | 추론 강도 | zh-CN: 思考强度；zh-CN: 思考深度；zh-CN: 推理深度；zh-CN: 努力程度；zh-CN: 推理力度；zh-TW: 思考強度；zh-TW: 思考深度；zh-TW: 推理深度；zh-TW: 努力程度；zh-TW: 推理力度；ja: 推論レベル；ja: 推論の強度 |
 | **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | zh-CN: 工单；zh-CN: 议题；zh-TW: 工單；zh-TW: 議題；ja: 課題（仅当英文含 Issue） |
 | **Message** | 消息 | 訊息 | メッセージ | 메시지 | zh-CN: 条对话（仅当英文含 Message）；zh-TW: 條對話（仅当英文含 Message） |
-| **Plugin** | 插件 | 外掛 | プラグイン | 플러그인 | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin |
+| **Plugin** | 插件 | 插件 | プラグイン | 플러그인 | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin；zh-TW: 外掛 |
 | **Project** | 项目 | 專案 | プロジェクト | 프로젝트 | zh-CN: Project；zh-TW: Project |
 | **Provider** | 供应商 | 供應商 | プロバイダー | 제공자 | zh-CN: 提供方；zh-CN: 提供商；zh-TW: 提供方；zh-TW: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
 | **Proxy** | `Proxy`（保留英文） | `Proxy`（保留英文） | プロキシ | 프록시 | zh-CN: 代理（仅当英文含 Proxy）；zh-TW: 代理（仅当英文含 Proxy） |
