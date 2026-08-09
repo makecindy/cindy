@@ -131,6 +131,7 @@
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
       "linkOpen": "連結開啟方式",
+      "streamFade": "串流動態效果",
       "compatMode": "小技巧",
       "voiceInput": "語音輸入",
       "import": "任務匯入",
@@ -2297,6 +2298,12 @@
         "sidebar": "內建側邊欄瀏覽器",
         "external": "系統預設瀏覽器"
       }
+    },
+    "streamFade": {
+      "title": "串流動態效果",
+      "label": "輸出文字淡入顯示",
+      "hint": "回覆串流輸出時，新文字會逐詞淡入顯示；開啟後套用效果，關閉時內容會立即顯示。系統開啟「減少動態效果」時，此效果一律關閉。",
+      "toggleAria": "開啟或關閉串流輸出淡入效果"
     },
     "personalization": {
       "title": "個性化",
