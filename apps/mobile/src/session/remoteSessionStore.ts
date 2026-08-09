@@ -266,6 +266,11 @@ const inputProjections = new Map<string, InputProjection>();
 const inputProjectionAuthorityEpochs = new Map<string, number>();
 let nextInputProjectionAuthorityEpoch = 0;
 let inputProjectionAuthorityEpochFloor = 0;
+// Local optimistic writes must invalidate stale queries without counting as
+// proof that the controlled device accepted a queued message.
+const inputProjectionRemoteEpochs = new Map<string, number>();
+let nextInputProjectionRemoteEpoch = 0;
+let inputProjectionRemoteEpochFloor = 0;
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
 const sessionRunning = new Map<string, boolean>();
 const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
@@ -526,6 +531,12 @@ function emit(): void {
 function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
   const epoch = ++nextInputProjectionAuthorityEpoch;
   inputProjectionAuthorityEpochs.set(sessionId, epoch);
+  return epoch;
+}
+
+function bumpInputProjectionRemoteEpoch(sessionId: string): number {
+  const epoch = ++nextInputProjectionRemoteEpoch;
+  inputProjectionRemoteEpochs.set(sessionId, epoch);
   return epoch;
 }
 
@@ -1864,11 +1875,34 @@ export const remoteSessionStore = {
   setInputProjection(sessionId: string, projection: unknown): void {
     const next = normalizeInputProjection(projection, sessionId);
     bumpInputProjectionAuthorityEpoch(sessionId);
+    bumpInputProjectionRemoteEpoch(sessionId);
+    commitInputProjection(sessionId, next);
+  },
+
+  /** Apply a local UI projection without claiming that the remote accepted it. */
+  setInputProjectionOptimistically(sessionId: string, projection: unknown): void {
+    const next = normalizeInputProjection(projection, sessionId);
+    bumpInputProjectionAuthorityEpoch(sessionId);
     commitInputProjection(sessionId, next);
   },
 
   captureInputProjectionAuthorityEpoch(sessionId: string): number {
     return inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
+  },
+
+  captureInputProjectionRemoteEpoch(sessionId: string): number {
+    return inputProjectionRemoteEpochs.get(sessionId) ?? inputProjectionRemoteEpochFloor;
+  },
+
+  hasAuthoritativeQueuedItemSince(
+    sessionId: string,
+    clientId: string,
+    expectedRemoteEpoch: number,
+  ): boolean {
+    const currentRemoteEpoch = inputProjectionRemoteEpochs.get(sessionId) ?? inputProjectionRemoteEpochFloor;
+    if (currentRemoteEpoch === expectedRemoteEpoch) return false;
+    return (inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION).pendingQueue
+      .some((item) => item.clientId === clientId);
   },
 
   setInputProjectionIfCurrent(
@@ -1882,6 +1916,7 @@ export const remoteSessionStore = {
     }
     const next = normalizeInputProjection(projection, sessionId);
     bumpInputProjectionAuthorityEpoch(sessionId);
+    bumpInputProjectionRemoteEpoch(sessionId);
     commitInputProjection(sessionId, next);
     return true;
   },
@@ -2745,6 +2780,8 @@ export const remoteSessionStore = {
     inputProjections.clear();
     inputProjectionAuthorityEpochFloor = ++nextInputProjectionAuthorityEpoch;
     inputProjectionAuthorityEpochs.clear();
+    inputProjectionRemoteEpochFloor = ++nextInputProjectionRemoteEpoch;
+    inputProjectionRemoteEpochs.clear();
     // Keep authority tombstones monotonic across a global store reset so an
     // old in-flight query cannot be accepted after the session is recreated.
     sessionLiveActivity.clear();

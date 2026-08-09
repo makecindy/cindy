@@ -2716,6 +2716,28 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');
   });
 
+  it('does not treat an optimistic queue item as remote acceptance', () => {
+    const optimisticProjection = projection('s1', 'q-local');
+    const expectedAuthorityEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const expectedRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+
+    remoteSessionStore.setInputProjectionOptimistically('s1', optimisticProjection);
+
+    expect(remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')).not.toBe(expectedAuthorityEpoch);
+    expect(remoteSessionStore.captureInputProjectionRemoteEpoch('s1')).toBe(expectedRemoteEpoch);
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', expectedRemoteEpoch)).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent(
+      's1',
+      projection('s1', 'q-stale'),
+      expectedAuthorityEpoch,
+    )).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-local');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:input:projection', optimisticProjection);
+
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', expectedRemoteEpoch)).toBe(true);
+  });
+
   it('clears a continuation owner at a terminal boundary without a projection clear push', () => {
     const ownerProjection = {
       ...projection('s1'),

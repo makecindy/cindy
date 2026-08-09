@@ -5542,7 +5542,7 @@ export default function SessionScreen() {
     // 乐观交接:进本地 pendingQueue 的同一同步段把条目移出 outbox,气泡原位从
     // 「发送中」变「排队中」不闪断;enqueue 成功后用权威 projection 覆盖 reconcile。
     const projectionBeforeSend = remoteSessionStore.getInputProjection(item.sessionId);
-    remoteSessionStore.setInputProjection(item.sessionId, {
+    remoteSessionStore.setInputProjectionOptimistically(item.sessionId, {
       ...projectionBeforeSend,
       sessionId: projectionBeforeSend.sessionId || item.sessionId,
       pendingQueue: [...projectionBeforeSend.pendingQueue, queued],
@@ -5559,10 +5559,12 @@ export default function SessionScreen() {
     // outbox 气泡本来就在转圈:交接进 pendingQueue 后 enqueue 仍在途,徽标继续转圈,
     // 不要在这一帧闪成排队 icon 再回来(也不能谎报「已入队」)。
     markQueueItemSending(queued.clientId);
+    const projectionEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
+    const projectionRemoteEpochAtRequestStart =
+      remoteSessionStore.captureInputProjectionRemoteEpoch(item.sessionId);
     try {
       // 弱网重试与写序边界同 send() 原路径(仅明确可安全重发的瞬时传输错误)。
-      const projectionEpochAtRequestStart =
-        remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
       let projection: InputProjection | undefined;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -5624,12 +5626,16 @@ export default function SessionScreen() {
           // optimistic pendingQueue 不能自证。确定性远端失败也沿用同一权威口径。
           return fresh.pendingQueue.some((entry) => entry.clientId === queued.clientId);
         } catch {
-          return false;
+          return remoteSessionStore.hasAuthoritativeQueuedItemSince(
+            item.sessionId,
+            queued.clientId,
+            projectionRemoteEpochAtRequestStart,
+          );
         }
       })();
       if (!applied) {
         const current = remoteSessionStore.getInputProjection(item.sessionId);
-        remoteSessionStore.setInputProjection(item.sessionId, {
+        remoteSessionStore.setInputProjectionOptimistically(item.sessionId, {
           ...current,
           pendingQueue: current.pendingQueue.filter((entry) => entry.clientId !== queued.clientId),
         });
@@ -6546,7 +6552,7 @@ export default function SessionScreen() {
       // previews / mediaAssetAttachments 映射保留到成功后再清:它们不入消息体,失败
       // 恢复 attachments 时缩略图能原样回来。
       const projectionBeforeSend = remoteSessionStore.getInputProjection(sessionId);
-      remoteSessionStore.setInputProjection(sessionId, {
+      remoteSessionStore.setInputProjectionOptimistically(sessionId, {
         ...projectionBeforeSend,
         sessionId: projectionBeforeSend.sessionId || sessionId,
         pendingQueue: [...projectionBeforeSend.pendingQueue, queued],
@@ -6565,6 +6571,10 @@ export default function SessionScreen() {
       // 托盘后,标注附件必须还能继续编辑/撤销(review P2);成功收尾按本批精确清。
       setAttachmentError(null);
       requestMessageListFollowLatest();
+      const projectionEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
+      const projectionRemoteEpochAtRequestStart =
+        remoteSessionStore.captureInputProjectionRemoteEpoch(sessionId);
       try {
         // 弱网重试:切基站 / 短暂断连时自动补发,不让用户为一次抖动手动重发。
         // 写序边界(codex review P1 + auto-review P1):只有「保证未发出」的
@@ -6574,8 +6584,6 @@ export default function SessionScreen() {
         // 不在 pendingQueue 里),盲重会双入队;这类歧义失败直接交给下方 catch
         // 的回滚/报错路径。BACKPRESSURE 在本地发送前或被控端 admission 拒绝
         // 执行时产生,可安全重发。被控端 enqueue 侧另有 clientId 幂等去重兜底。
-        const projectionEpochAtRequestStart =
-          remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
         let projection: InputProjection | undefined;
         for (let attempt = 0; ; attempt++) {
           try {
@@ -6599,7 +6607,8 @@ export default function SessionScreen() {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:弱网下 enqueue 的 invoke
         // 响应可能超时丢失而桌面端已入队——此时摘除气泡会让手机隐藏一条桌面将处理的
         // 消息,用户重发即重复(codex review R19)。优先 refetch 权威 projection 判断,
-        // refetch 也失败再退回本地 store(订阅推送在此窗口内可能已带回该 clientId)。
+        // refetch 也失败时,只有更新过 remote epoch 的 push/RPC projection 能证明
+        // 该 clientId 已被接收;本地乐观气泡本身不能自证成功。
         const applied = await (async () => {
           try {
             const projectionEpochAtRequestStart =
@@ -6615,15 +6624,18 @@ export default function SessionScreen() {
             const current = accepted ? fresh : remoteSessionStore.getInputProjection(sessionId);
             return current.pendingQueue.some((item) => item.clientId === queued.clientId);
           } catch {
-            return remoteSessionStore.getInputProjection(sessionId).pendingQueue
-              .some((item) => item.clientId === queued.clientId);
+            return remoteSessionStore.hasAuthoritativeQueuedItemSince(
+              sessionId,
+              queued.clientId,
+              projectionRemoteEpochAtRequestStart,
+            );
           }
         })();
         if (!applied) {
           // 回滚:按 clientId 精确摘除乐观气泡(期间 projection 可能已被其他事件更新,
           // 不能整体还原快照),并恢复草稿与附件托盘。
           const current = remoteSessionStore.getInputProjection(sessionId);
-          remoteSessionStore.setInputProjection(sessionId, {
+          remoteSessionStore.setInputProjectionOptimistically(sessionId, {
             ...current,
             pendingQueue: current.pendingQueue.filter((item) => item.clientId !== queued.clientId),
           });
@@ -6727,7 +6739,7 @@ export default function SessionScreen() {
     if (queueBusy) return;
     setQueueBusy(true);
     if (!outboxConnectionDispatchBlocked) setError(null);
-    remoteSessionStore.setInputProjection(
+    remoteSessionStore.setInputProjectionOptimistically(
       sessionId,
       opts.optimistic(remoteSessionStore.getInputProjection(sessionId)),
     );
@@ -6739,7 +6751,7 @@ export default function SessionScreen() {
         applyProjectionIfCurrent(result, projectionEpochAtRequestStart);
       }
     } catch (err) {
-      remoteSessionStore.setInputProjection(
+      remoteSessionStore.setInputProjectionOptimistically(
         sessionId,
         opts.rollback(remoteSessionStore.getInputProjection(sessionId)),
       );

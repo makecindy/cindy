@@ -53,4 +53,9 @@ describe('send enqueue weak-network retry ordering', () => {
       expect(loopBody).not.toContain('getProjection');
     }
   });
+
+  it('权威 projection 不可达时不能用本地乐观队列自证已入队', () => {
+    expect(source.match(/hasAuthoritativeQueuedItemSince\(/g)).toHaveLength(2);
+    expect(source.match(/setInputProjectionOptimistically\(/g)).toHaveLength(6);
+  });
 });
