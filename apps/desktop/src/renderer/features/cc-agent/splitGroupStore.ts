@@ -135,30 +135,84 @@ function detachPane(root: SplitNode, sessionId: string): DetachedPane {
   return { root, pane: null };
 }
 
+interface PaneRect {
+  sessionId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const ADJACENCY_EPSILON = 1e-6;
+
+function collectPaneRects(
+  root: SplitNode,
+  rect: Omit<PaneRect, 'sessionId'> = { x: 0, y: 0, width: 1, height: 1 },
+): PaneRect[] {
+  if (root.type === 'pane') return [{ ...rect, sessionId: root.sessionId }];
+
+  if (root.direction === 'row') {
+    const firstWidth = rect.width * root.fraction;
+    return [
+      ...collectPaneRects(root.first, { ...rect, width: firstWidth }),
+      ...collectPaneRects(root.second, {
+        ...rect,
+        x: rect.x + firstWidth,
+        width: rect.width - firstWidth,
+      }),
+    ];
+  }
+
+  const firstHeight = rect.height * root.fraction;
+  return [
+    ...collectPaneRects(root.first, { ...rect, height: firstHeight }),
+    ...collectPaneRects(root.second, {
+      ...rect,
+      y: rect.y + firstHeight,
+      height: rect.height - firstHeight,
+    }),
+  ];
+}
+
+function rangesOverlap(startA: number, sizeA: number, startB: number, sizeB: number): boolean {
+  return Math.min(startA + sizeA, startB + sizeB) - Math.max(startA, startB) > ADJACENCY_EPSILON;
+}
+
 function isPaneAlreadyAtSide(
   root: SplitNode,
   sessionId: string,
   anchorSessionId: string,
   side: DropSide,
 ): boolean {
-  if (root.type === 'pane') return false;
+  const panes = collectPaneRects(root);
+  const source = panes.find((pane) => pane.sessionId === sessionId);
+  const anchor = panes.find((pane) => pane.sessionId === anchorSessionId);
+  if (!source || !anchor) return false;
 
-  const source = isBeforeSide(side) ? root.first : root.second;
-  const anchor = isBeforeSide(side) ? root.second : root.first;
-  if (
-    root.direction === directionForSide(side) &&
-    source.type === 'pane' &&
-    source.sessionId === sessionId &&
-    anchor.type === 'pane' &&
-    anchor.sessionId === anchorSessionId
-  ) {
-    return true;
+  switch (side) {
+    case 'left':
+      return (
+        Math.abs(source.x + source.width - anchor.x) <= ADJACENCY_EPSILON &&
+        rangesOverlap(source.y, source.height, anchor.y, anchor.height)
+      );
+    case 'right':
+      return (
+        Math.abs(anchor.x + anchor.width - source.x) <= ADJACENCY_EPSILON &&
+        rangesOverlap(source.y, source.height, anchor.y, anchor.height)
+      );
+    case 'top':
+      return (
+        Math.abs(source.y + source.height - anchor.y) <= ADJACENCY_EPSILON &&
+        rangesOverlap(source.x, source.width, anchor.x, anchor.width)
+      );
+    case 'bottom':
+      return (
+        Math.abs(anchor.y + anchor.height - source.y) <= ADJACENCY_EPSILON &&
+        rangesOverlap(source.x, source.width, anchor.x, anchor.width)
+      );
   }
 
-  return (
-    isPaneAlreadyAtSide(root.first, sessionId, anchorSessionId, side) ||
-    isPaneAlreadyAtSide(root.second, sessionId, anchorSessionId, side)
-  );
+  return false;
 }
 
 interface CoerceContext {

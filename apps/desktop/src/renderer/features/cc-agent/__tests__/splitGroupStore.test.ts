@@ -236,6 +236,38 @@ describe('splitGroupStore', () => {
     },
   );
 
+  it.each(['left', 'right', 'top', 'bottom'] as const)(
+    '同方向嵌套的边缘 pane 已位于目标 %s 侧时保持原比例和布局引用',
+    async (side) => {
+      const { splitGroupStore } = await loadStore();
+      splitGroupStore.addSession('session-b', 'session-a', side);
+      splitGroupStore.addSession('session-c', 'session-b', side);
+
+      const root = splitGroupStore.getSnapshot().root;
+      if (!root || root.type !== 'split') throw new Error('root split missing');
+      const nested = side === 'left' || side === 'top' ? root.first : root.second;
+      if (nested.type !== 'split') throw new Error('nested split missing');
+
+      splitGroupStore.setSplitFraction(root.key, 0.7);
+      splitGroupStore.setSplitFraction(nested.key, 0.6);
+      const before = splitGroupStore.getSnapshot();
+
+      expect(splitGroupStore.moveSession('session-b', 'session-a', side)).toBe(false);
+      expect(splitGroupStore.getSnapshot()).toBe(before);
+      const next = splitGroupStore.getSnapshot().root;
+      if (!next || next.type !== 'split') throw new Error('root split missing');
+      expect(next).toMatchObject({ fraction: 0.7 });
+      expect(side === 'left' || side === 'top' ? next.first : next.second).toMatchObject({
+        type: 'split',
+        fraction: 0.6,
+      });
+
+      const beforeNonAdjacentMove = splitGroupStore.getSnapshot();
+      expect(splitGroupStore.moveSession('session-c', 'session-a', side)).toBe(true);
+      expect(splitGroupStore.getSnapshot()).not.toBe(beforeNonAdjacentMove);
+    },
+  );
+
   it('分支比例夹到下限，并仅切换根方向', async () => {
     const { MIN_SPLIT_CHILD_FRACTION, splitGroupStore } = await loadStore();
     splitGroupStore.addSession('session-b', 'session-a', 'right');
