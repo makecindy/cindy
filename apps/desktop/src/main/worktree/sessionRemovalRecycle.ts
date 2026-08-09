@@ -16,6 +16,7 @@
 
 import { eq, inArray } from 'drizzle-orm';
 
+import { hasLiveSessionReference, pathKey } from './liveSessionRefs';
 import { removeWorktreeForSession } from './WorktreeManager';
 import * as store from './worktreeStore';
 import { getDbClient } from '../localDb/client/current';
@@ -37,7 +38,10 @@ const log = createLogger('sessionRemovalRecycle');
  */
 export async function recycleWorktreeForRemovedSession(sessionId: string): Promise<void> {
   const meta = store.get(sessionId);
-  if (!meta) return;
+  if (!meta) {
+    await retryOwningWorktreeRecycles(sessionId);
+    return;
+  }
   if (meta.ephemeral) {
     log.debug(
       `[sessionRemovalRecycle] skip ephemeral worktree for session ${sessionId} (pool-managed)`,
@@ -57,6 +61,58 @@ export async function recycleWorktreeForRemovedSession(sessionId: string): Promi
       return currentStatus === 'deleted' || currentStatus === 'archived';
     },
   });
+}
+
+/**
+ * 共享会话没有自己的 store 条目时，重新触发所有安全匹配 owner 的回收。
+ * 路径关系复用 hasLiveSessionReference 的精确/安全父子判定；owner 回收仍必须
+ * 经过 recycleWorktreeForRemovedSession → removeWorktreeForSession 的完整安全门。
+ */
+async function retryOwningWorktreeRecycles(sessionId: string): Promise<void> {
+  const row = await readSessionRecycleSnapshot(sessionId);
+  if (!row || (row.status !== 'deleted' && row.status !== 'archived')) return;
+
+  const sharedPathKeys = new Set<string>();
+  const workingDirKey = pathKey(row.workingDir);
+  const worktreePathKey = pathKey(row.worktreePath);
+  if (workingDirKey) sharedPathKeys.add(workingDirKey);
+  if (worktreePathKey) sharedPathKeys.add(worktreePathKey);
+  if (sharedPathKeys.size === 0) return;
+
+  for (const owner of store.getAll()) {
+    if (owner.ephemeral || owner.sessionId === sessionId) continue;
+    if (!hasLiveSessionReference(owner, sharedPathKeys)) continue;
+    await recycleWorktreeForRemovedSession(owner.sessionId);
+  }
+}
+
+interface SessionRecycleSnapshot {
+  status: string | null | undefined;
+  workingDir: string | null;
+  worktreePath: string | null;
+}
+
+async function readSessionRecycleSnapshot(
+  sessionId: string,
+): Promise<SessionRecycleSnapshot | null> {
+  try {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select({
+        status: sessions.status,
+        workingDir: sessions.workingDir,
+        worktreePath: sessions.worktreePath,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId));
+    return row ?? null;
+  } catch (err) {
+    log.warn(
+      `[sessionRemovalRecycle] session recycle snapshot lookup failed for ${sessionId}; preserving worktree`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
 }
 
 /**
@@ -103,7 +159,12 @@ export async function reconcileWorktreesForDeletedSessions(): Promise<void> {
     rows = await db
       .select({ id: sessions.id, status: sessions.status })
       .from(sessions)
-      .where(inArray(sessions.id, candidates.map((m) => m.sessionId)));
+      .where(
+        inArray(
+          sessions.id,
+          candidates.map((m) => m.sessionId),
+        ),
+      );
   } catch (err) {
     // DB 不可用时不做任何删除(保守方向:漏收一轮无害,误删不可逆)。
     log.warn(

@@ -1,9 +1,10 @@
 /**
  * live-session 引用判定（WorktreePool 与 WorktreeManager 删除路径共用）。
  *
- * 语义：某 worktree 路径若仍被任何**未删除**会话的 workingDir / worktreePath 指向，
- * 就视为"在用"，删除/淘汰路径必须保留它。查询失败时返回 null，消费方按
- * "无法确认 → 视为在用"的保守方向处理——所有分支都倾向保留而非删除。
+ * 语义：某 worktree 路径若仍被任何**未进入 archived/deleted 终态**会话的 workingDir /
+ * worktreePath 指向，就视为"在用"，删除/淘汰路径必须保留它。查询失败时返回 null，消费方按
+ * "无法确认 → 视为在用"的保守方向处理——所有分支都倾向保留而非删除。未知或 NULL status
+ * 同样按在用处理，避免损坏/不完整数据导致误删。
  *
  * 原实现内联在 WorktreePool.ts（MR1），P0 重构把它抽出来给
  * removeWorktreeForSession 的删除守卫复用，并支持排除会话自身
@@ -11,7 +12,7 @@
  */
 
 import path from 'node:path';
-import { ne } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
@@ -47,7 +48,7 @@ export interface LoadLiveSessionPathKeysOptions {
   contextPath?: string;
   /**
    * 排除的会话 id：显式删除/归档会话时，该会话自己的 workingDir/worktreePath
-   * 不构成"仍在用"（归档会话 status 仍非 deleted，不排除会永远挡住自己的回收）。
+   * 不构成"仍在用"（archived/deleted 行统一不算 live；保留参数兼容旧调用方）。
    */
   excludeSessionId?: string;
 }
@@ -60,15 +61,18 @@ export async function loadLiveSessionPathKeys(
     const rows = await db
       .select({
         id: sessions.id,
+        status: sessions.status,
         workingDir: sessions.workingDir,
         worktreePath: sessions.worktreePath,
       })
       .from(sessions)
-      .where(ne(sessions.status, 'deleted'));
+      .where(sql`${sessions.status} NOT IN ('archived', 'deleted') OR ${sessions.status} IS NULL`);
 
     const keys = new Set<string>();
     for (const row of rows) {
-      // 排除放在 JS 层而非 SQL:语义单测无需解析 drizzle 条件表达式。
+      // SQL 先滤掉合法终态；这里保留显式判断，防测试 fake / 损坏驱动返回了不符合 where 的行。
+      // NULL / 未知 status 必须保守地继续作为引用保留。
+      if (row.status === 'archived' || row.status === 'deleted') continue;
       if (opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
       const workingDirKey = pathKey(row.workingDir);
       const worktreePathKey = pathKey(row.worktreePath);
