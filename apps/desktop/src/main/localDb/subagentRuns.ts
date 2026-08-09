@@ -538,7 +538,11 @@ export async function listVisibleSubagentObservationIdentities(
     provider: row.provider,
     identities: mergeUnique(
       parseStringArray(row.aliases),
-      [row.logicalAgentId, row.parentToolUseId, ...parseStringArray(row.providerRunIds)],
+      [
+        row.logicalAgentId,
+        row.parentToolUseId ?? undefined,
+        ...parseStringArray(row.providerRunIds),
+      ],
       MAX_INDEXED_ALIAS_COUNT,
     ),
   }));

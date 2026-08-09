@@ -9,6 +9,7 @@ import {
   PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
   normalizeWorkflowProgressEntries,
+  subagentSpawnResultIndicatesRunning,
   type AgentTaskUpdate,
   type WorkflowProgressEntry,
 } from '../agentTask.js';
@@ -48,6 +49,14 @@ describe('isSubagentSpawnToolName', () => {
       expect(isSubagentSpawnToolName(name)).toBe(false);
       expect(isAgentTaskToolName(name)).toBe(true);
     }
+  });
+});
+
+describe('subagentSpawnResultIndicatesRunning', () => {
+  it('fails closed when a tool result is missing', () => {
+    expect(subagentSpawnResultIndicatesRunning('Agent', undefined)).toBe(false);
+    expect(subagentSpawnResultIndicatesRunning('Task', null)).toBe(false);
+    expect(subagentSpawnResultIndicatesRunning('collab:spawnAgent', undefined)).toBe(false);
   });
 });
 

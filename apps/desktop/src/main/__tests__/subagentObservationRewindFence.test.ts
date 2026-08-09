@@ -121,6 +121,56 @@ describe('Subagent observation Rewind generation fence', () => {
     expect(writes).toEqual(['old-spawn', 'new-spawn', 'new-terminal']);
   });
 
+  it('migrates still-visible tasks and preserves their buffered and later terminal updates', async () => {
+    const writes: string[] = [];
+    await enqueueWrite(update('survivor', 'spawn'), writes, 'survivor-spawn');
+    await enqueueWrite(update('withdrawn', 'spawn'), writes, 'withdrawn-spawn');
+    const fence = beginSubagentRewindFence(SESSION);
+    primeSubagentRewindFence(fence, [
+      { provider: 'claude-code', identities: ['survivor'] },
+      { provider: 'claude-code', identities: ['withdrawn'] },
+    ]);
+    const survivorProgress = enqueueWrite(
+      update('survivor', 'progress'),
+      writes,
+      'survivor-progress',
+    );
+    const survivorTerminal = enqueueWrite(
+      update('survivor', 'terminal'),
+      writes,
+      'survivor-terminal',
+    );
+    const withdrawnTerminal = enqueueWrite(
+      update('withdrawn', 'terminal'),
+      writes,
+      'withdrawn-terminal',
+    );
+
+    finishSubagentRewindFence(fence, true, [
+      { provider: 'claude-code', identities: ['survivor'] },
+    ]);
+
+    await expect(Promise.all([
+      survivorProgress,
+      survivorTerminal,
+      withdrawnTerminal,
+    ])).resolves.toEqual(['survivor-progress', 'survivor-terminal', null]);
+    await expect(
+      enqueueWrite(update('survivor', 'progress'), writes, 'survivor-late-progress'),
+    ).resolves.toBe('survivor-late-progress');
+    await expect(
+      enqueueWrite(update('withdrawn', 'progress'), writes, 'withdrawn-late-progress'),
+    ).resolves.toBeNull();
+
+    expect(writes).toEqual([
+      'survivor-spawn',
+      'withdrawn-spawn',
+      'survivor-progress',
+      'survivor-terminal',
+      'survivor-late-progress',
+    ]);
+  });
+
   it('replays buffered observations in arrival order when Rewind fails', async () => {
     const writes: string[] = [];
     await enqueueWrite(update('task', 'spawn'), writes, 'spawn');

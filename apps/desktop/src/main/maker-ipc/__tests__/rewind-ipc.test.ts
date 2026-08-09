@@ -86,6 +86,11 @@ describe('maker rewind IPC stop-then-rewind', () => {
 
   it('runs normal rewind inside the stopped input boundary when requested', async () => {
     const session = { id: 'session-1' };
+    const visibleBefore = [{ provider: 'claude-code', identities: ['before'] }];
+    const visibleAfter = [{ provider: 'claude-code', identities: ['survivor'] }];
+    mocks.listVisibleSubagentObservationIdentities
+      .mockResolvedValueOnce(visibleBefore)
+      .mockResolvedValueOnce(visibleAfter);
     mocks.commitRewindAtMessage.mockResolvedValue(session);
     const handler = mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT);
     if (!handler) throw new Error('rewind commit handler not registered');
@@ -110,8 +115,15 @@ describe('maker rewind IPC stop-then-rewind', () => {
       mocks.ownerScope,
     );
     expect(mocks.beginSubagentRewindFence).toHaveBeenCalledWith('session-1');
-    expect(mocks.primeSubagentRewindFence).toHaveBeenCalledWith(expect.any(Object), []);
-    expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(expect.any(Object), true);
+    expect(mocks.primeSubagentRewindFence).toHaveBeenCalledWith(
+      expect.any(Object),
+      visibleBefore,
+    );
+    expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(
+      expect.any(Object),
+      true,
+      visibleAfter,
+    );
   });
 
   it('waits through the post-Stop SESSION_RUNNING race before committing', async () => {
@@ -155,7 +167,11 @@ describe('maker rewind IPC stop-then-rewind', () => {
       expect(mocks.commitRewindAtMessage.mock.calls.length).toBeGreaterThan(1);
       expect(mocks.commitRewindAtMessage.mock.calls.length).toBeLessThanOrEqual(152);
       expect(mocks.broadcastSubagentRunsInvalidated).not.toHaveBeenCalled();
-      expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(expect.any(Object), false);
+      expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(
+        expect.any(Object),
+        false,
+        [],
+      );
     } finally {
       vi.useRealTimers();
     }

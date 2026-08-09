@@ -16,7 +16,10 @@ import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { getGoalController } from '../goal-host/index.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
-import { listVisibleSubagentObservationIdentities } from '../localDb/subagentRuns.js';
+import {
+  listVisibleSubagentObservationIdentities,
+  type VisibleSubagentObservationIdentity,
+} from '../localDb/subagentRuns.js';
 import {
   beginSubagentRewindFence,
   finishSubagentRewindFence,
@@ -113,6 +116,7 @@ export function registerMakerRewindIpc(): void {
         (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
       let subagentFence: SubagentRewindFence | null = null;
       let committed = false;
+      let visibleSubagentIdentitiesAfterCommit: VisibleSubagentObservationIdentity[] = [];
       try {
         subagentFence = beginSubagentRewindFence(sid);
         primeSubagentRewindFence(
@@ -126,6 +130,15 @@ export function registerMakerRewindIpc(): void {
               commitAfterStopping(sid, cid, { requireLatestUser }))
           : await commitAfterPersistBarrier(sid, cid, { requireLatestUser });
         committed = true;
+        try {
+          visibleSubagentIdentitiesAfterCommit =
+            await listVisibleSubagentObservationIdentities(sid);
+        } catch (error) {
+          log.warn('rewind:failed to refresh visible Subagent identities', {
+            sid,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         // 回滚后缓存的待注入交接 / fork 来源标记都是按截断前的历史算出来的,丢弃它,
         // 让下次 send 按回滚后的现状重新判定——被回滚掉的正是当初携带来源标记的那一轮时,
         // DB 侧判定会自动重新 arm(它按 rewind_at 过滤)。
@@ -139,7 +152,13 @@ export function registerMakerRewindIpc(): void {
         log.warn('rewind:commit failed', { sid, cid, error: String(err) });
         wrapErr(err);
       } finally {
-        if (subagentFence) finishSubagentRewindFence(subagentFence, committed);
+        if (subagentFence) {
+          finishSubagentRewindFence(
+            subagentFence,
+            committed,
+            visibleSubagentIdentitiesAfterCommit,
+          );
+        }
       }
     },
   );

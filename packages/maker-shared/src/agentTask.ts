@@ -390,9 +390,11 @@ export function subagentSpawnReceiptName(
  */
 export function subagentSpawnResultIndicatesRunning(
   toolName: string | undefined,
-  result: string | undefined,
+  result: string | null | undefined,
 ): boolean {
-  const trimmed = result?.trim().replace(/\r\n/g, '\n') ?? '';
+  const trimmed = typeof result === 'string'
+    ? result.trim().replace(/\r\n/g, '\n')
+    : '';
   // Claude's asynchronous Agent tool returns a textual launch receipt while the
   // child is still running. Treat it like the structured Codex V1 receipt so a
   // paired stale `running` update does not close the task prematurely.

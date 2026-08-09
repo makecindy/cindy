@@ -10,6 +10,7 @@ import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 interface PendingObservationWrite<T> {
   generation: number;
+  taskKey: string;
   enqueue: () => Promise<T>;
   resolve: (value: T | null) => void;
   reject: (error: unknown) => void;
@@ -35,6 +36,7 @@ export interface VisibleSubagentIdentity {
 
 export interface SubagentObservationGenerationStamp {
   generation: number;
+  taskKey: string;
 }
 
 const stateBySession = new Map<string, SessionFenceState>();
@@ -63,6 +65,16 @@ function observationFrom(data: unknown): SubagentObservation | null {
 
 function taskKey(update: AgentTaskUpdate, observation: SubagentObservation | null): string {
   return `${update.provider}:${observation?.logicalSubagentId ?? update.taskId}`;
+}
+
+function visibleIdentityKeys(visible: readonly VisibleSubagentIdentity[]): Set<string> {
+  const keys = new Set<string>();
+  for (const row of visible) {
+    for (const identity of row.identities) {
+      if (identity) keys.add(`${row.provider}:${identity}`);
+    }
+  }
+  return keys;
 }
 
 function generationForObservation(
@@ -108,23 +120,21 @@ export function primeSubagentRewindFence(
 ): void {
   const state = stateBySession.get(fence.sessionId);
   if (!state || state.activeToken !== fence.token) return;
-  for (const row of visible) {
-    for (const identity of row.identities) {
-      if (!identity) continue;
-      const key = `${row.provider}:${identity}`;
-      if (!state.taskGenerations.has(key)) state.taskGenerations.set(key, state.generation);
-    }
+  for (const key of visibleIdentityKeys(visible)) {
+    if (!state.taskGenerations.has(key)) state.taskGenerations.set(key, state.generation);
   }
 }
 
 /**
- * Finish a Rewind fence. Success advances the session generation and discards
- * every lifecycle frame observed during the withdrawn branch. Failure keeps
- * the generation and replays buffered writes in original arrival order.
+ * Finish a Rewind fence. Success advances the session generation, migrates
+ * identities that remain visible after commit, replays their buffered frames,
+ * and discards frames belonging to the withdrawn branch. Failure keeps the
+ * generation and replays every buffered write in original arrival order.
  */
 export function finishSubagentRewindFence(
   fence: SubagentRewindFence,
   committed: boolean,
+  visibleAfterCommit: readonly VisibleSubagentIdentity[] = [],
 ): void {
   const state = stateBySession.get(fence.sessionId);
   if (!state || state.activeToken !== fence.token) return;
@@ -133,7 +143,12 @@ export function finishSubagentRewindFence(
   if (committed) {
     state.generation += 1;
     state.acceptsNewTasks = false;
-    for (const item of pending) item.resolve(null);
+    const visibleKeys = visibleIdentityKeys(visibleAfterCommit);
+    for (const key of visibleKeys) state.taskGenerations.set(key, state.generation);
+    for (const item of pending) {
+      if (visibleKeys.has(item.taskKey)) enqueuePending(item);
+      else item.resolve(null);
+    }
     return;
   }
   for (const item of pending) {
@@ -163,8 +178,9 @@ export function captureSubagentObservationGeneration(args: {
   if (!update) return null;
   const observation = observationFrom(args.data);
   const state = sessionState(args.sessionId);
+  const key = taskKey(update, observation);
   const generation = generationForObservation(state, update, observation);
-  return generation === null ? null : { generation };
+  return generation === null ? null : { generation, taskKey: key };
 }
 
 export function enqueueSubagentObservationWrite<T>(args: {
@@ -181,6 +197,7 @@ export function enqueueSubagentObservationWrite<T>(args: {
   return new Promise<T | null>((resolve, reject) => {
     state.pending.push({
       generation,
+      taskKey: args.stamp.taskKey,
       enqueue: args.enqueue,
       resolve,
       reject,
