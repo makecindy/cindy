@@ -86,6 +86,20 @@ const FOCUSABLE_SELECTOR =
 const SAVED_TABINDEX_ATTR = 'data-plan-collapse-tabindex';
 
 /**
+ * 监听会新增 / 改变可聚焦节点的子树变动。
+ * - childList + subtree:异步解析把纯文本换成 FileTargetChip 这类节点替换;
+ * - tabindex / href:原地把一个普通节点变成可聚焦节点(FOCUSABLE_SELECTOR 就靠
+ *   这两个属性判定 `[tabindex]` 与 `a[href]`)。
+ * 刻意不监听 SAVED_TABINDEX_ATTR —— 那是本组件自己的记账属性。
+ */
+const FOCUSABILITY_OBSERVE_OPTIONS: MutationObserverInit = {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ['tabindex', 'href'],
+};
+
+/**
  * 把 root 内"底边超过 cutoff"的可聚焦元素移出 tab 序;cutoff 为 null(未折叠)
  * 时全部还原。
  *
@@ -275,21 +289,46 @@ function PlanMarkdownBody({
 
   // useLayoutEffect:首帧就在 paint 前定下折叠与否,否则长计划会先整段铺开
   // 再收起,滚动位置和卡片高度跳一下。tab 序同步也放这里 —— 它依赖布局,必须
-  // 在同一时机跟着高度一起算,并由 ResizeObserver 在图片加载 / 字体就位 /
-  // 窗口改宽导致回流后重算。
+  // 在同一时机跟着高度一起算。
+  //
+  // 三个重算触发源,缺一个就会漏掉一类"隐形可聚焦元素":
+  //   - effect 依赖(plan / expanded / 折叠高度):内容或折叠状态本身变了;
+  //   - ResizeObserver:图片加载、字体就位、窗口改宽导致回流,裁剪线两侧的
+  //     元素易主;
+  //   - MutationObserver:**尺寸不变的子树替换**。MarkdownRenderer 的
+  //     useResolvedMarkdownTarget 会在初次布局之后把本地路径异步解析成带
+  //     tabIndex={0} 的 FileTargetChip,这种行内替换可能一点尺寸都不改 ——
+  //     那么前两个触发源都不响,新 chip 就绕过同步、继续留在 tab 序里。
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
+
+    let mutationObserver: MutationObserver | null = null;
+
     const sync = () => {
       const tooTall = el.offsetHeight > collapsedMaxHeight + 1;
       setOverflowing(tooTall);
+      // 本函数自己就会改 tabindex,而 tabindex 也在 MutationObserver 的监听项里。
+      // 改之前断开:disconnect() 会连带清空已排队的记录,所以自己造成的变动不会
+      // 再回调进来,不存在自触发循环。
+      mutationObserver?.disconnect();
       syncClippedFocusability(el, tooTall && !expanded ? collapsedMaxHeight : null);
+      mutationObserver?.observe(el, FOCUSABILITY_OBSERVE_OPTIONS);
     };
+
+    if (typeof MutationObserver !== 'undefined') {
+      mutationObserver = new MutationObserver(sync);
+    }
     sync();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(sync);
-    observer.observe(el);
-    return () => observer.disconnect();
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    resizeObserver?.observe(el);
+
+    return () => {
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
   }, [collapsedMaxHeight, plan, expanded]);
 
   const collapsed = !expanded && overflowing;

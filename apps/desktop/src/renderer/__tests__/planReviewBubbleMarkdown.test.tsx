@@ -4,7 +4,7 @@
 // 回归背景:approved 态原本用 <pre> 打印 planReviewPlan,聊天记录里回看时满屏
 // `#` / `**` / 表格竖线,和底部 Plan Viewer Card 的排版观感完全脱节。
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -75,7 +75,7 @@ function collapsedBoxOf(markdown: HTMLElement): HTMLElement {
  * overflowing=true 与"元素是否被裁"两条分支都测不到。这里把两者一起打桩 ——
  * 高度顶到超过折叠上限,矩形则按元素自带的 data-test-bottom 返回底边。
  */
-function withOverflowingContent(run: () => void) {
+function installLayoutStubs(): () => void {
   const savedHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
   const savedRect = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -104,14 +104,30 @@ function withOverflowingContent(run: () => void) {
     },
   });
 
-  try {
-    run();
-  } finally {
+  return () => {
     const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
     if (savedHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', savedHeight);
     else delete proto.offsetHeight;
     if (savedRect) Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', savedRect);
     else delete proto.getBoundingClientRect;
+  };
+}
+
+function withOverflowingContent(run: () => void) {
+  const restore = installLayoutStubs();
+  try {
+    run();
+  } finally {
+    restore();
+  }
+}
+
+async function withOverflowingContentAsync(run: () => Promise<void>) {
+  const restore = installLayoutStubs();
+  try {
+    await run();
+  } finally {
+    restore();
   }
 }
 
@@ -232,6 +248,38 @@ describe('PlanReviewBubble 计划正文渲染', () => {
         expect(screen.getByTestId('clipped-link').hasAttribute('tabindex')).toBe(false);
         expect(screen.getByRole('button', { name: /collapse/ }).getAttribute('aria-expanded'))
           .toBe('true');
+      });
+    });
+
+    // 回归护栏(PR #2274 review):MarkdownRenderer 的 useResolvedMarkdownTarget
+    // 会在初次布局之后把本地路径异步解析成带 tabIndex={0} 的 FileTargetChip。
+    // 这种行内替换可能一点尺寸都不改 —— 于是 effect 依赖没变、ResizeObserver
+    // 也不响,新 chip 会绕过同步继续留在 tab 序里。靠 MutationObserver 兜住。
+    it('延迟出现的可聚焦控件也按位置同步(被裁的摘掉、可见的不动)', async () => {
+      await withOverflowingContentAsync(async () => {
+        render(<PlanReviewBubble message={planReviewMessage()} workingDir="/tmp/repo" />);
+
+        const body = screen.getByTestId('markdown');
+        // 模拟异步解析就绪:往子树里插入两个 chip,一个在裁剪线下、一个在线上。
+        const lateClipped = document.createElement('span');
+        lateClipped.setAttribute('role', 'button');
+        lateClipped.setAttribute('tabindex', '0');
+        lateClipped.dataset.testid = 'late-clipped-chip';
+        lateClipped.dataset.testBottom = '500';
+
+        const lateVisible = document.createElement('span');
+        lateVisible.setAttribute('role', 'button');
+        lateVisible.setAttribute('tabindex', '0');
+        lateVisible.dataset.testid = 'late-visible-chip';
+        lateVisible.dataset.testBottom = '30';
+
+        body.append(lateClipped, lateVisible);
+
+        await waitFor(() => {
+          expect(lateClipped.getAttribute('tabindex')).toBe('-1');
+        });
+        // 线上的 chip 必须保持可聚焦 —— 它是用户看得见、点得到的控件。
+        expect(lateVisible.getAttribute('tabindex')).toBe('0');
       });
     });
   });
