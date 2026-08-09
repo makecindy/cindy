@@ -36,54 +36,72 @@ const log = createLogger('sessionRemovalRecycle');
  * 调用方约定:先确保该会话的 CLI 子进程已关闭(Windows 下子进程 cwd 在
  * worktree 内会锁目录,git worktree remove 必败),再调本函数。
  */
-export async function recycleWorktreeForRemovedSession(sessionId: string): Promise<void> {
+interface RecycleWorktreeOptions {
+  /** Internal guard: owner retries reuse this entry point without starting another owner scan. */
+  scanOwners?: boolean;
+}
+
+export async function recycleWorktreeForRemovedSession(
+  sessionId: string,
+  options: RecycleWorktreeOptions = {},
+): Promise<void> {
   const meta = store.get(sessionId);
-  if (!meta) {
-    await retryOwningWorktreeRecycles(sessionId);
-    return;
+  try {
+    if (!meta) return;
+    if (meta.ephemeral) {
+      log.debug(
+        `[sessionRemovalRecycle] skip ephemeral worktree for session ${sessionId} (pool-managed)`,
+      );
+      return;
+    }
+    const status = await readCurrentSessionStatus(sessionId);
+    if (status !== 'deleted' && status !== 'archived') {
+      log.info(
+        `[sessionRemovalRecycle] skip worktree recycle for session ${sessionId}: current status=${status ?? 'missing'}`,
+      );
+      return;
+    }
+    await removeWorktreeForSession(sessionId, {
+      canRemove: async () => {
+        const currentStatus = await readCurrentSessionStatus(sessionId);
+        return currentStatus === 'deleted' || currentStatus === 'archived';
+      },
+    });
+  } finally {
+    if (options.scanOwners !== false) {
+      const ownerSessionIds = await findOwningWorktreeSessionIds(sessionId);
+      for (const ownerSessionId of ownerSessionIds) {
+        await recycleWorktreeForRemovedSession(ownerSessionId, { scanOwners: false });
+      }
+    }
   }
-  if (meta.ephemeral) {
-    log.debug(
-      `[sessionRemovalRecycle] skip ephemeral worktree for session ${sessionId} (pool-managed)`,
-    );
-    return;
-  }
-  const status = await readCurrentSessionStatus(sessionId);
-  if (status !== 'deleted' && status !== 'archived') {
-    log.info(
-      `[sessionRemovalRecycle] skip worktree recycle for session ${sessionId}: current status=${status ?? 'missing'}`,
-    );
-    return;
-  }
-  await removeWorktreeForSession(sessionId, {
-    canRemove: async () => {
-      const currentStatus = await readCurrentSessionStatus(sessionId);
-      return currentStatus === 'deleted' || currentStatus === 'archived';
-    },
-  });
 }
 
 /**
- * 共享会话没有自己的 store 条目时，重新触发所有安全匹配 owner 的回收。
- * 路径关系复用 hasLiveSessionReference 的精确/安全父子判定；owner 回收仍必须
- * 经过 recycleWorktreeForRemovedSession → removeWorktreeForSession 的完整安全门。
+ * 读取终态共享 session 的路径，并从 store 中找精确匹配或安全父子路径关系的 owner。
+ * 这个 helper 只负责一次扫描，不递归触发其它 session 的扫描；owner 回收由调用方
+ * 重新经过 recycleWorktreeForRemovedSession 与 removeWorktreeForSession 安全门。
  */
-async function retryOwningWorktreeRecycles(sessionId: string): Promise<void> {
+async function findOwningWorktreeSessionIds(sessionId: string): Promise<string[]> {
   const row = await readSessionRecycleSnapshot(sessionId);
-  if (!row || (row.status !== 'deleted' && row.status !== 'archived')) return;
+  if (!row || (row.status !== 'deleted' && row.status !== 'archived')) return [];
 
   const sharedPathKeys = new Set<string>();
   const workingDirKey = pathKey(row.workingDir);
   const worktreePathKey = pathKey(row.worktreePath);
   if (workingDirKey) sharedPathKeys.add(workingDirKey);
   if (worktreePathKey) sharedPathKeys.add(worktreePathKey);
-  if (sharedPathKeys.size === 0) return;
+  if (sharedPathKeys.size === 0) return [];
 
-  for (const owner of store.getAll()) {
-    if (owner.ephemeral || owner.sessionId === sessionId) continue;
-    if (!hasLiveSessionReference(owner, sharedPathKeys)) continue;
-    await recycleWorktreeForRemovedSession(owner.sessionId);
-  }
+  return store
+    .getAll()
+    .filter(
+      (owner) =>
+        !owner.ephemeral &&
+        owner.sessionId !== sessionId &&
+        hasLiveSessionReference(owner, sharedPathKeys),
+    )
+    .map((owner) => owner.sessionId);
 }
 
 interface SessionRecycleSnapshot {

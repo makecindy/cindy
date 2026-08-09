@@ -151,6 +151,50 @@ describe('sessionRemovalRecycle', () => {
       expect(removeMock).not.toHaveBeenCalled();
     });
 
+    it('terminal owner with a store meta still retries a shared owner', async () => {
+      const parentMeta = makeMeta('parent');
+      const ownerMeta = makeMeta('owner');
+      storeMap.set('parent', parentMeta);
+      storeMap.set('owner', ownerMeta);
+      addSession('parent', 'archived', { workingDir: parentMeta.path });
+      addSession('owner', 'archived', { workingDir: parentMeta.path });
+
+      await mod.recycleWorktreeForRemovedSession('owner');
+
+      expect(removeMock).toHaveBeenCalledTimes(2);
+      expect(removeMock.mock.calls.map(([sessionId]) => sessionId).sort()).toEqual([
+        'owner',
+        'parent',
+      ]);
+    });
+
+    it('ephemeral terminal session still scans and retries a matching owner', async () => {
+      const ownerMeta = makeMeta('owner');
+      storeMap.set('shared', makeMeta('shared', true));
+      storeMap.set('owner', ownerMeta);
+      addSession('shared', 'archived', { workingDir: ownerMeta.path });
+      addSession('owner', 'archived', { worktreePath: ownerMeta.path });
+
+      await mod.recycleWorktreeForRemovedSession('shared');
+
+      expect(removeMock).toHaveBeenCalledTimes(1);
+      expect(removeMock).toHaveBeenCalledWith(
+        'owner',
+        expect.objectContaining({ canRemove: expect.any(Function) }),
+      );
+    });
+
+    it('owner scan is fail-closed when its status lookup fails', async () => {
+      const ownerMeta = makeMeta('owner');
+      storeMap.set('owner', ownerMeta);
+      addSession('shared', 'archived', { workingDir: ownerMeta.path });
+      sessionLookupError = new Error('db closed');
+
+      await mod.recycleWorktreeForRemovedSession('shared');
+
+      expect(removeMock).not.toHaveBeenCalled();
+    });
+
     it.each(['archived', 'deleted'])(
       'shared session %s retriggers an archived owner by exact worktree path',
       async (sharedStatus) => {
