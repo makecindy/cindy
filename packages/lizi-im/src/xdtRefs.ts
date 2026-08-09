@@ -657,13 +657,35 @@ function markdownParenPairs(text: string): {
 function markdownWhitespacePositions(text: string): number[] {
   const positions: number[] = [];
   for (let cursor = 0; cursor < text.length; cursor += 1) {
-    if (text[cursor] === '\\') {
+    if (text[cursor] === '\\' && isMarkdownEscapablePunctuation(text[cursor + 1])) {
       cursor += 1;
       continue;
     }
     if (/\s/.test(text[cursor])) positions.push(cursor);
   }
   return positions;
+}
+
+function isMarkdownEscapablePunctuation(char: string | undefined): boolean {
+  if (!char) return false;
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x21 && code <= 0x2f) ||
+    (code >= 0x3a && code <= 0x40) ||
+    (code >= 0x5b && code <= 0x60) ||
+    (code >= 0x7b && code <= 0x7e)
+  );
+}
+
+function hasInvalidAngleDestinationChar(text: string, start: number, end: number): boolean {
+  for (let cursor = start; cursor < end; cursor += 1) {
+    if (text[cursor] === '\\' && isMarkdownEscapablePunctuation(text[cursor + 1])) {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === '<' || text[cursor] === '\n' || text[cursor] === '\r') return true;
+  }
+  return false;
 }
 
 function hasWhitespaceBetween(positions: readonly number[], start: number, end: number): boolean {
@@ -854,7 +876,7 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
 
     const closingAngle = angleWrapped ? nextAngle(schemeStart + scheme.length) : -1;
     const initialEndParen = angleWrapped
-      ? closingAngle === -1
+      ? closingAngle === -1 || hasInvalidAngleDestinationChar(text, schemeStart, closingAngle)
         ? -1
         : angleReferenceEnd(text, closingAngle)
       : parenPairs.closeByOpen[altEnd + 1];

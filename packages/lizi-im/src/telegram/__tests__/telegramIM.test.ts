@@ -1462,13 +1462,17 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(1);
   });
 
-  it('单图发送失败时不把该图片确认为已交付', async () => {
+  it.each([
+    ['网络错误', new TypeError('fetch failed')],
+    ['5xx', new TelegramApiError('sendPhoto', 500, 'Internal Server Error')],
+    ['429', new TelegramApiError('sendPhoto', 429, 'Too Many Requests', 3)],
+  ])('单图发送%s时不确认已交付并标记为不可重试', async (_label, failure) => {
     await connect();
     const absPath = path.join(tmpDir, 'failed-single.png');
     fs.writeFileSync(absPath, 'fake-png');
     const originalForm = api.callForm.bind(api);
     api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
-      if (method === 'sendPhoto') throw new TypeError('fetch failed');
+      if (method === 'sendPhoto') throw failure;
       return originalForm(method, form, signal);
     }) as FakeApi['callForm'];
     const handle = await im.startStreamingText(OWNER_ID);
@@ -1477,6 +1481,27 @@ describe('TelegramIM', () => {
     await handle.finalize('一张发送失败的图');
 
     expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
+    expect(handle.getNonRetryableExtraImageAbsPaths?.()).toEqual([absPath]);
+  });
+
+  it('单图被 400 明确拒绝时保留为可安全重试', async () => {
+    await connect();
+    const absPath = path.join(tmpDir, 'rejected-single.png');
+    fs.writeFileSync(absPath, 'fake-png');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendPhoto') {
+        throw new TelegramApiError('sendPhoto', 400, 'Bad Request: invalid photo');
+      }
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+    const handle = await im.startStreamingText(OWNER_ID);
+    handle.addExtraImageAbsPath?.(absPath);
+
+    await handle.finalize('一张被明确拒绝的图');
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
+    expect(handle.getNonRetryableExtraImageAbsPaths?.()).toEqual([]);
   });
 
   describe('相册发送失败的回落判据', () => {

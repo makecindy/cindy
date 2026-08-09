@@ -1990,12 +1990,20 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         for (const ref of refsByAbsPath.get(absPath) ?? []) deliveredRefs.add(ref);
       }
     };
+    const markNonRetryable = (paths: string[]): void => {
+      for (const absPath of paths) {
+        for (const ref of refsByAbsPath.get(absPath) ?? []) nonRetryableRefs.add(ref);
+      }
+    };
     if (absPaths.length === 1) {
       assertLive?.();
-      if (await this.sendSinglePhoto(chatId, absPaths[0], anchorReply)) {
+      const outcome = await this.sendSinglePhoto(chatId, absPaths[0], anchorReply);
+      if (outcome === 'sent') {
         markDelivered(absPaths);
+      } else if (outcome === 'uncertain') {
+        markNonRetryable(absPaths);
       }
-      return { delivered: [...deliveredRefs], nonRetryable: [] };
+      return { delivered: [...deliveredRefs], nonRetryable: [...nonRetryableRefs] };
     }
     for (let i = 0; i < absPaths.length; i += 10) {
       const group = absPaths.slice(i, i + 10);
@@ -2008,16 +2016,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         continue;
       }
       if (outcome === 'uncertain') {
-        for (const absPath of group) {
-          for (const ref of refsByAbsPath.get(absPath) ?? []) nonRetryableRefs.add(ref);
-        }
+        markNonRetryable(group);
         continue; // 可能已经发出去了, 不补发也不跨交互重试
       }
       if (outcome === 'rejected') {
         for (const absPath of group) {
           assertLive?.();
-          if (await this.sendSinglePhoto(chatId, absPath, anchorReply)) {
+          const singleOutcome = await this.sendSinglePhoto(chatId, absPath, anchorReply);
+          if (singleOutcome === 'sent') {
             markDelivered([absPath]);
+          } else if (singleOutcome === 'uncertain') {
+            markNonRetryable([absPath]);
           }
         }
       }
@@ -2094,20 +2103,36 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     chatId: string,
     absPath: string,
     anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
-  ): Promise<boolean> {
+  ): Promise<'sent' | 'rejected' | 'uncertain'> {
     const api = this.api;
-    if (!api) return false;
+    if (!api) return 'rejected';
+    let form: FormData;
     try {
-      const form = new FormData();
+      form = new FormData();
       form.set('chat_id', chatId);
       if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set('photo', new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
-      await api.callForm('sendPhoto', form);
-      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`telegram image upload failed: ${msg}`);
-      return false;
+      this.log.warn(`telegram image assembly failed before send: ${msg}`);
+      return 'rejected';
+    }
+    try {
+      await api.callForm('sendPhoto', form);
+      return 'sent';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        err instanceof TelegramApiError &&
+        err.errorCode >= 400 &&
+        err.errorCode < 500 &&
+        err.errorCode !== 429
+      ) {
+        this.log.warn(`telegram image upload rejected: ${msg}`);
+        return 'rejected';
+      }
+      this.log.warn(`telegram image upload outcome unknown, not retrying: ${msg}`);
+      return 'uncertain';
     }
   }
 

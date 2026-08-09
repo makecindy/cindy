@@ -51,6 +51,17 @@ function isEscapedMarkdownMarker(text: string, markerIndex: number): boolean {
   return backslashes % 2 === 1;
 }
 
+function isMarkdownEscapablePunctuation(char: string | undefined): boolean {
+  if (!char) return false;
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x21 && code <= 0x2f) ||
+    (code >= 0x3a && code <= 0x40) ||
+    (code >= 0x5b && code <= 0x60) ||
+    (code >= 0x7b && code <= 0x7e)
+  );
+}
+
 function markdownImageLabelEnd(text: string, labelStart: number, limit: number): number {
   let depth = 1;
   for (let cursor = labelStart; cursor < limit; cursor += 1) {
@@ -97,15 +108,30 @@ function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
     let targetEnd = targetStart;
     let depth = 1;
     let insideAngleDestination = text[targetStart] === '<';
+    let titleQuote: '"' | "'" | null = null;
     while (targetEnd < targetLimit) {
       const char = text[targetEnd];
       if (char === '\r' || char === '\n') break;
-      if (char === '\\') {
+      if (char === '\\' && isMarkdownEscapablePunctuation(text[targetEnd + 1])) {
         targetEnd += 2;
+        continue;
+      }
+      if (titleQuote) {
+        if (char === titleQuote) titleQuote = null;
+        targetEnd += 1;
         continue;
       }
       if (insideAngleDestination) {
         if (char === '>') insideAngleDestination = false;
+        targetEnd += 1;
+        continue;
+      }
+      if (
+        depth === 1 &&
+        (char === '"' || char === "'") &&
+        (text[targetEnd - 1] === ' ' || text[targetEnd - 1] === '\t')
+      ) {
+        titleQuote = char;
         targetEnd += 1;
         continue;
       }
@@ -156,15 +182,30 @@ function localMarkdownImageSanitizationMatches(text: string): LocalMarkdownImage
     let depth = 1;
     let nestedImageStart = -1;
     let insideAngleDestination = text[targetStart] === '<';
+    let titleQuote: '"' | "'" | null = null;
     while (targetEnd < lineEnd) {
       const char = text[targetEnd];
       if (char === '\r') break;
-      if (char === '\\') {
+      if (char === '\\' && isMarkdownEscapablePunctuation(text[targetEnd + 1])) {
         targetEnd = Math.min(targetEnd + 2, lineEnd);
+        continue;
+      }
+      if (titleQuote) {
+        if (char === titleQuote) titleQuote = null;
+        targetEnd += 1;
         continue;
       }
       if (insideAngleDestination) {
         if (char === '>') insideAngleDestination = false;
+        targetEnd += 1;
+        continue;
+      }
+      if (
+        depth === 1 &&
+        (char === '"' || char === "'") &&
+        (text[targetEnd - 1] === ' ' || text[targetEnd - 1] === '\t')
+      ) {
+        titleQuote = char;
         targetEnd += 1;
         continue;
       }
@@ -252,7 +293,7 @@ function isPathInside(parentAbs: string, childAbs: string): boolean {
 
 function hasUnescapedMarkdownWhitespace(value: string): boolean {
   for (let cursor = 0; cursor < value.length; cursor += 1) {
-    if (value[cursor] === '\\') {
+    if (value[cursor] === '\\' && isMarkdownEscapablePunctuation(value[cursor + 1])) {
       cursor += 1;
       continue;
     }
@@ -263,7 +304,7 @@ function hasUnescapedMarkdownWhitespace(value: string): boolean {
 
 function hasInvalidAngleDestinationChar(value: string): boolean {
   for (let cursor = 0; cursor < value.length; cursor += 1) {
-    if (value[cursor] === '\\') {
+    if (value[cursor] === '\\' && isMarkdownEscapablePunctuation(value[cursor + 1])) {
       cursor += 1;
       continue;
     }
@@ -282,10 +323,13 @@ function markdownImageDestination(raw: string): string {
     if (closingBracket < 0) return '';
     const destination = target.slice(1, closingBracket);
     if (hasInvalidAngleDestinationChar(destination)) return '';
-    const tail = target.slice(closingBracket + 1).trim();
+    const tail = target.slice(closingBracket + 1);
     if (
       tail &&
-      !/^(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))$/.test(tail)
+      !/^[ \t]+$/.test(tail) &&
+      !/^[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/.test(
+        tail,
+      )
     ) {
       return '';
     }

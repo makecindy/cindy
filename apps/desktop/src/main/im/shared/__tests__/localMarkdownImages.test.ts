@@ -116,6 +116,23 @@ describe('materializeLocalMarkdownImages', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe('示例');
   });
 
+  it('does not treat backslash followed by whitespace as an image destination escape', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'secret\\ image.png');
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    deps.realpath = vi.fn(async (value: string) => value);
+    deps.readBoundedFile = vi.fn(async () => PNG_BYTES);
+    const text = `![示例](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-backslash-whitespace' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(deps.ingest).not.toHaveBeenCalled();
+  });
+
   it('redacts but does not materialize an angle destination missing its closing bracket', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'private.png');
@@ -143,6 +160,23 @@ describe('materializeLocalMarkdownImages', () => {
     await expect(
       materializeLocalMarkdownImages(
         { text, workingDir, sessionId: 'session-invalid-angle-tail' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(deps.ingest).not.toHaveBeenCalled();
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('示例');
+  });
+
+  it('requires whitespace before an angle image destination title', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    const text = `![示例](<${sourcePath}>"title")`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-angle-title-whitespace' },
         deps,
       ),
     ).resolves.toEqual({ absPaths: [], text });
@@ -274,6 +308,22 @@ describe('materializeLocalMarkdownImages', () => {
         deps,
       ),
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
+  });
+
+  it('ignores a closing parenthesis inside a quoted image title', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'titled.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+    const text = `![titled](${sourcePath} "第 1) 版")`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-title-parenthesis' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'titled' });
   });
 
   it('materializes a local image target with multiple balanced parenthesis levels', async () => {

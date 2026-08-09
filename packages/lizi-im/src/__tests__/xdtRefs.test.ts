@@ -281,11 +281,25 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
   });
 
+  it('rejects invalid characters inside an angle file destination', () => {
+    const texts = [
+      '[示例](<xdt-file:///work/secret<draft.pdf>)',
+      '[示例](<xdt-file:///work/secret\nreport.pdf>)',
+    ];
+
+    for (const text of texts) {
+      expect(collectXdtFileRefs(text)).toEqual([]);
+      expect(collectXdtFileLinks(text)).toEqual([]);
+      expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+    }
+  });
+
   it('rejects a plain file destination with unescaped whitespace', () => {
     const texts = [
       '[示例](xdt-file:///work/secret report.pdf)',
       '[示例](xdt-file:///work/secret report.pdf "title")',
       '[示例](xdt-file:///work/secret report.pdf (title))',
+      '[示例](xdt-file:///work/secret\\ report.pdf)',
     ];
 
     for (const text of texts) {
