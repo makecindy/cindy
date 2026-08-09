@@ -34,7 +34,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 
 import { RightSidebarShell } from '../RightSidebarShell';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
-import { _resetPopupRouterForTests } from '../lib/popupRouter';
+import { initPopupRouter, _resetPopupRouterForTests } from '../lib/popupRouter';
 import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
 import {
   _resetSidebarCommandsForTests,
@@ -859,6 +859,139 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     expect(getBucket('s1').tabs).toHaveLength(1);
     expect(getBucket('s2').tabs).toHaveLength(0);
     expect(rsbNativePopupClaim).toHaveBeenCalledTimes(1);
+  });
+
+  it('session 尚未就绪时,带 opener 归属的同步 replay 立即落到 opener session', async () => {
+    const electronApi = (
+      window as unknown as {
+        electronAPI: { onRsbBrowserPopup: ReturnType<typeof vi.fn> };
+      }
+    ).electronAPI;
+    electronApi.onRsbBrowserPopup.mockImplementation(
+      (callback: (payload: RsbBrowserPopupPayloadStub) => void) => {
+        rsbBrowserPopupListeners.push(callback);
+        // sessionId=null 时也必须订阅;明确 opener 归属不应等待 fallback。
+        callback({
+          url: 'about:blank',
+          disposition: 'foreground-tab',
+          openerSessionId: 's-opener',
+          nativePopupSurfaceId: 'surface-attributed-cold-start',
+        });
+        return () => {
+          rsbBrowserPopupListeners = rsbBrowserPopupListeners.filter((cb) => cb !== callback);
+        };
+      },
+    );
+
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: null,
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+
+    await waitFor(() => expect(getBucket('s-opener').tabs).toHaveLength(1));
+    await waitFor(() => expect(rsbNativePopupClaim).toHaveBeenCalledTimes(1));
+    expect(rsbNativePopupClaim).toHaveBeenCalledWith({
+      surfaceId: 'surface-attributed-cold-start',
+      sessionId: 's-opener',
+      tabId: getBucket('s-opener').tabs[0].id,
+    });
+    expect(rsbNativePopupClose).not.toHaveBeenCalled();
+  });
+
+  it('无归属 popup 在 fallback 到来前保留,设置后 FIFO 只 claim 一次', async () => {
+    const electronApi = (
+      window as unknown as {
+        electronAPI: { onRsbBrowserPopup: ReturnType<typeof vi.fn> };
+      }
+    ).electronAPI;
+    electronApi.onRsbBrowserPopup.mockImplementation(
+      (callback: (payload: RsbBrowserPopupPayloadStub) => void) => {
+        rsbBrowserPopupListeners.push(callback);
+        return () => {
+          rsbBrowserPopupListeners = rsbBrowserPopupListeners.filter((cb) => cb !== callback);
+        };
+      },
+    );
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: null,
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    rsbBrowserPopupListeners[0]({
+      url: 'about:blank',
+      disposition: 'foreground-tab',
+      nativePopupSurfaceId: 'surface-unattributed-cold-start',
+    });
+    expect(rsbNativePopupClose).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's-fallback',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await waitFor(() => expect(getBucket('s-fallback').tabs).toHaveLength(1));
+    await waitFor(() => expect(rsbNativePopupClaim).toHaveBeenCalledTimes(1));
+    expect(rsbNativePopupClose).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's-next',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getBucket('s-fallback').tabs).toHaveLength(1);
+    expect(getBucket('s-next').tabs).toHaveLength(0);
+    expect(rsbNativePopupClaim).toHaveBeenCalledTimes(1);
+  });
+
+  it('无归属 pending 队列有界,溢出与 TTL 都关闭 native surface', async () => {
+    vi.useFakeTimers();
+    try {
+      initPopupRouter();
+      expect(rsbBrowserPopupListeners).toHaveLength(1);
+      for (let index = 0; index < 9; index += 1) {
+        rsbBrowserPopupListeners[0]({
+          url: `about:blank#pending-${index}`,
+          disposition: 'foreground-tab',
+          nativePopupSurfaceId: `surface-pending-${index}`,
+        });
+      }
+      expect(rsbNativePopupClose).toHaveBeenCalledTimes(1);
+      expect(rsbNativePopupClose).toHaveBeenCalledWith({ surfaceId: 'surface-pending-0' });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_001);
+      });
+      expect(rsbNativePopupClose).toHaveBeenCalledTimes(9);
+      for (let index = 1; index < 9; index += 1) {
+        expect(rsbNativePopupClose).toHaveBeenCalledWith({
+          surfaceId: `surface-pending-${index}`,
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('把 popup 落进 opener session,并以 userInitiated:false 请求展开', async () => {
