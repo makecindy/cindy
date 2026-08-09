@@ -166,6 +166,9 @@ export function createResponsesChatHandler(
           capabilities: provider.capabilities,
           onDroppedTool: (type, index) => {
             log.warn?.('responses-chat bridge dropped non-function tool', { type, index });
+            if (type === 'web_search') {
+              throw new UnsupportedResponsesFeatureError('tool web_search');
+            }
           },
         });
       } catch (error) {
