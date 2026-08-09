@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
@@ -23,6 +24,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { execFile, execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { machineIdSync } from 'node-machine-id';
 import windowStateKeeper from 'electron-window-state';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -41,6 +43,20 @@ import {
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
+import { MacAppshotNativeHost } from './appshots/MacAppshotNativeHost.js';
+import { AppshotCoordinator } from './appshots/coordinator.js';
+import { createAppshotPublisher, registerAppshotIpc } from './appshots/ipc.js';
+import { createAppshotShortcutStore } from './appshots/shortcutStore.js';
+import { AppshotShortcutService } from './appshots/shortcutService.js';
+import {
+  broadcastAppshotShortcutState,
+  registerAppshotShortcutIpc,
+} from './appshots/shortcutIpc.js';
+import {
+  MacWorkspaceApplicationMonitor,
+  readMacWorkspaceApplicationSnapshot,
+  spawnMacWorkspaceApplicationListener,
+} from './appshots/workspaceApplicationMonitor.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
@@ -325,7 +341,10 @@ import {
   isFocusedAppContentWindow,
   markAppContentWindow,
 } from './windowFocusClassifier.js';
-import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from './security/trustedAppRenderer.js';
 import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
@@ -579,6 +598,7 @@ import { isSecondaryAppWindow, openSessionInNewWindow } from './secondary-window
 import {
   isGlobalVoiceInputOverlayVisible,
   registerGlobalVoiceInputIpc,
+  retainMacModifierKeySnapshots,
 } from './voice-input/global.js';
 import { ensureMainAppPresence } from './appPresence.js';
 import {
@@ -1830,6 +1850,55 @@ function isPathAllowed(filePath: string): boolean {
 // BrowserWindow，[0] 拿到它再 .focus() 等于啥也没干，用户视觉上以为
 // "双击启动不了"。
 let mainWindowRef: BrowserWindow | null = null;
+const appshotNativeHost = new MacAppshotNativeHost();
+const appshotCoordinator = new AppshotCoordinator({
+  captureNative: (outputDir) => appshotNativeHost.capture(outputDir),
+  ingestPng: async (bytes) => cindyChatAttachments.ingestChatImageBuffer({
+    buffer: bytes,
+    mimeType: 'image/png',
+  }),
+  async makeTempDir() {
+    const outputDir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'cindy-appshot-'));
+    await fs.promises.chmod(outputDir, 0o700);
+    return outputDir;
+  },
+  removeTempDir: (outputDir) => fs.promises.rm(outputDir, { recursive: true, force: true }),
+  now: () => new Date(),
+  randomUUID,
+  publish: createAppshotPublisher({
+    getMainWindow: () => mainWindowRef,
+    isTrustedWindow: isTrustedAppRendererWindow,
+    send: (window, channel, result) => window.webContents.send(channel, result),
+    focus: () => { focusMainWindow(); },
+  }),
+});
+const appshotRunningBundleIds = new Set<string>();
+const appshotShortcutService = new AppshotShortcutService({
+  store: createAppshotShortcutStore(app.getPath('userData')),
+  globalShortcut,
+  retainMacModifierKeySnapshots,
+  capture: () => appshotCoordinator.capture(),
+  getRunningBundleIds: () => appshotRunningBundleIds,
+  onStateChanged: (state) => {
+    broadcastAppshotShortcutState({
+      windows: BrowserWindow.getAllWindows(),
+      isTrustedWindow: isTrustedAppRendererWindow,
+      send: (window, channel, shortcutState) => window.webContents.send(channel, shortcutState),
+    }, state);
+  },
+});
+const appshotWorkspaceApplicationMonitor = new MacWorkspaceApplicationMonitor({
+  spawnListener: spawnMacWorkspaceApplicationListener,
+  readSnapshot: readMacWorkspaceApplicationSnapshot,
+  onSnapshot: (bundleIds) => {
+    appshotRunningBundleIds.clear();
+    for (const bundleId of bundleIds) appshotRunningBundleIds.add(bundleId);
+    void appshotShortcutService.refreshConflicts();
+  },
+});
+const refreshAppshotWorkspaceApplicationSnapshot = (): void => {
+  void appshotWorkspaceApplicationMonitor.refresh();
+};
 // 端点清单阻断门:ready 流程走到正常 createWindow() 前置 true。在此之前
 // second-instance / activate 一律不许建窗——阻断循环(错误框重试)期间用户
 // 双击图标 / 点 Dock 若能建窗,preload 的模块级 sendSync 会因 handler 未注册
@@ -6494,6 +6563,20 @@ app.on('ready', async () => {
   // dev-only IPC for embedding-host smoke testing (status + sync embed). 安全:
   // 内部自带 app.isPackaged 守卫, packaged build 下 register 是 no-op。
   registerDevEmbeddingIpc();
+  registerAppshotIpc({
+    ipcMain,
+    coordinator: appshotCoordinator,
+    assertTrustedSender: (event) => assertTrustedAppRendererEvent(
+      event as Parameters<typeof assertTrustedAppRendererEvent>[0],
+    ),
+  });
+  registerAppshotShortcutIpc({
+    ipcMain,
+    service: appshotShortcutService,
+    assertTrustedSender: (event) => assertTrustedAppRendererEvent(
+      event as Parameters<typeof assertTrustedAppRendererEvent>[0],
+    ),
+  });
   // worktree-parallel-sessions: 注册 7 个 worktree:* channel (创建/查询/列表/reveal/...)
   // 删除路径不暴露 IPC; 仅在 cc-agent:close-session 内部调用 removeWorktreeForSession。
   registerWorktreeIpc(ipcMain);
@@ -6527,6 +6610,12 @@ app.on('ready', async () => {
     // 会话副窗口跑同一套路由,设置页在里面照样打得开,所以弹系统授权窗那两条 IPC 要认它。
     isSecondaryAppWindow,
   });
+  if (process.platform === 'darwin') {
+    appshotWorkspaceApplicationMonitor.start();
+    await appshotWorkspaceApplicationMonitor.refresh();
+    app.on('browser-window-focus', refreshAppshotWorkspaceApplicationSnapshot);
+    await appshotShortcutService.start();
+  }
   // 老 'usage:get-today-spend' 已退役 —— renderer 走 maker:usage:today('claude-code') 拉。
   // readTodaySpend 仍在 main/usageBroadcaster.ts 内部被 readAgentTodayUsage 用。
   // 主机飞书 token 链已退役(2026-07-17):飞书授权改由 xd-feishu 意识经
@@ -6707,6 +6796,12 @@ onQuit(
   'sync',
 );
 onQuit('auth-manager', () => authManager.dispose(), 'sync');
+onQuit('appshots-clear-pending', () => appshotCoordinator.clear(), 'sync');
+onQuit('appshots-shortcut-service', () => {
+  app.removeListener('browser-window-focus', refreshAppshotWorkspaceApplicationSnapshot);
+  appshotWorkspaceApplicationMonitor.stop();
+  appshotShortcutService.stop();
+}, 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
 // 不阻塞)。不收会一直锁安装目录里的 adb.exe,弄挂增量更新(os error 32)。

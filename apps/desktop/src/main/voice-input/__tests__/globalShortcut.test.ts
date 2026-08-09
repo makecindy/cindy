@@ -84,6 +84,7 @@ const mocks = vi.hoisted(() => {
   const modifierSetShortcut = vi.fn();
   const modifierStop = vi.fn();
   const modifierReleaseShortcut = vi.fn();
+  const modifierStopKeyCapture = vi.fn();
   const modifierIsRunning = vi.fn();
   const modifierIsReady = vi.fn();
   const modifierStartKeyCapture = vi.fn();
@@ -138,6 +139,7 @@ const mocks = vi.hoisted(() => {
     modifierSetShortcut,
     modifierStop,
     modifierReleaseShortcut,
+    modifierStopKeyCapture,
     modifierIsRunning,
     modifierIsReady,
     modifierStartKeyCapture,
@@ -224,7 +226,7 @@ vi.mock('../MacModifierShortcutListener.js', () => ({
       isReady: mocks.modifierIsReady,
       stop: mocks.modifierStop,
       releaseShortcutKeepingCapture: mocks.modifierReleaseShortcut,
-      stopKeyCapture: vi.fn(),
+      stopKeyCapture: mocks.modifierStopKeyCapture,
       startKeyCapture: mocks.modifierStartKeyCapture,
       pendingStartResult: mocks.modifierPendingStartResult,
     };
@@ -246,6 +248,12 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 
 let setTimeoutSpy: { mockRestore: () => void } | null = null;
 const originalPlatform = process.platform;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
 
 function setPlatform(value: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value, configurable: true });
@@ -276,6 +284,7 @@ describe('voice input global shortcut registration', () => {
     mocks.modifierIsReady.mockImplementation(() => mocks.modifierIsRunning() as boolean);
     mocks.modifierStop.mockClear();
     mocks.modifierReleaseShortcut.mockClear();
+    mocks.modifierStopKeyCapture.mockClear();
     mocks.modifierStartKeyCapture.mockReset();
     mocks.modifierStartKeyCapture.mockResolvedValue({ ok: true });
     // 默认已授权:既有用例断言的是「拿得到权限时」的注册行为。
@@ -304,6 +313,65 @@ describe('voice input global shortcut registration', () => {
     mocks.updateSettings.mockImplementation((patch: unknown) => ({ shortcut: null, ...(patch as object) }));
     mocks.registerShortcut.mockReset();
     mocks.registerShortcut.mockReturnValue(true);
+  });
+
+  it('fans native key snapshots out to voice recording and an independent Appshot subscriber', async () => {
+    setPlatform('darwin');
+    const { registerGlobalVoiceInputIpc, retainMacModifierKeySnapshots } = await import('../global.js');
+    registerGlobalVoiceInputIpc(mocks.ipcDeps);
+    const subscriber = vi.fn();
+    const release = await retainMacModifierKeySnapshots('appshots', subscriber);
+    const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+    await start?.(mocks.recordingEvent);
+
+    mocks.listenerOptions.onKeys?.(['MetaLeft', 'MetaRight']);
+    expect(subscriber).toHaveBeenCalledWith(['MetaLeft', 'MetaRight']);
+    expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
+      'voice-input:modifier-shortcut-keys',
+      { keys: ['MetaLeft', 'MetaRight'] },
+    );
+
+    release();
+    expect(mocks.modifierStopKeyCapture).not.toHaveBeenCalled();
+    await mocks.handlers.get('voice-input:modifier-shortcut-recording:stop')?.(mocks.recordingEvent);
+    expect(mocks.modifierStopKeyCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up a failed Appshot subscriber start and reports a stable error', async () => {
+    setPlatform('darwin');
+    mocks.modifierStartKeyCapture.mockResolvedValue({ ok: false, error: '/private/helper failed' });
+    const { retainMacModifierKeySnapshots } = await import('../global.js');
+
+    await expect(retainMacModifierKeySnapshots('appshots', vi.fn())).rejects.toThrow(
+      'Could not start the macOS modifier key listener.',
+    );
+    mocks.listenerOptions.onKeys?.(['MetaLeft', 'MetaRight']);
+    expect(mocks.modifierStopKeyCapture).not.toHaveBeenCalled();
+  });
+
+  it('does not let an older failed retain remove a newer subscriber for the same owner', async () => {
+    setPlatform('darwin');
+    const firstStart = deferred<{ ok: false; error: string }>();
+    const secondStart = deferred<{ ok: true }>();
+    mocks.modifierStartKeyCapture
+      .mockReturnValueOnce(firstStart.promise)
+      .mockReturnValueOnce(secondStart.promise);
+    const { retainMacModifierKeySnapshots } = await import('../global.js');
+    const firstSubscriber = vi.fn();
+    const secondSubscriber = vi.fn();
+
+    const first = retainMacModifierKeySnapshots('appshots', firstSubscriber);
+    const second = retainMacModifierKeySnapshots('appshots', secondSubscriber);
+    secondStart.resolve({ ok: true });
+    const releaseSecond = await second;
+    firstStart.resolve({ ok: false, error: 'failed' });
+
+    await expect(first).rejects.toThrow('Could not start the macOS modifier key listener.');
+    mocks.listenerOptions.onKeys?.(['MetaLeft', 'MetaRight']);
+
+    expect(secondSubscriber).toHaveBeenCalledWith(['MetaLeft', 'MetaRight']);
+    expect(firstSubscriber).not.toHaveBeenCalled();
+    releaseSecond();
   });
 
   afterEach(() => {

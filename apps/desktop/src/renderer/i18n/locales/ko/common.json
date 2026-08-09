@@ -3068,6 +3068,33 @@
     },
     "shortcuts": {
       "title": "키보드 단축키",
+      "appshots": {
+        "title": "Appshots",
+        "description": "현재 앱 창을 캡처하여 현재 로컬 Codex 입력창에 첨부합니다.",
+        "codexOnly": "Appshots는 로컬 Codex 세션에서만 사용할 수 있으며 자동으로 전송하지 않습니다.",
+        "preferred": "기본 단축키",
+        "fallback": "대체 단축키",
+        "active": "현재 활성",
+        "unavailable": "사용할 수 없음",
+        "customize": "사용자 지정",
+        "reset": "Appshots 단축키 재설정",
+        "loadFailed": "Appshots 단축키 설정을 불러오지 못했습니다",
+        "saveFailed": "Appshots 단축키 설정을 저장하지 못했습니다",
+        "permissionsTitle": "macOS 권한",
+        "permissions": "화면 기록은 창 이미지를 캡처하고, 손쉬운 사용은 창 제목과 UI 트리를 읽으며, 입력 모니터링은 수정 키 두 번 누르기에 필요합니다. 시작 시 권한을 요청하지 않으며 “시스템 설정 > 개인정보 보호 및 보안”에서 허용할 수 있습니다.",
+        "openPermissionSettingsFailed": "macOS 권한 설정을 열지 못했습니다",
+        "permissionsActions": {
+          "screen-recording": "화면 기록",
+          "accessibility": "손쉬운 사용",
+          "input-monitoring": "입력 모니터링"
+        },
+        "modifiers": { "command": "Command 두 번", "option": "Option 두 번", "shift": "Shift 두 번" },
+        "reasons": {
+          "codex-running": "Codex가 실행 중이므로 대체 단축키가 활성화되었습니다.",
+          "registration-conflict": "기본 단축키를 사용할 수 없어 대체 단축키가 활성화되었습니다.",
+          "input-monitoring": "입력 모니터링을 사용할 수 없어 대체 단축키가 활성화되었습니다."
+        }
+      },
       "resetAll": "모두 기본값으로 재설정",
       "reset": "기본값으로 재설정",
       "recording": "새 단축키를 누르세요…",
@@ -5433,6 +5460,21 @@
     },
     "chatInput": {
       "defaultPlaceholder": "오늘은 무엇을 할까요~",
+      "appshots": {
+        "menuItem": "앱 스냅샷",
+        "permissionTitle": "화면 기록 권한이 필요합니다",
+        "permissionDescription": "Appshots로 현재 앱 창을 캡처하려면 macOS 화면 기록 권한이 필요합니다. Cindy는 해당 시스템 설정 페이지만 열며, 다시 시도하기 전에는 캡처하거나 전송하지 않습니다.",
+        "openSettings": "설정 열기",
+        "cancel": "취소",
+        "openSettingsFailed": "화면 기록 설정을 열 수 없습니다",
+        "captureFailed": "현재 앱 창을 캡처할 수 없습니다",
+        "hasAxBadge": "UI 구조 포함",
+        "axPreviewTitle": "Appshot UI 구조",
+        "axPreviewDescription": "전송 시 아래 접근성 텍스트가 스크린샷과 함께 첨부됩니다. 전송 전에 제거할 수 있습니다.",
+        "noAx": "이 스냅샷에는 UI 구조가 없습니다.",
+        "removeAx": "UI 구조 제거",
+        "close": "닫기"
+      },
       "voiceInput": {
         "start": "음성 입력 시작",
         "stop": "음성 입력 중지",

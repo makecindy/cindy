@@ -3069,6 +3069,33 @@
     },
     "shortcuts": {
       "title": "Keyboard Shortcuts",
+      "appshots": {
+        "title": "Appshots",
+        "description": "Capture the current app window and attach it to the active local Codex composer.",
+        "codexOnly": "Appshots are available only in local Codex sessions and are never sent automatically.",
+        "preferred": "Preferred shortcut",
+        "fallback": "Fallback shortcut",
+        "active": "Currently active",
+        "unavailable": "Unavailable",
+        "customize": "Customize",
+        "reset": "Reset Appshots shortcuts",
+        "loadFailed": "Could not load Appshots shortcut settings",
+        "saveFailed": "Could not save Appshots shortcut settings",
+        "permissionsTitle": "macOS permissions",
+        "permissions": "Screen Recording captures the window image. Accessibility reads the window title and UI tree. Input Monitoring is needed for double-modifier shortcuts. Cindy does not request these permissions at startup; grant them in System Settings > Privacy & Security if you enable the feature.",
+        "openPermissionSettingsFailed": "Failed to open the macOS permission settings",
+        "permissionsActions": {
+          "screen-recording": "Screen Recording",
+          "accessibility": "Accessibility",
+          "input-monitoring": "Input Monitoring"
+        },
+        "modifiers": { "command": "Double Command", "option": "Double Option", "shift": "Double Shift" },
+        "reasons": {
+          "codex-running": "Codex is running, so the fallback shortcut is active.",
+          "registration-conflict": "The preferred shortcut was unavailable, so the fallback is active.",
+          "input-monitoring": "Input Monitoring is unavailable, so the fallback is active."
+        }
+      },
       "resetAll": "Reset all to defaults",
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
@@ -5435,6 +5462,21 @@
     },
     "chatInput": {
       "defaultPlaceholder": "What shall we work on today~",
+      "appshots": {
+        "menuItem": "Capture app snapshot",
+        "permissionTitle": "Screen Recording permission required",
+        "permissionDescription": "Appshots needs macOS Screen Recording permission to capture the active app window. Cindy will open the matching System Settings page and will not capture or send anything until you try again.",
+        "openSettings": "Open Settings",
+        "cancel": "Cancel",
+        "openSettingsFailed": "Failed to open Screen Recording settings",
+        "captureFailed": "Could not capture the active app window",
+        "hasAxBadge": "Includes UI structure",
+        "axPreviewTitle": "Appshot UI structure",
+        "axPreviewDescription": "The accessibility text below is attached alongside the screenshot when sent. You can remove it before sending.",
+        "noAx": "This snapshot has no UI structure.",
+        "removeAx": "Remove UI structure",
+        "close": "Close"
+      },
       "voiceInput": {
         "start": "Start voice input",
         "stop": "Stop voice input",

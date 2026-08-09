@@ -16,6 +16,7 @@ import {
   COMPOUND_EXTS,
   KNOWN_TEXT_FILENAMES,
 } from '../../shared/textFileExts';
+import type { AppshotMetadata } from '../../shared/appshots';
 
 // ── Supported extension sets ──
 
@@ -99,6 +100,7 @@ export interface AttachedFile {
    * buildMakerUserMessage 据此给模型注入"红色笔迹是用户标注"的固定说明。
    */
   annotated?: boolean;
+  appshot?: AppshotMetadata;
   /**
    * 非破坏性标注:未烧录**原图**的 xdt-image:// 缓存 url。`annotated` 为真时
    * 存在;托盘预览用它(而非烧录位图)+ `annotationStrokes` 矢量叠加显示,
@@ -163,6 +165,7 @@ export interface SerializedAttachedFile {
   truncated?: boolean;
   /** 图片带用户手绘标注,见 {@link AttachedFile.annotated}。 */
   annotated?: boolean;
+  appshot?: AppshotMetadata;
 }
 
 export interface MentionedResource {

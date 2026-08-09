@@ -854,6 +854,7 @@ function isMacForgePlatform(platform: ForgePlatform): boolean {
 const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
+const MACOS_APPSHOT_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 
 function swiftTargetTriple(cpuArch: 'arm64' | 'x86_64', deploymentTarget: string): string {
   return `${cpuArch}-apple-${deploymentTarget}`;
@@ -1024,6 +1025,28 @@ function buildMacComputerPermissionGuideHelper(platform: ForgePlatform, arch: Fo
   fs.chmodSync(dest, 0o755);
   const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
   console.log(`[forge:prePackage] macOS computer permission guide helper (${swiftArchLabel(arch, MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
+}
+
+function buildMacAppshotHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const src = path.join(__dirname, 'native', 'appshots', 'macos-appshot-helper.swift');
+  const destDir = path.join(__dirname, 'resources', 'tools', 'appshots');
+  const dest = path.join(destDir, 'xdt-macos-appshot-helper');
+  if (!fs.existsSync(src)) {
+    throw new Error(`[forge] macOS Appshot helper source missing at ${src}`);
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_APPSHOT_HELPER_DEPLOYMENT_TARGET,
+    ['-O'],
+    'Appshot helper',
+  );
+  fs.chmodSync(dest, 0o755);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log(`[forge:prePackage] macOS Appshot helper (${swiftArchLabel(arch, MACOS_APPSHOT_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
 }
 
 // MakerNSIS is Windows-only (native dependency), conditionally require to
@@ -1304,6 +1327,7 @@ const config: ForgeConfig = {
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
+      buildMacAppshotHelper(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，

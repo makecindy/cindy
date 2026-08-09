@@ -17,6 +17,11 @@ import {
   readAgentInputReferences,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
+import {
+  coerceAppshotMetadata,
+  formatAppshotContext,
+  type AppshotMetadata,
+} from './appshots';
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 
@@ -40,6 +45,7 @@ export interface AgentInputSerializedFile {
    * 在附件 block 后注入一句固定说明,告诉模型红色笔迹是用户标注、非原图内容。
    */
   annotated?: boolean;
+  appshot?: AppshotMetadata;
 }
 
 export interface AgentInputMention {
@@ -933,15 +939,20 @@ export function buildMakerUserMessage(
   let hasAnnotatedImage = false;
   for (const f of queued.files ?? []) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
+    const appshot = type === 'image' ? coerceAppshotMetadata(f.appshot) : null;
+    let block: { type: string; [k: string]: unknown };
     if (f.url) {
-      blocks.push({ type, path: f.url, mimeType: f.mimeType });
+      block = { type, path: f.url, mimeType: f.mimeType };
     } else if (f.path && !f.path.startsWith('clipboard://')) {
-      blocks.push({ type, path: f.path, mimeType: f.mimeType });
+      block = { type, path: f.path, mimeType: f.mimeType };
     } else if (f.base64) {
-      blocks.push({ type, base64: f.base64, mimeType: f.mimeType });
+      block = { type, base64: f.base64, mimeType: f.mimeType };
     } else {
       continue;
     }
+    if (appshot) block.appshot = appshot;
+    blocks.push(block);
+    if (appshot) blocks.push({ type: 'text', text: formatAppshotContext(appshot) });
     if (type === 'image' && f.annotated) hasAnnotatedImage = true;
   }
   // 标注说明放在全部附件 block 之后、每条消息至多一条:codex 侧 inputs 保序,

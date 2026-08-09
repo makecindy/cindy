@@ -6004,6 +6004,40 @@ describe('AgentInputCoordinator queue mutations', () => {
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
+  it('strips Appshot metadata from a non-Codex crash snapshot and restores the rest', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-appshot-non-codex';
+    h.setLoadQueueSnapshot(async () => [
+      makeItem('r-appshot', 'captured window', {
+        files: [{
+          id: 'file-1',
+          name: 'capture.png',
+          path: '/tmp/capture.png',
+          ext: '.png',
+          size: 1,
+          category: 'image',
+          mimeType: 'image/png',
+          appshot: {
+            schemaVersion: 1,
+            captureId: 'capture-1',
+            capturedAt: '2026-08-06T01:02:03.000Z',
+            applicationName: 'Cindy',
+            bundleIdentifier: 'com.xd.cindy',
+            windowTitle: 'Draft',
+            accessibilityText: null,
+            accessibilityTruncated: false,
+          },
+        }],
+      }),
+    ]);
+
+    await h.coordinator.ensureQueueRestored(sid);
+
+    const restored = latestProjection(h.projections).pendingQueue[0];
+    expect(restored?.files?.[0]).not.toHaveProperty('appshot');
+    expect(restored?.files?.[0]?.name).toBe('capture.png');
+  });
+
   it('persists the queue after restore and shrinks the snapshot once the head crosses the DB boundary', async () => {
     const h = createHarness();
     const sid = 'snapshot-persist';

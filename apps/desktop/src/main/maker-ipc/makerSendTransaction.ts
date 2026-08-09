@@ -17,6 +17,7 @@ import {
 } from '../maker-host/send-outcome.js';
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { validateAndStripAppshotMetadata } from './appshotBoundary.js';
 import {
   prependHandoffToUserMessage,
   prependNoteToWireUserMessage,
@@ -665,6 +666,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // reference still used by the transcript.
       let userMessagePersisted = false;
       let sendAccepted = false;
+      const appshotValidated = validateAndStripAppshotMetadata(outgoingMessage, sess.agentKind);
+      outgoingMessage = appshotValidated.message as IpcUserMessage;
       if (deps.materializeDirectSendOssAttachments) {
         const materialized = await deps.materializeDirectSendOssAttachments(
           sessionId,

@@ -1055,6 +1055,20 @@ interface ElectronAPI {
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
   getDeviceId: () => Promise<string>;
+  appshots: {
+    capture: () => Promise<{ accepted: true }>;
+    listPending: () => Promise<import('../shared/appshots').AppshotCaptureResult[]>;
+    ack: (captureId: string) => Promise<{ acknowledged: boolean }>;
+    onCaptured: (callback: (result: import('../shared/appshots').AppshotCaptureResult) => void) => () => void;
+    getShortcutState: () => Promise<import('../main/appshots/shortcutService').AppshotShortcutState>;
+    setShortcutPreferences: (
+      value: import('../shared/appshots').AppshotShortcutPreferences,
+    ) => Promise<import('../main/appshots/shortcutService').AppshotShortcutState>;
+    resetShortcutPreferences: () => Promise<import('../main/appshots/shortcutService').AppshotShortcutState>;
+    onShortcutStateChanged: (
+      callback: (state: import('../main/appshots/shortcutService').AppshotShortcutState) => void,
+    ) => () => void;
+  };
   windowMinimize: () => void;
   windowMaximize: () => void;
   windowClose: () => void;

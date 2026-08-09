@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pencil, RotateCcw, Trash2 } from 'lucide-react';
+import { Camera, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import {
@@ -44,7 +44,14 @@ import {
 } from '@/lib/appShortcutStore';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { createLogger } from '@/lib/logger';
+import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
+import {
+  DEFAULT_APPSHOT_SHORTCUT_PREFERENCES,
+  formatAppshotShortcut,
+  type AppshotShortcut,
+  type AppshotShortcutPreferences,
+} from '../../../shared/appshots';
 
 const log = createLogger('settings:keyboard-shortcuts');
 
@@ -52,6 +59,15 @@ interface RecordingError {
   id: AppShortcutId;
   message: string;
 }
+
+type AppshotRecordingTarget = 'preferred' | 'fallback' | null;
+type AppshotPermissionTarget = 'screen-recording' | 'accessibility' | 'input-monitoring';
+
+const APPSHOT_PERMISSION_SETTINGS_URLS: Record<AppshotPermissionTarget, string> = {
+  'screen-recording': 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+  accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+  'input-monitoring': 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent',
+};
 
 export function KeyboardShortcutsSection() {
   const { t } = useTranslation();
@@ -68,6 +84,81 @@ export function KeyboardShortcutsSection() {
   const [error, setError] = useState<RecordingError | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const mutationRequestIdRef = useRef(0);
+  const [appshotState, setAppshotState] = useState<{
+    preferences: AppshotShortcutPreferences;
+    configured: AppshotShortcut;
+    active: AppshotShortcut | null;
+    fallbackReason?: string;
+  } | null>(null);
+  const [appshotRecording, setAppshotRecording] = useState<AppshotRecordingTarget>(null);
+  const [appshotError, setAppshotError] = useState<string | null>(null);
+  const appshotsApi = window.electronAPI?.appshots;
+
+  useEffect(() => {
+    if (!appshotsApi) return;
+    void appshotsApi.getShortcutState().then((state) => {
+      setAppshotState(state);
+    }).catch(() => {
+      setAppshotError(t('settings.shortcuts.appshots.loadFailed'));
+    });
+    return appshotsApi.onShortcutStateChanged((state) => {
+      setAppshotState(state);
+    });
+  }, [appshotsApi, t]);
+
+  useEffect(() => {
+    if (!appshotRecording) return;
+    const handler = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        setAppshotRecording(null);
+        return;
+      }
+      const combo = createAppShortcutComboFromEvent(event);
+      if (!combo) return;
+      const current = appshotState?.preferences ?? DEFAULT_APPSHOT_SHORTCUT_PREFERENCES;
+      const next: AppshotShortcutPreferences = {
+        ...current,
+        [appshotRecording]: { kind: 'accelerator', combo },
+      };
+      setAppshotRecording(null);
+      setAppshotError(null);
+      if (!appshotsApi) return;
+      void appshotsApi.setShortcutPreferences(next)
+        .then(setAppshotState)
+        .catch(() => setAppshotError(t('settings.shortcuts.appshots.saveFailed')));
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [appshotRecording, appshotState?.preferences, appshotsApi, t]);
+
+  const setAppshotDualModifier = useCallback((modifier: 'command' | 'option' | 'shift') => {
+    const current = appshotState?.preferences ?? DEFAULT_APPSHOT_SHORTCUT_PREFERENCES;
+    const next = { ...current, preferred: { kind: 'dual-modifier' as const, modifier } };
+    setAppshotError(null);
+    if (!appshotsApi) return;
+    void appshotsApi.setShortcutPreferences(next)
+      .then(setAppshotState)
+      .catch(() => setAppshotError(t('settings.shortcuts.appshots.saveFailed')));
+  }, [appshotState?.preferences, appshotsApi, t]);
+
+  const resetAppshotShortcuts = useCallback(() => {
+    setAppshotError(null);
+    if (!appshotsApi) return;
+    void appshotsApi.resetShortcutPreferences()
+      .then(setAppshotState)
+      .catch(() => setAppshotError(t('settings.shortcuts.appshots.saveFailed')));
+  }, [appshotsApi, t]);
+
+  const openAppshotPermissionSettings = useCallback(async (target: AppshotPermissionTarget) => {
+    try {
+      const result = await window.electronAPI.openExternal(APPSHOT_PERMISSION_SETTINGS_URLS[target]);
+      if (!result.success) throw new Error('open failed');
+    } catch {
+      toast.error(t('settings.shortcuts.appshots.openPermissionSettingsFailed'));
+    }
+  }, [t]);
 
   const mutationErrorMessage = useCallback(
     (err: unknown) => {
@@ -357,6 +448,83 @@ export function KeyboardShortcutsSection() {
           );
         })}
       </div>
+
+      {platform === 'darwin' && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+              {t('settings.shortcuts.appshots.title')}
+            </h2>
+            <button type="button" onClick={resetAppshotShortcuts} className="shrink-0 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+              {t('settings.shortcuts.appshots.reset')}
+            </button>
+          </div>
+          <div className="rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
+            <div className="flex items-start gap-3">
+              <Camera size={17} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
+              <div className="min-w-0 flex-1">
+                <p className="text-13 font-medium text-[var(--text-primary)]">{t('settings.shortcuts.appshots.description')}</p>
+                <p className="mt-1 text-12 leading-[1.5] text-[var(--text-secondary)]">{t('settings.shortcuts.appshots.codexOnly')}</p>
+              </div>
+            </div>
+            {appshotState && (
+              <div className="mt-4 flex flex-col gap-2 text-12">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[var(--text-secondary)]">{t('settings.shortcuts.appshots.preferred')}</span>
+                  <span className="rounded-md border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] px-2 py-1 text-[var(--text-primary)]">
+                    {formatAppshotShortcut(appshotState.preferences.preferred, platform)}
+                  </span>
+                </div>
+                <div className="flex flex-wrap justify-end gap-1">
+                  {(['command', 'option', 'shift'] as const).map((modifier) => (
+                    <button key={modifier} type="button" onClick={() => setAppshotDualModifier(modifier)} className="rounded-md border border-[var(--settings-theme-card-border)] px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]">
+                      {t(`settings.shortcuts.appshots.modifiers.${modifier}`)}
+                    </button>
+                  ))}
+                  <button type="button" onClick={() => setAppshotRecording('preferred')} className="rounded-md border border-[var(--settings-theme-card-border)] px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]">
+                    {appshotRecording === 'preferred' ? t('settings.shortcuts.recording') : t('settings.shortcuts.appshots.customize')}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[var(--text-secondary)]">{t('settings.shortcuts.appshots.fallback')}</span>
+                  <span className="rounded-md border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] px-2 py-1 text-[var(--text-primary)]">
+                    {formatAppshotShortcut(appshotState.preferences.fallback, platform)}
+                  </span>
+                </div>
+                <div className="flex justify-end">
+                  <button type="button" onClick={() => setAppshotRecording('fallback')} className="rounded-md border border-[var(--settings-theme-card-border)] px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]">
+                    {appshotRecording === 'fallback' ? t('settings.shortcuts.recording') : t('settings.shortcuts.appshots.customize')}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] pt-2">
+                  <span className="text-[var(--text-secondary)]">{t('settings.shortcuts.appshots.active')}</span>
+                  <span className={cn('text-right', appshotState.active ? 'text-[var(--text-primary)]' : 'text-[var(--error-fg)]')}>
+                    {appshotState.active ? formatAppshotShortcut(appshotState.active, platform) : t('settings.shortcuts.appshots.unavailable')}
+                  </span>
+                </div>
+                {appshotState.fallbackReason && <p className="text-12 text-[var(--text-secondary)]">{t(`settings.shortcuts.appshots.reasons.${appshotState.fallbackReason}`)}</p>}
+                {appshotError && <p className="text-12 text-[var(--error-fg)]">{appshotError}</p>}
+              </div>
+            )}
+            <div className="mt-4 border-t border-[var(--settings-theme-card-border)] pt-3 text-12 leading-[1.5] text-[var(--text-secondary)]">
+              <p className="font-medium text-[var(--text-primary)]">{t('settings.shortcuts.appshots.permissionsTitle')}</p>
+              <p className="mt-1">{t('settings.shortcuts.appshots.permissions')}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {(['screen-recording', 'accessibility', 'input-monitoring'] as const).map((target) => (
+                  <button
+                    key={target}
+                    type="button"
+                    onClick={() => void openAppshotPermissionSettings(target)}
+                    className="rounded-md border border-[var(--settings-theme-card-border)] px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"
+                  >
+                    {t(`settings.shortcuts.appshots.permissionsActions.${target}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

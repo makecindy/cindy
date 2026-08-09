@@ -10,6 +10,26 @@ import {
   updateQueuedMessageContent,
   updateQueuedMessageText,
 } from '../../shared/agentInputQueue.js';
+import type { AppshotMetadata } from '../../shared/appshots.js';
+
+const appshot: AppshotMetadata = {
+  schemaVersion: 1,
+  captureId: 'capture-1',
+  capturedAt: '2026-08-05T00:00:00.000Z',
+  applicationName: 'A&B',
+  bundleIdentifier: 'com.example.app',
+  windowTitle: '"Draft" <1>',
+  accessibilityText: '<AXButton title="Send & close">',
+  accessibilityTruncated: false,
+};
+
+const appshotContext =
+  '<appshot app="A&amp;B" bundle-identifier="com.example.app" window-title="&quot;Draft&quot; &lt;1&gt;">\n' +
+  'Window: ""Draft" &lt;1&gt;", App: A&amp;B.\n' +
+  '<accessibility-tree>\n' +
+  '&lt;AXButton title="Send &amp; close"&gt;\n' +
+  '</accessibility-tree>\n' +
+  '</appshot>';
 
 function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueuedMessage {
   return {
@@ -42,6 +62,68 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
+  it('emits a queued Appshot image followed by one escaped context block', () => {
+    expect(
+      buildMakerUserMessage(
+        queuedMessage([
+          {
+            id: 'appshot-1',
+            name: 'appshot.png',
+            path: '/repo/appshot.png',
+            ext: '.png',
+            size: 128,
+            category: 'image',
+            mimeType: 'image/png',
+            url: 'xdt-image://session/appshot.png',
+            appshot,
+          },
+        ]),
+      ),
+    ).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        {
+          type: 'image',
+          path: 'xdt-image://session/appshot.png',
+          mimeType: 'image/png',
+          appshot,
+        },
+        { type: 'text', text: appshotContext },
+      ],
+    });
+  });
+
+  it('drops malformed Appshot metadata without dropping the queued image', () => {
+    expect(
+      buildMakerUserMessage(
+        queuedMessage([
+          {
+            id: 'appshot-invalid',
+            name: 'appshot.png',
+            path: '/repo/appshot.png',
+            ext: '.png',
+            size: 128,
+            category: 'image',
+            mimeType: 'image/png',
+            url: 'xdt-image://session/appshot-invalid.png',
+            appshot: { ...appshot, schemaVersion: 2 } as unknown as AppshotMetadata,
+          },
+        ]),
+      ),
+    ).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        {
+          type: 'image',
+          path: 'xdt-image://session/appshot-invalid.png',
+          mimeType: 'image/png',
+        },
+      ],
+    });
+  });
+
   it('sends queued GIF attachments as file blocks', () => {
     expect(
       buildMakerUserMessage(

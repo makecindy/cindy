@@ -7,6 +7,26 @@ import {
   buildMakerUserMessage,
   buildUserMessageAttachmentPayload,
 } from '@/lib/messageAttachmentPayload';
+import type { AppshotMetadata } from '../../shared/appshots';
+
+const appshot: AppshotMetadata = {
+  schemaVersion: 1,
+  captureId: 'capture-1',
+  capturedAt: '2026-08-05T00:00:00.000Z',
+  applicationName: 'A&B',
+  bundleIdentifier: 'com.example.app',
+  windowTitle: '"Draft" <1>',
+  accessibilityText: '<AXButton title="Send & close">',
+  accessibilityTruncated: false,
+};
+
+const appshotContext =
+  '<appshot app="A&amp;B" bundle-identifier="com.example.app" window-title="&quot;Draft&quot; &lt;1&gt;">\n' +
+  'Window: ""Draft" &lt;1&gt;", App: A&amp;B.\n' +
+  '<accessibility-tree>\n' +
+  '&lt;AXButton title="Send &amp; close"&gt;\n' +
+  '</accessibility-tree>\n' +
+  '</appshot>';
 
 type AttachmentFixture = AttachedFile & {
   base64?: string;
@@ -29,6 +49,69 @@ function attachment(overrides: Partial<AttachmentFixture>): AttachmentFixture {
 }
 
 describe('messageAttachmentPayload', () => {
+  it('emits an Appshot image followed by one escaped context block', () => {
+    const payload = buildUserMessageAttachmentPayload([
+      attachment({
+        name: 'appshot.png',
+        path: 'clipboard://appshot-1',
+        ext: '.png',
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'xdt-image://session/appshot.png',
+        appshot,
+      }),
+    ]);
+
+    expect(payload.persistImageRefs).toEqual([
+      {
+        url: 'xdt-image://session/appshot.png',
+        mimeType: 'image/png',
+        originalName: 'appshot.png',
+        appshot,
+      },
+    ]);
+    expect(buildMakerUserContentBlocks('', undefined, payload.serializedFiles)).toEqual([
+      {
+        type: 'image',
+        path: 'xdt-image://session/appshot.png',
+        mimeType: 'image/png',
+        originalName: 'appshot.png',
+        appshot,
+      },
+      { type: 'text', text: appshotContext },
+    ]);
+  });
+
+  it('drops malformed Appshot metadata without dropping the direct-send image', () => {
+    const payload = buildUserMessageAttachmentPayload([
+      attachment({
+        name: 'appshot.png',
+        path: 'clipboard://appshot-invalid',
+        ext: '.png',
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'xdt-image://session/appshot-invalid.png',
+        appshot: { ...appshot, schemaVersion: 2 } as unknown as AppshotMetadata,
+      }),
+    ]);
+
+    expect(payload.persistImageRefs).toEqual([
+      {
+        url: 'xdt-image://session/appshot-invalid.png',
+        mimeType: 'image/png',
+        originalName: 'appshot.png',
+      },
+    ]);
+    expect(buildMakerUserContentBlocks('', undefined, payload.serializedFiles)).toEqual([
+      {
+        type: 'image',
+        path: 'xdt-image://session/appshot-invalid.png',
+        mimeType: 'image/png',
+        originalName: 'appshot.png',
+      },
+    ]);
+  });
+
   it('keeps cached image URLs as the primary render, persist, and SDK source', () => {
     const image = attachment({
       name: 'shot.png',

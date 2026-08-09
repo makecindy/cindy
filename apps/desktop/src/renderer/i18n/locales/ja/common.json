@@ -3068,6 +3068,33 @@
     },
     "shortcuts": {
       "title": "キーボードショートカット",
+      "appshots": {
+        "title": "Appshots",
+        "description": "現在のアプリウィンドウをキャプチャし、現在のローカル Codex composer に添付します。",
+        "codexOnly": "Appshots はローカル Codex セッションでのみ使用でき、自動送信はしません。",
+        "preferred": "優先ショートカット",
+        "fallback": "代替ショートカット",
+        "active": "現在有効",
+        "unavailable": "利用不可",
+        "customize": "カスタマイズ",
+        "reset": "Appshots のショートカットをリセット",
+        "loadFailed": "Appshots のショートカット設定を読み込めませんでした",
+        "saveFailed": "Appshots のショートカット設定を保存できませんでした",
+        "permissionsTitle": "macOS の権限",
+        "permissions": "画面収録はウィンドウ画像の取得に、アクセシビリティはタイトルと UI ツリーの読み取りに、入力監視は修飾キー 2 回押しに使用します。起動時に権限を要求せず、「システム設定 > プライバシーとセキュリティ」で許可できます。",
+        "openPermissionSettingsFailed": "macOS の権限設定を開けませんでした",
+        "permissionsActions": {
+          "screen-recording": "画面収録",
+          "accessibility": "アクセシビリティ",
+          "input-monitoring": "入力監視"
+        },
+        "modifiers": { "command": "Command 2 回", "option": "Option 2 回", "shift": "Shift 2 回" },
+        "reasons": {
+          "codex-running": "Codex の実行中は代替ショートカットを使用します。",
+          "registration-conflict": "優先ショートカットを登録できないため、代替を使用します。",
+          "input-monitoring": "入力監視を利用できないため、代替を使用します。"
+        }
+      },
       "resetAll": "すべてデフォルトに戻す",
       "reset": "デフォルトに戻す",
       "recording": "新しいショートカットを入力…",
@@ -5433,6 +5460,21 @@
     },
     "chatInput": {
       "defaultPlaceholder": "今日は何をしましょうか〜",
+      "appshots": {
+        "menuItem": "アプリのスナップショット",
+        "permissionTitle": "画面収録の権限が必要です",
+        "permissionDescription": "Appshots で現在のアプリウィンドウを取得するには、macOS の画面収録権限が必要です。Cindy は該当するシステム設定ページだけを開き、再試行するまで取得も送信もしません。",
+        "openSettings": "設定を開く",
+        "cancel": "キャンセル",
+        "openSettingsFailed": "画面収録の設定を開けませんでした",
+        "captureFailed": "現在のアプリウィンドウを取得できませんでした",
+        "hasAxBadge": "UI構造を含む",
+        "axPreviewTitle": "Appshot UI 構造",
+        "axPreviewDescription": "送信時には以下のアクセシビリティテキストがスクリーンショットと一緒に添付されます。送信前に削除できます。",
+        "noAx": "このスナップショットには UI 構造が含まれていません。",
+        "removeAx": "UI 構造を削除",
+        "close": "閉じる"
+      },
       "voiceInput": {
         "start": "音声入力を開始",
         "stop": "音声入力を停止",

@@ -583,6 +583,10 @@ import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
+import {
+  requireCodexQueuedAppshots,
+  validateAndStripAppshotMetadata,
+} from './appshotBoundary.js';
 import { registerStopAgentTaskHandler } from './stopAgentTaskHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgroundTasksHandler.js';
 import { registerProviderHandlers } from './providerHandlers.js';
@@ -9118,7 +9122,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     let normalized: IpcUserMessage;
     try {
-      normalized = await prepareUserMessageForAgent(sessionId, message, 'steer');
+      const appshotValidated = validateAndStripAppshotMetadata(message, sess.agentKind);
+      normalized = await prepareUserMessageForAgent(sessionId, appshotValidated.message, 'steer');
     } catch (err) {
       const messageText = err instanceof Error ? err.message : String(err);
       log.warn('steer: normalize message failed', {
@@ -10444,6 +10449,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    requireCodexQueuedAppshots(normalized);
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
       // preload/renderer 不属于可信边界，不能直接注入历史正文。

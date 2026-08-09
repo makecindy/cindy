@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, Mic, Pen, Scan, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
@@ -70,7 +70,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
 import type { AttachedFile, MentionedResource, ImageAnnotationStroke } from '@/lib/fileTypes';
 import {
@@ -141,6 +141,8 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
+import { appshotThumbnailLabel } from '@/features/appshots/appshotInbox';
+import { canCaptureAppshotFromComposer } from '@/features/appshots/appshotInbox';
 import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
@@ -560,6 +562,7 @@ interface ChatInputProps {
     hasAttachments: boolean;
     addFiles: (fileList: FileList | readonly File[]) => Promise<void>;
     addClipboardImage: (blob: Blob) => Promise<void>;
+    addAppshot: (result: import('../../../shared/appshots').AppshotCaptureResult) => void;
     rejections: { id: string; message: string }[];
     dismissRejection: (id: string) => void;
     clearRejections: () => void;
@@ -2566,6 +2569,41 @@ export function ChatInput({
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
   const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;
   composerMutationLockedRef.current = composerMutationLocked;
+  const appshotCaptureEnabled = canCaptureAppshotFromComposer({
+    platform: window.electronAPI?.platform,
+    sessionId,
+    runtimeAgentKind,
+    vendorKey,
+    remoteHostId,
+    deviceLinkDeviceId,
+    composerMutationLocked,
+  });
+  const captureAppshot = useCallback(async () => {
+    if (!appshotCaptureEnabled) return;
+    try {
+      await window.electronAPI.appshots.capture();
+    } catch (error) {
+      if (extractIpcError(error)?.code === 'PERMISSION_DENIED') {
+        const openSettings = await confirmDialog({
+          title: t('newChat.chatInput.appshots.permissionTitle'),
+          description: t('newChat.chatInput.appshots.permissionDescription'),
+          confirmText: t('newChat.chatInput.appshots.openSettings'),
+          cancelText: t('newChat.chatInput.appshots.cancel'),
+          autoFocusConfirm: true,
+        });
+        if (openSettings) {
+          const result = await window.electronAPI.openExternal(
+            'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+          );
+          if (!result.success) {
+            toast.error(t('newChat.chatInput.appshots.openSettingsFailed'));
+          }
+        }
+        return;
+      }
+      toast.error(t('newChat.chatInput.appshots.captureFailed'));
+    }
+  }, [appshotCaptureEnabled, confirmDialog, t]);
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
   }, [composerMutationLocked, editor]);
@@ -3659,6 +3697,14 @@ export function ChatInput({
         run: () => suggestionFileInputRef.current?.click(),
       });
     }
+    if (appshotCaptureEnabled) {
+      actions.push({
+        id: 'capture-appshot',
+        label: t('newChat.chatInput.appshots.menuItem'),
+        disabled: composerMutationLocked,
+        run: () => void captureAppshot(),
+      });
+    }
     if (inSessionGoalEnabled || onNewGoal) {
       actions.push({
         id: 'new-goal',
@@ -3729,6 +3775,8 @@ export function ChatInput({
     }
     return actions;
   }, [
+    appshotCaptureEnabled,
+    captureAppshot,
     collaboration,
     composerMutationLocked,
     confirmDialog,
@@ -7433,6 +7481,7 @@ function ThumbnailItem({
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
   const { t } = useTranslation();
+  const { confirm: confirmDialog } = useConfirmDialog();
   const [isHovered, setIsHovered] = useState(false);
   const thumbRef = useRef<HTMLDivElement>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
@@ -7490,6 +7539,9 @@ function ThumbnailItem({
   // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
   // base64 的图片同样落到文件卡分支。
   const isImageThumb = file.category === 'image' && Boolean(file.url || file.base64);
+  const thumbnailLabel = file.appshot
+    ? appshotThumbnailLabel(file.appshot, file.name)
+    : file.name;
   // 副行是「类型 · 大小」;无扩展名(Makefile 之类)或 size 缺失时按存在的部分给。
   // file.size 是拖入那一刻的快照:文件在托盘期间被改写后,发出去的是新内容,卡片
   // 却还报旧字节数。缩略图复核时 main 会把当前 stat 大小一并带回,这里优先用它。
@@ -7503,6 +7555,37 @@ function ThumbnailItem({
   const metaLine = [extLabel || null, hasSize ? formatBytes(shownSize) : null]
     .filter(Boolean)
     .join(' · ');
+  const appshot = file.appshot;
+  const hasAxStructure = appshot?.accessibilityText != null && appshot.accessibilityText.length > 0;
+  const handleAppshotStructure = useCallback(async () => {
+    if (!appshot) return;
+    const text = appshot.accessibilityText;
+    const remove = await confirmDialog({
+      title: t('newChat.chatInput.appshots.axPreviewTitle'),
+      description: text
+        ? t('newChat.chatInput.appshots.axPreviewDescription')
+        : t('newChat.chatInput.appshots.noAx'),
+      content: text
+        ? (
+            <pre
+              className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md p-2 text-xs leading-relaxed"
+              style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
+            >
+              {text}
+            </pre>
+          )
+        : undefined,
+      maxWidth: 560,
+      confirmText: t('newChat.chatInput.appshots.removeAx'),
+      cancelText: t('newChat.chatInput.appshots.close'),
+      confirmVariant: 'destructive',
+    });
+    if (remove) {
+      onUpdate(file.id, {
+        appshot: { ...appshot, accessibilityText: null, accessibilityUnavailableReason: 'removed' },
+      });
+    }
+  }, [appshot, confirmDialog, onUpdate, t]);
 
   return (
     <div
@@ -7524,18 +7607,29 @@ function ThumbnailItem({
         disabled={isDownloadOnly}
         aria-label={
           isDownloadOnly
-            ? t('chat.userMessage.attachmentAttachedAria', { name: file.name })
-            : `Preview ${file.name}`
+            ? t('chat.userMessage.attachmentAttachedAria', { name: thumbnailLabel })
+            : `Preview ${thumbnailLabel}`
         }
+        title={file.appshot ? thumbnailLabel : undefined}
       >
         {file.category === 'image' && (file.url || file.base64) ? (
           <span className="relative block h-full w-full">
             <img
               src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
-              alt={file.name}
+              alt={thumbnailLabel}
               className="h-full w-full rounded-lg object-cover"
               draggable={false}
             />
+            {hasAxStructure && (
+              <span
+                className="absolute bottom-0.5 left-0.5 flex h-4 w-4 items-center justify-center rounded-full"
+                style={{ backgroundColor: 'var(--surface-elevated)' }}
+                title={t('newChat.chatInput.appshots.hasAxBadge')}
+                aria-label={t('newChat.chatInput.appshots.hasAxBadge')}
+              >
+                <Scan className="h-2.5 w-2.5" style={{ color: 'var(--text-secondary)' }} />
+              </span>
+            )}
             {file.annotationStrokes && file.annotationStrokes.length > 0 ? (
               <span
                 className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full"
@@ -7565,7 +7659,9 @@ function ThumbnailItem({
             </span>
             <span className="flex min-w-0 flex-col gap-0.5">
               <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
-                {file.name}
+                {file.appshot
+                  ? thumbnailLabel
+                  : file.name /* ordinary attachment: {file.name} */}
               </span>
               {metaLine ? (
                 <span className="truncate text-11" style={{ color: 'var(--text-secondary)' }}>
@@ -7594,13 +7690,28 @@ function ThumbnailItem({
         &times;
       </button>
 
+      {file.appshot && (
+        <button
+          type="button"
+          className="absolute -left-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-10 text-white opacity-0 transition-opacity group-hover:opacity-100"
+          style={{ backgroundColor: 'var(--file-remove-bg)' }}
+          onClick={(event) => {
+            event.stopPropagation();
+            void handleAppshotStructure();
+          }}
+          aria-label={t('newChat.chatInput.appshots.axPreviewTitle')}
+        >
+          <Scan className="h-2.5 w-2.5 text-white" />
+        </button>
+      )}
+
       {/* Hover preview / tooltip (F-FI-4) — rendered via portal to escape overflow clipping */}
       {file.category === 'image' && (file.url || file.base64) ? (
         <ImageHoverPreview
           open={isHovered}
           anchorRef={thumbRef}
           src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
-          alt={file.name}
+          alt={thumbnailLabel}
         />
       ) : null}
       {isHovered &&
