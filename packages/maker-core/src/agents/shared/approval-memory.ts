@@ -449,6 +449,45 @@ const DYNAMIC_COMMAND_INPUT_PATTERNS: readonly RegExp[] = [
   /\d*<{1,3}\s*(?!\()(?:"[^"\r\n]+"|'[^'\r\n]+'|&(?:\d+|-)|[^\s;&|]+)/,
 ];
 
+/** 引号与命令/进程替换感知地识别真正由管道接收 stdin 的 SQLite invocation。 */
+function hasPipedSqliteInvocation(command: string): boolean {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  let substitutionDepth = 0;
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && !singleQuoted) { escaped = true; continue; }
+    if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
+    if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
+    if (singleQuoted || doubleQuoted) continue;
+    if (char === '#' && (i === 0 || /[\s;|&(]/.test(command[i - 1] ?? ''))) {
+      const newline = command.indexOf('\n', i);
+      if (newline === -1) break;
+      i = newline - 1;
+      continue;
+    }
+    if ((char === '$' || char === '<' || char === '>') && command[i + 1] === '(') {
+      substitutionDepth += 1;
+      i++;
+      continue;
+    }
+    if (substitutionDepth > 0) {
+      if (char === '(') substitutionDepth += 1;
+      else if (char === ')') substitutionDepth -= 1;
+      continue;
+    }
+    if (char === '|' && command[i - 1] !== '|' && command[i + 1] !== '|') {
+      const separatorLength = command[i + 1] === '&' ? 2 : 1;
+      const suffix = command.slice(i + separatorLength).replace(/^[\s({]+/, '');
+      if (commandExecutableInvocations(suffix)[0]?.name === 'sqlite3') return true;
+      i += separatorLength - 1;
+    }
+  }
+  return false;
+}
+
 export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (MUTABLE_EXECUTION_ENV_PATTERN.test(command)) return true;
   if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
@@ -458,7 +497,12 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (invocations.some(({ name, args }) =>
     name === 'wget' && wgetMayLoadMutableUserState(args))) return true;
   if (invocations.some(({ name, args }) =>
-    name === 'sqlite3' && sqliteMayLoadMutableFileState(args))) return true;
+    // SQLite shell 会把 stdin 当 SQL / dot command 执行。只看 sqlite3 自身 argv 会漏掉
+    // `cat deploy.sql | sqlite3 prod.db`：命令文本没变，上游文件内容却可替换。
+    name === 'sqlite3' && (hasPipedSqliteInvocation(command)
+      || sqliteMayLoadMutableFileState(args)))) {
+    return true;
+  }
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。

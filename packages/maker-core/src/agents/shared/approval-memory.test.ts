@@ -508,6 +508,14 @@ describe('approvalSignature — 可记忆判据', () => {
       "sqlite3 prod.db '.archive -i ./backup.sqlar'",
       'sqlite3 -A -i ./backup.sqlar prod.db',
       'true && sqlite3 -init ./deploy.sql prod.db',
+      'cat deploy.sql | sqlite3 prod.db',
+      'head -n 20 deploy.sql | sqlite3 prod.db',
+      'tail -n +1 deploy.sql | env sqlite3 prod.db',
+      'base64 --decode deploy.sql.b64 | timeout 30 sqlite3 prod.db',
+      'gzip -dc deploy.sql.gz | sqlite3 prod.db',
+      'curl -q file:///tmp/deploy.sql | sqlite3 prod.db',
+      'cat deploy.sql | tee audit.sql | sqlite3 prod.db',
+      "printf '.read ./deploy.sql\\n' | sqlite3 prod.db",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -516,6 +524,11 @@ describe('approvalSignature — 可记忆判据', () => {
     for (const command of [
       "sqlite3 prod.db 'select 1'",
       'echo sqlite3 -init ./deploy.sql prod.db',
+      "echo 'cat deploy.sql | sqlite3 prod.db'",
+      "echo ok # cat deploy.sql | sqlite3 prod.db",
+      'cat deploy.sql | wc -l',
+      "cat deploy.sql | wc -l && sqlite3 prod.db 'select 1'",
+      "false || sqlite3 prod.db 'select 1'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
@@ -524,10 +537,14 @@ describe('approvalSignature — 可记忆判据', () => {
     const memory = createApprovalMemory({
       agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
     });
-    const action = exec('sqlite3 -init ./deploy.sql prod.db');
-    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
-    // deploy.sql 即使在两次调用之间被替换，初始化命令也从未写入可复用摘要。
-    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    for (const action of [
+      exec('sqlite3 -init ./deploy.sql prod.db'),
+      exec('cat deploy.sql | sqlite3 prod.db'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      // deploy.sql 即使在两次调用之间被替换，两类入口也从未写入可复用摘要。
+      expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    }
     expect(memory.size()).toBe(0);
   });
 
