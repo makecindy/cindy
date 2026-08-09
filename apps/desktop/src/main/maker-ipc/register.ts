@@ -667,6 +667,7 @@ import {
 } from '../mcp-integrations/custom-mcp-registry.js';
 import {
   getDesktopProviderService,
+  getDesktopProviderServiceReadOnly,
   getDesktopSelectableCatalog,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
@@ -9314,7 +9315,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const getProviderRoutingContext = (options: { allowSideEffects: boolean }) =>
     readOrcaWorkerProviderRoutingContext({
-      providerService: getDesktopProviderService(),
+      providerService: options.allowSideEffects
+        ? getDesktopProviderService()
+        : getDesktopProviderServiceReadOnly(),
       getCatalog: options.allowSideEffects ? getActiveCatalog : getDesktopSelectableCatalog,
       allowSideEffects: options.allowSideEffects,
       waitForDiscovery: options.allowSideEffects,

@@ -20,6 +20,9 @@ describe('list_available_models tool', () => {
     expect(registry.get('list_available_models')?.description).toContain(
       '旧 host 可能不返回此字段',
     );
+    expect(registry.get('list_available_models')?.description).toContain(
+      '{codex?, claude_code?, pi?}',
+    );
   });
 
   it('preserves the aggregate list and exposes distinct provider routes', async () => {

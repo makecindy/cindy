@@ -826,7 +826,10 @@ export function getDesktopSelectableCatalog(): Catalog {
   });
 }
 
-/** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
+/**
+ * 进程内单例的授权入口：先迁移旧版 native provider 绑定，再返回 service。
+ * 只有已经位于可信写操作边界的调用方才能使用；纯读调用必须走下方 ReadOnly 入口。
+ */
 export function getDesktopProviderService(): ProviderService {
   const authState = getAuthState();
   const ownerId = getActiveAppSession().dataOwnerId;
@@ -842,6 +845,19 @@ export function getDesktopProviderService(): ProviderService {
       xai: hasGrokOAuthLoginUnbound(),
     });
   }
+  return getOrCreateDesktopProviderService();
+}
+
+/**
+ * 进程内单例的纯读入口。service 构造本身不迁移凭证绑定；具体连接态读取仍须传
+ * allowSideEffects: false，形成两层显式约束。
+ */
+export function getDesktopProviderServiceReadOnly(): ProviderService {
+  return getOrCreateDesktopProviderService();
+}
+
+/** 注入 active-catalog（同步读）+ 实时连接状态读取器，不执行凭证或绑定写入。 */
+function getOrCreateDesktopProviderService(): ProviderService {
   if (singleton) return singleton;
   singleton = createProviderService({
     getCatalog: getDesktopSelectableCatalog,
