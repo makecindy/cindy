@@ -97,6 +97,7 @@ import {
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
 } from './mobileNotify';
+import { getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
   handleContactsDeviceLinkStatusChanged,
@@ -1623,6 +1624,7 @@ export function sendMobileSessionNotify(payload: {
       title: payload.title,
       kind: payload.kind,
       selfDeviceId,
+      fallbackBody: getSessionNotificationBody(payload.kind),
       detail: payload.detail,
     }),
   );

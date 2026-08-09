@@ -485,6 +485,15 @@
       "feishuHint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
       "feishuDisabledHint": "需要先在「飛書 / Lark 機器人」中配置 bot 並向它傳送一條訊息以完成繫結。",
       "feishuAria": "切換任務完成的飛書通知",
+      "sessionEvent": {
+        "untitled": "未命名任務",
+        "done": "已完成 ✓",
+        "error": "執行失敗",
+        "needsReply": "需要你回覆",
+        "externalDone": "Cindy · 任務「{{title}}」已完成 ✓",
+        "externalError": "Cindy · 任務「{{title}}」執行失敗",
+        "externalNeedsReply": "Cindy · 任務「{{title}}」需要你回覆"
+      },
       "wecomGroupLabel": "企業微信群通知",
       "wecomGroupHint": "用於自動操作的完成通知。貼上企微群機器人的 Webhook URL，URL 會加密儲存在本機。",
       "wecomGroupConfiguredHint": "已配置（金鑰 {{maskedKey}}）。開啟總開關後，可在每個自動操作中按需傳送。",
