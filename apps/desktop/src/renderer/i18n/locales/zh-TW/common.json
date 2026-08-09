@@ -464,6 +464,15 @@
         "label": "側邊欄卡片模式",
         "hint": "置頂任務以卡片形式展示，含執行狀態摘要，卡片高度隨摘要長短錯落；側欄拉寬時自動分 2~3 列。",
         "aria": "切換側邊欄卡片模式"
+      },
+      "layout": {
+        "label": "面板佈局",
+        "hint": "面板位置和寬度會保留到下次啟動。如果佈局變得難以使用，可以恢復預設排列。",
+        "reset": "恢復預設佈局",
+        "resetSuccess": "已恢復預設面板佈局",
+        "resetFailed": "無法恢復預設面板佈局",
+        "saved": "面板位置已儲存；可在「設定 → 外觀」中恢復預設佈局",
+        "saveFailed": "無法儲存面板位置"
       }
     },
     "notifications": {
@@ -2042,6 +2051,7 @@
         "project": "切換專案工作區",
         "model": "檢視或切換模型",
         "permission": "檢視或切換許可權模式",
+        "settings": "檢視目前專案與 Agent 設定",
         "ctr": "接管桌面端的任務",
         "exctr": "退出遠端控制"
       },
@@ -4262,6 +4272,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "（輸入 {{input}} · 輸出 {{output}}）",
     "cacheLabel": "快取",
+    "timeLabel": "耗時",
+    "timeAndRateValue": "{{duration}} 速度：{{rate}} token/秒",
     "modelLabel": "模型",
     "staleData": "資料更新於 {{minutes}} 分鐘前",
     "paceTrendFast": "按目前平均速度偏快（粗略趨勢）",
@@ -4270,6 +4282,11 @@
     "waiting": "Claude 訂閱餘量會在下一輪完成後更新。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "performanceLine": "速度 {{rate}} token/秒 · 耗時 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} token/秒",
+    "timeLine": "耗時 {{duration}}",
     "costLine": "本輪消耗：{{cost}}",
     "valueLine": "本輪 token 價值：{{cost}}",
     "tokenLine": "Token：共 {{total}} · 輸入 {{input}} · 輸出 {{output}}",
@@ -7837,6 +7854,7 @@
       "typeFeature": "功能建議",
       "titleLabel": "標題",
       "bodyLabel": "正文(Markdown)",
+      "privacyHint": "偵測到常見密鑰、個人路徑及電子郵件地址時，系統會自動遮蔽。提交前請檢查公開內容。",
       "submissionMethodLabel": "釋出方式",
       "identityGithubUser": "通過 GitHub 賬號 @{{login}} 直接釋出",
       "identityGithubUserHint": "你將成為該 Issue 的 GitHub 作者，可以在 GitHub 編輯或關閉",
