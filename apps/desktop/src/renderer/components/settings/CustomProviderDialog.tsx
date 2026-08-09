@@ -207,6 +207,8 @@ function PresetDropdown({
   label,
   placeholder,
   locale,
+  open,
+  onOpenChange,
 }: {
   presets: ProviderPreset[];
   appliedPreset: string | null;
@@ -214,11 +216,12 @@ function PresetDropdown({
   label: string;
   placeholder: string;
   locale: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const selected = presets.find((p) => p.id === appliedPreset) ?? null;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -246,6 +249,11 @@ function PresetDropdown({
         align="start"
         sideOffset={6}
         collisionPadding={8}
+        onEscapeKeyDown={(event) => {
+          // Radix 自己也是该层的 dismiss owner；组合输入期间阻止它先于表单
+          // 的统一判据关闭菜单。
+          if (event.isComposing || event.keyCode === 229) event.preventDefault();
+        }}
         className={cn(
           // z-[10001]: 宿主弹窗 overlay 是 z-[10000],默认 z-50 会被盖住。
           // 底/hover 用 cmd-palette 菜单 token 对——settings-menu-bg-hover 在深色下
@@ -266,7 +274,7 @@ function PresetDropdown({
                 aria-selected={isSelected}
                 onClick={() => {
                   onApply(p);
-                  setOpen(false);
+                  onOpenChange(false);
                 }}
                 className={cn(
                   // 菜单项 hover 不加 transition——渐变会让高亮拖尾跟不上指针,菜单应瞬时切换
@@ -348,6 +356,9 @@ export function CustomProviderDialog({
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
+  // 嵌套 dismiss layer 的 open 状态由表单统一持有：Radix Popover 只负责呈现，
+  // 不再与表单的 Escape / scrim 关闭路径各自维护一份互不知情的状态。
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   // per-runtime 测试连接状态。
   const [test, setTest] = useState<Record<DialogAgentKind, TestState>>({
     'claude-code': IDLE_TEST,
@@ -368,17 +379,33 @@ export function CustomProviderDialog({
     query: string;
   } | null>(null);
 
-  // Dismissible form contract:Esc closes the topmost layer first. The footer
-  // Cancel button and scrim clicks are the other two exits; no duplicate ×.
+  // Dismissible form contract:一个关闭输入只结算最上层一次。模型选择器优先于
+  // 预设菜单，最后才是表单；Cancel 仍直接表示用户要关闭表单，且无重复 ×。
+  const dismissTopmostLayer = useCallback(() => {
+    if (picker) {
+      setPicker(null);
+      return;
+    }
+    if (presetMenuOpen) {
+      setPresetMenuOpen(false);
+      return;
+    }
+    onClose();
+  }, [onClose, picker, presetMenuOpen]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (picker) setPicker(null);
-      else onClose();
+      // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
+      if (event.isComposing || event.keyCode === 229) return;
+      // Radix DismissableLayer 在 capture 阶段结算自己的最上层并 preventDefault；
+      // 底层表单不得在 bubble 阶段再次消费同一事件。
+      if (event.defaultPrevented) return;
+      dismissTopmostLayer();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose, picker]);
+  }, [dismissTopmostLayer]);
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
   // （见 setRtSynced），不用被动 useEffect——effect 在 commit 后才跑，IPC 响应若落在
@@ -1044,8 +1071,10 @@ export function CustomProviderDialog({
   return (
     <div
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+      onPointerDown={(event) => {
+        // pointerdown 时先按当前层级结算，避免 Popover 的 outside-dismiss 在随后
+        // click 前把状态改成 closed，令同一次手势继续误关底层表单。
+        if (event.button === 0 && event.target === event.currentTarget) dismissTopmostLayer();
       }}
     >
       <div
@@ -1087,6 +1116,8 @@ export function CustomProviderDialog({
                 label={t('settings.providers.custom.presets.label')}
                 placeholder={t('settings.providers.custom.presets.placeholder')}
                 locale={i18n.language}
+                open={presetMenuOpen}
+                onOpenChange={setPresetMenuOpen}
               />
             </div>
           )}
@@ -1822,8 +1853,8 @@ function ModelPickerOverlay({
   return (
     <div
       className="fixed inset-0 z-[10001] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+      onPointerDown={(event) => {
+        if (event.button === 0 && event.target === event.currentTarget) onClose();
       }}
     >
       <div

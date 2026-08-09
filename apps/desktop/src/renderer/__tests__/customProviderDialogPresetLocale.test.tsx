@@ -15,12 +15,6 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('@/components/ui/popover', () => ({
-  Popover: ({ children }: { children: React.ReactNode }) => children,
-  PopoverTrigger: ({ children }: { children: React.ReactNode }) => children,
-  PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
-
 vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
@@ -67,6 +61,13 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       listProviderPresets: vi.fn(async () => ({ presets: [localizedPreset] })),
+      fetchProviderModels: vi.fn(async () => ({
+        ok: true,
+        models: [
+          { id: 'local-model', name: 'Local Model' },
+          { id: 'new-model', name: 'New Model' },
+        ],
+      })),
     },
   };
 });
@@ -91,6 +92,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
       });
       expect(trigger.textContent).toContain('settings.providers.custom.presets.placeholder');
 
+      fireEvent.click(trigger);
       const option = await screen.findByRole('option', { name: expectedName });
       fireEvent.click(option);
 
@@ -103,21 +105,131 @@ describe('CustomProviderDialog preset locale ownership', () => {
     },
   );
 
-  it('uses only Cancel, Escape, and the scrim as form dismissal affordances', async () => {
+  it('dismisses only the topmost preset menu on Escape and preserves unsaved form edits', async () => {
     i18nState.language = 'zh-TW';
-    const { container, onClose } = renderDialog();
+    const { onClose } = renderDialog();
 
-    await screen.findByRole('option', { name: '繁體供應商' });
+    const trigger = await screen.findByRole('button', {
+      name: 'settings.providers.custom.presets.label',
+    });
 
     const heading = screen.getByRole('heading', {
       name: 'settings.providers.custom.dialog.createTitle',
     });
     expect(heading.parentElement?.parentElement?.querySelector('button')).toBeNull();
 
+    const nameInput = screen.getByPlaceholderText(
+      'settings.providers.custom.fields.namePlaceholder',
+    );
+    fireEvent.change(nameInput, { target: { value: 'Unsaved provider' } });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
+    expect(screen.getByDisplayValue('Unsaved provider')).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
 
-    fireEvent.click(container.firstElementChild as Element);
-    expect(onClose).toHaveBeenCalledTimes(2);
+  it('dismisses only the topmost preset menu on a scrim gesture', async () => {
+    i18nState.language = 'zh-TW';
+    const { container, onClose } = renderDialog();
+
+    const trigger = await screen.findByRole('button', {
+      name: 'settings.providers.custom.presets.label',
+    });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+
+    const scrim = container.firstElementChild as Element;
+    fireEvent.pointerDown(scrim);
+    expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(scrim);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Cancel as a direct form dismissal without a duplicate top-right button', async () => {
+    i18nState.language = 'zh-TW';
+    const { onClose } = renderDialog();
+
+    await screen.findByRole('button', { name: 'settings.providers.custom.presets.label' });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.cancel' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['isComposing', { isComposing: true }],
+    ['keyCode 229', { keyCode: 229 }],
+  ])('keeps IME Escape inside composition for %s', async (_label, eventInit) => {
+    i18nState.language = 'zh-TW';
+    const { onClose } = renderDialog();
+
+    const trigger = await screen.findByRole('button', {
+      name: 'settings.providers.custom.presets.label',
+    });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+
+    fireEvent.keyDown(document, { key: 'Escape', ...eventInit });
+    expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('dismisses the model picker before the underlying form on Escape', async () => {
+    i18nState.language = 'zh-TW';
+    const { onClose } = renderDialog();
+
+    const trigger = await screen.findByRole('button', {
+      name: 'settings.providers.custom.presets.label',
+    });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    expect(
+      await screen.findByRole('heading', {
+        name: 'settings.providers.custom.fetch.pickerTitle',
+      }),
+    ).not.toBeNull();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(
+      screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
+    ).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('dismisses only the model picker on its scrim gesture', async () => {
+    i18nState.language = 'zh-TW';
+    const { onClose } = renderDialog();
+
+    const trigger = await screen.findByRole('button', {
+      name: 'settings.providers.custom.presets.label',
+    });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+
+    const pickerHeading = await screen.findByRole('heading', {
+      name: 'settings.providers.custom.fetch.pickerTitle',
+    });
+    const pickerScrim = pickerHeading.closest('[role="dialog"]')?.parentElement;
+    expect(pickerScrim).not.toBeNull();
+    fireEvent.pointerDown(pickerScrim as Element);
+
+    expect(
+      screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
+    ).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
