@@ -243,36 +243,46 @@ describe('embedding-host 多 consumer 启停', () => {
     expect(params.slice(1)).toEqual(['chat', 32]);
   });
 
-  it('query 后丢失 availability 时不处理已选中的 chat job', async () => {
+  it('query 或 markDone 后丢失 availability 时不处理已选中的 chat job', async () => {
     const host = await loadHost();
     const { EmbeddingWorker } = await import('../EmbeddingWorker');
     const { registerProvider } = await import('../providers');
     const getTextsForJobs = vi.fn().mockResolvedValue([{ rowid: 1, text: 'queued chat' }]);
     registerProvider({ source: 'chat', getTextsForJobs });
     const embed = vi.fn();
-    const query = vi.fn().mockResolvedValue([
-      {
-        rowid: 1,
-        source: 'chat',
-        source_id: 'm1',
-        chunk_index: 0,
-        model_id: 'voyage/voyage-4',
-        vec_table: 'chat_messages_vec_v1',
-        attempts: 0,
-      },
-    ]);
+    const chatJob = {
+      rowid: 1,
+      source: 'chat',
+      source_id: 'm1',
+      chunk_index: 0,
+      model_id: 'voyage/voyage-4',
+      vec_table: 'chat_messages_vec_v1',
+      attempts: 0,
+    };
+    const query = vi.fn().mockResolvedValue([chatJob]);
+    const tx = vi.fn(async () => host.setEmbeddingSourceSuspended('chat', true));
     const worker = new EmbeddingWorker({
-      getDbClient: () => ({ query }) as never,
+      getDbClient: () => ({ query, tx }) as never,
       getClient: () => ({ embed }) as never,
       isVecAvailable: () => true,
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
     });
 
-    const tick = (worker as unknown as { tick(): Promise<void> }).tick();
+    const runTick = () => (worker as unknown as { tick(): Promise<void> }).tick();
+    const tick = runTick();
     host.setEmbeddingSourceSuspended('chat', true);
     await tick;
-
     expect(getTextsForJobs).not.toHaveBeenCalled();
+
+    host.setEmbeddingSourceSuspended('chat', false);
+    getTextsForJobs.mockResolvedValue([
+      { rowid: 1, text: null },
+      { rowid: 2, text: 'queued chat' },
+    ]);
+    query.mockResolvedValue([chatJob, { ...chatJob, rowid: 2, source_id: 'm2' }]);
+    await runTick();
+
+    expect(tx).toHaveBeenCalledWith('embedding.markDone', { rowids: [1] });
     expect(embed).not.toHaveBeenCalled();
   });
 });

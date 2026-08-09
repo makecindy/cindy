@@ -273,6 +273,8 @@ export class EmbeddingWorker {
       if (noTextJobs.length > 0) {
         await this.markDoneNoVector(noTextJobs);
         doneCount += noTextJobs.length;
+        if (this.aborted) return;
+        if (isProviderSuspended(source)) continue;
       }
 
       const liveJobs = sourceJobs.filter((j) => (textByRowid.get(j.rowid) ?? null) !== null);

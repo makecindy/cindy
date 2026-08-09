@@ -3,14 +3,10 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const bootstrapSource = readFileSync(
-  resolve(__dirname, '..', 'bootstrap-electron.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
-const makerHostSource = readFileSync(
-  resolve(__dirname, '..', 'maker-host', 'index.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
+const readMainSource = (...parts: string[]) =>
+  readFileSync(resolve(__dirname, '..', ...parts), 'utf8').replace(/\r\n?/g, '\n');
+const bootstrapSource = readMainSource('bootstrap-electron.ts');
+const makerHostSource = readMainSource('maker-host', 'index.ts');
 
 describe('chat embedding availability wiring', () => {
   it('reconciles the runtime whenever provider access changes', () => {
@@ -31,8 +27,7 @@ describe('chat embedding availability wiring', () => {
     expect(refreshStart).toBeGreaterThanOrEqual(0);
     expect(refreshEnd).toBeGreaterThan(refreshStart);
     const refreshSource = makerHostSource.slice(refreshStart, refreshEnd);
-
-    expect(refreshSource).toContain('try {\n    providerAccessRuntimeRefreshListener?.();');
+    expect(refreshSource).toMatch(/try\s*{\s*providerAccessRuntimeRefreshListener\?\.\(\);/);
     expect(refreshSource).toContain(
       "desktopMakerLogger.warn('provider access runtime refresh listener failed'",
     );
@@ -65,8 +60,7 @@ describe('chat embedding availability wiring', () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const handler = bootstrapSource.slice(start, end);
-
-    expect(handler).toContain("throwIpcError(\n        'UNSUPPORTED_CAPABILITY'");
+    expect(handler).toMatch(/throwIpcError\(\s*'UNSUPPORTED_CAPABILITY'/);
     expect(handler).not.toContain("requireAppCapability('canUseCindyGateway'");
   });
 });

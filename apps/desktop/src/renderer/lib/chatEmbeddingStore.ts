@@ -16,8 +16,8 @@
  *   - false : createMessage hook 在 enabled 守卫处直接 return, 零成本
  *
  * **偏好默认 true** —— 与 main DEFAULTS 对齐。本镜像只用于设置 UI 即时态; 真正的
- * enqueue 守卫在 main (chat-history-embedder)。bootstrap 会在 React 挂载前从 main
- * 拉取经过账号与模型目录可用性检查的有效值，不可用或显式关过都会同步成 false。
+ * enqueue 守卫在 main (chat-history-embedder)。bootstrap 在 renderer 启动早期从 main
+ * 拉取有效值；请求完成后，不可用或显式关过的状态会同步成 false。
  */
 
 import { extractIpcError } from '@/utils/ipcError';
@@ -74,8 +74,7 @@ export function subscribeChatEmbeddingEnabled(cb: Subscriber): () => void {
 
 /**
  * 启动期一次性从 main 拉真值同步到 localStorage。
- * app entry (index.tsx) 在挂 React 之前调一次, 让 settings UI 第一次渲染时
- * localStorage 已经是真值。
+ * app entry (index.tsx) 在启动早期触发异步读取；完成后更新 localStorage 和 subscriber。
  *
  * 失败兜底: IPC 错误 (preload 未就绪 / main 异常) 静默 — 留旧值, 用户 toggle
  * 时仍能通过 IPC 写 main, 下次启动恢复正常。
