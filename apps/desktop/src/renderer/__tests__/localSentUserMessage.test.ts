@@ -27,6 +27,7 @@ vi.mock('@/lib/messageService', () => ({
 vi.mock('@/lib/sessionService', () => ({
   touchUserSend: vi.fn(async () => {}),
   update: vi.fn(async () => ({})),
+  get: vi.fn(async () => null),
 }));
 
 vi.mock('@/lib/sessionsBus', () => ({
@@ -67,6 +68,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { makerChatStore } from '@/lib/makerChatStore';
+import * as sessionService from '@/lib/sessionService';
 
 const MODEL = 'claude-opus-4-7';
 const EFFORT = 'medium';
@@ -362,5 +364,30 @@ describe('isLocalSentUserMessage (#2194)', () => {
     makerChatStore.sendMessage(sid, 'again', MODEL, EFFORT, PERM, WD);
     await flushPromises();
     expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone')).toBe(false);
+  });
+
+  // Codex review P1（第八轮）: 本地 UI 触发器（silent-stop「继续」/ 中断横幅
+  // 「继续任务」/ Mivo 触发）是本端点击意图——合成行虽不渲染气泡，但点击后
+  // 用户要看到续跑产出，必须按本端发送登记以触发强制回底。
+  it('本地 UI 触发器（sendUiTrigger）的合成行登记为本端意图', async () => {
+    const sid = `uitrigger-${Math.random().toString(36).slice(2, 8)}`;
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      agentKind: 'claude-code',
+      sdkSessionId: null,
+      fastMode: false,
+      workingDir: WD,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERM,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+
+    await makerChatStore.sendUiTrigger(sid, '[UI_ACTION_TRIGGER] test');
+    await flushPromises();
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const item = enqueue.mock.calls[0][1];
+    expect(makerChatStore.isLocalSentUserMessage(sid, item.clientId)).toBe(true);
+    // 外部注入的 clientId 不受影响。
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'injected-from-im')).toBe(false);
   });
 });

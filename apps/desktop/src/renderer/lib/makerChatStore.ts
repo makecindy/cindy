@@ -2684,9 +2684,11 @@ const lightSnapshotCache = new Map<string, SessionChatLightState>();
  * sendMessageCore / steerMessageCore are the choke points every local send
  * (composer send, edit-resend, steer, device-link send initiated on this
  * desktop) passes through, so those local user messages are recorded there.
- * One exception: a manual Retry's visible clone is minted by main with a
- * fresh clientId, so retryLastError registers it separately from the invoke
- * receipt's projection (items carrying supersedesUserClientId).
+ * Two paths register separately: local UI triggers (silent-stop Continue /
+ * app-exit Continue / Mivo) are marked in sendUiTriggerCore, and a manual
+ * Retry's visible clone is minted by main with a fresh clientId, so
+ * retryLastError registers it from the invoke receipt's projection (items
+ * carrying supersedesUserClientId).
  * MessageStream uses this to tell an explicit local send — which force-pins
  * the viewport to the tail — apart from user messages injected by other
  * entries (IM channels, a mobile client driving the session remotely,
@@ -13421,6 +13423,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
+      // #2194 (Codex review P1): 本地 UI 触发器（silent-stop「继续」/ 中断横幅
+      // 「继续任务」/ Mivo 触发）是本端点击意图——合成行虽不渲染气泡，但点击后
+      // 用户要看到续跑产出，必须按本端发送登记以触发强制回底；未读计数对
+      // isSyntheticTrigger 行一律跳过，不会因此产生幻影未读。direct-send 兜底
+      // 分支的 clientId 由执行端生成，renderer 无从登记（行缺失的稀有路径）。
+      markLocalSentUserMessage(sessionId, queued.clientId);
       const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);
       return operation.api.input
         .enqueue(sessionId, queued, { sendAtMs: Date.now() })
