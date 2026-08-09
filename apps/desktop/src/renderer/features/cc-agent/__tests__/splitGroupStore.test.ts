@@ -192,20 +192,20 @@ describe('splitGroupStore', () => {
     splitGroupStore.addSession('session-b', 'session-a', 'right');
     splitGroupStore.addSession('session-c', 'session-b', 'bottom');
 
-    expect(splitGroupStore.moveSession('session-b', 'session-c', 'top')).toBe(true);
+    expect(splitGroupStore.moveSession('session-b', 'session-a', 'bottom')).toBe(true);
     const next = splitGroupStore.getSnapshot().root;
     expect(getSplitSessionIds(next)).toEqual(['session-a', 'session-b', 'session-c']);
     expect(getSplitPanes(next)).toHaveLength(3);
     expect(next).toMatchObject({
       type: 'split',
       direction: 'row',
-      first: { type: 'pane', sessionId: 'session-a' },
-      second: {
+      first: {
         type: 'split',
         direction: 'column',
-        first: { type: 'pane', sessionId: 'session-b' },
-        second: { type: 'pane', sessionId: 'session-c' },
+        first: { type: 'pane', sessionId: 'session-a' },
+        second: { type: 'pane', sessionId: 'session-b' },
       },
+      second: { type: 'pane', sessionId: 'session-c' },
     });
   });
 
@@ -219,6 +219,22 @@ describe('splitGroupStore', () => {
     expect(splitGroupStore.moveSession('session-a', 'session-a', 'left')).toBe(false);
     expect(splitGroupStore.getSnapshot()).toBe(initial);
   });
+
+  it.each(['left', 'right', 'top', 'bottom'] as const)(
+    'pane 已位于目标 %s 侧时保持原比例和布局引用',
+    async (side) => {
+      const { splitGroupStore } = await loadStore();
+      splitGroupStore.addSession('session-b', 'session-a', side);
+      const root = splitGroupStore.getSnapshot().root;
+      if (!root || root.type !== 'split') throw new Error('root split missing');
+      splitGroupStore.setSplitFraction(root.key, 0.7);
+      const before = splitGroupStore.getSnapshot();
+
+      expect(splitGroupStore.moveSession('session-b', 'session-a', side)).toBe(false);
+      expect(splitGroupStore.getSnapshot()).toBe(before);
+      expect(splitGroupStore.getSnapshot().root).toMatchObject({ fraction: 0.7 });
+    },
+  );
 
   it('分支比例夹到下限，并仅切换根方向', async () => {
     const { MIN_SPLIT_CHILD_FRACTION, splitGroupStore } = await loadStore();

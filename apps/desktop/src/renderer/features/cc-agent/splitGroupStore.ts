@@ -135,6 +135,32 @@ function detachPane(root: SplitNode, sessionId: string): DetachedPane {
   return { root, pane: null };
 }
 
+function isPaneAlreadyAtSide(
+  root: SplitNode,
+  sessionId: string,
+  anchorSessionId: string,
+  side: DropSide,
+): boolean {
+  if (root.type === 'pane') return false;
+
+  const source = isBeforeSide(side) ? root.first : root.second;
+  const anchor = isBeforeSide(side) ? root.second : root.first;
+  if (
+    root.direction === directionForSide(side) &&
+    source.type === 'pane' &&
+    source.sessionId === sessionId &&
+    anchor.type === 'pane' &&
+    anchor.sessionId === anchorSessionId
+  ) {
+    return true;
+  }
+
+  return (
+    isPaneAlreadyAtSide(root.first, sessionId, anchorSessionId, side) ||
+    isPaneAlreadyAtSide(root.second, sessionId, anchorSessionId, side)
+  );
+}
+
 interface CoerceContext {
   seenKeys: Set<string>;
   seenSessionIds: Set<string>;
@@ -401,6 +427,7 @@ export const splitGroupStore = {
     const panes = getSplitPanes(state.root);
     if (!panes.some((pane) => pane.sessionId === sessionId)) return false;
     if (!panes.some((pane) => pane.sessionId === anchorSessionId)) return false;
+    if (isPaneAlreadyAtSide(state.root, sessionId, anchorSessionId, side)) return false;
 
     const detached = detachPane(state.root, sessionId);
     if (!detached.pane || !detached.root) return false;
