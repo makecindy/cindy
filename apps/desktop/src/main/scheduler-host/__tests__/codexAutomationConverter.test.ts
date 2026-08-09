@@ -28,6 +28,13 @@ describe('codexRruleToCron', () => {
     });
   });
 
+  it('accepts the optional RRULE prefix used by Codex automation files', () => {
+    expect(codexRruleToCron('RRULE:FREQ=DAILY;BYHOUR=8;BYMINUTE=30;BYSECOND=0')).toEqual({
+      cronExpr: '30 8 * * *',
+      diagnostics: [],
+    });
+  });
+
   it('converts a weekly rule and maps RFC weekday names to cron numbers', () => {
     expect(codexRruleToCron('FREQ=WEEKLY;BYDAY=MO,FR;BYHOUR=16;BYMINUTE=0')).toEqual({
       cronExpr: '0 16 * * 1,5',
@@ -147,10 +154,9 @@ describe('convertCodexAutomation', () => {
   });
 
   it('explains that only the first cwd is imported when multiple are present', () => {
-    const result = convertCodexAutomation(
-      detail({ cwds: ['C:\\newlife', 'D:\\other-project'] }),
-      { timezone: 'UTC' },
-    );
+    const result = convertCodexAutomation(detail({ cwds: ['C:\\newlife', 'D:\\other-project'] }), {
+      timezone: 'UTC',
+    });
 
     expect(result.canImport).toBe(false);
     expect(result.diagnostics).toContain(

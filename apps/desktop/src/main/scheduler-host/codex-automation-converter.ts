@@ -46,9 +46,13 @@ const SUPPORTED_KEYS = new Set([
 function parseRrule(rrule: string): { values: Map<string, string>; diagnostics: string[] } {
   const diagnostics: string[] = [];
   const values = new Map<string, string>();
-  if (!rrule.trim()) return { values, diagnostics: ['RRULE is empty'] };
+  const normalized = rrule
+    .trim()
+    .replace(/^RRULE\s*:/i, '')
+    .trim();
+  if (!normalized) return { values, diagnostics: ['RRULE is empty'] };
 
-  for (const rawPart of rrule.split(';')) {
+  for (const rawPart of normalized.split(';')) {
     const part = rawPart.trim();
     if (!part) {
       diagnostics.push('RRULE contains an empty component');
