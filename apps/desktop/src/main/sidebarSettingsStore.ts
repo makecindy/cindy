@@ -51,7 +51,6 @@ const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
 const SETTINGS_FILE_NAME = 'sidebar-settings.json';
-const LEGACY_OWNER_MARKER = 'sidebar-settings-legacy-owner.v1.json';
 
 const log = createLogger('sidebar-settings');
 const stores = new Map<
@@ -507,24 +506,6 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
   return changed;
 }
 
-function readLegacyOwnerKey(markerPath: string): string | null | undefined {
-  if (!fs.existsSync(markerPath)) return undefined;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(markerPath, 'utf-8')) as {
-      version?: unknown;
-      ownerKey?: unknown;
-    };
-    return parsed.version === 1 && typeof parsed.ownerKey === 'string' && parsed.ownerKey.length > 0
-      ? parsed.ownerKey
-      : null;
-  } catch (err) {
-    log.warn('invalid sidebar legacy owner marker; refusing legacy migration', {
-      errorCode: sidebarSettingsErrorCode(err),
-    });
-    return null;
-  }
-}
-
 type LegacySidebarPathState = 'missing' | 'regular-file' | 'blocked';
 
 function legacySidebarPathState(file: string): LegacySidebarPathState {
@@ -542,10 +523,7 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   if (session.mode !== 'cloud' || !session.dataOwnerId) return 'blocked';
 
   const root = app.getPath('userData');
-  const markerPath = path.join(root, LEGACY_OWNER_MARKER);
   const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
-  const existing = readLegacyOwnerKey(markerPath);
-  if (existing !== undefined && existing !== ownerKey) return 'blocked';
   const legacyPath = path.join(root, SETTINGS_FILE_NAME);
   const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
   const legacyPathState = legacySidebarPathState(legacyPath);
@@ -554,22 +532,6 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
     return isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) && legacyPathState === 'missing'
       ? 'ready'
       : 'blocked';
-  }
-  if (existing === undefined) {
-    try {
-      fs.writeFileSync(markerPath, JSON.stringify({ version: 1, ownerKey }, null, 2), {
-        encoding: 'utf-8',
-        flag: 'wx',
-      });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        log.warn('failed to claim legacy sidebar settings', {
-          errorCode: sidebarSettingsErrorCode(err),
-        });
-        return 'blocked';
-      }
-      if (readLegacyOwnerKey(markerPath) !== ownerKey) return 'blocked';
-    }
   }
 
   if (legacyPathState === 'missing') return 'ready';
@@ -610,7 +572,6 @@ export function registerSidebarSettingsIpc(): void {
 
 export const __testing = {
   normalizeSettings,
-  LEGACY_OWNER_MARKER,
   MAX_SETTINGS_BYTES,
   pendingWriteChainCount: () => writeChains.size,
 };

@@ -428,11 +428,6 @@ describe('sidebarSettingsStore', () => {
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'owner-b-session' } })),
     ).resolves.toEqual(['owner-b-session']);
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'), 'utf-8'),
-      ),
-    ).toEqual({ version: 1, ownerKey: 'key-owner-a' });
     expect(JSON.parse(fs.readFileSync(ownerFile('owner-b'), 'utf-8'))).toMatchObject({
       pinnedOrder: ['owner-b-session'],
     });
@@ -458,11 +453,6 @@ describe('sidebarSettingsStore', () => {
     harness.legacyClaimReady = true;
     expect(loadSnapshot()).toMatchObject(legacySettings);
     expect(fs.existsSync(legacy)).toBe(false);
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'), 'utf-8'),
-      ),
-    ).toEqual({ version: 1, ownerKey: 'key-owner-a' });
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
     ).resolves.toEqual(['new-session', 'legacy-session']);
@@ -485,11 +475,6 @@ describe('sidebarSettingsStore', () => {
   });
 
   it('lets a passive same-owner instance use fully migrated scoped state', async () => {
-    fs.writeFileSync(
-      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
-      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
-      'utf-8',
-    );
     fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
     fs.writeFileSync(
       ownerFile(),
@@ -537,11 +522,6 @@ describe('sidebarSettingsStore', () => {
 
   it('keeps a passive same-owner instance blocked while shared legacy state remains', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
-    fs.writeFileSync(
-      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
-      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
-      'utf-8',
-    );
     fs.writeFileSync(legacy, JSON.stringify({ pinnedOrder: ['legacy-session'] }), 'utf-8');
     harness.legacyClaimReady = false;
     harness.legacyClaimOwnedByOwner = true;
@@ -558,11 +538,6 @@ describe('sidebarSettingsStore', () => {
 
   it('treats a dangling shared legacy symlink as present in passive mode', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
-    fs.writeFileSync(
-      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
-      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
-      'utf-8',
-    );
     harness.legacyClaimReady = false;
     harness.legacyClaimOwnedByOwner = true;
     const lstatSync = vi.spyOn(fs, 'lstatSync').mockImplementation((file) => {
@@ -583,11 +558,6 @@ describe('sidebarSettingsStore', () => {
 
   it('fails closed when the shared legacy path cannot be inspected', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
-    fs.writeFileSync(
-      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
-      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
-      'utf-8',
-    );
     harness.legacyClaimReady = false;
     harness.legacyClaimOwnedByOwner = true;
     const lstatSync = vi.spyOn(fs, 'lstatSync').mockImplementation((file) => {
@@ -774,15 +744,18 @@ describe('sidebarSettingsStore', () => {
     expect(harness.send).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the sidebar legacy owner marker is malformed', () => {
-    fs.writeFileSync(
-      path.join(harness.root, 'sidebar-settings.json'),
-      '{"pinnedOrder":["legacy"]}',
-    );
-    fs.writeFileSync(path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'), 'broken');
+  it('ignores an obsolete sidebar marker and follows the global owner claim', () => {
+    const legacy = path.join(harness.root, 'sidebar-settings.json');
+    const obsoleteMarker = path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json');
+    fs.writeFileSync(legacy, '{"pinnedOrder":["legacy"]}');
+    fs.writeFileSync(obsoleteMarker, 'broken');
 
-    expect(loadSnapshot().pinnedOrder).toEqual([]);
-    expect(fs.existsSync(path.join(harness.root, 'sidebar-settings.json'))).toBe(true);
+    expect(loadSnapshot().pinnedOrder).toEqual(['legacy']);
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(fs.readFileSync(obsoleteMarker, 'utf-8')).toBe('broken');
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8'))).toMatchObject({
+      pinnedOrder: ['legacy'],
+    });
   });
 
   it('checks the trusted sender before accepting a mutation', async () => {
