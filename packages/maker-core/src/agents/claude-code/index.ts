@@ -4945,6 +4945,24 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 不能再读包含 arm 态的 effectiveSdkPermissionMode()。否则 rewind 窗口里用户 arm
           // 了下一 turn 的 plan,但当前排队行显式 planMode:false 时,新 Query 会先以 plan
           // 起跑且 replay 看不到 diff,导致普通 turn 误跑成 plan turn (Codex review 3535801840)。
+          // accept-phase Stop may have recorded an asynchronous RemoteQuery.close();
+          // retryResumeAt must wait for that ownership promise before asking the
+          // remote manager to create a replacement session.
+          // `q` is still the canceled Query at this point; the replacement is
+          // assigned only after this ownership gate completes.
+          const retryQuery = q;
+          const recordedRetryClose = canceledQueryClosePromises.get(retryQuery);
+          if (recordedRetryClose) {
+            try {
+              await recordedRetryClose;
+            } catch (error) {
+              // Match cancellation-continuation rebuild semantics: a rejected
+              // close is observable, but must not turn the retry into a hang.
+              log.warn('rewind retry: canceled Query close rejected before replacement', {
+                error: String(error),
+              });
+            }
+          }
           q = await buildQuery({
             resumeSessionAt: resumeAt,
             forkSession: true,

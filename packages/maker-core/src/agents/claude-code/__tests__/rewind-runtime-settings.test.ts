@@ -1940,6 +1940,10 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await acceptReplayStarted;
     expect(handle.isTurnRunning?.()).toBe(true);
 
+    let resolveClose!: () => void;
+    const closePromise = new Promise<void>((resolve) => { resolveClose = resolve; });
+    secondQuery.close.mockImplementationOnce(() => closePromise);
+
     await handle.abort();
     await expect(sendPromise).rejects.toThrow('Claude send cancelled before acceptance');
     expect(handle.isTurnRunning?.()).toBe(false);
@@ -1974,7 +1978,11 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
     const thirdQuery = createFakeQuery();
     sdkMock.query.mockReturnValue(thirdQuery);
-    await handle.send({ type: 'user', content: 'next after accept replay cancellation' });
+    const retryPromise = handle.send({ type: 'user', content: 'next after accept replay cancellation' });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    resolveClose();
+    await retryPromise;
     expect(sdkMock.query).toHaveBeenCalledTimes(3);
     const retryArgs = sdkMock.query.mock.calls[2]?.[0] as {
       options: Record<string, unknown>;
