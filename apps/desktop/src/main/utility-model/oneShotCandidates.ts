@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import { toSdkModelString, type AgentKind, type Maker } from '@cindy/maker-core';
+import {
+  toSdkModelString,
+  type AgentKind,
+  type AutoReviewRouteIdentity,
+  type Maker,
+} from '@cindy/maker-core';
 import { appendProviderRequestPath } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
@@ -279,15 +284,52 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   // 停用的 (来源, 模型) 不参与推断:被推断出来也会在派发前被 fail closed,
   // 提前剔除让「另一家启用的来源」仍能保住所选路由。
   const disableOverrides = readModelDisableOverrides();
-  const matches = getActiveCatalog().providers.filter((provider) =>
-    provider.agents.includes(agentKind)
-    && !isProviderDisabled(disableOverrides, provider.id)
-    && !isModelDisabled(disableOverrides, provider.id, normalizedModel)
-    && (provider.models[agentKind] ?? []).some((candidate) => candidate.id === normalizedModel),
-  );
+  const matches = getActiveCatalog().providers.filter((provider) => {
+    const routing = provider.routing[agentKind];
+    return provider.agents.includes(agentKind)
+      && routing !== undefined
+      && routing.disabled !== true
+      && !isProviderDisabled(disableOverrides, provider.id)
+      && !isModelDisabled(disableOverrides, provider.id, normalizedModel)
+      && (provider.models[agentKind] ?? []).some((candidate) => candidate.id === normalizedModel);
+  });
   const nonXd = matches.filter((provider) => provider.id !== 'xd');
   if (nonXd.length === 1) return nonXd[0]?.id;
   return matches.length === 1 ? matches[0]?.id : undefined;
+}
+
+/**
+ * Resolve the exact catalog route that requestUtilityText would use for a task-scoped request.
+ * Approval memory calls this before lookup, then pins the returned provider/model onto the actual
+ * reviewer request. Ambiguous, disabled, mutating, or invalid routes return null and therefore do
+ * not participate in persistent approval reuse.
+ */
+export function resolveUtilityTextRouteIdentity(
+  opts: Pick<UtilityTextRequestOptions, 'providerId' | 'agentKind' | 'model'>,
+): AutoReviewRouteIdentity | null {
+  const providerId = opts.providerId?.trim() || inferUniqueProviderId(opts.agentKind, opts.model);
+  if (!providerId) return null;
+  const provider = getActiveCatalog().providers.find((item) => item.id === providerId);
+  const agentKind = opts.agentKind ?? inferProviderAgent(provider);
+  if (!provider || !agentKind || !provider.agents.includes(agentKind)) return null;
+  const routing = provider.routing[agentKind];
+  if (!routing || routing.disabled === true) return null;
+  if (isProviderRouteMutationInProgress(provider.id)) return null;
+
+  const configuredModels = provider.models[agentKind] ?? [];
+  const requestedModel = opts.model?.trim();
+  const model = requestedModel || configuredModels[0]?.id || '';
+  if (!model || (requestedModel && !configuredModels.some((item) => item.id === requestedModel))) {
+    return null;
+  }
+  const disableOverrides = readModelDisableOverrides();
+  if (
+    isProviderDisabled(disableOverrides, provider.id)
+    || isModelDisabled(disableOverrides, provider.id, model)
+  ) {
+    return null;
+  }
+  return { providerId: provider.id, model };
 }
 
 async function requestDefaultUtilityText(

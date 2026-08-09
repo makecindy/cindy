@@ -83,13 +83,17 @@ import {
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import {
+  classifyLocalAutoReviewTier,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
-  type AutoReviewDecision,
+  resolveAutoReviewRouteSnapshot,
+  type AutoReviewDecisionSnapshot,
 } from '../shared/auto-review-decision.js';
+import { createApprovalMemory } from '../shared/approval-memory.js';
+import { logAutoReviewDecision } from '../shared/auto-review-log.js';
 import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
@@ -3369,7 +3373,10 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableProviderId: string | null | undefined = opts.providerId;
     let currentAutoReviewIntent = '';
-    const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    const autoReviewDecisionCache = new Map<
+      string,
+      Promise<AutoReviewDecisionSnapshot>
+    >();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -3658,7 +3665,23 @@ export class CodexAgent extends BaseAgent {
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
-    const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+    const approvalMemory = createApprovalMemory({
+      agentKind: 'codex',
+      workspaceKey: opts.remoteHostId
+        ? `${opts.remoteHostId}\0${opts.workingDir || 'default'}`
+        : opts.workingDir || 'default',
+      platform: sessionReviewPlatform,
+      ...(this.deps.approvalMemoryStore ? { store: this.deps.approvalMemoryStore } : {}),
+      logger: this.deps.logger,
+    });
+    await approvalMemory.hydrate();
+    const reviewAutoAction = async (
+      action: ReviewableAction,
+    ): Promise<AutoReviewDecisionSnapshot> => {
+      const startedAt = Date.now();
+      const workspaceRootsSnapshot = runtimeWorkspaceRoots().filter(
+        (dir): dir is string => typeof dir === 'string' && dir.length > 0,
+      );
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'codex' as const,
@@ -3669,18 +3692,55 @@ export class CodexAgent extends BaseAgent {
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
         action,
-        workspaceRoots: runtimeWorkspaceRoots().filter(
-          (dir): dir is string => typeof dir === 'string' && dir.length > 0,
-        ),
+        workspaceRoots: [...workspaceRootsSnapshot],
         platform: sessionReviewPlatform,
       };
+      const reviewerRouteSnapshot = await resolveAutoReviewRouteSnapshot(
+        request,
+        this.deps.resolveAutoReviewRoute,
+      );
+      if (reviewerRouteSnapshot.providerId) {
+        request.providerId = reviewerRouteSnapshot.providerId;
+        request.model = reviewerRouteSnapshot.model;
+      }
+      if (approvalMemory.isRemembered(
+        action,
+        request.userIntent,
+        workspaceRootsSnapshot,
+        reviewerRouteSnapshot,
+      )) {
+        logAutoReviewDecision(this.deps.logger, {
+          agentKind: 'codex', action, source: 'memory', verdict: 'allow', elapsedMs: 0,
+        });
+        return Promise.resolve({
+          verdict: 'allow',
+          userIntentSnapshot: request.userIntent,
+          workspaceRootsSnapshot,
+          reviewerRouteSnapshot,
+        });
+      }
       const key = JSON.stringify(request);
       const cached = autoReviewDecisionCache.get(key);
       if (cached) return cached;
-      const pending = resolveAutoReviewDecision(
-        request,
-        this.deps.reviewAutoPermissionAction,
-      );
+      const localTier = classifyLocalAutoReviewTier(request);
+      const pending = resolveAutoReviewDecision(request, this.deps.reviewAutoPermissionAction)
+        .then((decision) => {
+          logAutoReviewDecision(this.deps.logger, {
+            agentKind: 'codex',
+            action,
+            source: localTier === 'needs-review' ? 'reviewer' : 'static',
+            localTier,
+            verdict: decision.verdict,
+            unavailable: decision.unavailable === true,
+            elapsedMs: Date.now() - startedAt,
+          });
+          return {
+            ...decision,
+            userIntentSnapshot: request.userIntent,
+            workspaceRootsSnapshot,
+            reviewerRouteSnapshot,
+          };
+        });
       autoReviewDecisionCache.set(key, pending);
       return pending;
     };
@@ -4851,7 +4911,7 @@ export class CodexAgent extends BaseAgent {
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation';
       settled: boolean;
       /** prompt-each-time 高风险审批: 宽松模式也必须弹 UI, dismissAllPending('allow') 不得放行 */
-      forcePrompt?: boolean;
+      requiresExplicitConfirmation?: boolean;
     }
     const pendingApprovals = new Map<string, PendingEntry>();
     const seenGuardianReviewIds = new Set<string>();
@@ -5089,6 +5149,10 @@ export class CodexAgent extends BaseAgent {
           opts?.forcePrompt === true ||
           (req.kind === 'permission' &&
             forceTurnConfirmation(req.toolName, req.input));
+        // `forcePrompt` 还会在轻量 reviewer 返回 ask 时变成 true；那只是普通 UI 降级，
+        // 用户切到 Full access 时可以随档位放行。只有这里由确定性红线得到的逐次确认
+        // 才能抵抗 permission-mode 的批量放行，不能把两个语义混成同一标志。
+        const requiresExplicitConfirmation = forcePrompt;
         // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
         // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
         // 再由 Cindy reviewer 静默裁决。
@@ -5147,6 +5211,12 @@ export class CodexAgent extends BaseAgent {
           if (modeAfterReview !== 'auto') {
             forcePrompt = true;
           } else if (decision.verdict === 'allow') {
+            approvalMemory.rememberReviewerAllow(
+              opts.autoReviewAction,
+              decision.userIntentSnapshot,
+              decision.workspaceRootsSnapshot,
+              decision.reviewerRouteSnapshot,
+            );
             return 'accept';
           } else if (decision.verdict === 'block') {
             // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
@@ -5154,7 +5224,7 @@ export class CodexAgent extends BaseAgent {
             if (decision.unavailable) autoReviewUnavailableNotice.notify();
             return 'decline';
           } else {
-            // Only red-line decisions reach the user and they cannot be remembered.
+            // UI 的「允许一次」只影响当前请求，不写跨轮次批准记忆。
             forcePrompt = true;
           }
         }
@@ -5163,7 +5233,12 @@ export class CodexAgent extends BaseAgent {
             ? { ...req, suggestions: undefined }
             : req;
         return await new Promise<ApprovalDecision>((resolve) => {
-          const entry: PendingEntry = { resolve, kind, settled: false, forcePrompt };
+          const entry: PendingEntry = {
+            resolve,
+            kind,
+            settled: false,
+            requiresExplicitConfirmation,
+          };
           pendingApprovals.set(requestId, entry);
           const finalize = (d: ApprovalDecision) => {
             if (entry.settled) return;
@@ -5180,7 +5255,8 @@ export class CodexAgent extends BaseAgent {
                 finalize('decline');
                 return;
               }
-              finalize(mapPermissionDecisionToApproval(decision));
+              const approval = mapPermissionDecisionToApproval(decision);
+              finalize(approval);
             })
             .catch((e) => {
               log.error('dispatchInteraction threw → decline', { requestId, message: (e as Error).message });
@@ -5207,7 +5283,9 @@ export class CodexAgent extends BaseAgent {
         // 没拿到用户对这一次调用的明确确认就 fail-closed 拒绝, 与 awaitApprovalDecision
         // 里宽松模式仍强制弹 UI 的语义一致。
         const effectiveResolveAs: 'allow' | 'deny' =
-          resolveAs === 'allow' && entry.forcePrompt === true ? 'deny' : resolveAs;
+          resolveAs === 'allow' && entry.requiresExplicitConfirmation === true
+            ? 'deny'
+            : resolveAs;
         entry.resolve(effectiveResolveAs === 'allow' ? 'accept' : 'decline');
         eventQueue.push({
           type: 'interaction_dismissed',

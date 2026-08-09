@@ -1,0 +1,444 @@
+/**
+ * Auto-review 批准记忆 —— harness 无关的「同一件事不重复审」层。
+ *
+ * 归档会话分析显示，agent 的 bash 调用里有大量**逐字重复**。此前这些重复每次都要
+ * 重新走一遍灰区审阅。灰区 AI 判决虽有会话内缓存,但缓存只活在当前 session;
+ * 同一条 `rm -rf build` 在会话重开后还得再审一次。
+ *
+ * 本模块只记 **审阅器 allow**:AI 判 allow 后,相同工作区、harness、reviewer 路由、
+ * 逐字命令和逐字 `userIntent` 才能复用。用户在权限卡点的「允许一次」绝不进入长期记忆;
+ * 它没有表达跨轮次授权,不得被静默升级成跨会话 allowlist。`block` / `ask` 也不记。
+ *
+ * ## 安全边界(五条,均由本模块强制,调用方不得绕过)
+ *
+ * 1. **红线永不记忆**。`prompt-each-time` 档(确定性红线:`curl | sh`、`rm -rf` 越界、凭证
+ *    读写、云 metadata 探测……)的动作签名一律返回 `null`,既不查也不存。这类必须逐次确认,
+ *    与 Codex 的 "red-line decisions cannot be remembered" 同口径。
+ * 2. **可变间接执行不记忆**。`pnpm test`、`bash ./check.sh` 等命令的外层文本不变时，
+ *    `package.json` 或脚本内容仍可被替换；这类每次重新审核，不用不完整的单层文件 hash
+ *    制造安全错觉。
+ * 3. **签名是逐字命令 + 逐字意图**,不是前缀通配。`rm -rf build` 的批准不会顺带放行
+ *    `rm -rf dist`。前缀规则(`Bash(rm -rf:*)` 那种)会让参数位置的提权
+ *    变得不可见 —— 例如把 `curl <url>` 的批准扩到 `curl -X POST <url>` —— 属独立的产品
+ *    决策,不在本层默默引入。
+ * 4. **记忆按工作区分域**。同一条 `rm -rf build` 在 A 仓被批准,不影响 B 仓;工作区根参与
+ *    签名哈希。跨会话持久化同样带工作区域,换项目不串。
+ * 5. **记忆绑定 reviewer 路由**。模型或 provider 切换后重新送审,不能把 A 路由的自动判决
+ *    当成 B 路由已批准。异步审阅按请求创建时的路由快照落签名,不读返回时的会话可变态。
+ *
+ * ## 持久化
+ *
+ * 本包不碰文件系统(共享 package 不得自己猜宿主目录,见 credentials-and-local-storage.md)。
+ * 跨会话记忆由宿主注入 `ApprovalMemoryStore`:宿主负责落盘位置、体量上限与查看/清除
+ * 接口；是否接入用户界面由宿主产品层决定。未注入时退化成纯会话内记忆。
+ */
+
+import { createHash } from 'node:crypto';
+
+import type { Logger } from '../../interfaces/logger.js';
+import type { AgentKind } from '../../types/common.js';
+
+import {
+  classifyLocalAutoReviewTier,
+  type AutoReviewRouteIdentity,
+} from './auto-review-decision.js';
+import {
+  commandExecutableNames,
+  commandUsesExplicitExecutablePath,
+  type ReviewableAction,
+} from './auto-review.js';
+
+/**
+ * 记忆来源。`user` 仅为宿主读取旧版存储保留兼容；v2 只写 `reviewer`，旧签名不会命中。
+ */
+export type ApprovalMemoryOrigin = 'user' | 'reviewer';
+
+/**
+ * 宿主注入的跨会话存储。全部方法都是 best-effort:抛错 / 拒绝只降级成「本次没记住」,
+ * 绝不能让权限判定本身失败(fail-open 只发生在**记忆写入**,不发生在**放行判定**上)。
+ */
+export interface ApprovalMemoryStore {
+  /**
+   * 载入该工作区已持久化的签名集合。会话启动时调用一次;失败按空集处理。
+   * 返回的集合只被读取,不会被本模块改写。
+   */
+  load(workspaceKey: string): Promise<ReadonlySet<string>>;
+  /** 追加一条签名。宿主负责去重、体量上限与落盘节流。 */
+  add(workspaceKey: string, signature: string, origin: ApprovalMemoryOrigin): void;
+}
+
+export interface ApprovalMemoryOptions {
+  /** 当前 harness。签名带上它，避免不同 harness 的权限语义意外串用。 */
+  agentKind: AgentKind;
+  /**
+   * 工作区域键:参与记忆分域。用会话的可写根(`workspaceRoots[0]`),缺省用 `default`
+   * —— 不带工作区的会话(纯对话)本就不该产生 exec 记忆,退化成单一域也不扩大范围。
+   */
+  workspaceKey: string;
+  platform?: NodeJS.Platform;
+  store?: ApprovalMemoryStore;
+  logger?: Logger;
+}
+
+export interface ApprovalMemory {
+  /** 该动作是否在完全相同的用户意图下被记住可放行。红线一律 false。 */
+  isRemembered(
+    action: ReviewableAction,
+    userIntent: string,
+    workspaceRoots: readonly string[],
+    reviewerRoute: AutoReviewRouteIdentity,
+  ): boolean;
+  /** 轻量审阅器判定 allow。调用方必须传创建审阅请求时的意图与工作区根快照。 */
+  rememberReviewerAllow(
+    action: ReviewableAction,
+    userIntent: string,
+    workspaceRoots: readonly string[],
+    reviewerRoute: AutoReviewRouteIdentity,
+  ): void;
+  /** 载入宿主持久化的签名(会话启动时调用一次;失败静默降级成纯会话内记忆)。 */
+  hydrate(): Promise<void>;
+  /** 仅供测试/诊断:当前会话可见的签名数量。 */
+  size(): number;
+}
+
+const MAX_SESSION_SIGNATURES = 500;
+
+/**
+ * 命令行凭证特征与凭证存储写操作 —— 命中即**不可记忆**。
+ *
+ * 两个理由,任一都足够:
+ *  1. **最小授权**:凭证类动作不应该因为一次 allow 变成长期授权；摘要落盘并不改变这一点。
+ *  2. **判定正确性**:凭证是会轮换的。逐字记住 `--token=abc` 只在这一把 token 有效期内
+ *     有意义,换了 token 就是一条永远不会再命中的死记录 —— 记它没有收益,只有风险。
+ *
+ * 这不是安全分类(那是 classifyShellCommand 的职责),只是记忆层的准入门槛:命中的命令
+ * 照常走原有判定链,只是每次都重新判 —— 与本模块引入前的行为一致。
+ */
+const SECRET_ENV_NAME_SOURCE = String.raw`[A-Z0-9_]*(?:TOKEN|SECRET|API[_-]?KEY|APIKEY|ACCESS[_-]?KEY|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY)[A-Z0-9_]*`;
+const SECRET_CONFIG_KEY_SOURCE = String.raw`\S*(?:TOKEN|SECRET|API[_-]?KEY|APIKEY|ACCESS[_-]?KEY|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY)\S*`;
+
+const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
+  // HTTP 鉴权头：curl/wget 的 -H、--header、--proxy-header，含空格/等号/紧凑短选项。
+  /(?:^|\s)(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?\s*(?:authorization|proxy-authorization|cookie|x-api-key|x-auth)/i,
+  // curl 的 @file header/config 内容可在命令不变时换成新凭证，不能让旧摘要静默复用。
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?@\S/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-K(?:\s*=?\s*)\S|--config(?:\s+|=)\S)/i,
+  /\bbearer\s+[\w.\-~+/]{8,}/i,
+  // 显式凭证 flag（含 = 与空格两种写法）。要求后面真有值，避免把 --auth-mode 误判。
+  /(?:^|\s)--(?:token|password|passwd|api[-_]?key|secret|client[-_]?secret|access[-_]?token|session[-_]?token|oauth2[-_]?bearer|authorization|auth|credential|credentials|private[-_]?key|secret[-_]?access[-_]?key|access[-_]?key(?:[-_]?id)?)(?:\s+|=)\S/i,
+  // 凭证值来自 stdin / file 时命令行没有秘密明文，但该动作仍在消费凭证，不能长期记忆。
+  /(?:^|\s)--(?:token|password|passwd|api[-_]?key|secret|client[-_]?secret|access[-_]?token|session[-_]?token|credential|credentials|private[-_]?key)(?:[-_](?:stdin|file|path))(?:\s|=|$)/i,
+  // curl/wget 的 user:password、proxy user，以及 cookie/session 参数。
+  /(?:^|\s)(?:-u\s*=?\s*|--(?:proxy-)?user(?:\s+|=))\S+:\S/i,
+  /(?:^|\s)(?:-b\s*=?\s*|--cookie(?:\s+|=))\S/i,
+  // 客户端证书 / 私钥 / identity file 同样是凭证消费。短选项与 `--key` 必须限定工具，
+  // 避免误伤 sort --key、通用 -i 输入等无关参数；CA / 公钥证书也不在这里泛化拦截。
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:--(?:cert|key|proxy-cert|proxy-key|pass|proxy-pass|netrc-file)(?:\s+|=)\S|-E(?:\s*=?\s*)\S)/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:--netrc(?:-optional)?|--ssl-auto-client-cert|-n)(?=\s|$)/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?(?:ssh|scp|sftp|ssh-copy-id|plink|pscp|psftp)(?:\.exe)?(?=\s|$)[^;&|\r\n]*(?:-i(?:\s*=?\s*)\S|-o\s*(?:IdentityFile|CertificateFile|PKCS11Provider|SecurityKeyProvider)\s*=\s*\S|-o\s*ForwardAgent\s*=\s*(?:yes|true|on)\b)/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?(?:ssh-add|sshpass)(?:\.exe)?(?=\s|$)/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?openssl(?:\.exe)?\s+s_client\b[^;&|\r\n]*\s-(?:cert|key|pass)(?:\s+|=)\S/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?wget(?:\.exe)?\b[^;&|\r\n]*\s--certificate(?:\s+|=)\S/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?kubectl(?:\.exe)?\b[^;&|\r\n]*\s--client-(?:certificate|key)(?:\s+|=)\S/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?grpcurl(?:\.exe)?\b[^;&|\r\n]*\s-(?:cert|key)(?:\s+|=)\S/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?(?:http|https|httpie)(?:\.exe)?\b[^;&|\r\n]*\s--(?:cert|cert-key)(?:\s+|=)\S/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?docker(?:\.exe)?\b[^;&|\r\n]*\s--tls(?:cert|key)(?:\s+|=)\S/i,
+  /(?:^|[\s;&|('"`])(?:DOCKER_CERT_PATH|GIT_SSL_(?:CERT|KEY)|PGSSL(?:CERT|KEY))\s*=\s*\S/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?git(?:\.exe)?\b[^;&|\r\n]*(?:-c\s+http\.ssl(?:cert|key)\s*=|config\b[^;&|\r\n]*\shttp\.ssl(?:cert|key)(?:\s+|=))\S/i,
+  // URL userinfo：https://user:password@example.com/…
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i,
+  // shell 赋值、URL query、表单、JSON 与嵌套 flag 值。大小写均不可记忆。
+  new RegExp(
+    String.raw`(?:^|[=\s?&;,:{|'\"])${SECRET_ENV_NAME_SOURCE}['"]?\s*(?:=|:)\s*['"]?\S`,
+    'i',
+  ),
+  // PowerShell 与 cmd 的等价环境变量写法。
+  new RegExp(String.raw`\$env:${SECRET_ENV_NAME_SOURCE}\s*=\s*\S`, 'i'),
+  new RegExp(String.raw`(?:^|[\s;&|'"])setx?\s+${SECRET_ENV_NAME_SOURCE}\s+\S`, 'i'),
+  // config/set 的凭证 key 与 value 是位置参数，不一定出现等号。
+  new RegExp(
+    String.raw`\b(?:npm|pnpm|yarn|gcloud)(?:\.cmd|\.exe)?\s+config\s+set\s+${SECRET_CONFIG_KEY_SOURCE}\s+\S`,
+    'i',
+  ),
+  new RegExp(
+    String.raw`\baws(?:\.exe)?\s+configure\s+set\s+${SECRET_CONFIG_KEY_SOURCE}\s+\S`,
+    'i',
+  ),
+  // 凭证存储写入即使从 stdin/file 取值也不记忆；key 可以是任意业务名，不能只看 password。
+  /\bkubectl(?:\.exe)?\s+(?:create|patch|replace)\s+secret\b/i,
+  /\baws(?:\.exe)?\s+secretsmanager\s+(?:create-secret|put-secret-value|update-secret)\b/i,
+  /\bgcloud(?:\.cmd|\.exe)?\s+secrets\s+(?:create|versions\s+add)\b/i,
+  /\baz(?:\.cmd|\.exe)?\s+keyvault\s+secret\s+set\b/i,
+  /\b(?:gh|glab)(?:\.exe)?\s+secret\s+set\b/i,
+  /\bkubectl(?:\.exe)?\s+config\s+set-credentials\b/i,
+  /\bgit(?:\.exe)?\s+credential(?:-[\w.-]+)?\s+(?:fill|approve|reject|store|erase|get)\b/i,
+  // 交互式 / stdin 登录本身就是凭证消费动作；即使看不到值也必须每次重新判定。
+  /(?:^|[\s;&|])(?:\S*[\\/])?(?:docker|podman|buildah|nerdctl|skopeo|oras)(?:\.exe)?\s+(?:login|logout)\b/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?helm(?:\.exe)?\s+registry\s+(?:login|logout)\b/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?(?:gh|glab)(?:\.exe)?\s+auth\s+(?:login|logout|refresh|token)\b/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?(?:npm|pnpm)(?:\.cmd|\.exe)?\s+(?:login|adduser)\b/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?yarn(?:\.cmd|\.exe)?\s+npm\s+login\b/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?gcloud(?:\.cmd|\.exe)?\s+auth\b/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?az(?:\.cmd|\.exe)?\s+(?:login|logout|account\s+get-access-token)\b/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?aws(?:\.exe)?\s+(?:sso\s+login|ecr(?:-public)?\s+get-login-password)\b/i,
+  // 工具专用的短凭证选项。限定可执行文件/子命令，避免把 docker -p 端口等误判。
+  /(?:^|[\s;&|])(?:\S*[\\/])?(?:mysql|mysqladmin|mariadb|mariadb-admin|mongo|mongosh|sqlcmd|sshpass)(?:\.exe)?\b[^;&|\r\n]*\s-p\s*=?\s*\S/i,
+  // MySQL/MariaDB option files 与 login paths 可在命令不变时换入新凭证；只限定数据库
+  // 客户端工具，避免误伤其它程序的通用 --defaults-file / --login-path 参数。
+  /(?:^|[\s;&|])(?:\S*[\\/])?(?:mysql|mysqladmin|mysqlcheck|mysqldump|mysqlimport|mysqlshow|mysqlslap|mysqlpump|mariadb|mariadb-admin|mariadb-check|mariadb-dump|mariadb-import|mariadb-show|mariadb-slap)(?:\.exe)?\b[^;&|\r\n]*(?:--defaults-(?:(?:extra-)?file|group-suffix)|--login-path)(?:\s+|=)\S/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?(?:mysql_config_editor|mariadb_config_editor)(?:\.exe)?\s+(?:set|remove|reset|print)\b/i,
+  /(?:^|[\s;&|]|\$env:)(?:MYSQL|MARIADB)_PWD\s*=\s*\S/i,
+  /(?:^|[\s;&|'"`])setx?\s+(?:MYSQL|MARIADB)_PWD(?:\s+|=)\S/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?redis-cli(?:\.exe)?\b[^;&|\r\n]*\s-a\s*=?\s*\S/i,
+  /(?:^|[\s;&|])(?:\S*[\\/])?(?:docker|podman)(?:\.exe)?\s+login\b[^;&|\r\n]*\s-p\s*=?\s*\S/i,
+  // 常见密钥字面量前缀。形态与 Desktop log-upload/redact.ts 的独立凭证清单保持对齐；
+  // 这里宁可多做一次 review，也不能让脱敏器已认定为凭证的字面量进入长期批准记忆。
+  /\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[abposr]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|LTAI[A-Za-z0-9]{12,}|AIza[0-9A-Za-z_-]{35})/,
+];
+
+export function isCredentialBearingCommand(command: string): boolean {
+  return SECRET_BEARING_PATTERNS.some((re) => re.test(command));
+}
+
+/**
+ * 行为会由工作区内可变文件间接定义的 executable。
+ *
+ * 不能只 hash `package.json` 或入口脚本：任务还可继续 source/import 其它文件，任何单层摘要
+ * 都会留下同一条外层命令静默复用旧批准的缺口。这里宁可让这些命令每次重审，也不承诺一条
+ * 无法完整绑定其执行内容的长期批准。
+ */
+const MUTABLE_INDIRECT_EXECUTABLES: ReadonlySet<string> = new Set([
+  // package/runtime wrappers
+  'npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'corepack', 'bun', 'bunx', 'deno',
+  // shells and language interpreters
+  'sh', 'bash', 'dash', 'zsh', 'fish', 'ksh', 'csh', 'tcsh',
+  'cmd', 'powershell', 'pwsh', 'node', 'tsx', 'ts-node', 'ts-node-esm',
+  'nodejs', 'python', 'py', 'pyw', 'pypy', 'ruby', 'perl', 'php', 'lua',
+  // program-file interpreters: unchanged argv can load a replaced script with new side effects
+  'awk', 'gawk', 'mawk', 'nawk', 'sed', 'r', 'rscript', 'julia', 'tclsh', 'wish',
+  'expect', 'osascript', 'cscript', 'wscript', 'groovy', 'scala', 'clojure', 'bb',
+  'elixir', 'escript', 'guile', 'racket', 'sbcl', 'clisp', 'ocaml', 'runghc',
+  'runhaskell', 'swift', 'dart', 'dotnet-script', 'fsi', 'csi',
+  // shell builtins/operators that execute a following script, command, or string
+  '.', 'source', 'eval', 'exec', 'command', 'builtin', 'call',
+  'start', 'iex', 'invoke-expression', 'start-process', 'saps',
+  'invoke-command', 'icm', 'start-job', 'sajb', 'start-threadjob',
+  // launchers that execute argv supplied later in the same command or on stdin/remote hosts
+  'xargs', 'parallel', 'find', 'ssh', 'plink', 'docker', 'podman', 'nerdctl', 'kubectl',
+  'chroot', 'nsenter', 'unshare', 'systemd-run', 'wsl', 'winrs',
+  // aliases/extensions/config can redirect these stable-looking commands into project code
+  'git', 'gh', 'glab',
+  // project task/build/test runners
+  'make', 'gmake', 'just', 'task', 'cargo', 'go', 'gradle', 'gradlew', 'mvn', 'mvnw',
+  'ant', 'dotnet', 'java', 'cmake', 'ctest', 'ninja', 'meson', 'bazel', 'bazelisk',
+  'buck', 'buck2', 'scons', 'pytest', 'vitest', 'jest', 'mocha', 'ava', 'playwright',
+  'tox', 'nox', 'composer', 'bundle', 'rake', 'pip', 'pip3', 'uv', 'poetry', 'pdm',
+  'pipenv', 'vite', 'webpack', 'rollup', 'gulp', 'grunt', 'parcel', 'rspack', 'rsbuild',
+  'turbo', 'nx', 'lerna', 'xcodebuild', 'msbuild', 'xbuild', 'nmake',
+  // infrastructure/configuration runners: stable argv can load entirely replaced local manifests
+  'terraform', 'tofu', 'terragrunt', 'packer', 'pulumi', 'vagrant',
+  'ansible', 'ansible-playbook', 'ansible-pull', 'ansible-console',
+  'helm', 'kustomize', 'docker-compose', 'podman-compose',
+  // cloud CLIs expose many file-driven deployment surfaces (templates, policies, payloads);
+  // enumerating individual subcommands/flags would leave the next service alias as a bypass.
+  'aws', 'gcloud', 'az',
+  'serverless', 'sls', 'sam', 'cdk', 'cdktf', 'sst', 'nomad',
+]);
+
+const MUTABLE_EXECUTION_ENV_PATTERN =
+  /(?:^|[\s;&|('"`])(?:\$env:)?(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH)\s*=/i;
+
+/**
+ * 文本相同、运行时取值却可变化的 shell 展开。
+ *
+ * 这里有意不尝试按引号做 shell 方言解析：同一段文本可能先经过宿主 shell，再作为
+ * PowerShell/cmd/SSH 等下层解释器的参数。误把某层看似被引号保护的 `$VAR` 当成字面量，
+ * 会让后续环境变量、命令替换或参数文件改变真实 argv，却继续命中旧批准。宁可多审一次。
+ */
+const DYNAMIC_COMMAND_INPUT_PATTERNS: readonly RegExp[] = [
+  // POSIX shell 与 PowerShell：变量、参数、命令/算术/子表达式展开。
+  /\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}\r\n]+\}|\(|[0-9@*#?$!_-])/,
+  // POSIX 命令替换与进程替换。
+  /`[^`\r\n]*`/,
+  /[<>]\(/,
+  // cmd.exe 的普通、位置与 delayed-expansion 变量。
+  /%(?:[A-Za-z_][A-Za-z0-9_]*(?::[^%\r\n]*)?%|~[A-Za-z0-9$:*~-]*[0-9]|[0-9*])|![A-Za-z_][A-Za-z0-9_]*(?::[^!\r\n]*)?!/,
+  /\bfor\s+%%?~?[A-Za-z]\b/i,
+  // PowerShell splatting；也保守覆盖 @file、@./file、@../file、绝对路径及带引号
+  // response/request-body 文件。`=` 覆盖 --flag=@path 形态。
+  /(?:^|[\s,;('"=])@(?![({])(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|,)]+)/,
+  // shell/cmd 的 stdin、here-doc 与 here-string 重定向。文件描述符可显式写成 0<file；
+  // 进程替换 <(...) 已由上面的独立规则覆盖。
+  /(?:^|[\s;&|])\d*<{1,3}\s*(?![(&])(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|]+)/,
+];
+
+export function isMutableIndirectExecutionCommand(command: string): boolean {
+  if (MUTABLE_EXECUTION_ENV_PATTERN.test(command)) return true;
+  if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
+  if (commandUsesExplicitExecutablePath(command)) return true;
+  return commandExecutableNames(command).some((rawName) => {
+    // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。
+    if (rawName.startsWith('-')) return true;
+    if (/\.(?:cmd|bat)$/i.test(rawName)) return true;
+    const name = rawName.replace(/\.(?:exe|cmd|bat)$/i, '');
+    return MUTABLE_INDIRECT_EXECUTABLES.has(name)
+      || /^(?:node|nodejs|python|pypy|ruby|perl|php|lua)\d+(?:\.\d+)*$/.test(name);
+  });
+}
+
+/**
+ * 动作 → 记忆签名。返回 `null` = **不可记忆**,调用方必须逐次走原有判定。
+ *
+ * 只有 `exec`(bash 命令)进入记忆:它是重复率最高、也最容易逐字比对的动作。
+ * `file-write` / `read` / `network` / `other` 不记 —— 路径类动作的「同一件事」判据
+ * (同目录?同文件?同 glob?)本身就是产品决策,MCP/未知工具则连稳定的身份都没有,
+ * 逐字记住一个 JSON 序列化串既没有复用价值,又容易被入参里的无关字段搅乱。
+ */
+export function approvalSignature(
+  action: ReviewableAction,
+  agentKind: AgentKind,
+  workspaceKey: string,
+  workspaceRoots: readonly string[],
+  userIntent: string,
+  reviewerRoute: AutoReviewRouteIdentity,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (action.kind !== 'exec') return null;
+  const command = action.command ?? '';
+  if (!command.trim()) return null;
+  // 显式空白 cwd 与 cwdUnknown 都表示执行目录无法确定。命令逐字相同也可能落在不同项目，
+  // 不能把一次 allow 复用到一个未知目录；未提供 cwd 则仍按 harness 的会话工作目录契约处理。
+  if (action.cwdUnknown === true || (action.cwd !== undefined && !action.cwd.trim())) return null;
+  // provider 缺失时，实际 reviewer 仍可能由宿主目录按 model 推断。未解析到最终 provider
+  // 就不能查/存：同名 model 后续改由另一 provider 提供时，旧批准不得直接命中。
+  const reviewerProviderId = reviewerRoute.providerId?.trim();
+  const reviewerModel = reviewerRoute.model.trim();
+  if (!reviewerProviderId || !reviewerModel) return null;
+  // 凭证动作不进记忆:即使落盘只存摘要,凭证会轮换,这类授权也不适合长期复用。
+  if (isCredentialBearingCommand(command)) return null;
+  // 外层 argv 没变不代表执行内容没变：项目脚本、任务定义、解释器入口或显式路径文件都可能
+  // 在两次调用之间被替换。无法可靠绑定完整执行闭包时，保持逐次审核。
+  if (isMutableIndirectExecutionCommand(command)) return null;
+  // 红线永不记忆:确定性高危动作必须逐次确认。这里用与 dispatcher 同一份 core 判定,
+  // 而不是让调用方自己判 —— 调用方漏判就是一条静默的记忆型提权路径。
+  const tier = classifyLocalAutoReviewTier({
+    agentKind,
+    model: '',
+    userIntent: '',
+    action,
+    workspaceRoots: [...workspaceRoots],
+    platform,
+  });
+  if (tier === 'prompt-each-time') return null;
+  // 只持久化固定长度摘要,不把命令、路径、URL 或其它用户数据的明文复制进 userData。
+  // SHA-256 不是保密存储：知道完整候选输入的人仍可做匹配；文件权限仍由宿主收紧。
+  // 命令与 cwd 保持逐字精确:空白在引号和 heredoc 中可能改变语义,不得折叠。
+  const payload = JSON.stringify({
+    version: 3,
+    agentKind,
+    reviewerRoute: {
+      providerId: reviewerProviderId,
+      model: reviewerModel,
+    },
+    workspaceKey,
+    workspaceRoots,
+    platform,
+    userIntent,
+    command,
+    cwd: action.cwd ?? null,
+  });
+  return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
+}
+
+export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemory {
+  const {
+    agentKind, workspaceKey, platform = process.platform, store, logger,
+  } = opts;
+  const remembered = new Set<string>();
+  const currentTier = (
+    action: ReviewableAction,
+    userIntent: string,
+    workspaceRoots: readonly string[],
+  ) => classifyLocalAutoReviewTier({
+    agentKind,
+    model: '',
+    userIntent,
+    action,
+    workspaceRoots: [...workspaceRoots],
+    platform,
+  });
+  const signatureOf = (
+    action: ReviewableAction,
+    userIntent: string,
+    workspaceRoots: readonly string[],
+    reviewerRoute: AutoReviewRouteIdentity,
+  ): string | null => approvalSignature(
+    action,
+    agentKind,
+    workspaceKey,
+    workspaceRoots,
+    userIntent,
+    reviewerRoute,
+    platform,
+  );
+
+  const recordRaw = (signature: string, origin: ApprovalMemoryOrigin): void => {
+    if (remembered.has(signature)) return;
+    if (remembered.size >= MAX_SESSION_SIGNATURES) {
+      const oldest = remembered.values().next().value as string | undefined;
+      if (oldest) remembered.delete(oldest);
+    }
+    remembered.add(signature);
+    // 持久化是 best-effort:宿主存储故障不影响本次会话已经生效的记忆。
+    try {
+      store?.add(workspaceKey, signature, origin);
+    } catch (err) {
+      logger?.debug('approval memory persist failed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  const record = (
+    action: ReviewableAction,
+    userIntent: string,
+    workspaceRoots: readonly string[],
+    reviewerRoute: AutoReviewRouteIdentity,
+    origin: ApprovalMemoryOrigin,
+  ): void => {
+    const signature = signatureOf(action, userIntent, workspaceRoots, reviewerRoute);
+    if (signature === null) return;
+    recordRaw(signature, origin);
+  };
+
+  return {
+    isRemembered(action, userIntent, workspaceRoots, reviewerRoute) {
+      // 红线 / 带凭证的命令在这里就返回 null,两条路径都进不去。
+      const signature = signatureOf(action, userIntent, workspaceRoots, reviewerRoute);
+      if (signature === null) return false;
+      return remembered.has(signature);
+    },
+    rememberReviewerAllow(action, userIntent, workspaceRoots, reviewerRoute) {
+      // 静态 auto-approve 不需要记忆；只有真的经过轻量审阅器的灰区 allow 才持久化。
+      if (currentTier(action, userIntent, workspaceRoots) !== 'needs-review') return;
+      record(action, userIntent, workspaceRoots, reviewerRoute, 'reviewer');
+    },
+    async hydrate() {
+      if (!store) return;
+      try {
+        const persisted = await store.load(workspaceKey);
+        for (const signature of persisted) {
+          if (remembered.size >= MAX_SESSION_SIGNATURES) break;
+          remembered.add(signature);
+        }
+      } catch (err) {
+        // 载入失败只意味着「这次没有跨会话记忆」,不改变任何放行判定。
+        logger?.debug('approval memory hydrate failed', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    size() {
+      return remembered.size;
+    },
+  };
+}

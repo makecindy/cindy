@@ -10931,52 +10931,54 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('declines pending prompt-each-time approvals when permission mode switches to auto', async () => {
-    // Auto 也不能批量放行 forcePrompt 高风险审批，必须 fail-closed 关闭挂起请求。
-    const agent = new CodexAgent(createDeps({}, {
-      getMcpToolApprovalPolicy: () => 'prompt-each-time',
-    }));
-    const host = installFakeHost(agent);
+  for (const newMode of ['auto', 'bypassPermissions'] as const) {
+    it(`declines pending prompt-each-time approvals when permission mode switches to ${newMode}`, async () => {
+      // Auto / Full access 都不能批量放行确定性高风险审批，必须 fail-closed 关闭挂起请求。
+      const agent = new CodexAgent(createDeps({}, {
+        getMcpToolApprovalPolicy: () => 'prompt-each-time',
+      }));
+      const host = installFakeHost(agent);
 
-    const handle = await agent.startSession({
-      sessionId: 'session-high-risk-mode-switch',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      permissionMode: 'ask',
+      const handle = await agent.startSession({
+        sessionId: 'session-high-risk-mode-switch',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.mcpServerElicitation) throw new Error('expected mcpServerElicitation handler');
+      const pendingDecision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(async () => pendingDecision.promise);
+
+      const responsePromise = handlers.mcpServerElicitation({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        serverName: 'cindy_contacts',
+        mode: 'form',
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+          tool_params: { name: 'contacts_merge', args: { targetId: 'a', sourceId: 'b' } },
+        },
+        message: 'Allow tool call',
+        requestedSchema: {},
+      });
+
+      if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+      await handle.setPermissionMode(newMode);
+
+      await expect(responsePromise).resolves.toEqual({ action: 'decline', content: null, _meta: null });
+      await expect(nextEvent(iterator)).resolves.toMatchObject({
+        type: 'interaction_dismissed',
+        data: {
+          reason: `permission_mode_changed_to_${newMode}`,
+          resolvedAs: 'deny',
+        },
+      });
+      pendingDecision.resolve({ kind: 'permission', behavior: 'allow' });
+      await handle.close();
     });
-    const iterator = handle.events()[Symbol.asyncIterator]();
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.mcpServerElicitation) throw new Error('expected mcpServerElicitation handler');
-    const pendingDecision = deferred<InteractionDecision>();
-    handle.setInteractionResolver(async () => pendingDecision.promise);
-
-    const responsePromise = handlers.mcpServerElicitation({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      serverName: 'cindy_contacts',
-      mode: 'form',
-      _meta: {
-        codex_approval_kind: 'mcp_tool_call',
-        tool_params: { name: 'contacts_merge', args: { targetId: 'a', sourceId: 'b' } },
-      },
-      message: 'Allow tool call',
-      requestedSchema: {},
-    });
-
-    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
-    await handle.setPermissionMode('auto');
-
-    await expect(responsePromise).resolves.toEqual({ action: 'decline', content: null, _meta: null });
-    await expect(nextEvent(iterator)).resolves.toMatchObject({
-      type: 'interaction_dismissed',
-      data: {
-        reason: 'permission_mode_changed_to_auto',
-        resolvedAs: 'deny',
-      },
-    });
-    pendingDecision.resolve({ kind: 'permission', behavior: 'allow' });
-    await handle.close();
-  });
+  }
 
   it('enables the built-in reviewer for remote OAuth-subscription sessions (Auto)', async () => {
     // 远程 daemon 用的是 auth sync 推过去的同一份订阅凭证, reviewer 调用
@@ -11195,6 +11197,254 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('reuses an exact Codex fallback reviewer allow across sessions without widening it', async () => {
+    const intent = 'Clean generated build output';
+    const persisted = new Set<string>();
+    const store: NonNullable<AgentDeps['approvalMemoryStore']> = {
+      load: vi.fn(async () => new Set(persisted)),
+      add: vi.fn((_workspace, signature) => persisted.add(signature)),
+    };
+    const firstReviewer = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const firstAgent = new CodexAgent(createDeps({}, {
+      reviewAutoPermissionAction: firstReviewer,
+      approvalMemoryStore: store,
+    }));
+    const firstHost = installFakeHost(firstAgent, (method) => (
+      method === Method.TurnStart ? { turn: { id: 'turn-memory-1' } } : undefined
+    ));
+    const firstHandle = await firstAgent.startSession({
+      sessionId: 'codex-memory-first', model: 'gpt-5.5', providerId: 'xd',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    await firstHandle.send({ type: 'user', content: intent });
+    const firstHandlers = firstHost.getThreadHandlers();
+    if (!firstHandlers?.commandExecutionApproval) throw new Error('expected command approval');
+    await expect(firstHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-memory-1', itemId: 'memory-1',
+      command: 'rm -rf build', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(firstReviewer).toHaveBeenCalledOnce();
+    expect(firstReviewer).toHaveBeenCalledWith(expect.objectContaining({ userIntent: intent }));
+    expect(store.add).toHaveBeenCalledWith(
+      '/repo', expect.stringMatching(/^sha256:[a-f0-9]{64}$/), 'reviewer',
+    );
+    await firstHandle.close();
+
+    const secondReviewer = vi.fn(async () => ({ verdict: 'block' as const }));
+    const secondAgent = new CodexAgent(createDeps({}, {
+      reviewAutoPermissionAction: secondReviewer,
+      approvalMemoryStore: store,
+    }));
+    const secondHost = installFakeHost(secondAgent, (method) => (
+      method === Method.TurnStart ? { turn: { id: 'turn-memory-2' } } : undefined
+    ));
+    const secondHandle = await secondAgent.startSession({
+      sessionId: 'codex-memory-second', model: 'gpt-5.5', providerId: 'xd',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    await secondHandle.send({ type: 'user', content: intent });
+    const secondHandlers = secondHost.getThreadHandlers();
+    if (!secondHandlers?.commandExecutionApproval) throw new Error('expected command approval');
+    const rememberedResult = await secondHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-memory-2', itemId: 'memory-2',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    expect(secondReviewer).not.toHaveBeenCalled();
+    expect(rememberedResult).toEqual({ decision: 'accept' });
+    await expect(secondHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-memory-2', itemId: 'memory-3',
+      command: 'rm -rf dist', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(secondReviewer).toHaveBeenCalledOnce();
+    await secondHandle.close();
+
+    const changedIntentReviewer = vi.fn(async () => ({ verdict: 'block' as const }));
+    const changedIntentAgent = new CodexAgent(createDeps({}, {
+      reviewAutoPermissionAction: changedIntentReviewer,
+      approvalMemoryStore: store,
+    }));
+    const changedIntentHost = installFakeHost(changedIntentAgent, (method) => (
+      method === Method.TurnStart ? { turn: { id: 'turn-memory-3' } } : undefined
+    ));
+    const changedIntentHandle = await changedIntentAgent.startSession({
+      sessionId: 'codex-memory-changed-intent', model: 'gpt-5.5', providerId: 'xd',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    await changedIntentHandle.send({ type: 'user', content: 'Publish the release' });
+    const changedIntentHandlers = changedIntentHost.getThreadHandlers();
+    if (!changedIntentHandlers?.commandExecutionApproval) throw new Error('expected command approval');
+    await expect(changedIntentHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-memory-3', itemId: 'memory-4',
+      command: 'rm -rf build', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(changedIntentReviewer).toHaveBeenCalledOnce();
+    await changedIntentHandle.close();
+  });
+
+  it('persists an in-flight Codex allow under the workspace roots the reviewer actually saw', async () => {
+    let reviewAttempt = 0;
+    let resolveFirstReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(() => {
+      reviewAttempt++;
+      if (reviewAttempt === 1) {
+        return new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+          resolveFirstReview = resolve;
+        });
+      }
+      return Promise.resolve({ verdict: 'block' as const, reason: 'different roots' });
+    });
+    const add = vi.fn();
+    const agent = new CodexAgent(createDeps({}, {
+      reviewAutoPermissionAction: reviewer,
+      approvalMemoryStore: { load: async () => new Set(), add },
+    }));
+    const host = installFakeHost(agent, (method) => (
+      method === Method.TurnStart ? { turn: { id: 'turn-roots-snapshot' } } : undefined
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'codex-roots-snapshot', model: 'gpt-5.5', providerId: 'xd',
+      workingDir: '/repo', extraDirs: ['/shared-a'], permissionMode: 'auto',
+    });
+    await handle.send({ type: 'user', content: 'Clean generated build output' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected command approval');
+
+    const first = handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-roots-snapshot', itemId: 'roots-a',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
+    expect(reviewer.mock.calls[0]?.[0]).toMatchObject({
+      workspaceRoots: ['/repo', '/shared-a'],
+    });
+    await handle.setExtraDirs?.(['/shared-b']);
+    resolveFirstReview!({ verdict: 'allow', reason: 'reviewed with roots A' });
+    await expect(first).resolves.toEqual({ decision: 'accept' });
+    expect(add).toHaveBeenCalledOnce();
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-roots-snapshot', itemId: 'roots-b',
+      command: 'rm -rf build', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    // 若第一条 allow 被错误写到返回时的 roots B，这里会直接命中记忆而不会二次送审。
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it('persists an in-flight Codex allow under the reviewer route that actually reviewed it', async () => {
+    let reviewAttempt = 0;
+    let resolveFirstReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(() => {
+      reviewAttempt++;
+      if (reviewAttempt === 1) {
+        return new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+          resolveFirstReview = resolve;
+        });
+      }
+      return Promise.resolve({ verdict: 'block' as const, reason: 'different reviewer route' });
+    });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent, (method) => (
+      method === Method.TurnStart ? { turn: { id: 'turn-route-snapshot' } } : undefined
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'codex-route-snapshot', model: 'gpt-5.5', providerId: 'xd',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    await handle.send({ type: 'user', content: 'Clean generated build output' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected command approval');
+
+    const first = handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-route-snapshot', itemId: 'route-old',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
+    expect(reviewer.mock.calls[0]?.[0]).toMatchObject({ providerId: 'xd', model: 'gpt-5.5' });
+    await handle.setModel?.('gpt-5.6', { providerId: 'openai' });
+    resolveFirstReview!({ verdict: 'allow', reason: 'reviewed through old route' });
+    await expect(first).resolves.toEqual({ decision: 'accept' });
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-route-snapshot', itemId: 'route-new',
+      command: 'rm -rf build', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewer.mock.calls[1]?.[0]).toMatchObject({
+      providerId: 'openai', model: 'gpt-5.6',
+    });
+    await handle.close();
+  });
+
+  it('never remembers a Codex reviewer allow when the execution cwd is unknown', async () => {
+    const add = vi.fn();
+    const reviewer = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const store: NonNullable<AgentDeps['approvalMemoryStore']> = {
+      load: async () => new Set(),
+      add,
+    };
+
+    for (const sessionNumber of [1, 2]) {
+      const turnId = `turn-unknown-cwd-${sessionNumber}`;
+      const agent = new CodexAgent(createDeps({}, {
+        reviewAutoPermissionAction: reviewer,
+        approvalMemoryStore: store,
+      }));
+      const host = installFakeHost(agent, (method) => (
+        method === Method.TurnStart ? { turn: { id: turnId } } : undefined
+      ));
+      const handle = await agent.startSession({
+        sessionId: `codex-unknown-cwd-${sessionNumber}`,
+        model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto',
+      });
+      await handle.send({ type: 'user', content: 'Trigger the requested API job' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.commandExecutionApproval) throw new Error('expected command approval');
+      await expect(handlers.commandExecutionApproval({
+        threadId: 'start-thread-id', turnId, itemId: `unknown-cwd-${sessionNumber}`,
+        command: 'curl -X POST https://api.example.com/jobs', cwd: '   ',
+      })).resolves.toEqual({ decision: 'accept' });
+      await handle.close();
+    }
+
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewer).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      action: {
+        kind: 'exec', command: 'curl -X POST https://api.example.com/jobs', cwdUnknown: true,
+      },
+    }));
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it('does not persist a Codex approval synthesized by a permission-mode change', async () => {
+    const add = vi.fn();
+    const reviewer = vi.fn(async () => ({ verdict: 'ask' as const }));
+    const agent = new CodexAgent(createDeps({}, {
+      reviewAutoPermissionAction: reviewer,
+      approvalMemoryStore: { load: async () => new Set(), add },
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'codex-memory-dismiss', model: 'gpt-5.5', providerId: 'xd',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected command approval');
+    const userDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(() => userDecision.promise);
+    const pending = handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-memory-dismiss', itemId: 'memory-dismiss',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
+    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+    await handle.setPermissionMode('bypassPermissions');
+    await expect(pending).resolves.toEqual({ decision: 'accept' });
+    expect(add).not.toHaveBeenCalled();
+    userDecision.resolve({ kind: 'permission', behavior: 'allow' });
+    await handle.close();
+  });
+
   it('falls back to user approvals on XD without interrupting when the UI switches to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
@@ -11307,11 +11557,15 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 
   it('opens the approval UI only when the lightweight reviewer explicitly returns ask', async () => {
+    const add = vi.fn();
     const reviewAutoPermissionAction = vi.fn(async () => ({
       verdict: 'ask' as const,
       reason: 'This action crosses a high-impact boundary.',
     }));
-    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
+    const agent = new CodexAgent(createDeps({}, {
+      reviewAutoPermissionAction,
+      approvalMemoryStore: { load: async () => new Set(), add },
+    }));
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-auto-command-fallback',
@@ -11344,6 +11598,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(request?.kind).toBe('permission');
     if (request?.kind !== 'permission') throw new Error('expected permission request');
     expect(request.suggestions).toBeUndefined();
+    // 卡片是「允许一次」；用户允许当前调用也不能被升级成跨轮次批准记忆。
+    expect(add).not.toHaveBeenCalled();
     await handle.close();
   });
 

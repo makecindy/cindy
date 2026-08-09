@@ -73,9 +73,20 @@ export {
   type AutoReviewDecision,
   type AutoReviewDelegate,
   type AutoReviewRequest,
+  type AutoReviewRouteIdentity,
+  type AutoReviewRouteResolver,
   type AutoReviewTimeoutPolicy,
 } from './shared/auto-review-decision.js';
 export type { ReviewableAction } from './shared/auto-review.js';
+// 批准记忆的接口与安全边界在 maker-core;落盘位置、体量上限与用户可见的查看/清除入口
+// 由宿主实现(共享 package 不猜宿主目录)。
+export {
+  approvalSignature,
+  createApprovalMemory,
+  type ApprovalMemory,
+  type ApprovalMemoryOrigin,
+  type ApprovalMemoryStore,
+} from './shared/approval-memory.js';
 export {
   ORCA_NESTED_REPORT_DENIAL_REASON,
   ORCA_NESTED_REPORT_ERROR_CODE,

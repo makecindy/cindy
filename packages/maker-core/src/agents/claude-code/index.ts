@@ -117,13 +117,17 @@ import {
 } from './capability-routing.js';
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
+  classifyLocalAutoReviewTier,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
-  type AutoReviewDecision,
+  resolveAutoReviewRouteSnapshot,
+  type AutoReviewDecisionSnapshot,
 } from '../shared/auto-review-decision.js';
+import { createApprovalMemory } from '../shared/approval-memory.js';
+import { logAutoReviewDecision } from '../shared/auto-review-log.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import {
   resolveAgentCredentialMode,
@@ -1388,7 +1392,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           resolve(d);
         };
         resolver(req)
-          .then(finalize)
+          .then((decision) => {
+            finalize(decision);
+          })
           .catch((e) => {
             log.warn('interaction resolver threw', { kind: req.kind, requestId: req.requestId, error: String(e) });
             finalize(safeDefaultDecision(req.kind, 'resolver_threw'));
@@ -1658,8 +1664,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
         );
+        const autoReviewAction = normalizeBuiltinToolForAutoReview(toolName, input);
         const autoDecision = await reviewAutoAction(
-          normalizeBuiltinToolForAutoReview(toolName, input),
+          autoReviewAction,
           workspaceRoots,
           opts.remoteHostId ? 'linux' : process.platform,
         );
@@ -1676,6 +1683,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 已收紧到 Ask/更严:不吃 auto 裁决,强制走用户确认(下方 forcePrompt 流程)。
           forcePrompt = true;
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+          approvalMemory.rememberReviewerAllow(
+            autoReviewAction,
+            autoDecision.userIntentSnapshot,
+            autoDecision.workspaceRootsSnapshot,
+            autoDecision.reviewerRouteSnapshot,
+          );
           return { behavior: 'allow', updatedInput: input };
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
           // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,用户有权知道并接管,
@@ -1686,7 +1699,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             message: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
           };
         } else {
-          // AI `ask` and deterministic red-line verdicts are never persisted.
+          // UI 的「允许一次」只影响当前请求，不写跨轮次批准记忆。
           forcePrompt = true;
         }
       } else {
@@ -1795,7 +1808,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
-    const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    const autoReviewDecisionCache = new Map<
+      string,
+      Promise<AutoReviewDecisionSnapshot>
+    >();
     // Claude's native OAuth Auto classifier bypasses canUseTool entirely. Once a host MCP
     // is registered, that would also bypass Cindy's trusted-server and prompt policies,
     // leaving permission requests with no Cindy interaction surface. Keep native Auto for
@@ -1824,11 +1840,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         source: 'claude-code',
       });
     });
-    const reviewAutoAction = (
+    const reviewAutoAction = async (
       action: ReviewableAction,
       workspaceRoots: string[],
       platform: NodeJS.Platform,
-    ): Promise<AutoReviewDecision> => {
+    ): Promise<AutoReviewDecisionSnapshot> => {
+      const startedAt = Date.now();
+      const workspaceRootsSnapshot = [...workspaceRoots];
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'claude-code' as const,
@@ -1836,16 +1854,55 @@ export class ClaudeCodeAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         action,
-        workspaceRoots,
+        workspaceRoots: [...workspaceRootsSnapshot],
         platform,
       };
+      const reviewerRouteSnapshot = await resolveAutoReviewRouteSnapshot(
+        request,
+        this.deps.resolveAutoReviewRoute,
+      );
+      if (reviewerRouteSnapshot.providerId) {
+        request.providerId = reviewerRouteSnapshot.providerId;
+        request.model = reviewerRouteSnapshot.model;
+      }
+      if (approvalMemory.isRemembered(
+        action,
+        request.userIntent,
+        workspaceRootsSnapshot,
+        reviewerRouteSnapshot,
+      )) {
+        logAutoReviewDecision(this.deps.logger, {
+          agentKind: 'claude-code', action, source: 'memory', verdict: 'allow', elapsedMs: 0,
+        });
+        return Promise.resolve({
+          verdict: 'allow',
+          userIntentSnapshot: request.userIntent,
+          workspaceRootsSnapshot,
+          reviewerRouteSnapshot,
+        });
+      }
       const key = JSON.stringify(request);
       const cached = autoReviewDecisionCache.get(key);
       if (cached) return cached;
-      const pending = resolveAutoReviewDecision(
-        request,
-        this.deps.reviewAutoPermissionAction,
-      );
+      const localTier = classifyLocalAutoReviewTier(request);
+      const pending = resolveAutoReviewDecision(request, this.deps.reviewAutoPermissionAction)
+        .then((decision) => {
+          logAutoReviewDecision(this.deps.logger, {
+            agentKind: 'claude-code',
+            action,
+            source: localTier === 'needs-review' ? 'reviewer' : 'static',
+            localTier,
+            verdict: decision.verdict,
+            unavailable: decision.unavailable === true,
+            elapsedMs: Date.now() - startedAt,
+          });
+          return {
+            ...decision,
+            userIntentSnapshot: request.userIntent,
+            workspaceRootsSnapshot,
+            reviewerRouteSnapshot,
+          };
+        });
       autoReviewDecisionCache.set(key, pending);
       return pending;
     };
@@ -1899,6 +1956,16 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖, buildQuery
     // 每 turn 读最新值传给 SDK options.additionalDirectories — 即时生效。
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
+    const approvalMemory = createApprovalMemory({
+      agentKind: 'claude-code',
+      workspaceKey: opts.remoteHostId
+        ? `${opts.remoteHostId}\0${opts.workingDir || 'default'}`
+        : opts.workingDir || 'default',
+      platform: opts.remoteHostId ? 'linux' : process.platform,
+      ...(this.deps.approvalMemoryStore ? { store: this.deps.approvalMemoryStore } : {}),
+      logger: this.deps.logger,
+    });
+    await approvalMemory.hydrate();
     const modelContextWindows = new Map(
       this.capabilities.availableModels.map((model) => [model.id, model.contextWindow] as const),
     );
@@ -2667,17 +2734,32 @@ export class ClaudeCodeAgent extends BaseAgent {
               && remoteToolName
               && !remoteToolName.startsWith('mcp__')
             ) {
+              const remoteAutoReviewAction = normalizeBuiltinToolForAutoReview(
+                remoteToolName,
+                params.input ?? {},
+              );
               const autoDecision = await reviewAutoAction(
-                normalizeBuiltinToolForAutoReview(remoteToolName, params.input ?? {}),
+                remoteAutoReviewAction,
                 [opts.workingDir].filter(
                   (d): d is string => typeof d === 'string' && d.length > 0,
                 ),
                 'linux',
               );
-              if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+              const remoteModeAfterReview = mutablePermissionMode as PermissionMode;
+              if (remoteModeAfterReview === 'bypassPermissions') {
                 return { kind: 'permission', behavior: 'allow' };
               }
-              if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
+              if (remoteModeAfterReview !== 'auto') {
+                remoteForcePrompt = true;
+              } else if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+                approvalMemory.rememberReviewerAllow(
+                  remoteAutoReviewAction,
+                  autoDecision.userIntentSnapshot,
+                  autoDecision.workspaceRootsSnapshot,
+                  autoDecision.reviewerRouteSnapshot,
+                );
+                return { kind: 'permission', behavior: 'allow' };
+              } else if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
                 // 与本地分支同口径:审阅器故障要提示一次,模型判定保持静默。
                 if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
                 return {
@@ -2685,8 +2767,10 @@ export class ClaudeCodeAgent extends BaseAgent {
                   behavior: 'deny',
                   reason: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
                 };
+              } else {
+                // UI 的「允许一次」只影响当前请求，不写跨轮次批准记忆。
+                remoteForcePrompt = true;
               }
-              remoteForcePrompt = true;
             } else {
               if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
                 return { kind: 'permission', behavior: 'allow' };

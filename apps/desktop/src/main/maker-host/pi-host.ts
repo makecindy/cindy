@@ -190,6 +190,9 @@ export interface BuildPiAgentOpts {
   registerLocalAgentProcess?: AgentDeps['registerLocalAgentProcess'];
   capabilityAdditions?: AgentDeps['capabilityAdditions'];
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
+  resolveAutoReviewRoute?: AgentDeps['resolveAutoReviewRoute'];
+  /** 跨会话批准记忆的落盘实现;缺省时批准记忆只活在当前会话内。 */
+  approvalMemoryStore?: AgentDeps['approvalMemoryStore'];
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
@@ -368,6 +371,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
     capabilityAdditions: opts.capabilityAdditions,
     reviewAutoPermissionAction: opts.reviewAutoPermissionAction,
+    resolveAutoReviewRoute: opts.resolveAutoReviewRoute,
+    approvalMemoryStore: opts.approvalMemoryStore,
     mcpProviders: opts.mcpProviders,
     makerMemory: opts.makerMemory,
     // 与 Claude Code / Codex 同一份第一方 MCP 审批真源。Pi 之前没接,导致 orca 这类

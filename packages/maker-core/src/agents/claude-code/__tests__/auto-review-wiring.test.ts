@@ -50,6 +50,7 @@ function noopLogger(): Logger {
 function createDeps(options: {
   authSource?: 'oauth' | 'api-key';
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
+  approvalMemoryStore?: AgentDeps['approvalMemoryStore'];
   mcpProviderNames?: readonly string[];
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
 } = {}): AgentDeps {
@@ -69,6 +70,7 @@ function createDeps(options: {
       toClaudeSdkConfig: () => ({ type: 'stdio', command: 'true' }),
     })),
     reviewAutoPermissionAction: options.reviewAutoPermissionAction,
+    approvalMemoryStore: options.approvalMemoryStore,
     getMcpToolApprovalPolicy: options.getMcpToolApprovalPolicy,
   };
 }
@@ -139,11 +141,13 @@ async function startSession(
     blockMcpServerStatus?: boolean;
     rejectPermissionModeChange?: boolean;
     mcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+    approvalMemoryStore?: AgentDeps['approvalMemoryStore'];
+    workingDir?: string;
   } = {},
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
-  const workingDir = await makeTempDir();
+  const workingDir = options.workingDir ?? await makeTempDir();
   const fakeQuery = createFakeQuery(
     options.initMcpServerNames,
     options.blockMcpServerStatus,
@@ -160,6 +164,7 @@ async function startSession(
     reviewAutoPermissionAction,
     mcpProviderNames: options.mcpProviderNames,
     getMcpToolApprovalPolicy: options.mcpToolApprovalPolicy,
+    approvalMemoryStore: options.approvalMemoryStore,
   }));
   const handle = await agent.startSession({
     sessionId: 'session-auto-review',
@@ -393,12 +398,165 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
 });
 
 describe('Auto-review wiring: lightweight reviewer controls gray actions', () => {
+  it('reuses an exact reviewer allow across Claude Code sessions without widening it', async () => {
+    const intent = 'Clean generated build output';
+    const persisted = new Set<string>();
+    const store: NonNullable<AgentDeps['approvalMemoryStore']> = {
+      load: vi.fn(async () => new Set(persisted)),
+      add: vi.fn((_workspace, signature) => persisted.add(signature)),
+    };
+    const first = await startSession('auto', {
+      reviewer: vi.fn(async () => ({ verdict: 'allow' as const })),
+      approvalMemoryStore: store,
+    });
+    await first.handle.send({ type: 'user', content: intent });
+    await expect(first.canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'remember-reviewer-1' },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+    expect(store.add).toHaveBeenCalledWith(
+      first.workingDir,
+      expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      'reviewer',
+    );
+    await first.handle.close();
+
+    const secondReviewer = vi.fn(async () => ({ verdict: 'block' as const }));
+    const second = await startSession('auto', {
+      reviewer: secondReviewer,
+      approvalMemoryStore: store,
+      workingDir: first.workingDir,
+    });
+    await second.handle.send({ type: 'user', content: intent });
+    await expect(second.canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'remember-reviewer-2' },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+    expect(secondReviewer).not.toHaveBeenCalled();
+    // 逐字批准 build 目录不会扩成其它参数或路径。
+    await expect(second.canUseTool(
+      'Bash',
+      { command: 'rm -rf dist' },
+      { toolUseID: 'do-not-widen-reviewer-memory' },
+    )).resolves.toMatchObject({ behavior: 'deny' });
+    expect(secondReviewer).toHaveBeenCalledOnce();
+    expect(persisted.size).toBe(1);
+    await second.handle.close();
+  });
+
+  it('does not reuse a reviewer allow when the user intent changes', async () => {
+    const persisted = new Set<string>();
+    const store: NonNullable<AgentDeps['approvalMemoryStore']> = {
+      load: vi.fn(async () => new Set(persisted)),
+      add: vi.fn((_workspace, signature) => persisted.add(signature)),
+    };
+    const first = await startSession('auto', {
+      reviewer: vi.fn(async () => ({ verdict: 'allow' as const })),
+      approvalMemoryStore: store,
+    });
+    await first.handle.send({ type: 'user', content: 'Clean generated build output' });
+    await expect(first.canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'remember-intent-first' },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+    await first.handle.close();
+
+    const secondReviewer = vi.fn(async () => ({ verdict: 'block' as const }));
+    const second = await startSession('auto', {
+      reviewer: secondReviewer,
+      approvalMemoryStore: store,
+      workingDir: first.workingDir,
+    });
+    await second.handle.send({ type: 'user', content: 'Preserve generated build output' });
+    await expect(second.canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'remember-intent-second' },
+    )).resolves.toMatchObject({ behavior: 'deny' });
+    expect(secondReviewer).toHaveBeenCalledOnce();
+    await second.handle.close();
+  });
+
+  it('persists an in-flight allow under the workspace roots the reviewer actually saw', async () => {
+    let reviewAttempt = 0;
+    let resolveFirstReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn(() => {
+      reviewAttempt++;
+      if (reviewAttempt === 1) {
+        return new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+          resolveFirstReview = resolve;
+        });
+      }
+      return Promise.resolve({ verdict: 'block' as const, reason: 'different roots' });
+    });
+    const add = vi.fn();
+    const session = await startSession('auto', {
+      reviewer,
+      approvalMemoryStore: { load: async () => new Set(), add },
+    });
+    await session.handle.setExtraDirs?.(['/shared-a']);
+    await session.handle.send({ type: 'user', content: 'Run the project checks' });
+
+    const first = session.canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'roots-a' },
+    );
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    expect(reviewedRequest(reviewer).workspaceRoots).toEqual([session.workingDir, '/shared-a']);
+    await session.handle.setExtraDirs?.(['/shared-b']);
+    resolveFirstReview!({ verdict: 'allow', reason: 'reviewed with roots A' });
+    await expect(first).resolves.toMatchObject({ behavior: 'allow' });
+    expect(add).toHaveBeenCalledOnce();
+
+    await expect(session.canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'roots-b' },
+    )).resolves.toMatchObject({ behavior: 'deny' });
+    // 若第一条 allow 被错误写到返回时的 roots B，这里会直接命中记忆而不会二次送审。
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await session.handle.close();
+  });
+
+  it('does not persist an allow-once response or deterministic red lines', async () => {
+    const add = vi.fn();
+    const store: NonNullable<AgentDeps['approvalMemoryStore']> = {
+      load: async () => new Set(),
+      add,
+    };
+    const session = await startSession('auto', {
+      reviewVerdict: 'ask',
+      approvalMemoryStore: store,
+    });
+    await session.canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'remember-user-allow' },
+    );
+    expect(add).not.toHaveBeenCalled();
+    await session.canUseTool(
+      'Bash',
+      { command: 'sudo rm -rf build' },
+      { toolUseID: 'do-not-remember-redline' },
+    );
+    expect(add).not.toHaveBeenCalled();
+    await session.handle.close();
+  });
+
   it('re-checks the latest permission mode after an in-flight review', async () => {
+    const add = vi.fn();
     let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
     const reviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
       resolveReview = resolve;
     }));
-    const { handle, canUseTool, seen } = await startSession('auto', { reviewer });
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewer,
+      approvalMemoryStore: { load: async () => new Set(), add },
+    });
 
     const pending = canUseTool('Write', { file_path: '/tmp/late-mode.conf' }, { toolUseID: 'late-ask' });
     await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
@@ -408,6 +566,9 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     // allow 来自用户确认而非旧 reviewer verdict，且 session grant 已被剥离。
     expect(permissionRequests(seen)).toHaveLength(1);
     expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+    // reviewer 完成前用户已收紧到 Ask；随后 UI allow 也只是 Ask 档本次放行，二者都不能
+    // 被误写成 Auto 的长期批准。
+    expect(add).not.toHaveBeenCalled();
 
     let resolveFull: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
     const fullReviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
@@ -521,6 +682,49 @@ describe('Auto-review wiring: the reviewer routes through the catalog model id',
       { toolUseID: 'catalog-model-switched' },
     );
     expect(reviewedRequest(reviewAutoPermissionAction).model).toBe('claude-sonnet-5');
+    await handle.close();
+  });
+
+  it('does not persist an in-flight allow under a newly selected reviewer route', async () => {
+    let reviewAttempt = 0;
+    let resolveFirstReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(() => {
+      reviewAttempt++;
+      if (reviewAttempt === 1) {
+        return new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+          resolveFirstReview = resolve;
+        });
+      }
+      return Promise.resolve({ verdict: 'block' as const, reason: 'different reviewer route' });
+    });
+    const { handle, canUseTool } = await startSession('auto', {
+      model: 'claude-opus-4-6',
+      reviewer,
+    });
+    await handle.send({ type: 'user', content: 'Clean generated build output' });
+
+    const first = canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'route-opus' },
+    );
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    expect(reviewedRequest(reviewer)).toMatchObject({
+      providerId: 'xd', model: 'claude-opus-4-6',
+    });
+    await handle.setModel?.('claude-sonnet-5');
+    resolveFirstReview!({ verdict: 'allow', reason: 'reviewed through opus' });
+    await expect(first).resolves.toMatchObject({ behavior: 'allow' });
+
+    await expect(canUseTool(
+      'Bash',
+      { command: 'rm -rf build' },
+      { toolUseID: 'route-sonnet' },
+    )).resolves.toMatchObject({ behavior: 'deny' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewedRequest(reviewer, 1)).toMatchObject({
+      providerId: 'xd', model: 'claude-sonnet-5',
+    });
     await handle.close();
   });
 });

@@ -28,6 +28,57 @@ export type AutoReviewDecision = {
 };
 
 /**
+ * 轻量审阅请求创建时的安全上下文快照。
+ *
+ * 审阅器异步返回前,用户可能切换意图或增删只读目录。批准记忆必须使用审阅器实际看过的
+ * 原始上下文生成签名,不能在返回时重新读取会话的可变态。
+ */
+export type AutoReviewDecisionSnapshot = AutoReviewDecision & {
+  userIntentSnapshot: string;
+  workspaceRootsSnapshot: readonly string[];
+  /** 实际发起轻量审阅请求时的模型路由；批准摘要必须绑定它，不能跨路由复用。 */
+  reviewerRouteSnapshot: AutoReviewRouteIdentity;
+};
+
+export interface AutoReviewRouteIdentity {
+  providerId?: string | null;
+  model: string;
+}
+
+/** Host-owned route resolver. `null` means the reviewer route is ambiguous or unavailable. */
+export type AutoReviewRouteResolver = (
+  request: AutoReviewRequest,
+) => AutoReviewRouteIdentity | null | Promise<AutoReviewRouteIdentity | null>;
+
+/**
+ * Freeze the concrete reviewer route before consulting approval memory.
+ *
+ * Older callers may omit providerId and let the Desktop catalog infer it from the model. The
+ * inferred provider must be pinned back onto the review request; otherwise a later catalog change
+ * could reuse an allow issued by another provider. Missing/failed resolution deliberately produces
+ * a null provider, which approvalSignature treats as non-persistable.
+ */
+export async function resolveAutoReviewRouteSnapshot(
+  request: AutoReviewRequest,
+  resolver: AutoReviewRouteResolver | undefined,
+): Promise<AutoReviewRouteIdentity> {
+  const requested = {
+    providerId: request.providerId?.trim() || null,
+    model: request.model.trim(),
+  };
+  if (!resolver) return requested;
+  try {
+    const resolved = await resolver(request);
+    const providerId = resolved?.providerId?.trim();
+    const model = resolved?.model?.trim();
+    if (providerId && model) return { providerId, model };
+  } catch {
+    // Route lookup is an optimization preflight. Failure disables memory; normal review still runs.
+  }
+  return { providerId: null, model: requested.model };
+}
+
+/**
  * 「自动审核不可用」的会话级提示错误码。走既有的 `[CODE] fallback text` 约定：
  * harness emit 非终止 error 事件，renderer 的 decodeRemoteErrorMessage 翻成 i18n 文案
  * （见 apps/desktop 的 chat.remoteError.*），不新增协议、不新增事件类型。

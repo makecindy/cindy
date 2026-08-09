@@ -3277,12 +3277,9 @@ function classifyShellSegment(
 /**
  * 一条命令实际会调起的**可执行文件名**集合(去包装器、去路径、含各管道/串联段)。
  *
- * 供批准记忆做「命令名级」规则用(对齐 Claude Code 的 `Bash(pnpm:*)`):用户批准过
- * `cd /repo && pnpm test` 后,记住的是 {cd, pnpm} —— 后续 `cd /repo && pnpm build`
- * 因为用到的可执行文件都在已批准集合里而直接放行,`cd /repo && rm -rf x` 则不在。
- *
- * 比 CC 的「取第一个词 + `:*`」更贴合真实用法:我们的命令大量以 `cd X && …` 开头,
- * 按首词生成规则会变成 `cd:*`,那等于放行**所有** `cd X && 任意命令`。
+ * 供需要按实际 executable 做安全判定的调用方复用。这里负责剥掉 `env`、环境变量赋值、
+ * `timeout` 等包装，并覆盖管道/串联的每一段；调用方仍须按自己的边界解释这些名字，不能
+ * 把集合直接当成命令级 allowlist。
  */
 export function commandExecutableNames(command: string): string[] {
   if (typeof command !== 'string' || command.trim().length === 0) return [];
@@ -3298,6 +3295,23 @@ export function commandExecutableNames(command: string): string[] {
     names.add(bin);
   }
   return [...names];
+}
+
+/**
+ * 是否有 shell 段通过显式路径启动可执行文件。
+ *
+ * 与 `commandExecutableNames` 共用同一套引号感知分段和 wrapper 剥壳，因此
+ * `env FOO=1 ./check`、`timeout 10 C:\\repo\\check.cmd` 都能看到真正的 executable。
+ * 这里只报告形态，不判断路径是否可信；批准记忆会保守地把这类可变文件入口排除。
+ */
+export function commandUsesExplicitExecutablePath(command: string): boolean {
+  if (typeof command !== 'string' || command.trim().length === 0) return false;
+  for (const { text } of splitExecutableSegments(command)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const executable = tokens[0] ?? '';
+    if (/[\\/]/.test(executable) || /^[A-Za-z]:/.test(executable)) return true;
+  }
+  return false;
 }
 
 export function classifyShellCommand(

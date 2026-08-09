@@ -301,6 +301,7 @@ import {
   type EmbeddingService,
 } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
+import { flushApprovalMemoryStore } from './maker-host/approval-memory-store.js';
 import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import { onQuit, installQuitHandler } from './lifecycle';
@@ -6776,6 +6777,9 @@ onQuit('git-context', () => disposeGitContext(), 'async');
 onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
+// 批准记忆必须晚于 shutdown-maker：session 关闭完成后再刷最后一批，避免 unref 的
+// 节流 timer 尚未触发时 app.exit 直接丢掉刚批准的操作。
+onQuit('approval-memory-store', () => flushApprovalMemoryStore(), 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 
 installQuitHandler(6000);

@@ -80,7 +80,11 @@ import { readModelDisableOverrides } from '../../maker-host/model-disable-store.
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
-import { getUtilityTextCandidates, requestUtilityText } from '../oneShotCandidates.js';
+import {
+  getUtilityTextCandidates,
+  requestUtilityText,
+  resolveUtilityTextRouteIdentity,
+} from '../oneShotCandidates.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const readKey = vi.mocked(readClaudeApiKey);
@@ -1123,6 +1127,16 @@ describe('utility one-shot candidates', () => {
     } as never);
     readKey.mockReturnValue('xd-key');
 
+    expect(resolveUtilityTextRouteIdentity({
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+    })).toBeNull();
+    expect(resolveUtilityTextRouteIdentity({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+    })).toBeNull();
+
     const result = await requestUtilityText(makerMock(false), 'generate', {
       providerId: 'xd',
       agentKind: 'codex',
@@ -1151,6 +1165,11 @@ describe('utility one-shot candidates', () => {
       text: async () => 'data: {"type":"response.output_text.delta","delta":"ok"}\ndata: [DONE]\n',
     } as never);
 
+    expect(resolveUtilityTextRouteIdentity({
+      agentKind: 'codex',
+      model: 'unique-mini',
+    })).toEqual({ providerId: 'tapsvc', model: 'unique-mini' });
+
     const result = await requestUtilityText(makerMock(false), 'generate', {
       agentKind: 'codex',
       model: 'unique-mini',
@@ -1158,6 +1177,27 @@ describe('utility one-shot candidates', () => {
 
     expect(result).toMatchObject({ ok: true, providerId: 'tapsvc', model: 'unique-mini' });
     expect(fetchMock).toHaveBeenCalledWith('https://custom.example/v1/responses', expect.anything());
+  });
+
+  it('does not produce a memory route when an omitted provider is ambiguous', () => {
+    activeCatalog.mockReturnValue({
+      providers: ['provider-a', 'provider-b'].map((id) => ({
+        id,
+        name: id,
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: { upstream: `https://${id}.example/v1`, authStrategy: 'api-key-header' },
+        },
+        models: { codex: [{ id: 'shared-mini', name: 'Shared Mini', contextWindow: 100_000 }] },
+      })),
+    } as never);
+
+    expect(resolveUtilityTextRouteIdentity({
+      agentKind: 'codex',
+      model: 'shared-mini',
+    })).toBeNull();
   });
 
   it('does not enter the XD fallback chain when an explicit selection has no provider', async () => {

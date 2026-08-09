@@ -71,7 +71,11 @@ import type {
 } from '../types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
-import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
+import type {
+  AutoReviewDelegate,
+  AutoReviewRouteResolver,
+} from './shared/auto-review-decision.js';
+import type { ApprovalMemoryStore } from './shared/approval-memory.js';
 
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
@@ -541,6 +545,19 @@ export interface AgentDeps {
    * only the request supplied here; null/throw is treated as a silent block.
    */
   reviewAutoPermissionAction?: AutoReviewDelegate;
+
+  /** Resolve and pin the concrete host reviewer provider/model before approval-memory lookup. */
+  resolveAutoReviewRoute?: AutoReviewRouteResolver;
+
+  /**
+   * 跨会话的 Auto-review 批准记忆存储(宿主实现落盘位置、体量上限与用户可见的
+   * 查看/清除入口)。缺省时批准记忆只活在当前会话内 —— 行为与注入前一致。
+   *
+   * 共享 package 不自己猜宿主目录(credentials-and-local-storage.md),所以这里只收
+   * 一个接口。写入是 best-effort:store 抛错只降级成「这条没记住」,不影响放行判定;
+   * 红线动作在 approval-memory 层就被拒绝签名,永远不会进到 store。
+   */
+  approvalMemoryStore?: ApprovalMemoryStore;
 
   /**
    * Codex-only: bind app-server thread ids back to xdt-maker session context

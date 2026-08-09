@@ -109,7 +109,11 @@ import { getClaudeEndpoint, setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthS
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
-import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { approvalMemoryStore } from './approval-memory-store.js';
+import {
+  requestUtilityText,
+  resolveUtilityTextRouteIdentity,
+} from '../utility-model/oneShotCandidates.js';
 import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
@@ -237,6 +241,13 @@ const reviewAutoPermissionAction = createAutoPermissionReviewer({
     return result.ok ? result.text : null;
   },
 });
+
+const resolveAutoReviewRoute = (request: Parameters<typeof reviewAutoPermissionAction>[0]) =>
+  resolveUtilityTextRouteIdentity({
+    providerId: request.providerId?.trim() || undefined,
+    agentKind: request.agentKind,
+    model: request.model,
+  });
 
 /**
  * Codex 模型补拉 coordinator —— 随 maker 一起创建(需要 maker 实例做 live 拉取)、随
@@ -768,6 +779,8 @@ export function getMaker(): Maker {
       registerLocalAgentProcess: ({ pid, kind, role }) =>
         registerAgentProcess(pid, kind, role),
       reviewAutoPermissionAction,
+      resolveAutoReviewRoute,
+      approvalMemoryStore,
       // 每个 session 的 cc 子进程 debug 写到 sessions/<id>/cc-debug.raw.log (logger 拼路径
       // + mkdir), tailer 再归一化汇入该 session 的 <date>.ndjson。
       resolveCcDebugFile: resolveSessionCcDebugFile,
@@ -1107,6 +1120,8 @@ export function getMaker(): Maker {
         return origin ? getOutboundPathSnapshotFor([origin]) : null;
       },
       reviewAutoPermissionAction,
+      resolveAutoReviewRoute,
+      approvalMemoryStore,
       prepareCodexLocalCredentialModeSwitch: async (ctx) => {
         const maker = _maker;
         if (!maker) throw new Error('Maker is not initialized for Codex credential mode switch');
@@ -1468,6 +1483,9 @@ export function getMaker(): Maker {
       registerLocalAgentProcess: ({ pid, kind, role }) =>
         registerAgentProcess(pid, kind, role),
       reviewAutoPermissionAction,
+      resolveAutoReviewRoute,
+      // 跨会话批准记忆:用户点过允许 / 审阅器判过 allow 的命令换个会话也不再重复问。
+      approvalMemoryStore,
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },

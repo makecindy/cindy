@@ -48,11 +48,15 @@ import {
 } from './cindy-subagent-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
+  classifyLocalAutoReviewTier,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
-  type AutoReviewDecision,
+  resolveAutoReviewRouteSnapshot,
+  type AutoReviewDecisionSnapshot,
 } from '../shared/auto-review-decision.js';
+import { createApprovalMemory } from '../shared/approval-memory.js';
+import { logAutoReviewDecision } from '../shared/auto-review-log.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
 import type {
@@ -1067,7 +1071,10 @@ export class PiAgent extends BaseAgent {
     let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
     let activeEffortSnapshot = initialEffortSnapshot;
     let currentAutoReviewIntent = '';
-    const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    const autoReviewDecisionCache = new Map<
+      string,
+      Promise<AutoReviewDecisionSnapshot>
+    >();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -1127,7 +1134,28 @@ export class PiAgent extends BaseAgent {
         source: 'pi',
       });
     });
-    const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+    /**
+     * 审阅器批准记忆 —— 相同动作与相同用户意图不重复审。工作区域取可写根；跨会话
+     * 持久化由宿主 store 提供，未注入时退化成纯会话内记忆。用户的「允许一次」不进这里。
+     */
+    const approvalMemory = createApprovalMemory({
+      agentKind: 'pi',
+      workspaceKey: opts.remoteHostId
+        ? `${opts.remoteHostId}\0${opts.workingDir || 'default'}`
+        : opts.workingDir || 'default',
+      platform: opts.remoteHostId ? 'linux' : process.platform,
+      ...(this.deps.approvalMemoryStore ? { store: this.deps.approvalMemoryStore } : {}),
+      logger: this.deps.logger,
+    });
+    // 载入失败会在记忆层降级为空集；成功时必须在首个工具调用前就绪，避免会话刚开时重复问。
+    await approvalMemory.hydrate();
+    const reviewAutoAction = async (
+      action: ReviewableAction,
+    ): Promise<AutoReviewDecisionSnapshot> => {
+      const startedAt = Date.now();
+      const workspaceRootsSnapshot = [opts.workingDir, ...mutableExtraDirs].filter(
+        (dir): dir is string => typeof dir === 'string' && dir.length > 0,
+      );
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'pi' as const,
@@ -1135,13 +1163,58 @@ export class PiAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         action,
-        workspaceRoots: [opts.workingDir, ...mutableExtraDirs],
+        workspaceRoots: [...workspaceRootsSnapshot],
         platform: opts.remoteHostId ? 'linux' as const : process.platform,
       };
+      const reviewerRouteSnapshot = await resolveAutoReviewRouteSnapshot(
+        request,
+        this.deps.resolveAutoReviewRoute,
+      );
+      if (reviewerRouteSnapshot.providerId) {
+        request.providerId = reviewerRouteSnapshot.providerId;
+        request.model = reviewerRouteSnapshot.model;
+      }
+      // 记忆必须同时命中逐字动作与创建本次审阅请求时的逐字意图；换意图后重新送审。
+      if (approvalMemory.isRemembered(
+        action,
+        request.userIntent,
+        workspaceRootsSnapshot,
+        reviewerRouteSnapshot,
+      )) {
+        logAutoReviewDecision(this.deps.logger, {
+          agentKind: 'pi', action, source: 'memory', verdict: 'allow', elapsedMs: 0,
+        });
+        return Promise.resolve({
+          verdict: 'allow',
+          userIntentSnapshot: request.userIntent,
+          workspaceRootsSnapshot,
+          reviewerRouteSnapshot,
+        });
+      }
       const cacheKey = JSON.stringify(request);
       let pending = autoReviewDecisionCache.get(cacheKey);
       if (!pending) {
-        pending = resolveAutoReviewDecision(request, this.deps.reviewAutoPermissionAction);
+        const localTier = classifyLocalAutoReviewTier(request);
+        pending = resolveAutoReviewDecision(request, this.deps.reviewAutoPermissionAction)
+          .then((decision) => {
+            // 审阅器判 allow 的灰区动作进记忆:不再每轮重审。只记 allow —— block / ask
+            // 若也记住,一次保守判定就把命令永久钉死,用户无从翻案。
+            logAutoReviewDecision(this.deps.logger, {
+              agentKind: 'pi',
+              action,
+              source: localTier === 'needs-review' ? 'reviewer' : 'static',
+              localTier,
+              verdict: decision.verdict,
+              unavailable: decision.unavailable === true,
+              elapsedMs: Date.now() - startedAt,
+            });
+            return {
+              ...decision,
+              userIntentSnapshot: request.userIntent,
+              workspaceRootsSnapshot,
+              reviewerRouteSnapshot,
+            };
+          });
         autoReviewDecisionCache.set(cacheKey, pending);
       }
       return pending;
@@ -1284,6 +1357,17 @@ export class PiAgent extends BaseAgent {
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
+              rememberReviewerAllow: (
+                action: ReviewableAction,
+                decision: AutoReviewDecisionSnapshot,
+              ) => {
+                approvalMemory.rememberReviewerAllow(
+                  action,
+                  decision.userIntentSnapshot,
+                  decision.workspaceRootsSnapshot,
+                  decision.reviewerRouteSnapshot,
+                );
+              },
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
@@ -2405,7 +2489,14 @@ export class PiAgent extends BaseAgent {
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       workspaceRoots: string[];
       readRoots: string[];
-      reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
+      reviewAutoAction: (
+        action: ReviewableAction,
+      ) => Promise<AutoReviewDecisionSnapshot>;
+      /** 审阅器 allow 仅在最新档位仍为 Auto 且未被更高优先级策略覆盖时记忆。 */
+      rememberReviewerAllow: (
+        action: ReviewableAction,
+        decision: AutoReviewDecisionSnapshot,
+      ) => void;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
@@ -2496,6 +2587,7 @@ export class PiAgent extends BaseAgent {
         workspaceRoots,
         readRoots,
         reviewAutoAction,
+        rememberReviewerAllow,
         notifyAutoReviewUnavailable,
         registeredMcpServerNames,
         registerPendingPrompt,
@@ -2723,6 +2815,8 @@ export class PiAgent extends BaseAgent {
             // policy turn + auto 的灰区语义对齐 Codex:只有渠道 policy 明确命中的调用
             // 才打扰 owner；普通 Auto-Review ask 直接 fail-closed，不再额外弹微信确认。
             // 无 policy 的 Desktop auto 会话维持既有逐次确认行为。
+            //
+            // 卡片语义是「允许一次」：即使用户允许，也绝不写成跨轮次批准记忆。
             proc.send({
               type: 'extension_ui_response',
               id,
@@ -2741,6 +2835,9 @@ export class PiAgent extends BaseAgent {
               reason: decision.reason,
               unavailable: decision.unavailable === true,
             });
+          }
+          if (decision.verdict === 'allow') {
+            rememberReviewerAllow(action, decision);
           }
           proc.send({
             type: 'extension_ui_response',

