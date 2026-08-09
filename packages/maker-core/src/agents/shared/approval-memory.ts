@@ -312,6 +312,15 @@ function psqlMayLoadMutableUserState(args: readonly string[]): boolean {
   return !options.includes('-X') && !options.includes('--no-psqlrc');
 }
 
+function sqlcmdMayLoadMutableFileState(args: readonly string[]): boolean {
+  const optionTerminator = args.indexOf('--');
+  const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
+  // ODBC / Go 兼容入口都支持 -i FILE；sqlcmd 也接受无空格短选项和长选项等号/紧凑形态。
+  return options.some((arg) =>
+    arg.startsWith('--input-file')
+    || /^-[^-]*i/.test(arg));
+}
+
 function mongoShellMayLoadMutableUserState(args: readonly string[]): boolean {
   const optionTerminator = args.indexOf('--');
   const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
@@ -581,6 +590,10 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
     // 默认 psqlrc、`psql -f FILE` 与管道 stdin 都会让同一 argv 执行可替换的外部 SQL。
     name === 'psql' && (hasPipedInvocation(command, 'psql')
       || psqlMayLoadMutableUserState(args)))) return true;
+  if (invocations.some(({ name, args }) =>
+    // sqlcmd 的 -i/--input-file 与 stdin 管道都会把可替换 SQL 送入数据库执行。
+    name === 'sqlcmd' && (hasPipedInvocation(command, 'sqlcmd')
+      || sqlcmdMayLoadMutableFileState(args)))) return true;
   if (invocations.some(({ name, args }) =>
     // mongo / mongosh 默认加载可替换的用户启动脚本；只有显式 --norc 才可稳定复用。
     (name === 'mongo' || name === 'mongosh')

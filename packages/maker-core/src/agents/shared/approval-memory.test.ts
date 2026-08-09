@@ -526,6 +526,59 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(1);
   });
 
+  it('sqlcmd 的外部 SQL 文件与 stdin 管道不可记忆', () => {
+    for (const command of [
+      'sqlcmd -i ./deploy.sql -S prod',
+      'sqlcmd -i./deploy.sql -S prod',
+      'sqlcmd --input-file ./deploy.sql -S prod',
+      'sqlcmd --input-file=./deploy.sql -S prod',
+      'sqlcmd --input-file./deploy.sql -S prod',
+      'sqlcmd -bi ./deploy.sql -S prod',
+      'sqlcmd.exe -i ./deploy.sql -S prod',
+      'env sqlcmd -i ./deploy.sql -S prod',
+      'true && sqlcmd -i ./deploy.sql -S prod',
+      'cat deploy.sql | sqlcmd -S prod',
+      'cat deploy.sql | env sqlcmd -S prod',
+      'head -n 20 deploy.sql | timeout 30 sqlcmd.exe -S prod',
+      'sqlcmd -i ./deploy.sql -S prod && sqlcmd -S prod',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      `sqlcmd -S prod -Q "SELECT 1"`,
+      `sqlcmd -S prod -q "SELECT 1"`,
+      'sqlcmd -S prod -I',
+      'cat deploy.sql | wc -l && sqlcmd -S prod -Q "SELECT 1"',
+      'echo sqlcmd -i ./deploy.sql -S prod',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    for (const action of [
+      exec('sqlcmd -i ./deploy.sql -S prod'),
+      exec('cat deploy.sql | sqlcmd -S prod'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      expect(memory.isRemembered(
+        action, defaultIntent, roots, reviewerRoute,
+      )).toBe(false);
+    }
+    expect(memory.size()).toBe(0);
+
+    const fixedAction = exec(`sqlcmd -S prod -Q "SELECT 1"`);
+    memory.rememberReviewerAllow(fixedAction, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(
+      fixedAction, defaultIntent, roots, reviewerRoute,
+    )).toBe(true);
+    expect(memory.size()).toBe(1);
+  });
+
   it('MySQL 与 MariaDB 只有明确关闭各自启动配置时才可记忆', () => {
     for (const command of [
       "mysql app -e 'DELETE FROM jobs'",
