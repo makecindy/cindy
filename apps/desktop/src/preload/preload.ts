@@ -6062,6 +6062,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       resume: (id: string): Promise<unknown> => ipcRenderer.invoke('maker:schedule:resume', id),
       runNow: (id: string): Promise<{ runId: string }> =>
         ipcRenderer.invoke('maker:schedule:run-now', id),
+      codexAutomationPreview: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:schedule:codex-automation-preview'),
+      codexAutomationImport: (sourceIds: string[]): Promise<unknown> =>
+        ipcRenderer.invoke('maker:schedule:codex-automation-import', { sourceIds }),
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: (): Promise<{
         statuses: Array<{

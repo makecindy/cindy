@@ -7128,6 +7128,32 @@
       "promptHeading": "暂无自动化",
       "promptDescription": "创建一个 cron 自动化，让 Claude Code 或 Codex 按计划执行你的 Prompt。"
     },
+    "codexImport": {
+      "title": "从 Codex 导入定时任务",
+      "description": "先检查 Codex 的定时任务，再选择要迁移到 Cindy 的任务。",
+      "loading": "正在读取 Codex 定时任务…",
+      "unknownRrule": "RRULE 未知",
+      "empty": "没有找到 Codex 定时任务。",
+      "loadFailed": "读取 Codex 定时任务失败：{{error}}",
+      "available": "{{count}} 条可迁移",
+      "selectAll": "全选",
+      "clearAll": "取消全选",
+      "importSelected": "迁移已选（{{count}}）",
+      "importable": "可直接迁移",
+      "manualRequired": "需要手工调整",
+      "duplicate": "已存在相同任务",
+      "status": "状态",
+      "model": "模型",
+      "workingDir": "工作目录",
+      "expandPrompt": "展开 Prompt",
+      "collapsePrompt": "收起 Prompt",
+      "confirmTitle": "确认迁移已选任务？",
+      "confirmDescription": "将创建 {{count}} 条 Cindy 定时任务：{{names}}。任务运行可能消耗模型 Token 并产生用量费用。",
+      "confirm": "确认迁移",
+      "resultTitle": "迁移完成",
+      "resultSummary": "已创建 {{created}} 条，跳过 {{skipped}} 条，失败 {{failed}} 条。",
+      "selectionSummary": "已选 {{selected}} 条 · 共 {{total}} 条可迁移"
+    },
     "usageLimitRecovery": {
       "name": "用量恢复后继续任务",
       "prompt": "从中断的位置继续完成当前任务。"
@@ -7162,6 +7188,7 @@
     },
     "button": {
       "newAutomation": "新建自动化",
+      "importCodex": "从 Codex 导入",
       "runNow": "立即运行",
       "close": "关闭",
       "edit": "编辑",

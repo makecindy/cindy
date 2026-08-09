@@ -533,6 +533,8 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     scriptConfig: parseScriptConfig(row.scriptConfig),
     source: row.source === 'project' ? 'project' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
+    originKind: row.originKind ?? undefined,
+    originId: row.originId ?? undefined,
     kind: row.kind,
     cronExpr: row.cronExpr,
     timezone: row.timezone,
@@ -584,6 +586,8 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     scriptConfig: serializeScriptConfig(s.scriptConfig),
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
+    originKind: s.originKind ?? null,
+    originId: s.originId ?? null,
     kind: s.kind,
     cronExpr: s.cronExpr,
     timezone: s.timezone,
@@ -637,6 +641,8 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
+  if (hasKey(patch, 'originKind')) out.originKind = patch.originKind ?? null;
+  if (hasKey(patch, 'originId')) out.originId = patch.originId ?? null;
   if (hasKey(patch, 'kind')) out.kind = patch.kind as ScheduleInsert['kind'];
   if (hasKey(patch, 'cronExpr')) out.cronExpr = patch.cronExpr as string;
   if (hasKey(patch, 'timezone')) out.timezone = patch.timezone as string;

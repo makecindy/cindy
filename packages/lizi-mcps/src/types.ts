@@ -212,6 +212,8 @@ export interface SlackHookMcpDeps {
  */
 export interface SchedulerMcpDeps {
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
+  /** Read-only bridge to the system Codex CLI automations. */
+  codexAutomation?: CodexAutomationMcpService;
   /**
    * 前置检查脚本(preRunHook)统一安装服务(host 注入,desktop 实现为
    * scheduler-host/hook-script-generator.installHookScript):落盘路径规范、
@@ -221,6 +223,30 @@ export interface SchedulerMcpDeps {
    */
   hookScript?: SchedulerHookScriptService;
   logger?: LiziMcpLogger;
+}
+
+export interface CodexAutomationRecord {
+  id: string;
+  version?: number;
+  kind?: string;
+  name: string;
+  prompt: string;
+  status: string;
+  rrule: string;
+  model?: string;
+  reasoningEffort?: string;
+  executionEnvironment?: string;
+  target?: { type: string; projectId?: string };
+  cwds: string[];
+  createdAt?: number;
+  updatedAt?: number;
+  sourcePath: string;
+  diagnostics: string[];
+}
+
+export interface CodexAutomationMcpService {
+  list(): Promise<CodexAutomationRecord[]>;
+  get(id: string): Promise<CodexAutomationRecord | null>;
 }
 
 /** SchedulerMcpDeps.hookScript 的服务契约。 */

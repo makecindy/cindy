@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Timer } from 'lucide-react';
+import { Download, Plus, Timer } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -49,6 +49,7 @@ import { useScheduleUnreadRunCounts } from './hooks/useScheduleUnreadRunCounts';
 import { useScheduleCostSummaries } from './hooks/useScheduleCostSummaries';
 import { useRunNowBusyGuard } from './hooks/useRunNowBusyGuard';
 import { ScheduleFormDialog } from './components/ScheduleFormDialog';
+import { CodexAutomationImportDialog } from './components/CodexAutomationImportDialog';
 import { TemplateGallery } from './components/TemplateGallery';
 import { TaskListPane } from './components/TaskListPane';
 import { RunHistoryPane } from './components/RunHistoryPane';
@@ -151,6 +152,7 @@ export function SchedulerPage() {
   } = useRunNowBusyGuard();
 
   const [formOpen, setFormOpen] = useState(false);
+  const [codexImportOpen, setCodexImportOpen] = useState(false);
   const [editing, setEditing] = useState<Schedule | null>(null);
   const [createInitialTemplate, setCreateInitialTemplate] = useState<ScheduleTemplate | null>(null);
   const [createInitialValues, setCreateInitialValues] =
@@ -629,7 +631,10 @@ export function SchedulerPage() {
         {/* 空数据时 New 按钮藏起来，留给 EmptyState 的主 CTA 接盘，避免双 CTA。 */}
         {!error && !isEmpty && (
           <div style={WINDOW_NO_DRAG_STYLE}>
-            <NewAutomationButton onClick={handleCreate} />
+            <div className="flex items-center gap-2">
+              <CodexImportButton onClick={() => setCodexImportOpen(true)} />
+              <NewAutomationButton onClick={handleCreate} />
+            </div>
           </div>
         )}
       </header>
@@ -643,7 +648,11 @@ export function SchedulerPage() {
           </p>
         )}
         {isEmpty && (
-          <EmptyState onCreate={handleCreate} onCreateFromTemplate={handleCreateFromTemplate} />
+          <EmptyState
+            onCreate={handleCreate}
+            onCreateFromTemplate={handleCreateFromTemplate}
+            onImportCodex={() => setCodexImportOpen(true)}
+          />
         )}
         {!error && !isEmpty && (
           // 拖拽中给整行加 select-none + col-resize cursor，避免误选中文字、
@@ -708,8 +717,31 @@ export function SchedulerPage() {
         editProjectSchedule={editing?.source === 'project'}
         onSubmit={handleSubmit}
       />
+      <CodexAutomationImportDialog
+        open={codexImportOpen}
+        onOpenChange={setCodexImportOpen}
+        onImported={() => void refresh()}
+      />
       {deleteScheduleDialog}
     </div>
+  );
+}
+
+function CodexImportButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-9 items-center gap-1.5 rounded-full border px-4 text-sm font-medium',
+        'border-[var(--cmd-palette-border)] text-[var(--settings-section-title)] hover:bg-[var(--settings-input-bg)]',
+        'transition-colors',
+      )}
+    >
+      <Download size={14} strokeWidth={2} />
+      {t('scheduler.button.importCodex')}
+    </button>
   );
 }
 
@@ -737,9 +769,11 @@ function NewAutomationButton({ onClick }: { onClick: () => void }) {
 function EmptyState({
   onCreate,
   onCreateFromTemplate,
+  onImportCodex,
 }: {
   onCreate: () => void;
   onCreateFromTemplate: (template: ScheduleTemplate) => void;
+  onImportCodex: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -755,7 +789,10 @@ function EmptyState({
           <p className="max-w-md text-sm text-[var(--cmd-palette-item-meta)]">
             {t('scheduler.empty.promptDescription')}
           </p>
-          <NewAutomationButton onClick={onCreate} />
+          <div className="flex items-center gap-2">
+            <CodexImportButton onClick={onImportCodex} />
+            <NewAutomationButton onClick={onCreate} />
+          </div>
         </div>
         <div className="flex flex-col gap-2">
           <h3 className="text-xs font-medium uppercase tracking-wider text-[var(--cmd-palette-item-meta)]">

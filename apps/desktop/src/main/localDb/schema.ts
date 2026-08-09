@@ -696,6 +696,8 @@ export const schedules = sqliteTable(
     scriptConfig: text('script_config'),
     source: text('source').default('user'),
     projectConfigId: text('project_config_id'),
+    originKind: text('origin_kind', { enum: ['codex-automation'] }),
+    originId: text('origin_id'),
     /**
      * 是否允许用“任务名 + workspace + 工作目录”认领没有 schedule_runs 的旧会话。
      *
@@ -799,6 +801,7 @@ export const schedules = sqliteTable(
   (t) => ({
     idxActiveNext: index('idx_schedules_active_next').on(t.status, t.nextFireAt),
     idxTargetSession: index('idx_schedules_target_session').on(t.targetSessionId),
+    uniqOrigin: uniqueIndex('uniq_schedules_origin').on(t.originKind, t.originId),
   }),
 );
 
