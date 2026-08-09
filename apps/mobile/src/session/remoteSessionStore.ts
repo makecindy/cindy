@@ -2036,7 +2036,6 @@ export const remoteSessionStore = {
     expectedRemoteEpoch?: number,
     acceptedClientId?: string,
   ): boolean {
-    const next = normalizeInputProjection(projection, sessionId);
     const remoteEpoch = inputProjectionRemoteEpochs.get(sessionId) ?? inputProjectionRemoteEpochFloor;
     const currentEpoch = inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
     const authorityStale = currentEpoch !== expectedEpoch;
@@ -2047,6 +2046,7 @@ export const remoteSessionStore = {
       if (remoteStale && acceptedLive) recordInputProjectionRemoteEvidence(sessionId, [acceptedClientId!]);
       return false;
     }
+    const next = normalizeInputProjection(projection, sessionId);
     const queuedClientIds = new Set(next.pendingQueue.map((item) => item.clientId));
     const confirmedClientIds = new Set(queuedClientIds);
     if (acceptedClientId) confirmedClientIds.add(acceptedClientId);

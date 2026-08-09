@@ -1,9 +1,9 @@
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
-import { formatRemoteError } from '@/device-link/remoteStatus';
 
 export function enqueueMayHaveReachedHost(error: unknown): boolean {
   if (isInFlightDeviceLinkError(error)) return true;
-  return (error as { code?: unknown } | null)?.code === 'INVOKE_TIMEOUT' || formatRemoteError(error).includes('INVOKE_TIMEOUT');
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return (error as { code?: unknown } | null)?.code === 'INVOKE_TIMEOUT' || message.includes('INVOKE_TIMEOUT');
 }
 export async function reconcileEnqueueFailure(
   input: { error: unknown; readAuthoritativeAcceptance(): Promise<boolean> },
