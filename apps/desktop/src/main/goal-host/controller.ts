@@ -2445,12 +2445,14 @@ export class GoalController {
         // 读 generation,快终态时 boundary 已被 stopSession 清掉会写成 0,与
         // finalize/terminal 脱节)。resumed 用 onDispatching 固化的恢复原因
         // (pendingResume 可能已被清理);at 用派发时刻保证重放顺序在 finalize 前。
-        // 发送条件:当前仍是本派发的 owner,或本派发的收口事件已真实记录
-        // (auditFinalized——finalizeTurn 置 finalized 后若在 storage await 期间
-        // clear/pause/替换,收口事件未写,不得补发;Greptile P1)。
+        // 发送条件:当前仍是本派发的 owner;或 finalizeTurn 已启动(finalized 在
+        // storage await 前置位)且未被登出放弃(!disposed)——快终态时 accepted 先于
+        // storage settle 执行,auditFinalized(事件记录后置位)会误吞合法 dispatch;
+        // 事件最终会写(同账号 clear/换代也写,T37),dispose 后不得补发(防旧账号
+        // 事件写回已清空的环)。
         const boundaryStillLive =
           this.turns.get(sessionId) === dispatchBoundary ||
-          dispatchBoundary?.auditFinalized === true;
+          (dispatchBoundary?.finalized === true && !this.disposed);
         if (!boundaryStillLive) {
           this.deps.logger.info('[goal] dispatch audit skipped — lifecycle replaced before accepted', {
             sessionId,
