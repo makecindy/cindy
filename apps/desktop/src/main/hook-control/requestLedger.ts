@@ -25,6 +25,27 @@ const DEFAULT_MAX_ENTRIES = 2_000;
 const MAX_ENTRY_BYTES = 8_000_000;
 /** Bound synchronous read/write work on Electron's main thread. */
 const DEFAULT_MAX_FILE_BYTES = 32_000_000;
+/**
+ * How long an undelivered answer stays worth delivering (≈24h).
+ *
+ * Each record plays two roles, and only one of them should expire:
+ *  - tombstone (`get`): "this request was already answered, do not invoke the
+ *    agent again". Worth keeping as long as capacity allows.
+ *  - outbox item (`listPending`): "this answer still needs a transport
+ *    attempt". Worth keeping only while sending it is still useful.
+ *
+ * Binding the two together is what lets an outbox item become immortal: a
+ * connection that never comes back (unbound account, deleted bot, replaced
+ * machine) leaves a `pending` record that nothing can ever settle, and the
+ * eviction loop below refuses to reclaim undelivered entries. Enough of those
+ * and every subsequent write fails, silently dropping the whole ledger back to
+ * in-memory dedupe — the exact regression this store exists to prevent.
+ *
+ * The horizon matches x-hook-server's reply horizon (OUTBOX_MAX_ATTEMPTS ×
+ * OUTBOX_MAX_DELAY_MS): the server already gives up on publishing a reply this
+ * old, so a client that reconnects later has nothing useful left to hand over.
+ */
+const DEFAULT_PENDING_TTL_MS = 24 * 60 * 60_000;
 
 export interface HookTerminalRecord {
   connectionId: string;
@@ -34,11 +55,13 @@ export interface HookTerminalRecord {
   turnEnd?: TurnEndPayload;
   /** pending = durable outbox still needs a transport attempt; sent = already attempted. */
   delivery: 'pending' | 'sent';
+  /** Wall clock at persist time; also the age used to expire the outbox role. */
   completedAt: number;
 }
 
 export interface HookRequestLedger {
   get(connectionId: string, requestId: string): HookTerminalRecord | null;
+  /** Undelivered answers still worth sending; entries past the horizon are omitted. */
   listPending(connectionId: string): HookTerminalRecord[];
   /** Returns false when persistence failed; callers must fall back to in-memory delivery. */
   set(record: HookTerminalRecord): boolean;
@@ -125,10 +148,33 @@ export function createHookRequestLedger(deps: {
   log: { warn(msg: string): void };
   maxEntries?: number;
   maxFileBytes?: number;
+  pendingTtlMs?: number;
+  now?: () => number;
 }): HookRequestLedger {
   const maxEntries = Math.max(1, Math.floor(deps.maxEntries ?? DEFAULT_MAX_ENTRIES));
   const maxFileBytes = Math.max(1_024, Math.floor(deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES));
+  const pendingTtlMs = Math.max(0, Math.floor(deps.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS));
+  const now = deps.now ?? Date.now;
   let cachedEntries: HookTerminalRecord[] | undefined;
+
+  /**
+   * A `pending` entry past the horizon is no longer an outbox item: nothing will
+   * be delivered from it. A clock that moved backwards yields a negative age and
+   * keeps the entry live, which is the safe direction (delivering late beats
+   * discarding an answer that is actually fresh).
+   */
+  function pendingExpired(entry: HookTerminalRecord, nowMs: number): boolean {
+    return entry.delivery === 'pending' && nowMs - entry.completedAt > pendingTtlMs;
+  }
+
+  /**
+   * Capacity may be reclaimed from any entry whose only remaining value is
+   * dedupe — already delivered, or undeliverable by age. Live undelivered
+   * answers stay protected.
+   */
+  function reclaimable(entry: HookTerminalRecord, nowMs: number): boolean {
+    return entry.delivery === 'sent' || pendingExpired(entry, nowMs);
+  }
 
   function readEntries(): HookTerminalRecord[] | null {
     if (cachedEntries !== undefined) return cachedEntries;
@@ -178,6 +224,7 @@ export function createHookRequestLedger(deps: {
       return false;
     }
 
+    const nowMs = now();
     const next = entries.filter(
       (entry) => !sameRequest(entry, record.connectionId, record.requestId),
     );
@@ -185,12 +232,14 @@ export function createHookRequestLedger(deps: {
     let data: LedgerFile = { version: FILE_VERSION, entries: next };
     let serialized = JSON.stringify(data);
     while (next.length > maxEntries || utf8ByteLength(serialized) > maxFileBytes) {
-      // Never evict an undelivered outbox entry to make room. Remove the
-      // oldest sent result first; if pending entries alone exceed the bound,
-      // fail this write and let the dispatcher retain its in-memory fallback.
+      // Never evict a *live* undelivered outbox entry to make room. Reclaim the
+      // oldest entry that is only holding a tombstone — already sent, or pending
+      // past the delivery horizon. Only a burst of live undelivered answers can
+      // still fail this write, and the horizon keeps that bounded instead of
+      // letting unsettleable entries accumulate forever.
       const removable = next.findIndex(
         (entry) =>
-          entry.delivery === 'sent' && !sameRequest(entry, record.connectionId, record.requestId),
+          reclaimable(entry, nowMs) && !sameRequest(entry, record.connectionId, record.requestId),
       );
       if (removable < 0) {
         deps.log.warn('write hook request ledger skipped (pending-outbox-limit)');
@@ -225,8 +274,17 @@ export function createHookRequestLedger(deps: {
     listPending(connectionId) {
       const entries = readEntries();
       if (entries === null) return [];
+      const nowMs = now();
       return entries
-        .filter((entry) => entry.connectionId === connectionId && entry.delivery === 'pending')
+        .filter(
+          (entry) =>
+            entry.connectionId === connectionId &&
+            entry.delivery === 'pending' &&
+            // Past the horizon this answer is no longer worth sending. Replaying
+            // it would post a reply to a conversation that moved on a day ago —
+            // and after a long outage there would be a burst of them at once.
+            !pendingExpired(entry, nowMs),
+        )
         .sort((a, b) => a.completedAt - b.completedAt);
     },
 
