@@ -19,6 +19,7 @@ import {
   isMarkdownCodePosition,
   markdownCodeRanges,
   normalizeXdtAbsPath,
+  sanitizeBareXdtFileUrls,
   transformXdtRefs,
 } from '@cindy/im';
 
@@ -338,7 +339,9 @@ export async function materializeLocalMarkdownFiles(
   },
 ): Promise<MaterializedLocalMarkdownFiles> {
   const refs = collectXdtFileRefs(params.text);
-  if (refs.length === 0) return { files: [], tempDirs: [], text: params.text };
+  if (refs.length === 0) {
+    return { files: [], tempDirs: [], text: sanitizeBareXdtFileUrls(params.text) };
+  }
 
   const maxFiles = Math.max(0, params.maxFiles ?? 8);
   const maxFileBytes = params.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
@@ -416,9 +419,11 @@ export async function materializeLocalMarkdownFiles(
   return {
     files,
     tempDirs: tempDir ? [tempDir] : [],
-    text: transformXdtRefs(params.text, {
-      file: ({ alt }) => attachmentDisplayName(alt, ''),
-    }),
+    text: sanitizeBareXdtFileUrls(
+      transformXdtRefs(params.text, {
+        file: ({ alt }) => attachmentDisplayName(alt, ''),
+      }),
+    ),
   };
 }
 

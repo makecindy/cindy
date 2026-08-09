@@ -329,6 +329,22 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: () => 'sent' })).toBe(text);
   });
 
+  it('ignores managed media references inside raw HTML blocks and comments', () => {
+    const text = [
+      '<pre>',
+      '[报告](xdt-file:///tmp/private.pdf)',
+      `![图片](${BLOB})`,
+      '</pre>',
+      '',
+      '<!--',
+      '[注释](xdt-file:///tmp/comment.pdf)',
+      '-->',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtImageRefs(text)).toEqual([]);
+  });
+
   it('keeps a four-space list continuation eligible for attachment delivery', () => {
     const text = '- 输出：\n    [报告](xdt-file:///tmp/list-report.pdf)';
     const afterBlank = '- 输出：\n\n    [报告](xdt-file:///tmp/list-report.pdf)';

@@ -83,7 +83,7 @@ import type {
   TurnPermissionPolicy,
   UserMessage,
 } from '@cindy/maker-core';
-import { transformXdtRefs } from '@cindy/im';
+import { sanitizeBareXdtFileUrls, transformXdtRefs } from '@cindy/im';
 import type { IMAttachment, InteractiveCardSpec, StreamingTextHandle } from '@cindy/im';
 
 import { persistUserMessage } from '../messagePersistence';
@@ -2952,9 +2952,11 @@ export function createTurnRunner(
       });
     } finally {
       turn.presenter.replaceBody(
-        transformXdtRefs(turn.presenter.wholeText(), {
-          file: ({ alt }) => alt.trim() || '附件',
-        }),
+        sanitizeBareXdtFileUrls(
+          transformXdtRefs(turn.presenter.wholeText(), {
+            file: ({ alt }) => alt.trim() || '附件',
+          }),
+        ),
       );
     }
   }

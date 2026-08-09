@@ -208,7 +208,77 @@ function lineStaysInFenceContainer(
   return prefix.indent >= opening.listContentIndent;
 }
 
-/** Locate fenced, indented, and inline Markdown code without copying large model output. */
+const HTML_BLOCK_TAGS =
+  'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+const HTML_BLOCK_TAG_RE = new RegExp(
+  `^</?(?:${HTML_BLOCK_TAGS})(?:\\s|/?>|$)`,
+  'i',
+);
+
+function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const lineEnd = lineEndAfterNewline(text, lineStart);
+    const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+    if (prefix.indent > 3) {
+      lineStart = lineEnd;
+      continue;
+    }
+    const content = text.slice(prefix.cursor, lineEnd);
+    const contentLower = content.toLowerCase();
+    let closingMarker: string | null = null;
+    let blankTerminated = false;
+    if (content.startsWith('<!--')) closingMarker = '-->';
+    else if (content.startsWith('<?')) closingMarker = '?>';
+    else if (content.startsWith('<![CDATA[')) closingMarker = ']]>';
+    else if (/^<![A-Z]/.test(content)) closingMarker = '>';
+    else {
+      const rawTag = contentLower.match(/^<(pre|script|style|textarea)(?:\s|>|$)/)?.[1];
+      if (rawTag) closingMarker = `</${rawTag}>`;
+      else if (HTML_BLOCK_TAG_RE.test(content)) blankTerminated = true;
+      else {
+        lineStart = lineEnd;
+        continue;
+      }
+    }
+
+    let blockEnd = text.length;
+    if (closingMarker) {
+      const closingAt = text.toLowerCase().indexOf(
+        closingMarker.toLowerCase(),
+        prefix.cursor + content.indexOf('<') + 1,
+      );
+      if (closingAt >= 0) blockEnd = lineEndAfterNewline(text, closingAt);
+    } else if (blankTerminated) {
+      let searchLine = lineEnd;
+      while (searchLine < text.length) {
+        const searchEnd = lineEndAfterNewline(text, searchLine);
+        if (isBlankLine(text, searchLine, searchEnd)) {
+          blockEnd = searchLine;
+          break;
+        }
+        searchLine = searchEnd;
+      }
+    }
+    ranges.push({ start: lineStart, end: blockEnd });
+    lineStart = blockEnd;
+  }
+  return ranges;
+}
+
+function mergeMarkdownRanges(ranges: MarkdownCodeRange[]): MarkdownCodeRange[] {
+  const sorted = ranges.sort((a, b) => a.start - b.start);
+  const merged: MarkdownCodeRange[] = [];
+  for (const range of sorted) {
+    const previous = merged.at(-1);
+    if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
+/** Locate non-rendered Markdown regions without copying large model output. */
 export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
   const fences: MarkdownCodeRange[] = [];
   let lineStart = 0;
@@ -286,13 +356,14 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
     }
     blocks.push({ start: blockStart, end: blockEnd });
   }
-  blocks.sort((a, b) => a.start - b.start);
+  blocks.push(...markdownHtmlBlockRanges(text));
+  const mergedBlocks = mergeMarkdownRanges(blocks);
 
-  const ranges = [...blocks];
+  const ranges = [...mergedBlocks];
   let blockIndex = 0;
   let cursor = 0;
   while (cursor < text.length) {
-    const block = blocks[blockIndex];
+    const block = mergedBlocks[blockIndex];
     if (block && cursor >= block.start) {
       cursor = block.end;
       blockIndex += 1;
@@ -327,6 +398,29 @@ export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
     cursor = closingEnd;
   }
   return ranges.sort((a, b) => a.start - b.start);
+}
+
+/** Remove residual bare internal file URLs while preserving Markdown code examples. */
+export function sanitizeBareXdtFileUrls(text: string): string {
+  const ranges = markdownCodeRanges(text);
+  const lower = text.toLowerCase();
+  const scheme = 'xdt-file://';
+  let cursor = 0;
+  let sanitized = '';
+  while (cursor < text.length) {
+    const start = lower.indexOf(scheme, cursor);
+    if (start < 0) return sanitized + text.slice(cursor);
+    if (isMarkdownCodePosition(ranges, start)) {
+      sanitized += text.slice(cursor, start + scheme.length);
+      cursor = start + scheme.length;
+      continue;
+    }
+    let end = start + scheme.length;
+    while (end < text.length && !/[\s<>"'`\])]/.test(text[end])) end += 1;
+    sanitized += `${text.slice(cursor, start)}附件`;
+    cursor = end;
+  }
+  return sanitized;
 }
 
 function codeRangeAt(

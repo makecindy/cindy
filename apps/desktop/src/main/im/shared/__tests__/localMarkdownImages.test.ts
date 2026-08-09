@@ -264,6 +264,22 @@ describe('materializeLocalMarkdownImages', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe(text);
   });
 
+  it('leaves local image examples inside raw HTML blocks untouched and unsent', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    const text = `<pre>\n![private](${sourcePath})\n</pre>`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-html-code' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(deps.ingest).not.toHaveBeenCalled();
+  });
+
   it('materializes a local image in a four-space list continuation', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'chart.png');
@@ -569,6 +585,17 @@ describe('materializeLocalMarkdownFiles', () => {
       files: [],
       tempDirs: [],
       text,
+    });
+  });
+
+  it('redacts a bare xdt-file URL without attempting to upload it', async () => {
+    const workingDir = await makeTempRoot();
+    const text = 'Download xdt-file:///Users/alice/private.pdf now';
+
+    await expect(materializeLocalMarkdownFiles({ text, workingDir })).resolves.toEqual({
+      files: [],
+      tempDirs: [],
+      text: 'Download 附件 now',
     });
   });
 

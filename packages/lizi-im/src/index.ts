@@ -71,6 +71,7 @@ export {
   stripXdtFileLinks,
   stripXdtImageLinks,
   transformXdtRefs,
+  sanitizeBareXdtFileUrls,
 } from './xdtRefs.js';
 export type {
   MarkdownCodeRange,
