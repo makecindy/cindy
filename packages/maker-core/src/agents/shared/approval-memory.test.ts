@@ -146,9 +146,9 @@ describe('approvalSignature — 可记忆判据', () => {
       `powershell -Command "$env:MYSQL_PWD='REDACTED_VALUE'; mysql app"`,
       'cmd /c "setx MARIADB_PWD REDACTED_VALUE"',
       `release-cli ${['github', '_pat_', 'A'.repeat(16)].join('')}`,
-      `release-cli ${['ASIA', 'A'.repeat(16)].join('')}`,
-      `release-cli ${['LTAI', 'A'.repeat(12)].join('')}`,
-      `release-cli ${['AIza', 'A'.repeat(35)].join('')}`,
+      `release-cli ${['AS', 'IA', 'A'.repeat(16)].join('')}`,
+      `release-cli ${['LT', 'AI', 'A'.repeat(12)].join('')}`,
+      `release-cli ${['AI', 'za', 'A'.repeat(35)].join('')}`,
       'redis-cli -a REDACTED_VALUE ping',
       'sshpass -p REDACTED_VALUE ssh host.example.com',
       'sqlcmd -P REDACTED_VALUE -S db.example.com',
@@ -177,10 +177,10 @@ describe('approvalSignature — 可记忆判据', () => {
       expect(signature(exec(command)), command).toBeNull();
     }
     expect(isCredentialBearingCommand(
-      `curl --header 'Accept: application/json' https://api.example.com`,
+      `curl -q --header 'Accept: application/json' https://api.example.com`,
     )).toBe(false);
     expect(signature(exec(
-      `curl --header 'Accept: application/json' https://api.example.com`,
+      `curl -q --header 'Accept: application/json' https://api.example.com`,
     ))).not.toBeNull();
     expect(isCredentialBearingCommand('tool --auth-mode browser')).toBe(false);
     expect(signature(exec('tool --auth-mode browser'))).not.toBeNull();
@@ -330,6 +330,32 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(isMutableIndirectExecutionCommand('echo npm test')).toBe(false);
     expect(isMutableIndirectExecutionCommand('rm -rf build')).toBe(false);
     expect(signature(exec('rm -rf build'))).not.toBeNull();
+  });
+
+  it('curl 只有首参数显式禁用配置且未另行指定 config 时才可记忆', () => {
+    for (const command of [
+      'curl https://api.example.com',
+      'curl -s -q https://api.example.com',
+      'curl --silent --disable https://api.example.com',
+      'curl -Q https://api.example.com',
+      'curl -q -K ./curl.conf https://api.example.com',
+      'curl --disable --config=./curl.conf https://api.example.com',
+      'curl -q https://api.example.com && curl https://other.example.com',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'curl -q https://api.example.com',
+      'curl --disable https://api.example.com',
+      'curl.exe -q https://api.example.com',
+      `curl -q --header 'Accept: application/json' https://api.example.com`,
+      'curl -q https://api.example.com && curl --disable https://other.example.com',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
   });
 
   it('非 exec 动作不进记忆', () => {

@@ -117,12 +117,21 @@ const MAX_SESSION_SIGNATURES = 500;
 const SECRET_ENV_NAME_SOURCE = String.raw`[A-Z0-9_]*(?:TOKEN|SECRET|API[_-]?KEY|APIKEY|ACCESS[_-]?KEY|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY)[A-Z0-9_]*`;
 const SECRET_CONFIG_KEY_SOURCE = String.raw`\S*(?:TOKEN|SECRET|API[_-]?KEY|APIKEY|ACCESS[_-]?KEY|PASSWORD|PASSWD|CREDENTIAL|PRIVATE[_-]?KEY)\S*`;
 
+const CURL_EXPLICIT_CONFIG_PATTERN =
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-K(?:\s*=?\s*)\S|--config(?:\s+|=)\S)/i;
+
+// curl 默认会读取用户级 curlrc；文件内容可在命令文本不变时注入新的 header、body 或 URL。
+// `-q` / `--disable` 只有作为 curl 的**首参数**时才禁用默认配置。选项大小写不能放宽：
+// `-Q` 是另一个 curl 选项，不能因大小写不敏感匹配而被误当成 `-q`。
+const CURL_MAY_LOAD_DEFAULT_CONFIG_PATTERN =
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?[cC][uU][rR][lL](?:\.[eE][xX][eE])?['"]?(?=[ \t;&|)\r\n]|$)(?![ \t]+(?:-q|--disable)(?=[ \t;&|)\r\n]|$))/;
+
 const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   // HTTP 鉴权头：curl/wget 的 -H、--header、--proxy-header，含空格/等号/紧凑短选项。
   /(?:^|\s)(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?\s*(?:authorization|proxy-authorization|cookie|x-api-key|x-auth)/i,
   // curl 的 @file header/config 内容可在命令不变时换成新凭证，不能让旧摘要静默复用。
   /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?@\S/i,
-  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-K(?:\s*=?\s*)\S|--config(?:\s+|=)\S)/i,
+  CURL_EXPLICIT_CONFIG_PATTERN,
   /\bbearer\s+[\w.\-~+/]{8,}/i,
   // 显式凭证 flag（含 = 与空格两种写法）。要求后面真有值，避免把 --auth-mode 误判。
   /(?:^|\s)--(?:token|password|passwd|api[-_]?key|secret|client[-_]?secret|access[-_]?token|session[-_]?token|oauth2[-_]?bearer|authorization|auth|credential|credentials|private[-_]?key|secret[-_]?access[-_]?key|access[-_]?key(?:[-_]?id)?)(?:\s+|=)\S/i,
@@ -275,8 +284,14 @@ const DYNAMIC_COMMAND_INPUT_PATTERNS: readonly RegExp[] = [
 export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (MUTABLE_EXECUTION_ENV_PATTERN.test(command)) return true;
   if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
+  const executableNames = commandExecutableNames(command);
+  if (
+    executableNames.includes('curl')
+    && (CURL_EXPLICIT_CONFIG_PATTERN.test(command)
+      || CURL_MAY_LOAD_DEFAULT_CONFIG_PATTERN.test(command))
+  ) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
-  return commandExecutableNames(command).some((rawName) => {
+  return executableNames.some((rawName) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。
     if (rawName.startsWith('-')) return true;
     if (/\.(?:cmd|bat)$/i.test(rawName)) return true;
