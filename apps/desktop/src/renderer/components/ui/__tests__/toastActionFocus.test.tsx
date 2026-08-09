@@ -45,4 +45,21 @@ describe('Toast action focus', () => {
     fireEvent.blur(copyDiagnostics, { relatedTarget: document.body });
     expect(resume).toHaveBeenCalledWith('toast-1');
   });
+
+  it('keeps dismissal paused until both hover and focus leave', () => {
+    const pause = vi.spyOn(toast, 'pauseAutoDismiss');
+    const resume = vi.spyOn(toast, 'resumeAutoDismiss');
+    const { container } = render(<Toast item={item()} />);
+    const action = screen.getByRole('button', { name: 'Open logs' });
+    const toastElement = container.firstElementChild as HTMLDivElement;
+
+    fireEvent.mouseEnter(toastElement);
+    action.focus();
+    fireEvent.mouseLeave(toastElement);
+    expect(pause).toHaveBeenCalledWith('toast-1');
+    expect(resume).not.toHaveBeenCalled();
+
+    fireEvent.blur(action, { relatedTarget: document.body });
+    expect(resume).toHaveBeenCalledWith('toast-1');
+  });
 });

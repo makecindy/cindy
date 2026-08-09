@@ -53,11 +53,18 @@ export function Toast({ item }: ToastProps) {
       data-state={item.exiting ? 'exiting' : 'entering'}
       // hover 悬停时暂停自动关闭，移开后按剩余时长继续（正在阅读时不消失）
       onMouseEnter={() => toast.pauseAutoDismiss(item.id)}
-      onMouseLeave={() => toast.resumeAutoDismiss(item.id)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement)) {
+          toast.resumeAutoDismiss(item.id);
+        }
+      }}
       // 操作按钮获得键盘焦点时同样暂停；否则短时 Toast 会在键盘用户操作前消失。
       onFocusCapture={() => toast.pauseAutoDismiss(item.id)}
       onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        if (
+          !event.currentTarget.contains(event.relatedTarget as Node | null) &&
+          !event.currentTarget.matches(':hover')
+        ) {
           toast.resumeAutoDismiss(item.id);
         }
       }}
