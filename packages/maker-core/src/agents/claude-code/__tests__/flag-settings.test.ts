@@ -51,6 +51,16 @@ describe('buildClaudeFlagSettings', () => {
     ).toBe(false);
   });
 
+  it('host model catalog overrides a user availableModels allowlist', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      selectedModelId: 'gpt-5.6-sol',
+    });
+
+    expect(settings.availableModels).toEqual(['gpt-5.6-sol']);
+  });
+
   it('adds namespaced plugin skill overrides from the host routing policy', () => {
     const settings = buildClaudeFlagSettings({
       showThinkingSummaries: false,

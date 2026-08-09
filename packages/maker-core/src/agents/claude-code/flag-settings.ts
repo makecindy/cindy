@@ -47,6 +47,12 @@ export interface ClaudeFlagSettingsInput {
   fastMode: boolean;
   /** Host-owned policy for colliding downstream skills. */
   capabilityRouting?: CapabilityRoutingPolicy;
+  /**
+   * Cindy's model selector is authoritative for the active session. Keep the
+   * selected model available even when a user's Claude settings file carries
+   * a stale availableModels allowlist.
+   */
+  selectedModelId?: string;
 }
 
 /** 装配 startSession 注入的 flag settings 对象。纯函数 —— 每次调用读最新输入值。 */
@@ -61,6 +67,7 @@ export function buildClaudeFlagSettings(input: ClaudeFlagSettingsInput): Setting
       autoDreamEnabled: input.memoryOverride,
     }),
     ...(input.fastMode && { fastMode: true }),
+    ...(input.selectedModelId ? { availableModels: [input.selectedModelId] } : {}),
     ...(Object.keys(skillOverrides).length > 0 && { skillOverrides }),
   };
 }
