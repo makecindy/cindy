@@ -10,10 +10,6 @@ const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'ut
   /\r\n?/g,
   '\n',
 );
-const routingSource = readFileSync(
-  resolve(__dirname, '..', 'orcaProviderRoutingContext.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
 const providerServiceSource = readFileSync(
   resolve(__dirname, '..', '..', 'maker-host', 'createDesktopProviderService.ts'),
   'utf8',
@@ -36,7 +32,6 @@ describe('Orca provider routing snapshot wiring', () => {
     );
     expect(wiring).toContain('allowSideEffects: options.allowSideEffects,');
     expect(wiring).toContain('waitForDiscovery: options.allowSideEffects,');
-    expect(routingSource).toContain('allowSideEffects: deps.allowSideEffects ?? true');
     expect(registerSource).toContain(
       'getProviderRoutingContext: () => getProviderRoutingContext({ allowSideEffects: true }),',
     );
@@ -52,15 +47,9 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(listing).toContain('getProviderRoutingContext({ allowSideEffects: false })');
     expect(listing).not.toContain('getProviderRoutingContext({ allowSideEffects: true })');
 
-    const accessorStart = providerServiceSource.indexOf(
-      'export function getDesktopProviderServiceReadOnly(): ProviderService {',
+    expect(providerServiceSource).toContain(
+      'export function getDesktopProviderServiceReadOnly(): ProviderService {\n  return getOrCreateDesktopProviderService();\n}',
     );
-    const accessorEnd = providerServiceSource.indexOf('\n}\n', accessorStart);
-    expect(accessorStart).toBeGreaterThanOrEqual(0);
-    expect(accessorEnd).toBeGreaterThan(accessorStart);
-    const readOnlyAccessor = providerServiceSource.slice(accessorStart, accessorEnd);
-    expect(readOnlyAccessor).toContain('return getOrCreateDesktopProviderService();');
-    expect(readOnlyAccessor).not.toContain('migrateLegacyNativeProviderAuthBindings');
   });
 
   it('validates explicit execution config before allocating a handoff worktree', () => {

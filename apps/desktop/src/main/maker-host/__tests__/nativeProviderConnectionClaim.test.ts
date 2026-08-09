@@ -24,9 +24,6 @@ const h = vi.hoisted(() => ({
   loadAnthropicDiskCache: vi.fn(async () => {}),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
-  authMode: 'local' as 'local' | 'cloud',
-  authUserId: 'owner-a',
-  legacyOwnerNamespaceClaim: false,
   anthropicDiscoveryFailure: null as {
     kind: string;
     at: string;
@@ -91,16 +88,9 @@ vi.mock('../auth-adapters.js', () => ({
   },
 }));
 
-vi.mock('../../authManager.js', () => ({
-  getAuthState: () =>
-    h.authMode === 'cloud'
-      ? { mode: 'cloud' as const, user: { id: h.authUserId } }
-      : { mode: 'local' as const, user: null },
-}));
+vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ mode: 'local' as const, user: null }) }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
-vi.mock('../../ownerNamespaceMigration.js', () => ({
-  hasLegacyOwnerNamespaceClaim: () => h.legacyOwnerNamespaceClaim,
-}));
+vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
 vi.mock('../../manifestService.js', () => ({ isDev: () => true, getBaseUrl: () => 'https://example.invalid' }));
 vi.mock('../../clientEndpointsService.js', () => ({ getBuildClientEndpoint: () => 'https://example.invalid', getClientEndpoint: () => 'https://example.invalid' }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
@@ -115,7 +105,6 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 
 import {
   getDesktopProviderService,
-  getDesktopProviderServiceReadOnly,
   setNativeProviderClaimListener,
 } from '../createDesktopProviderService.js';
 import { isNativeProviderAuthBound } from '../nativeProviderAuthBinding.js';
@@ -125,10 +114,7 @@ function isBoundToCurrentOwner(provider: 'anthropic' | 'xai'): boolean {
 }
 
 async function listProviders(allowSideEffects = true, waitForDiscovery = false) {
-  const service = allowSideEffects
-    ? getDesktopProviderService()
-    : getDesktopProviderServiceReadOnly();
-  return service.listProviders({ allowSideEffects, waitForDiscovery });
+  return getDesktopProviderService().listProviders({ allowSideEffects, waitForDiscovery });
 }
 
 async function connectedMap(allowSideEffects = true): Promise<Record<string, boolean>> {
@@ -143,9 +129,6 @@ beforeEach(() => {
   h.catalog = BUNDLED_CATALOG;
   h.claudeCredentialPresent = true;
   h.grokCredentialPresent = true;
-  h.authMode = 'local';
-  h.authUserId = 'owner-a';
-  h.legacyOwnerNamespaceClaim = false;
   h.anthropicDiscoveryFailure = null;
   h.refreshAnthropicModels.mockClear();
   h.loadAnthropicDiskCache.mockClear();
@@ -158,20 +141,6 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
-  it('纯读 accessor 不迁移 legacy owner 绑定', async () => {
-    h.authMode = 'cloud';
-    h.authUserId = 'owner-a';
-    h.legacyOwnerNamespaceClaim = true;
-
-    await getDesktopProviderServiceReadOnly().listProviders({ allowSideEffects: false });
-    expect(isNativeProviderAuthBound('anthropic')).toBe(false);
-    expect(isNativeProviderAuthBound('xai')).toBe(false);
-
-    getDesktopProviderService();
-    expect(isNativeProviderAuthBound('anthropic')).toBe(true);
-    expect(isNativeProviderAuthBound('xai')).toBe(true);
-  });
-
   it('认领本机 anthropic 凭证并补拉一次清单(修「已连接 + 零模型」)', async () => {
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
 

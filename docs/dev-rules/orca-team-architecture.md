@@ -116,14 +116,10 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 `cindy_orca` 直接注册到顶层，而不是藏在 `list_tools/call_tool` 后面；模型在“开协同 / 派 worker”时需要稳定发现 `start_team/create_worker`。实现见 `packages/lizi-mcps/src/orca/server.ts` 的 `createOrcaMcpServer`、`DirectToolSink`、`OrcaMcpDeps`。
 
-模型选择在工具层使用稳定的二元组 `(provider_id, model_id)`。`list_available_models`
-保留按 agent 聚合的兼容清单，并通过 `routes` 返回每个已连接来源及当前默认来源；
-`create_worker` / `create_workers` 可选传入 `provider_id` 做精确路由。创建回执同时返回
-持久化的 `provider_id` 与实际解析后的 `route_provider_id`，两者不能混为一谈。
-`list_available_models` 全局可见且不要求 Lead 身份，因此 provider 快照必须使用
-不执行 legacy 凭证绑定迁移的 service accessor，并在连接态读取时继续使用
-`allowSideEffects: false`；只有 handoff / Worker 创建等已经进入写操作授权边界的
-路由解析才能使用授权 accessor 并显式传 `allowSideEffects: true` 做本机 provider 自愈。
+模型选择使用稳定的 `(provider_id, model_id)`。`list_available_models` 保留按 agent 聚合的兼容清单并通过 `routes` 返回来源；创建工具可传 `provider_id` 精确路由，回执中的持久化 `provider_id` 与实际 `route_provider_id` 不能混为一谈。
+`list_available_models` 全局可见且不要求 Lead 身份，因此必须使用无凭证迁移的纯读
+provider accessor 与 `allowSideEffects: false`；只有进入写操作授权边界的 handoff /
+Worker 创建可以使用授权 accessor 做本机 provider 自愈。
 
 Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast 的“下次创建默认值”同类，不是 Lead 权限的继承项，也不是 Team 数据库字段：
 
