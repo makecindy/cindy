@@ -3535,6 +3535,7 @@ export function CCAgentSessionView({
                   sessionId={sessionId ?? null}
                   messages={messages}
                   animated={isStreaming}
+                  streaming={isStreaming}
                   width={inputWidth}
                   taskHistoryMayBeIncomplete={
                     !historyLoaded || hasMoreMessages || historyWindowHasIsland

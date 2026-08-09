@@ -31,7 +31,6 @@ import { createId } from '@paralleldrive/cuid2';
 
 import { BrowserWindow } from 'electron';
 import { desc, eq } from 'drizzle-orm';
-import { resolveCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
 
 import {
   broadcastMessageRow,
@@ -500,6 +499,22 @@ const toolUseCreatedAtBySession = new Map<string, Map<string, number>>();
  * 每会话 toolUseId → { toolName, input }。媒体 echo 兜底用:flushOrphanToolResults
  * 需要按 tool_use 的 input.args 去 mediaToolResultFallback 池里认领结果。
  */
+/**
+ * Codex 计划行的持久化引用,按 `plan:<turnId>` 存活到**产品 turn** 结束。
+ *
+ * 为什么不能复用 toolUseInfoBySession / updatableToolUsePersistIdBySession:
+ * 那两张表是 per-SDK-segment 的,每个 continuation boundary 都会被
+ * resetTurnPersistState 清空。分段 turn(S1 产出计划 → continuation done →
+ * S2 最终 done)在最终 done 时已经查不到计划行,既不写终态章也不写
+ * turnCompleted:false,重载后胶囊走旧版全勾完兜底 → 永久钉住(review P1-1)。
+ * 计划行的归属键是 turnId,与 SDK 分段无关,所以单独存一张按 turnId 的表,
+ * 只在同一 turnId 被新计划覆盖或 finalize 后清理。
+ */
+const codexPlanRowByTurnToolUseId = new Map<
+  string,
+  Map<string, { persistId: string; input: unknown }>
+>();
+
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
 const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>();
 
@@ -655,6 +670,23 @@ function isUpdatableToolUse(toolName: string): boolean {
   return toolName === 'update_plan' || toolName === 'web_search';
 }
 
+/**
+ * 计划行进按 turnId 的表:它要活过 continuation boundary 的 map 清空,直到产品
+ * turn 真正结束才用得上(review P1-1)。**每次 update_plan 都要调**——同一 turn 的
+ * 重复更新走 onToolUseEvent 的复用分支,只在首次记录会让终态写入拿首版快照覆盖
+ * 已更新的计划(review P1)。
+ */
+function rememberCodexPlanRow(
+  sessionId: string,
+  toolName: string,
+  toolUseId: string,
+  persistId: string,
+  input: unknown,
+): void {
+  if (toolName !== 'update_plan' || !toolUseId) return;
+  getOrCreateSessionMap(codexPlanRowByTurnToolUseId, sessionId).set(toolUseId, { persistId, input });
+}
+
 function rememberUpdatableToolUsePersistId(sessionId: string, toolUseId: string, persistId: string): void {
   let idMap = updatableToolUsePersistIdBySession.get(sessionId);
   if (!idMap) {
@@ -729,6 +761,9 @@ export function onToolUseEvent(
     enqueueWrite(`tool_use_update:${sessionId}:${existingPersistId}`, () =>
       updateDbMessageContent(sessionId, existingPersistId, content),
     );
+    // 同一 turn 的第二次 update_plan 走这条复用分支,按-turn 缓存必须跟着刷新:
+    // 终态写入优先读它,停在首版快照会把已更新的计划整行盖回第一版(review P1)。
+    rememberCodexPlanRow(sessionId, toolName, toolUseId, existingPersistId, data.input);
     notePersistedMessage(sessionId, 'tool_use', existingPersistId);
     return existingPersistId;
   }
@@ -746,6 +781,7 @@ export function onToolUseEvent(
   if (isUpdatableToolUse(toolName) && toolUseId) {
     rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
   }
+  rememberCodexPlanRow(sessionId, toolName, toolUseId, persistId, data.input);
   notePersistedMessage(sessionId, 'tool_use', persistId);
   return persistId;
 }
@@ -772,33 +808,44 @@ export function persistCodexPlanOnDone(
   if (!turnId) return false;
 
   const toolUseId = `plan:${turnId}`;
+  // 归属键是 turnId,与 SDK 分段无关:优先读活过 continuation boundary 的
+  // 按-turn 表,per-segment 表仅作兼容兜底(review P1-1)。
+  const planRowMap = codexPlanRowByTurnToolUseId.get(sessionId);
+  const planRow = planRowMap?.get(toolUseId);
   const infoMap = toolUseInfoBySession.get(sessionId);
   const info = infoMap?.get(toolUseId);
-  const persistId = updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId);
-  if (!info || info.toolName !== 'update_plan' || !persistId) return false;
+  const persistId =
+    planRow?.persistId ?? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId);
+  const rawInput = planRow?.input ?? (info?.toolName === 'update_plan' ? info.input : undefined);
+  if (!persistId) return false;
 
-  const input = info.input && typeof info.input === 'object' && !Array.isArray(info.input)
-    ? info.input as Record<string, unknown>
+  const input = rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)
+    ? rawInput as Record<string, unknown>
     : null;
   if (!input || !Array.isArray(input.plan)) return false;
 
   const isSuccessfulTerminal = isSuccessfulCodexDoneEventData(data);
-  const nextPlan =
-    resolveCodexPlanSnapshotOnDone(input.plan, data?.plan, isSuccessfulTerminal) ??
-    (isSuccessfulTerminal ? null : input.plan);
-  if (!nextPlan) return false;
+  // Only an explicit snapshot from Codex may change step statuses. A successful
+  // turn that left items open is recorded as-is and closed by the seal below —
+  // ticking them here would make the stored plan claim work the agent never
+  // reported doing.
+  const nextPlan = Array.isArray(data?.plan) ? data.plan : input.plan;
   // Even when Codex already emitted the exact completed/empty plan, stamp the
   // durable row at done. Renderer must distinguish this authoritative write
   // from an older ordinary DB echo that merely happens to look completed.
+  const terminalPlanAtMs = Date.now();
   const nextInput = { ...input, plan: nextPlan };
-  infoMap?.set(toolUseId, { ...info, input: nextInput });
+  if (info) infoMap?.set(toolUseId, { ...info, input: nextInput });
+  // 终态已定,这份计划行不再需要跨段引用;同时保留最新 input 供同 turn 的
+  // 重复 done(罕见)幂等复用。
+  planRowMap?.set(toolUseId, { persistId, input: nextInput });
   enqueueWrite(`codex_plan_done:${sessionId}:${persistId}`, async (ownerScope) => {
     const updated = await updateDbMessageContent(sessionId, persistId, {
       toolUseId,
       toolName: 'update_plan',
       input: nextInput,
       ...(isSuccessfulTerminal
-        ? { terminalPlanSnapshot: true }
+        ? { terminalPlanSnapshot: true, terminalPlanAtMs }
         : { turnCompleted: false }),
     });
     // Reuse the existing upsert-style row broadcast so a renderer that mounts
@@ -807,6 +854,47 @@ export function persistCodexPlanOnDone(
     if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
   });
   return true;
+}
+
+/**
+ * Codex can end a turn with a terminal `error` that never gets a `done` (the
+ * agent explicitly suppresses a late `turnCompleted` after a terminal error).
+ * That path used to leave the turn's plan row with neither a seal nor a
+ * `turnCompleted:false` stamp, so plan-liveness consumers (the pinned capsule)
+ * had no durable evidence the task is still alive and could retire an all-done
+ * plan as if it were legacy history. Stamp the failure marker here — the
+ * per-turn maps only ever hold rows belonging to the current turn, so the scope
+ * is exact. Never seals, never touches step statuses.
+ */
+export function persistCodexPlanOnTerminalError(sessionId: string, turnId?: string | null): boolean {
+  // 按-turn 表跨 continuation 存活,是这里的首选来源(同 persistCodexPlanOnDone)。
+  const planRowMap = codexPlanRowByTurnToolUseId.get(sessionId);
+  if (!planRowMap || planRowMap.size === 0) return false;
+  // turn 归属边界:调用方给出 turnId 时只盖该 turn 的计划行,不误伤同会话里
+  // 其它 turn 的行(review P2)。拿不到 turnId(Codex 的 terminal error 常不带)
+  // 时退回全表——本会话的未收口计划行本就只应有当前 turn 的那一份。
+  const expectedToolUseId = typeof turnId === 'string' && turnId ? `plan:${turnId}` : null;
+  let stamped = false;
+  for (const [toolUseId, planRow] of planRowMap) {
+    if (expectedToolUseId && toolUseId !== expectedToolUseId) continue;
+    const persistId = planRow.persistId;
+    if (!persistId) continue;
+    const input = planRow.input && typeof planRow.input === 'object' && !Array.isArray(planRow.input)
+      ? planRow.input as Record<string, unknown>
+      : null;
+    if (!input || !Array.isArray(input.plan)) continue;
+    enqueueWrite(`codex_plan_terminal_error:${sessionId}:${persistId}`, async (ownerScope) => {
+      const updated = await updateDbMessageContent(sessionId, persistId, {
+        toolUseId,
+        toolName: 'update_plan',
+        input,
+        turnCompleted: false,
+      });
+      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+    });
+    stamped = true;
+  }
+  return stamped;
 }
 
 /**
@@ -1276,6 +1364,9 @@ export function resetTurnPersistState(sessionId: string): void {
   toolUseCreatedAtBySession.delete(sessionId);
   toolUseInfoBySession.delete(sessionId);
   updatableToolUsePersistIdBySession.delete(sessionId);
+  // 刻意不清 codexPlanRowByTurnToolUseId:它按 turnId 归属,必须活过每个
+  // continuation boundary 的 per-segment 清空(review P1-1)。由
+  // clearCodexPlanRowsForSession(逻辑 turn 结束 / 会话清理)负责回收。
   lastAgentMetaBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
@@ -1570,7 +1661,16 @@ export function onTurnErrorEvent(
 }
 
 /** session 关闭时清掉该会话所有 per-session 持久化状态,避免 Map 泄漏 / 跨会话串状态。 */
+/**
+ * 回收按-turn 的计划行引用。逻辑 turn 真正结束(非 continuation boundary 的
+ * done / 终止 error 之后)与会话清理时调用——只有到那时跨段引用才不再需要。
+ */
+export function clearCodexPlanRowsForSession(sessionId: string): void {
+  codexPlanRowByTurnToolUseId.delete(sessionId);
+}
+
 export function clearSessionPersistState(sessionId: string): void {
+  clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);
   backgroundTurnPersistStatesBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);
