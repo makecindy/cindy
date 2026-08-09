@@ -195,6 +195,70 @@ describe('durable Subagent runs', () => {
     ]);
   });
 
+  it('uses the terminal Codex summary instead of a spawn receipt as the returned result', async () => {
+    insertMessage('codex-tool-use', 'tool_use', '{}', 'codex-spawn', 900);
+    const spawned = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'codex',
+          taskId: 'codex-spawn',
+          parentToolUseId: 'codex-spawn',
+          status: 'running',
+          title: 'Audit auth',
+          summary: 'Audit agent started',
+          updatedAt: '1970-01-01T00:00:01.000Z',
+        },
+        { providerRunIds: ['codex-thread-1'] },
+      ),
+    );
+    await persistSubagentTaskUpdate(
+      'session-1',
+      {
+        provider: 'codex',
+        taskId: 'codex-spawn',
+        parentToolUseId: 'codex-spawn',
+        status: 'completed',
+        title: 'spawnAgent',
+        summary: 'The audit found no upstream conflict.',
+        updatedAt: '1970-01-01T00:00:02.000Z',
+      },
+      'codex',
+    );
+    expect(await getSubagentRunDetail('session-1', spawned!.runId)).toMatchObject({
+      status: 'running',
+      title: 'Audit auth',
+      summary: 'The audit found no upstream conflict.',
+    });
+    expect(
+      (await getSubagentRunDetail('session-1', spawned!.runId))?.returnedResult,
+    ).toBeUndefined();
+    await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'codex',
+          taskId: 'codex-spawn',
+          parentToolUseId: 'codex-spawn',
+          status: 'completed',
+          updatedAt: '1970-01-01T00:00:02.100Z',
+        },
+        { kind: 'terminal' },
+      ),
+    );
+    insertMessage(
+      'codex-spawn-receipt',
+      'tool_result',
+      JSON.stringify('started: codex-thread-1'),
+      'codex-spawn',
+      1100,
+    );
+
+    expect((await getSubagentRunDetail('session-1', spawned!.runId))?.returnedResult).toBe(
+      'The audit found no upstream conflict.',
+    );
+  });
+
   it('honors message rewind and clear boundaries without deleting audit rows', async () => {
     insertMessage('tool-use-2', 'tool_use', '{}', 'parent-tool-2', 900);
     insertMessage('tool-result-before-clear', 'tool_result', 'old result', 'parent-tool-2', 950);
@@ -258,6 +322,27 @@ describe('durable Subagent runs', () => {
     ).toBeTruthy();
   });
 
+  it('keeps a parentless event observed before clear hidden when its write runs later', async () => {
+    rawDb.prepare('UPDATE sessions SET cleared_at = 1500 WHERE id = ?').run('session-1');
+
+    const created = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'claude-code',
+        taskId: 'parentless-before-clear',
+        status: 'running',
+      }),
+      'claude-code',
+      1000,
+    );
+
+    expect(created).toMatchObject({ created: true });
+    expect(
+      rawDb.prepare('SELECT started_at FROM subagent_runs WHERE id = ?').get(created!.runId),
+    ).toEqual({ started_at: 1000 });
+    expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
+  });
+
   it('excludes background Bash and Workflow aggregation from the Subagent workspace', async () => {
     expect(
       await persistSubagentTaskUpdate('session-1', observed({
@@ -297,6 +382,7 @@ describe('durable Subagent runs', () => {
         provider: 'codex',
         taskId: 'wait-call-1',
         status: 'completed',
+        summary: 'wait completed',
         title: 'wait',
         receiverThreadIds: ['child-a', 'child-b'],
       }),
@@ -348,6 +434,28 @@ describe('durable Subagent runs', () => {
     expect(second?.runs).toHaveLength(5);
     expect(second?.runs.at(-1)?.logicalAgentId).toBe('pi-child-0');
     expect(second?.nextCursor).toBeUndefined();
+  });
+
+  it('filters rewound or missing parents before applying the page limit', async () => {
+    const visible = await persistSubagentTaskUpdate('session-1', observed({
+      provider: 'pi',
+      taskId: 'visible-older-run',
+      status: 'completed',
+      updatedAt: '1970-01-01T00:00:01.000Z',
+    }));
+    for (let index = 0; index < 50; index += 1) {
+      await persistSubagentTaskUpdate('session-1', observed({
+        provider: 'claude-code',
+        taskId: `hidden-run-${index}`,
+        parentToolUseId: `missing-parent-${index}`,
+        status: 'completed',
+        updatedAt: new Date(2_000 + index).toISOString(),
+      }));
+    }
+
+    const first = await listSubagentRuns('session-1');
+    expect(first?.runs.map((run) => run.id)).toEqual([visible!.runId]);
+    expect(first?.nextCursor).toBeUndefined();
   });
 
   function insertMessage(

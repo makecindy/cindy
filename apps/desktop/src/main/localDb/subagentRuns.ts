@@ -315,19 +315,38 @@ export async function persistSubagentTaskUpdate(
   sessionId: string,
   data: unknown,
   source?: SubagentProvider,
+  observedAt = Date.now(),
 ): Promise<PersistSubagentTaskUpdateResult | null> {
   const update = normalizeAgentTaskUpdate(data, source);
-  const observation =
+  const markedObservation =
     data && typeof data === 'object' && !Array.isArray(data)
       ? normalizeSubagentObservation((data as Record<string, unknown>).subagentObservation)
       : null;
+  // Codex's completed spawn item carries the result summary but deliberately
+  // leaves lifecycle authority to descendant tracking. It may enrich an
+  // already-marked run, but can never create one or close it by itself.
+  const codexSummaryEnrichment =
+    !markedObservation &&
+    source === 'codex' &&
+    update?.provider === 'codex' &&
+    update.status === 'completed' &&
+    Boolean(update.summary);
+  const observation =
+    markedObservation ??
+    (codexSummaryEnrichment && update
+      ? {
+          kind: 'progress' as const,
+          logicalSubagentId: update.taskId,
+          ...(update.parentToolUseId ? { parentToolUseId: update.parentToolUseId } : {}),
+        }
+      : null);
   if (
     !update ||
     !observation ||
     update.taskType === 'local_bash' ||
     update.taskType === 'local_workflow' ||
     (observation.kind === 'terminal' && !terminal(update.status)) ||
-    (observation.kind === 'progress' && terminal(update.status))
+    (observation.kind === 'progress' && terminal(update.status) && !codexSummaryEnrichment)
   ) {
     return null;
   }
@@ -363,8 +382,28 @@ export async function persistSubagentTaskUpdate(
   // A progress/terminal event is never authority to invent a child or attach a
   // control call's receiver ids to an arbitrary existing run.
   if (!existing && observation.kind !== 'spawn') return null;
-  const now = Date.now();
+  const now = Number.isSafeInteger(observedAt) && observedAt >= 0 ? observedAt : Date.now();
   const updatedAt = finiteTime(update.updatedAt, now);
+  if (codexSummaryEnrichment) {
+    const summary = boundedText(update.summary, TEXT_LIMITS.summary);
+    if (!existing || !summary) return null;
+    const activity = appendActivity(
+      parseActivity(existing.activity),
+      { ...update, status: existing.status },
+      existing.status,
+      updatedAt,
+      false,
+    );
+    await db
+      .update(subagentRuns)
+      .set({
+        summary,
+        activity: JSON.stringify(activity),
+        updatedAt: Math.max(existing.updatedAt, updatedAt),
+      })
+      .where(eq(subagentRuns.id, existing.id));
+    return { runId: existing.id, created: false, firstForSession: false };
+  }
   const startedAt = existing?.startedAt ?? finiteTime(update.createdAt, updatedAt);
   const status = mergeStatus(existing?.status, update.status, update.provider);
   const aliases = mergeUnique(
@@ -525,41 +564,66 @@ export async function listSubagentRuns(
 ): Promise<{ runs: SubagentRun[]; nextCursor?: string } | null> {
   const session = await readableSession(sessionId);
   if (!session) return null;
+  const db = getDbClient().drizzle;
   const cursor = decodeCursor(options.cursor);
   const requestedLimit =
     typeof options.limit === 'number' && Number.isFinite(options.limit)
       ? Math.floor(options.limit)
       : DEFAULT_LIST_PAGE_SIZE;
   const pageSize = Math.min(MAX_LIST_PAGE_SIZE, Math.max(1, requestedLimit));
-  const conditions = [
+  const baseConditions = [
     eq(subagentRuns.sessionId, sessionId),
     isNull(subagentRuns.rewindAt),
     isNull(subagentRuns.deletedAt),
   ];
-  if (session.clearedAt !== null) conditions.push(gt(subagentRuns.startedAt, session.clearedAt));
-  if (cursor) {
-    conditions.push(
-      or(
-        lt(subagentRuns.startedAt, cursor.startedAt),
-        and(eq(subagentRuns.startedAt, cursor.startedAt), lt(subagentRuns.id, cursor.id)),
-      )!,
-    );
+  if (session.clearedAt !== null) {
+    baseConditions.push(gt(subagentRuns.startedAt, session.clearedAt));
   }
-  const rows = await getDbClient()
-    .drizzle.select()
-    .from(subagentRuns)
-    .where(and(...conditions))
-    .orderBy(desc(subagentRuns.startedAt), desc(subagentRuns.id))
-    .limit(pageSize + 1);
-  const page = rows.slice(0, pageSize);
-  const parentIds = page.flatMap((row) => (row.parentToolUseId ? [row.parentToolUseId] : []));
-  const visibleToolUseIds = await visibleParentToolUseIds(sessionId, parentIds, session.clearedAt);
-  const runs = page
-    .filter((row) => !row.parentToolUseId || visibleToolUseIds.has(row.parentToolUseId))
-    .map(rowToRun);
+  const visibleRows: SubagentRunRow[] = [];
+  let scanCursor = cursor;
+  let exhausted = false;
+  // Parent visibility is defensive and can hide an entire raw batch. Keep
+  // scanning bounded DB pages so those rows never strand older visible runs.
+  while (visibleRows.length <= pageSize && !exhausted) {
+    const conditions = [...baseConditions];
+    if (scanCursor) {
+      conditions.push(
+        or(
+          lt(subagentRuns.startedAt, scanCursor.startedAt),
+          and(
+            eq(subagentRuns.startedAt, scanCursor.startedAt),
+            lt(subagentRuns.id, scanCursor.id),
+          ),
+        )!,
+      );
+    }
+    const batch = await db
+      .select()
+      .from(subagentRuns)
+      .where(and(...conditions))
+      .orderBy(desc(subagentRuns.startedAt), desc(subagentRuns.id))
+      .limit(pageSize + 1);
+    if (batch.length === 0) break;
+    const parentIds = batch.flatMap((row) => (row.parentToolUseId ? [row.parentToolUseId] : []));
+    const visibleToolUseIds = await visibleParentToolUseIds(
+      sessionId,
+      parentIds,
+      session.clearedAt,
+    );
+    visibleRows.push(
+      ...batch.filter(
+        (row) => !row.parentToolUseId || visibleToolUseIds.has(row.parentToolUseId),
+      ),
+    );
+    const lastScanned = batch[batch.length - 1];
+    scanCursor = { startedAt: lastScanned.startedAt, id: lastScanned.id };
+    exhausted = batch.length < pageSize + 1;
+  }
+  const page = visibleRows.slice(0, pageSize);
+  const runs = page.map(rowToRun);
   return {
     runs,
-    ...(rows.length > pageSize && page.length > 0
+    ...(visibleRows.length > pageSize && page.length > 0
       ? { nextCursor: encodeCursor(page[page.length - 1]) }
       : {}),
   };
@@ -643,7 +707,21 @@ export async function getSubagentRunDetail(
   const run = rowToRun(row);
   let returnedResult: string | undefined;
   let returnedResultTruncated = false;
-  if (run.capabilities.viewReturnedResult && row.parentToolUseId && terminal(row.status)) {
+  if (
+    run.capabilities.viewReturnedResult &&
+    row.provider === 'codex' &&
+    row.status === 'completed' &&
+    row.summary
+  ) {
+    const bounded = truncateUtf8(row.summary, MAX_RETURNED_RESULT_BYTES);
+    returnedResult = bounded.value;
+    returnedResultTruncated = bounded.truncated;
+  } else if (
+    run.capabilities.viewReturnedResult &&
+    (row.provider === 'pi' || row.provider === 'claude-code') &&
+    row.parentToolUseId &&
+    terminal(row.status)
+  ) {
     const [result] = await getDbClient()
       .drizzle.select({ content: messages.content })
       .from(messages)

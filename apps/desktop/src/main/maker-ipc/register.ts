@@ -3738,8 +3738,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi'
             ? event.source
             : undefined;
+        const observedAt = Date.now();
         void enqueueDurableWrite(`subagent_update:${session.id}`, async (ownerScope) => {
-          const persisted = await persistSubagentTaskUpdate(session.id, event.data, source);
+          const persisted = await persistSubagentTaskUpdate(
+            session.id,
+            event.data,
+            source,
+            observedAt,
+          );
           if (persisted) {
             broadcastSubagentRunsChanged({ sessionId: session.id, ...persisted }, ownerScope);
           }

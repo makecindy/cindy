@@ -24,11 +24,11 @@ import { ipcMain } from 'electron';
 import { createId } from '@paralleldrive/cuid2';
 import { and, asc, eq } from 'drizzle-orm';
 
-import { getDbClient } from '../client/current';
-import { rightSidebarTabs, sessions } from '../schema';
-import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
-import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
-import { createLogger } from '../../logger';
+import { getDbClient } from '../client/current.js';
+import { rightSidebarTabs, sessions } from '../schema.js';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
+import { createLogger } from '../../logger.js';
 
 const log = createLogger('rightSidebarTabs');
 
