@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useEffect } from 'react';
-import { act, renderHook } from '@testing-library/react';
+import { act, fireEvent, renderHook } from '@testing-library/react';
 import { Editor } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
@@ -171,5 +171,37 @@ describe('useComposerSendFocusRestore', () => {
 
     expect(document.activeElement).toBe(document.body);
     expect(document.getSelection()?.toString()).toBe('select');
+  });
+
+  it('does not interrupt a message selection drag before the range expands', () => {
+    const editor = createEditor();
+    const message = document.createElement('p');
+    const messageText = document.createTextNode('start selecting here');
+    message.append(messageText);
+    document.body.prepend(message);
+    const hook = renderRestoreHook(editor);
+
+    focusComposerSelection(editor);
+    act(() => {
+      hook.result.current();
+    });
+    hook.rerender({ composerMutationLocked: true, sendDispatchInFlight: true });
+    act(() => {
+      editor.view.dom.blur();
+      const range = document.createRange();
+      range.setStart(messageText, 0);
+      range.collapse(true);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    fireEvent.pointerDown(message);
+
+    hook.rerender({ composerMutationLocked: false, sendDispatchInFlight: false });
+    flushAnimationFrames();
+
+    expect(document.activeElement).toBe(document.body);
+    expect(document.getSelection()?.isCollapsed).toBe(true);
+    expect(document.getSelection()?.anchorNode).toBe(messageText);
   });
 });

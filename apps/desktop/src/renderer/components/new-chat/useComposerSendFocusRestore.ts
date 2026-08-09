@@ -48,6 +48,24 @@ export function useComposerSendFocusRestore(
   const pendingRestoreRef = useRef<PendingComposerFocusRestore | null>(null);
 
   useEffect(() => {
+    if (!editor) return;
+    const editorDom = editor.view.dom;
+    const ownerDocument = editorDom.ownerDocument;
+    const cancelRestoreForOutsidePointer = (event: PointerEvent) => {
+      const pendingRestore = pendingRestoreRef.current;
+      if (!pendingRestore || pendingRestore.editor !== editor) return;
+      const target = event.target;
+      if (target instanceof Node && editorDom.contains(target)) return;
+      pendingRestoreRef.current = null;
+    };
+
+    ownerDocument.addEventListener('pointerdown', cancelRestoreForOutsidePointer, true);
+    return () => {
+      ownerDocument.removeEventListener('pointerdown', cancelRestoreForOutsidePointer, true);
+    };
+  }, [editor]);
+
+  useEffect(() => {
     if (!editor || sendDispatchInFlight || composerMutationLocked) return;
 
     const pendingRestore = pendingRestoreRef.current;
