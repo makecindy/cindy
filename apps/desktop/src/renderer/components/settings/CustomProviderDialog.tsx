@@ -14,7 +14,8 @@
  * DESIGN.md §4 规定的 `--surface-elevated`(压在 ivory settings 卡上的输入必须用它)。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
 
@@ -25,6 +26,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
+import {
+  CustomProviderRuntimeFillOverlay,
+  type RuntimeFillDialogState,
+} from '@/components/settings/CustomProviderRuntimeFillOverlay';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomProvider,
@@ -51,6 +56,19 @@ import {
   CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS,
   customProviderCodexWireProtocolOption,
 } from '@/lib/customProviderWireProtocols';
+import {
+  applyRuntimeFillFields,
+  buildRuntimeFillDiffs,
+  cloneRuntimeFillDraft,
+  mergeHydratedRuntimeKeys,
+  normalizeRuntimeFillSelection,
+  runtimeFillFieldsForToggle,
+  runtimeFillHasUnreviewedConflict,
+  runtimeFillSelectedTargetChanged,
+  runtimeFillTargetAgents,
+  type RuntimeFillDraft,
+  type RuntimeFillField,
+} from '@/lib/customProviderRuntimeFill';
 
 import {
   isProviderRequestPath,
@@ -75,6 +93,15 @@ type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
 
 const VISIBLE_AGENTS: DialogAgentKind[] = AGENTS;
+
+const DIALOG_FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[href]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
 
 const TAB_META: Record<DialogAgentKind, { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }> =
   {
@@ -109,6 +136,8 @@ interface CustomProviderDialogProps {
   initial?: CustomProviderConfig;
   /** 已占用的全部 provider id（内置 anthropic/openai/xd + 全部自定义）；新建时自动生成 id 时避让，防撞内置保留 id。 */
   existingIds?: string[];
+  /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   onSaved: () => void;
   onClose: () => void;
 }
@@ -118,11 +147,7 @@ interface HeaderRow {
   name: string;
   value: string;
 }
-interface RuntimeFields {
-  baseUrl: string;
-  requestPath: string;
-  apiKey: string;
-  wireProtocol: ProviderWireProtocol;
+interface RuntimeFields extends RuntimeFillDraft {
   models: ModelRow[];
   headers: HeaderRow[];
   /** 隐藏字段：列模型端点（预设 / 已存配置快照进来），「获取模型列表」用；不在表单展示。 */
@@ -162,7 +187,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
       if (!rc) continue;
       out[a] = {
         baseUrl: rc.baseUrl,
-        requestPath: rc.requestPath ?? '',
+        requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
         apiKey: '',
         wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
         models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
@@ -291,6 +316,7 @@ function PresetDropdown({
 export function CustomProviderDialog({
   initial,
   existingIds,
+  returnFocusRef,
   onSaved,
   onClose,
 }: CustomProviderDialogProps) {
@@ -363,6 +389,29 @@ export function CustomProviderDialog({
     selected: Set<string>;
     query: string;
   } | null>(null);
+  const [runtimeFill, setRuntimeFill] = useState<RuntimeFillDialogState | null>(null);
+  const [keyHydrationReady, setKeyHydrationReady] = useState(!editing);
+  const [keyHydrationFailed, setKeyHydrationFailed] = useState(false);
+  const runtimeFillTriggerRef = useRef<HTMLButtonElement>(null);
+  const modelPickerTriggerRef = useRef<HTMLButtonElement>(null);
+  const modelFetchInFlightRef = useRef(false);
+  const dialogPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const returnFocusElement =
+      document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+        ? document.activeElement
+        : null;
+    const frame = requestAnimationFrame(() => {
+      dialogPanelRef.current?.querySelector<HTMLInputElement>('input')?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      const focusTarget = returnFocusElement?.isConnected
+        ? returnFocusElement
+        : returnFocusRef?.current;
+      if (focusTarget?.isConnected) focusTarget.focus();
+    };
+  }, [returnFocusRef]);
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
   // （见 setRtSynced），不用被动 useEffect——effect 在 commit 后才跑，IPC 响应若落在
@@ -386,6 +435,13 @@ export function CustomProviderDialog({
     codex: '',
     pi: '',
   });
+  // A late safeStorage response must not overwrite a key edited or copied while
+  // hydration was in flight. Revisions only change for explicit key mutations.
+  const keyEditRevisionRef = useRef<Record<DialogAgentKind, number>>({
+    'claude-code': 0,
+    codex: 0,
+    pi: 0,
+  });
 
   // 已存供应商在编辑态的基线快照:端点/协议/鉴权模式取自已存配置,apiKey 取回填值,
   // headers 取已存非密文头(自定义鉴权头是 main-only 密文,不回读进表单)。测试连接 /
@@ -404,7 +460,7 @@ export function CustomProviderDialog({
             : 'apiKey';
       return {
         baseUrl: rc.baseUrl,
-        requestPath: rc.requestPath ?? '',
+        requestPath: agent === 'pi' ? '' : (rc.requestPath ?? ''),
         modelsUrl: rc.modelsUrl ?? '',
         wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
         authMode: savedAuthMode,
@@ -453,7 +509,7 @@ export function CustomProviderDialog({
           }
           next[a] = {
             baseUrl: rc.baseUrl,
-            requestPath: rc.requestPath ?? '',
+            requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
             apiKey: prev[a].apiKey, // 已填的 key 保留
             wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
             models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
@@ -482,14 +538,26 @@ export function CustomProviderDialog({
   // 让密钥框「能看」(eye 显形 / 可核对)，而非空白遮罩；据此点亮「已保存」徽标。
   // 鉴权请求头是 main-only 密文,不回读进表单;未显式改动时由 main 侧 update 保留旧值。
   useEffect(() => {
-    if (!editing || !initial) return;
+    if (!editing || !initial) {
+      setKeyHydrationReady(true);
+      return;
+    }
     let cancelled = false;
+    setKeyHydrationReady(false);
+    setKeyHydrationFailed(false);
+    const revisionAtStart = { ...keyEditRevisionRef.current };
     void (async () => {
       const nextHas: Record<DialogAgentKind, boolean> = { 'claude-code': false, codex: false, pi: false };
       const fetched: Partial<Record<DialogAgentKind, string>> = {};
+      let readFailed = false;
       for (const a of AGENTS) {
         if (!initial.runtimes[a]) continue;
-        const k = await readCustomProviderKey(initial.id, a);
+        let k: string | null = null;
+        try {
+          k = await readCustomProviderKey(initial.id, a);
+        } catch {
+          readFailed = true;
+        }
         if (k) {
           nextHas[a] = true;
           fetched[a] = k;
@@ -500,13 +568,16 @@ export function CustomProviderDialog({
       // 记下回填的已存明文 key 作为基线:测试连接判定「凭证材料是否被改动」时用来决定
       // 走受控 saved 探测还是 adhoc(headers 是 main-only 密文,基线取自 initial 的非密文头)。
       for (const a of AGENTS) loadedKeyRef.current[a] = fetched[a] ?? '';
-      setRtSynced((prev) => {
-        const next = { ...prev };
-        for (const a of AGENTS) {
-          if (fetched[a] != null) next[a] = { ...next[a], apiKey: fetched[a] as string };
-        }
-        return next;
-      });
+      setRtSynced((prev) =>
+        mergeHydratedRuntimeKeys(
+          prev,
+          fetched,
+          revisionAtStart,
+          keyEditRevisionRef.current,
+        ),
+      );
+      setKeyHydrationFailed(readFailed);
+      setKeyHydrationReady(true);
     })();
     return () => {
       cancelled = true;
@@ -520,6 +591,178 @@ export function CustomProviderDialog({
     },
     [setRtSynced],
   );
+
+  const openRuntimeFill = useCallback(() => {
+    if (modelFetchInFlightRef.current || picker) {
+      toast.info(t('settings.providers.custom.runtimeFill.modelsBusy'));
+      return;
+    }
+    const source = activeTab;
+    const usesApiKey = authModeRef.current === 'apiKey';
+    if (usesApiKey && !keyHydrationReady) {
+      toast.info(t('settings.providers.custom.runtimeFill.loadingKeys'));
+      return;
+    }
+    if (usesApiKey && keyHydrationFailed) {
+      toast.info(t('settings.providers.custom.runtimeFill.keysUnavailable'));
+    }
+    const includeApiKey = usesApiKey && !keyHydrationFailed;
+
+    const oauthPiUnavailable = authModeRef.current === 'oauth' && source !== 'pi';
+    const sourceDraft = cloneRuntimeFillDraft(rtRef.current[source]);
+    const allTargets = runtimeFillTargetAgents(source, {
+      includePi: authModeRef.current !== 'oauth',
+    }).map((agent) => ({
+      agent,
+      draft: cloneRuntimeFillDraft(rtRef.current[agent]),
+      diffs: buildRuntimeFillDiffs(sourceDraft, rtRef.current[agent], {
+        includeApiKey,
+        sourceAgent: source,
+        targetAgent: agent,
+      }),
+    }));
+    if (!allTargets.some((target) => target.diffs.length > 0)) {
+      toast.info(t('settings.providers.custom.runtimeFill.nothingToFill'));
+      return;
+    }
+    const targets = allTargets.filter((target) =>
+      target.diffs.some((diff) => diff.targetState !== 'same'),
+    );
+    if (targets.length === 0) {
+      toast.info(t('settings.providers.custom.runtimeFill.alreadySame'));
+      return;
+    }
+    if (
+      !targets.some((target) =>
+        target.diffs.some(
+          (diff) => diff.targetState === 'empty' || diff.targetState === 'conflict',
+        ),
+      )
+    ) {
+      toast.info(t('settings.providers.custom.runtimeFill.noCompatibleFields'));
+      return;
+    }
+
+    const selected: Partial<Record<DialogAgentKind, RuntimeFillField[]>> = {};
+    for (const target of targets) {
+      selected[target.agent] = normalizeRuntimeFillSelection(
+        target.diffs
+          .filter((diff) => diff.targetState === 'empty' || diff.targetState === 'conflict')
+          .map((diff) => diff.field),
+        target.diffs,
+      );
+    }
+    setRuntimeFill({
+      source,
+      sourceDraft,
+      includeApiKey,
+      oauthPiUnavailable,
+      stage: 'review',
+      targets,
+      selected,
+    });
+  }, [activeTab, keyHydrationFailed, keyHydrationReady, picker, t]);
+
+  const applyRuntimeFill = useCallback(() => {
+    if (!runtimeFill) return;
+    const changedTargets = runtimeFill.targets.filter(
+      (target) => (runtimeFill.selected[target.agent]?.length ?? 0) > 0,
+    );
+    if (changedTargets.length === 0) return;
+
+    // Re-read targets immediately before applying. Background async work should not
+    // turn an empty field into an unconfirmed overwrite after the review snapshot.
+    const freshTargets = runtimeFill.targets.map((target) => {
+      const draft = cloneRuntimeFillDraft(rtRef.current[target.agent]);
+      return {
+        ...target,
+        draft,
+        diffs: buildRuntimeFillDiffs(runtimeFill.sourceDraft, draft, {
+          includeApiKey: runtimeFill.includeApiKey,
+          sourceAgent: runtimeFill.source,
+          targetAgent: target.agent,
+        }),
+      };
+    });
+    const hasUnreviewedConflict = freshTargets.some((target) => {
+      const previous = runtimeFill.targets.find((candidate) => candidate.agent === target.agent);
+      const selectedFields = runtimeFill.selected[target.agent] ?? [];
+      return (
+        runtimeFillHasUnreviewedConflict(previous?.diffs ?? [], target.diffs, selectedFields) ||
+        (previous != null &&
+          runtimeFillSelectedTargetChanged(
+            previous.draft,
+            target.draft,
+            selectedFields,
+            target.agent,
+          ))
+      );
+    });
+    if (hasUnreviewedConflict) {
+      setRuntimeFill((prev) => (prev ? { ...prev, stage: 'confirm', targets: freshTargets } : prev));
+      return;
+    }
+
+    for (const target of changedTargets) {
+      if (runtimeFill.selected[target.agent]?.includes('apiKey')) {
+        keyEditRevisionRef.current[target.agent] += 1;
+      }
+    }
+    setRtSynced((prev) => {
+      const next = { ...prev };
+      for (const target of changedTargets) {
+        next[target.agent] = applyRuntimeFillFields(
+          prev[target.agent],
+          runtimeFill.sourceDraft,
+          runtimeFill.selected[target.agent] ?? [],
+          { sourceAgent: runtimeFill.source, targetAgent: target.agent },
+        );
+      }
+      return next;
+    });
+    setTest((prev) => {
+      const next = { ...prev };
+      for (const target of changedTargets) next[target.agent] = IDLE_TEST;
+      return next;
+    });
+    toast.success(
+      t('settings.providers.custom.runtimeFill.filledToast', {
+        targets: new Intl.ListFormat(i18n.language, {
+          style: 'short',
+          type: 'conjunction',
+        }).format(changedTargets.map((target) => t(TAB_META[target.agent].labelKey))),
+      }),
+    );
+    setRuntimeFill(null);
+  }, [i18n.language, runtimeFill, setRtSynced, t]);
+
+  const continueRuntimeFill = useCallback(() => {
+    if (!runtimeFill) return;
+    const hasOverwrite = runtimeFill.targets.some((target) =>
+      target.diffs.some(
+        (diff) =>
+          diff.targetState === 'conflict' &&
+          (runtimeFill.selected[target.agent]?.includes(diff.field) ?? false),
+      ),
+    );
+    if (hasOverwrite) setRuntimeFill((prev) => (prev ? { ...prev, stage: 'confirm' } : prev));
+    else applyRuntimeFill();
+  }, [applyRuntimeFill, runtimeFill]);
+
+  const toggleRuntimeFillField = useCallback((agent: DialogAgentKind, field: RuntimeFillField) => {
+    setRuntimeFill((prev) => {
+      if (!prev) return prev;
+      const target = prev.targets.find((candidate) => candidate.agent === agent);
+      if (!target) return prev;
+      const current = prev.selected[agent] ?? [];
+      const toggledFields = runtimeFillFieldsForToggle(field, target.diffs);
+      const allSelected = toggledFields.every((candidate) => current.includes(candidate));
+      const nextFields = allSelected
+        ? current.filter((candidate) => !toggledFields.includes(candidate))
+        : normalizeRuntimeFillSelection([...current, ...toggledFields], target.diffs);
+      return { ...prev, selected: { ...prev.selected, [agent]: nextFields } };
+    });
+  }, []);
 
   /** 切换协议时保留用户已填写的 endpoint，仅使旧测试结果失效。 */
   const changeWireProtocol = useCallback(
@@ -539,6 +782,7 @@ export function CustomProviderDialog({
   const handleTest = useCallback(async () => {
     const agent = activeTab;
     const rf = rt[agent];
+    const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
     const baseUrl = rf.baseUrl.trim();
     const firstModel = rf.models.map((m) => m.id.trim()).find((id) => id.length > 0);
     if (!baseUrl || !firstModel) {
@@ -555,13 +799,15 @@ export function CustomProviderDialog({
       if (n) headers[n] = h.value.trim();
     }
     const requestHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
-    const requestSig = providerConnectionTestRequestSignature(rf, authMode);
+    const requestSig = providerConnectionTestRequestSignature(probeFields, authMode);
     // 编辑态且端点/协议/鉴权模式与凭证材料相对已存配置都未改动时,走受控 saved 探测:
     // 它整体按已存 spec 发起,能带上不回读进表单的 main-only 密文鉴权头(否则纯密文头
     // 供应商会因缺头而失败)。任一改动则回落 adhoc,测用户新填的值。
     const savedBaseline = savedBaselineFor(agent);
     const useSaved = Boolean(
-      initial?.id && savedBaseline && connectionTestCanUseSaved(rf, savedBaseline, authMode),
+      initial?.id &&
+        savedBaseline &&
+        connectionTestCanUseSaved(probeFields, savedBaseline, authMode),
     );
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
@@ -576,14 +822,21 @@ export function CustomProviderDialog({
                 modelId: firstModel,
                 authMethod: authMode,
                 wireProtocol: rf.wireProtocol,
-                ...(rf.requestPath.trim() ? { requestPath: rf.requestPath.trim() } : {}),
+                ...(agent !== 'pi' && rf.requestPath.trim()
+                  ? { requestPath: rf.requestPath.trim() }
+                  : {}),
                 apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
                 ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
               },
             },
       );
       if (
-        providerConnectionTestRequestSignature(rtRef.current[agent], authModeRef.current) !==
+        providerConnectionTestRequestSignature(
+          agent === 'pi'
+            ? { ...rtRef.current[agent], requestPath: '' }
+            : rtRef.current[agent],
+          authModeRef.current,
+        ) !==
         requestSig
       )
         return;
@@ -595,7 +848,12 @@ export function CustomProviderDialog({
       }));
     } catch (e) {
       if (
-        providerConnectionTestRequestSignature(rtRef.current[agent], authModeRef.current) !==
+        providerConnectionTestRequestSignature(
+          agent === 'pi'
+            ? { ...rtRef.current[agent], requestPath: '' }
+            : rtRef.current[agent],
+          authModeRef.current,
+        ) !==
         requestSig
       )
         return;
@@ -613,7 +871,14 @@ export function CustomProviderDialog({
   const handleFetchModels = useCallback(async () => {
     const agent = activeTab;
     const rf = rt[agent];
-    if (fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi) return; // 单飞（按钮已禁用，兜底）
+    if (
+      modelFetchInFlightRef.current ||
+      runtimeFill ||
+      picker ||
+      fetchingModels['claude-code'] ||
+      fetchingModels.codex ||
+      fetchingModels.pi
+    ) return; // 单飞（按钮已禁用，兜底）
     const baseUrl = rf.baseUrl.trim();
     if (!baseUrl) {
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
@@ -639,6 +904,7 @@ export function CustomProviderDialog({
     const reuseSaved = Boolean(
       initial?.id && savedBaseline && modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
     );
+    modelFetchInFlightRef.current = true;
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
     try {
       const result = await window.electronAPI.maker.fetchProviderModels({
@@ -709,9 +975,10 @@ export function CustomProviderDialog({
       const ipc = extractIpcError(e);
       toast.error(ipc?.message ?? t('settings.providers.custom.fetch.failed'));
     } finally {
+      modelFetchInFlightRef.current = false;
       setFetchingModels((prev) => ({ ...prev, [agent]: false }));
     }
-  }, [activeTab, authMode, rt, fetchingModels, t, savedBaselineFor, initial]);
+  }, [activeTab, authMode, rt, fetchingModels, initial, picker, runtimeFill, savedBaselineFor, t]);
 
   /**
    * 勾选弹层确认：勾选集写回该 runtime 的模型行。基于**确认时的最新表单行**合并，
@@ -875,7 +1142,7 @@ export function CustomProviderDialog({
             : {}),
         }))
         .filter((m) => m.id && m.name);
-      const requestPath = rf.requestPath.trim();
+      const requestPath = a === 'pi' ? '' : rf.requestPath.trim();
       if (requestPath && !isProviderRequestPath(requestPath)) {
         setActiveTab(a);
         toast.error(t('settings.providers.custom.errors.requestPathInvalid'));
@@ -903,7 +1170,13 @@ export function CustomProviderDialog({
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
       };
       // OAuth 形态不收集 per-runtime API key（鉴权走 Runner 的 Bearer）。
-      if (authMode === 'apiKey' && rf.apiKey.trim()) keys[a] = rf.apiKey.trim();
+      if (
+        authMode === 'apiKey' &&
+        rf.apiKey.trim() &&
+        (!editing || keyEditRevisionRef.current[a] > 0)
+      ) {
+        keys[a] = rf.apiKey.trim();
+      }
     }
     if (Object.keys(runtimes).length === 0) {
       toast.error(t('settings.providers.custom.errors.runtimeRequired'));
@@ -1027,19 +1300,66 @@ export function CustomProviderDialog({
     : t('settings.providers.custom.fields.apiKeyPlaceholder');
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]">
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
+      onPointerDown={(event) => {
+        if (event.target !== event.currentTarget || saving || picker || runtimeFill) return;
+        onClose();
+      }}
+      onKeyDown={(event) => {
+        if (picker || runtimeFill) return;
+        if (event.key === 'Escape') {
+          if (
+            event.defaultPrevented ||
+            event.nativeEvent.isComposing ||
+            event.nativeEvent.keyCode === 229
+          ) return;
+          if (saving) return;
+          event.preventDefault();
+          onClose();
+          return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(
+          dialogPanelRef.current?.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR) ?? [],
+        );
+        if (focusable.length === 0) {
+          event.preventDefault();
+          dialogPanelRef.current?.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
+    >
       <div
+        ref={dialogPanelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="custom-provider-dialog-title"
+        tabIndex={-1}
         className={cn(
-          'flex max-h-[88vh] w-[600px] flex-col rounded-[16px]',
+          'flex max-h-[88vh] w-[600px] flex-col rounded-[16px] outline-none',
           'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
           'shadow-[var(--shadow-menu)]',
+          '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
         )}
       >
         {/* Header bar */}
         <div className="flex items-center justify-between px-3 py-3">
           <div className="flex items-center gap-2.5 pl-2">
             <Sparkles size={20} className="text-[var(--settings-section-title)]" />
-            <h2 className="text-18 font-semibold text-[var(--settings-section-title)]">
+            <h2
+              id="custom-provider-dialog-title"
+              className="text-18 font-semibold text-[var(--settings-section-title)]"
+            >
               {editing
                 ? t('settings.providers.custom.dialog.editTitle')
                 : t('settings.providers.custom.dialog.createTitle')}
@@ -1285,7 +1605,17 @@ export function CustomProviderDialog({
 
             {/* 基础 URL */}
             <div className="flex flex-col gap-[7px]">
-              <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>
+              <div className="flex items-center justify-between gap-3">
+                <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>
+                <button
+                  ref={runtimeFillTriggerRef}
+                  type="button"
+                  onClick={openRuntimeFill}
+                  className="shrink-0 rounded-full px-1 py-0.5 text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  {t('settings.providers.custom.runtimeFill.action')}
+                </button>
+              </div>
               <SettingsTextInput
                 surface="ivory"
                 value={f.baseUrl}
@@ -1295,22 +1625,24 @@ export function CustomProviderDialog({
             </div>
 
             {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
-            <div className="flex flex-col gap-[7px]">
-              <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
-              <SettingsTextInput
-                surface="ivory"
-                value={f.requestPath}
-                onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
-                placeholder={
-                  activeTab === 'claude-code' || f.wireProtocol === 'anthropic-messages'
-                    ? '/v1/messages'
-                    : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
-                }
-              />
-              <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                {t('settings.providers.custom.fields.requestPathHelp')}
-              </span>
-            </div>
+            {activeTab !== 'pi' && (
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
+                <SettingsTextInput
+                  surface="ivory"
+                  value={f.requestPath}
+                  onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
+                  placeholder={
+                    activeTab === 'claude-code' || f.wireProtocol === 'anthropic-messages'
+                      ? '/v1/messages'
+                      : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
+                  }
+                />
+                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
+                  {t('settings.providers.custom.fields.requestPathHelp')}
+                </span>
+              </div>
+            )}
 
             {/* API 密钥（OAuth 形态隐藏——鉴权走 Runner 的 Bearer，不收集 key） */}
             {authMode === 'apiKey' && (
@@ -1334,7 +1666,10 @@ export function CustomProviderDialog({
                 <SettingsTextInput
                   surface="ivory"
                   value={f.apiKey}
-                  onChange={(v) => patch(activeTab, (x) => ({ ...x, apiKey: v }))}
+                  onChange={(v) => {
+                    keyEditRevisionRef.current[activeTab] += 1;
+                    patch(activeTab, (x) => ({ ...x, apiKey: v }));
+                  }}
                   placeholder={keyPlaceholder}
                   mono
                   secret
@@ -1424,7 +1759,8 @@ export function CustomProviderDialog({
                               if (draftText === undefined || !isCommittableWindowText(draftText)) {
                                 return drafts;
                               }
-                              const { [`${activeTab}:${i}`]: _drop, ...rest } = drafts;
+                              const rest = { ...drafts };
+                              delete rest[`${activeTab}:${i}`];
                               return rest;
                             })
                           }
@@ -1436,8 +1772,9 @@ export function CustomProviderDialog({
                                 if (j !== i) return y;
                                 const trimmed = v.trim();
                                 if (trimmed === '') {
-                                  const { contextWindow: _drop, ...rest } = y;
-                                  return rest;
+                                  const next = { ...y };
+                                  delete next.contextWindow;
+                                  return next;
                                 }
                                 // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
                                 // 校验上界防 parseInt 先舍入):不合法的中间态/非法值只
@@ -1691,6 +2028,7 @@ export function CustomProviderDialog({
                 {/* 获取模型列表：GET 该供应商的列模型端点，成功后开勾选弹层填进上方模型行。
                   disabled 用 anyFetching（单飞）：另一 Tab 在途时本 Tab 也不许发起。 */}
                 <button
+                  ref={modelPickerTriggerRef}
                   type="button"
                   onClick={() => void handleFetchModels()}
                   disabled={anyFetching}
@@ -1732,6 +2070,7 @@ export function CustomProviderDialog({
             className={cn(
               'inline-flex items-center justify-center rounded-full border bg-transparent px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
               'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             )}
           >
             {t('settings.providers.custom.cancel')}
@@ -1744,6 +2083,7 @@ export function CustomProviderDialog({
               // min-w + 绝对定位 spinner：saving 切换时按钮宽度恒定,不再撑大挤动取消按钮(规则 7)。
               'relative inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
               'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               saving && 'cursor-not-allowed opacity-50',
             )}
           >
@@ -1760,6 +2100,23 @@ export function CustomProviderDialog({
           onChange={setPicker}
           onConfirm={applyPicker}
           onClose={() => setPicker(null)}
+          returnFocusRef={modelPickerTriggerRef}
+        />
+      )}
+      {runtimeFill && (
+        <CustomProviderRuntimeFillOverlay
+          state={runtimeFill}
+          runtimeNames={
+            Object.fromEntries(
+              AGENTS.map((agent) => [agent, t(TAB_META[agent].labelKey)]),
+            ) as Record<DialogAgentKind, string>
+          }
+          returnFocusRef={runtimeFillTriggerRef}
+          onClose={() => setRuntimeFill(null)}
+          onContinue={continueRuntimeFill}
+          onBack={() => setRuntimeFill((prev) => (prev ? { ...prev, stage: 'review' } : prev))}
+          onToggleField={toggleRuntimeFillField}
+          onApply={applyRuntimeFill}
         />
       )}
     </div>
@@ -1767,11 +2124,12 @@ export function CustomProviderDialog({
 }
 
 /** 勾选弹层内容（搜索 + 全选/清空 + 逐行勾选；> 8 项才显示搜索框，结构对齐 ModelListPanel）。 */
-function ModelPickerOverlay({
+export function ModelPickerOverlay({
   picker,
   onChange,
   onConfirm,
   onClose,
+  returnFocusRef,
 }: {
   picker: { agent: DialogAgentKind; models: ModelRow[]; selected: Set<string>; query: string };
   onChange: (next: {
@@ -1782,8 +2140,12 @@ function ModelPickerOverlay({
   }) => void;
   onConfirm: () => void;
   onClose: () => void;
+  returnFocusRef: RefObject<HTMLButtonElement | null>;
 }) {
   const { t } = useTranslation();
+  const contentRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const primaryButtonRef = useRef<HTMLButtonElement>(null);
   const q = picker.query.trim().toLowerCase();
   const filtered = q
     ? picker.models.filter(
@@ -1805,137 +2167,174 @@ function ModelPickerOverlay({
     onChange({ ...picker, selected: next });
   };
   return (
-    <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-[var(--overlay-modal)]">
-      <div
-        className={cn(
-          'flex max-h-[72vh] w-[460px] flex-col rounded-[16px]',
-          'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-          'shadow-[var(--shadow-menu)]',
-        )}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 pb-1 pt-4">
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <h3 className="text-15 font-semibold text-[var(--settings-section-title)]">
-              {t('settings.providers.custom.fetch.pickerTitle', {
-                runtime: t(TAB_META[picker.agent].labelKey),
-              })}
-            </h3>
-            <span className="text-12 text-[var(--text-tertiary)]">
-              {t('settings.providers.custom.fetch.pickerCount', {
-                selected: picker.selected.size,
-                total: picker.models.length,
-              })}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('settings.providers.custom.cancel')}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-          >
-            <X size={16} />
-          </button>
-        </div>
-        {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
-        <div className="flex flex-col gap-2 px-5 pt-2">
-          {picker.models.length > 8 && (
-            <input
-              value={picker.query}
-              onChange={(e) => onChange({ ...picker, query: e.target.value })}
-              placeholder={t('settings.providers.custom.fetch.searchPlaceholder')}
-              className={cn(
-                'h-[34px] w-full rounded-[9px] px-[11px] text-13 outline-none transition-colors',
-                'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-                'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
-              )}
-              style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-            />
+    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay
+          className={cn(
+            'fixed inset-0 z-[10001] bg-[var(--overlay-modal)]',
+            'data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out',
           )}
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setAllFiltered(true)}
-              className="text-12 font-medium text-[var(--settings-section-title)] hover:underline"
-            >
-              {t('settings.providers.custom.fetch.selectAll')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setAllFiltered(false)}
-              className="text-12 font-medium text-[var(--text-secondary)] hover:underline"
-            >
-              {t('settings.providers.custom.fetch.clearAll')}
-            </button>
-          </div>
-        </div>
-        {/* 列表 */}
-        <div className="mt-2 flex-1 overflow-y-auto px-3 pb-2">
-          {filtered.length === 0 ? (
-            <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
-              {t('settings.providers.custom.fetch.empty')}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        />
+        <Dialog.Content
+          ref={contentRef}
+          aria-describedby="custom-provider-model-picker-description"
+          onEscapeKeyDown={(event) => {
+            if (event.isComposing || event.keyCode === 229) event.preventDefault();
+          }}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            (
+              searchInputRef.current ??
+              contentRef.current?.querySelector<HTMLButtonElement>('[role="checkbox"]') ??
+              primaryButtonRef.current
+            )?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            returnFocusRef.current?.focus();
+          }}
+          className={cn(
+            'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col rounded-xl outline-none',
+            'border border-[var(--border-default)] bg-[var(--confirm-bg)]',
+            'shadow-[var(--confirm-shadow)]',
+            'data-[state=open]:animate-confirm-content-in data-[state=closed]:animate-confirm-content-out',
+          )}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 pb-1 pt-4">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
+                {t('settings.providers.custom.fetch.pickerTitle', {
+                  runtime: t(TAB_META[picker.agent].labelKey),
+                })}
+              </Dialog.Title>
+              <Dialog.Description
+                id="custom-provider-model-picker-description"
+                className="text-12 text-[var(--text-tertiary)]"
+              >
+                {t('settings.providers.custom.fetch.pickerCount', {
+                  selected: picker.selected.size,
+                  total: picker.models.length,
+                })}
+              </Dialog.Description>
             </div>
-          ) : (
-            filtered.map((m) => {
-              const isSelected = picker.selected.has(m.id);
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={isSelected}
-                  onClick={() => toggle(m.id)}
-                  className="flex w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-left hover:bg-[var(--surface-hover)]"
-                >
-                  <span
-                    className={cn(
-                      'flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors',
-                      isSelected
-                        ? 'border-[var(--settings-input-border-focus)] bg-[var(--surface-elevated)] text-[var(--settings-section-title)]'
-                        : 'border-[var(--settings-input-border)] text-transparent',
-                    )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t('settings.providers.custom.cancel')}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
+          <div className="flex flex-col gap-2 px-5 pt-2">
+            {picker.models.length > 8 && (
+              <input
+                ref={searchInputRef}
+                value={picker.query}
+                onChange={(e) => onChange({ ...picker, query: e.target.value })}
+                placeholder={t('settings.providers.custom.fetch.searchPlaceholder')}
+                className={cn(
+                  'h-[34px] w-full rounded-[9px] px-[11px] text-13 outline-none transition-colors',
+                  'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
+                  'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
+                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                )}
+                style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+              />
+            )}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setAllFiltered(true)}
+                className="text-12 font-medium text-[var(--settings-section-title)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {t('settings.providers.custom.fetch.selectAll')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllFiltered(false)}
+                className="text-12 font-medium text-[var(--text-secondary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {t('settings.providers.custom.fetch.clearAll')}
+              </button>
+            </div>
+          </div>
+          {/* 列表 */}
+          <div className="mt-2 flex-1 overflow-y-auto px-3 pb-2">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
+                {t('settings.providers.custom.fetch.empty')}
+              </div>
+            ) : (
+              filtered.map((m) => {
+                const isSelected = picker.selected.has(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    onClick={() => toggle(m.id)}
+                    className="flex w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-left hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
-                    <Check size={12} strokeWidth={3} />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-13 text-[var(--settings-input-text)]">
-                    {m.name}
-                  </span>
-                  {m.name !== m.id && (
-                    <span className="max-w-[45%] truncate text-11 text-[var(--text-tertiary)]">
-                      {m.id}
+                    <span
+                      className={cn(
+                        'flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors',
+                        isSelected
+                          ? 'border-[var(--settings-input-border-focus)] bg-[var(--surface-elevated)] text-[var(--settings-section-title)]'
+                          : 'border-[var(--settings-input-border)] text-transparent',
+                      )}
+                    >
+                      <Check size={12} strokeWidth={3} />
                     </span>
-                  )}
-                </button>
-              );
-            })
-          )}
-        </div>
-        {/* Footer */}
-        <div className="flex justify-end gap-2.5 px-5 py-3.5">
-          <button
-            type="button"
-            onClick={onClose}
-            className={cn(
-              'inline-flex items-center justify-center rounded-full border bg-transparent px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-              'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]',
+                    <span className="min-w-0 flex-1 truncate text-13 text-[var(--settings-input-text)]">
+                      {m.name}
+                    </span>
+                    {m.name !== m.id && (
+                      <span className="max-w-[45%] truncate text-11 text-[var(--text-tertiary)]">
+                        {m.id}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
             )}
-          >
-            {t('settings.providers.custom.cancel')}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={picker.selected.size === 0}
-            className={cn(
-              'inline-flex items-center justify-center rounded-full px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-              'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]',
-              picker.selected.size === 0 && 'cursor-not-allowed opacity-50',
-            )}
-          >
-            {t('settings.providers.custom.fetch.confirm', { count: picker.selected.size })}
-          </button>
-        </div>
-      </div>
-    </div>
+          </div>
+          {/* Footer */}
+          <div className="flex justify-end gap-2.5 px-5 py-3.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className={cn(
+                'inline-flex items-center justify-center rounded-full border bg-transparent px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
+                'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              )}
+            >
+              {t('settings.providers.custom.cancel')}
+            </button>
+            <button
+              ref={primaryButtonRef}
+              type="button"
+              onClick={onConfirm}
+              disabled={picker.selected.size === 0}
+              className={cn(
+                'inline-flex items-center justify-center rounded-full px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
+                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                picker.selected.size === 0 && 'cursor-not-allowed opacity-50',
+              )}
+            >
+              {t('settings.providers.custom.fetch.confirm', { count: picker.selected.size })}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

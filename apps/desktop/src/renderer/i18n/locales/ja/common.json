@@ -1456,6 +1456,65 @@
         },
         "advanced": {
           "label": "詳細設定（モデル / リクエストヘッダー）"
+        },
+        "runtimeFill": {
+          "action": "他の runtime に入力",
+          "reviewTitle": "他の runtime に入力",
+          "reviewSubtitle": "差分を確認してください。各 runtime は個別に保存されます。",
+          "confirmTitle": "上書きを確認",
+          "confirmSubtitle": "{{source}} からコピーする項目を選択してください。",
+          "source": "コピー元",
+          "columns": { "field": "項目", "source": "コピー元", "target": "現在値" },
+          "fields": {
+            "endpointBundle": "エンドポイントと API プロトコル",
+            "baseUrl": "ベース URL",
+            "requestPath": "リクエストパス",
+            "wireProtocol": "API プロトコル",
+            "apiKey": "API キー",
+            "models": "モデル",
+            "headers": "追加ヘッダー",
+            "modelsUrl": "モデル一覧 URL"
+          },
+          "values": {
+            "empty": "空",
+            "default": "既定/推測",
+            "configured": "設定済み",
+            "secretSet": "設定済み（非表示）",
+            "models_one": "{{count}} モデル",
+            "models_other": "{{count}} モデル",
+            "headers_one": "{{count}} ヘッダー",
+            "headers_other": "{{count}} ヘッダー"
+          },
+          "targetConflict_one": "既存の {{count}} 項目が異なります",
+          "targetConflict_other": "既存の {{count}} 項目が異なります",
+          "targetReady_one": "{{count}} 項目を入力できます",
+          "targetReady_other": "{{count}} 項目を入力できます",
+          "targetIncompatible_one": "{{count}} 項目は互換性がありません",
+          "targetIncompatible_other": "{{count}} 項目は互換性がありません",
+          "status": {
+            "needsConfirm": "確認が必要",
+            "ready": "入力可能",
+            "incompatible": "互換性なし"
+          },
+          "secretIndependent": "{{target}} の個別キーとしてコピー",
+          "overwriteCurrent": "現在値を置換",
+          "fillEmpty": "空の項目を入力",
+          "incompatibleProtocol": "コピーされません：{{target}} はこの API プロトコルをサポートしていません",
+          "noSelectableFields": "この runtime に入力できる互換項目はありません。",
+          "endpointBundleNote": "{{target}} には、ベース URL、リクエストパス、API プロトコルを一括コピーし、不整合を防ぎます。",
+          "oauthPiUnavailable": "Pi のネイティブ runtime は OAuth プロバイダーをサポートしないため、入力先から除外されます。",
+          "independentNote": "これは一度だけの入力です。以後 runtime 間で同期されません。キーは個別の safeStorage に保存されます。",
+          "continue": "上書きを確認",
+          "apply": "入力を確定",
+          "applyOverwrite": "上書きして入力",
+          "back": "差分に戻る",
+          "nothingToFill": "現在の runtime に再利用可能な項目を入力してください",
+          "alreadySame": "他の runtime と同じです",
+          "loadingKeys": "保存済み API キーの読み込み完了後に、他の runtime へ入力してください",
+          "keysUnavailable": "保存済み API キーを読み込めなかったため、秘密情報以外の項目のみ入力します",
+          "modelsBusy": "モデル一覧の取得または選択を完了してから、他の runtime へ入力してください",
+          "noCompatibleFields": "現在の runtime の再利用可能な項目は、他の runtime でサポートされていません",
+          "filledToast": "{{targets}} に入力しました"
         }
       },
       "models": {

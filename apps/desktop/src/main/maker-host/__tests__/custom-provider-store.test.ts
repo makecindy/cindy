@@ -485,6 +485,21 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       .toBe('/tenant/acme/v2/infer?stream=1');
   });
 
+  it('strips requestPath from Pi native runtime records', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        pi: {
+          ...valid.runtimes.codex!,
+          requestPath: '/ignored-by-pi',
+        },
+      },
+    });
+
+    expect((await getCustomProvider('openrouter'))?.runtimes.pi?.requestPath).toBeUndefined();
+  });
+
   it.each([
     '//evil.example/infer',
     '/infer#fragment',

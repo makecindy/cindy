@@ -1,0 +1,175 @@
+// @vitest-environment jsdom
+import { useRef, useState } from 'react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  CustomProviderRuntimeFillOverlay,
+  type RuntimeFillDialogState,
+} from '../CustomProviderRuntimeFillOverlay';
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+afterEach(cleanup);
+
+function draft(overrides: Partial<RuntimeFillDialogState['sourceDraft']> = {}) {
+  return {
+    baseUrl: 'https://source.example/v1',
+    requestPath: '',
+    apiKey: '',
+    wireProtocol: 'openai-chat' as const,
+    models: [],
+    headers: [],
+    modelsUrl: '',
+    ...overrides,
+  };
+}
+
+const runtimeNames = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  pi: 'Pi',
+};
+
+function state(overrides: Partial<RuntimeFillDialogState> = {}): RuntimeFillDialogState {
+  return {
+    source: 'codex',
+    sourceDraft: draft(),
+    includeApiKey: true,
+    oauthPiUnavailable: false,
+    stage: 'review',
+    targets: [
+      {
+        agent: 'pi',
+        draft: draft({
+          baseUrl: 'https://target.example/v1',
+          requestPath: '/responses',
+        }),
+        diffs: [
+          { field: 'baseUrl', targetState: 'conflict' },
+          { field: 'requestPath', targetState: 'conflict' },
+          { field: 'wireProtocol', targetState: 'same' },
+        ],
+      },
+    ],
+    selected: { pi: ['baseUrl', 'requestPath', 'wireProtocol'] },
+    ...overrides,
+  };
+}
+
+function renderOverlay(value: RuntimeFillDialogState, onClose = vi.fn()) {
+  return render(
+    <CustomProviderRuntimeFillOverlay
+      state={value}
+      runtimeNames={runtimeNames}
+      onClose={onClose}
+      onContinue={() => {}}
+      onBack={() => {}}
+      onToggleField={() => {}}
+      onApply={() => {}}
+    />,
+  );
+}
+
+describe('CustomProviderRuntimeFillOverlay', () => {
+  it('never reflects request-path query credentials into text or title attributes', () => {
+    renderOverlay(
+      state({
+        sourceDraft: draft({ requestPath: '/infer?api_key=source-secret' }),
+        targets: [
+          {
+            agent: 'pi',
+            draft: draft({ requestPath: '/infer?token=target-secret' }),
+            diffs: [{ field: 'requestPath', targetState: 'conflict' }],
+          },
+        ],
+        selected: { pi: ['requestPath'] },
+      }),
+    );
+
+    expect(document.body.textContent).toContain('/infer');
+    expect(document.body.innerHTML).not.toContain('source-secret');
+    expect(document.body.innerHTML).not.toContain('target-secret');
+  });
+
+  it('renders the endpoint tuple as one checkbox in the confirmation stage', () => {
+    renderOverlay(state({ stage: 'confirm' }));
+
+    const choices = screen.getAllByRole('checkbox');
+    expect(choices).toHaveLength(1);
+    expect(choices[0].textContent).toContain(
+      'settings.providers.custom.runtimeFill.fields.endpointBundle',
+    );
+    expect(choices[0].getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('shows protocol incompatibility instead of silently hiding the skipped field', () => {
+    renderOverlay(
+      state({
+        targets: [
+          {
+            agent: 'claude-code',
+            draft: draft({ wireProtocol: 'anthropic-messages' }),
+            diffs: [{ field: 'wireProtocol', targetState: 'incompatible' }],
+          },
+        ],
+        selected: {},
+      }),
+    );
+
+    expect(
+      screen.getByText('settings.providers.custom.runtimeFill.incompatibleProtocol'),
+    ).not.toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('focuses the primary action, traps keyboard focus, closes on Escape, and restores focus', async () => {
+    const onClose = vi.fn();
+
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      const triggerRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button ref={triggerRef} type="button">
+            Open fill
+          </button>
+          {open && (
+            <CustomProviderRuntimeFillOverlay
+              state={state()}
+              runtimeNames={runtimeNames}
+              returnFocusRef={triggerRef}
+              onClose={() => {
+                onClose();
+                setOpen(false);
+              }}
+              onContinue={() => {}}
+              onBack={() => {}}
+              onToggleField={() => {}}
+              onApply={() => {}}
+            />
+          )}
+        </>
+      );
+    }
+
+    const user = userEvent.setup();
+    render(<Harness />);
+    const primary = screen.getByRole('button', {
+      name: 'settings.providers.custom.runtimeFill.continue',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(primary));
+
+    await user.tab();
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open fill' })),
+    );
+  });
+});

@@ -1456,6 +1456,65 @@
         },
         "advanced": {
           "label": "고급 설정 (모델 / 요청 헤더)"
+        },
+        "runtimeFill": {
+          "action": "다른 runtime 채우기",
+          "reviewTitle": "다른 runtime 채우기",
+          "reviewSubtitle": "필드 차이를 먼저 확인하세요. 각 runtime은 독립적으로 저장됩니다.",
+          "confirmTitle": "덮어쓰기 확인",
+          "confirmSubtitle": "{{source}}에서 복사할 필드를 선택하세요.",
+          "source": "원본",
+          "columns": { "field": "필드", "source": "원본 값", "target": "현재 값" },
+          "fields": {
+            "endpointBundle": "엔드포인트 및 API 프로토콜",
+            "baseUrl": "기본 URL",
+            "requestPath": "요청 경로",
+            "wireProtocol": "API 프로토콜",
+            "apiKey": "API 키",
+            "models": "모델",
+            "headers": "추가 헤더",
+            "modelsUrl": "모델 목록 엔드포인트"
+          },
+          "values": {
+            "empty": "비어 있음",
+            "default": "기본/추론",
+            "configured": "설정됨",
+            "secretSet": "설정됨(숨김)",
+            "models_one": "모델 {{count}}개",
+            "models_other": "모델 {{count}}개",
+            "headers_one": "헤더 {{count}}개",
+            "headers_other": "헤더 {{count}}개"
+          },
+          "targetConflict_one": "기존 필드 {{count}}개가 다름",
+          "targetConflict_other": "기존 필드 {{count}}개가 다름",
+          "targetReady_one": "필드 {{count}}개를 채울 수 있음",
+          "targetReady_other": "필드 {{count}}개를 채울 수 있음",
+          "targetIncompatible_one": "필드 {{count}}개가 호환되지 않음",
+          "targetIncompatible_other": "필드 {{count}}개가 호환되지 않음",
+          "status": {
+            "needsConfirm": "확인 필요",
+            "ready": "채울 준비됨",
+            "incompatible": "호환되지 않음"
+          },
+          "secretIndependent": "{{target}}의 별도 로컬 키로 복사",
+          "overwriteCurrent": "현재 값 대체",
+          "fillEmpty": "빈 필드 채우기",
+          "incompatibleProtocol": "복사되지 않음: {{target}}에서 이 API 프로토콜을 지원하지 않습니다",
+          "noSelectableFields": "이 runtime에 호환되는 필드가 없습니다.",
+          "endpointBundleNote": "{{target}}에는 기본 URL, 요청 경로, API 프로토콜을 함께 복사하여 엔드포인트 불일치를 방지합니다.",
+          "oauthPiUnavailable": "Pi 네이티브 runtime은 OAuth 제공자를 지원하지 않아 채우기 대상에서 제외됩니다.",
+          "independentNote": "일회성 채우기입니다. 이후 runtime 간 동기화되지 않으며 키는 별도 safeStorage에 저장됩니다.",
+          "continue": "덮어쓰기 검토",
+          "apply": "채우기 확인",
+          "applyOverwrite": "덮어쓰고 채우기",
+          "back": "차이로 돌아가기",
+          "nothingToFill": "현재 runtime에 재사용 가능한 필드를 먼저 입력하세요",
+          "alreadySame": "다른 runtime과 이미 일치합니다",
+          "loadingKeys": "저장된 API 키를 모두 불러온 후 다른 runtime을 채우세요",
+          "keysUnavailable": "저장된 API 키를 불러오지 못해 비밀 정보가 아닌 필드만 채웁니다",
+          "modelsBusy": "모델 목록 가져오기 또는 선택을 완료한 후 다른 runtime을 채우세요",
+          "noCompatibleFields": "현재 runtime의 재사용 가능한 필드를 다른 runtime에서 지원하지 않습니다",
+          "filledToast": "{{targets}}에 채웠습니다"
         }
       },
       "models": {
