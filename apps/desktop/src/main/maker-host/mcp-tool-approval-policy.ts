@@ -78,6 +78,17 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   'cindy_lsp',
 ]);
 
+const CONFIRM_EACH_TIME_SCHEDULER_TOOLS = new Set([
+  'codex_automation_list',
+  'codex_automation_get',
+]);
+
+function progressiveInnerToolName(toolParams: unknown): string | undefined {
+  if (!toolParams || typeof toolParams !== 'object' || Array.isArray(toolParams)) return undefined;
+  const name = (toolParams as Record<string, unknown>).name;
+  return typeof name === 'string' ? name : undefined;
+}
+
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
 function toClaudeToolName(key: string): string {
   const [serverName, toolName] = key.split('::');
@@ -107,6 +118,16 @@ export function getDesktopMcpToolApprovalPolicy(
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
       : 'prompt-each-time';
+  }
+  if (serverName === 'cindy_scheduler') {
+    const schedulerToolName =
+      toolName === 'call_tool' || toolName === undefined
+        ? progressiveInnerToolName(toolParams)
+        : toolName;
+    if (schedulerToolName && CONFIRM_EACH_TIME_SCHEDULER_TOOLS.has(schedulerToolName)) {
+      return 'prompt-each-time';
+    }
+    if (toolName === undefined && schedulerToolName === undefined) return 'prompt-each-time';
   }
   if (TRUSTED_MCP_SERVERS.has(serverName)) {
     return 'auto-approve';

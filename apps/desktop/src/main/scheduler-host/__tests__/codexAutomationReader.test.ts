@@ -263,6 +263,27 @@ describe('createCodexAutomationReader', () => {
     await expect(createCodexAutomationReader({ rootDir: root }).get('.')).resolves.toBeNull();
   });
 
+  it('allows a legitimate automation directory whose name contains two dots', async () => {
+    const root = await makeRoot();
+    await writeAutomation(
+      root,
+      'foo..bar',
+      [
+        'version = 1',
+        'id = "foo..bar"',
+        'kind = "cron"',
+        'name = "Two dots"',
+        'prompt = "read only"',
+        'status = "ACTIVE"',
+        'rrule = "FREQ=DAILY;BYHOUR=9;BYMINUTE=0"',
+      ].join('\n'),
+    );
+
+    await expect(
+      createCodexAutomationReader({ rootDir: root }).get('foo..bar'),
+    ).resolves.toMatchObject({ id: 'foo..bar', name: 'Two dots' });
+  });
+
   it('rejects automation directories that are symbolic links outside the root', async () => {
     const root = await makeRoot();
     const outside = await makeRoot();
@@ -274,6 +295,29 @@ describe('createCodexAutomationReader', () => {
     );
 
     await expect(createCodexAutomationReader({ rootDir: root }).get('linked')).resolves.toBeNull();
+  });
+
+  it('skips a linked directory even if readdir reports it as a normal directory', async () => {
+    const root = await makeRoot();
+    const outside = await makeRoot();
+    await writeAutomation(outside, 'target', 'id = "linked"\nname = "outside"');
+    await fs.symlink(
+      path.join(outside, 'target'),
+      path.join(root, 'linked'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const readdir = vi.spyOn(fs, 'readdir').mockResolvedValueOnce([
+      {
+        name: 'linked',
+        isDirectory: () => true,
+        isSymbolicLink: () => false,
+      },
+    ] as never);
+    try {
+      await expect(createCodexAutomationReader({ rootDir: root }).list()).resolves.toEqual([]);
+    } finally {
+      readdir.mockRestore();
+    }
   });
 
   it('sanitizes root filesystem errors without exposing the root path', async () => {

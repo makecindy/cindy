@@ -9,26 +9,30 @@ describe('desktop Claude read-only allowlist', () => {
   it('allows only explicitly reviewed read-only tools', () => {
     const tools = getDesktopClaudeReadOnlyAllowedTools();
 
-    expect(tools).toEqual(expect.arrayContaining([
-      'mcp__cindy__ghost_list',
-      'mcp__cindy__ghost_forge_guide',
-      'mcp__cindy_helper__list_tools',
-      'mcp__cindy_slack__slack_status',
-    ]));
-    expect(tools).not.toEqual(expect.arrayContaining([
-      'Bash',
-      'Edit',
-      'Write',
-      'Agent',
-      'Skill',
-      // 外发网络请求(搜索词/URL 出境),与 maker-core READ_ONLY_CLAUDE_TOOLS 边界一致,
-      // 不免审批(Greptile P1 security)。
-      'WebSearch',
-      'WebFetch',
-      'mcp__cindy__ghost_call',
-      'mcp__cindy_helper__call_tool',
-      'mcp__cindy_slack__slack_list_tools',
-    ]));
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        'mcp__cindy__ghost_list',
+        'mcp__cindy__ghost_forge_guide',
+        'mcp__cindy_helper__list_tools',
+        'mcp__cindy_slack__slack_status',
+      ]),
+    );
+    expect(tools).not.toEqual(
+      expect.arrayContaining([
+        'Bash',
+        'Edit',
+        'Write',
+        'Agent',
+        'Skill',
+        // 外发网络请求(搜索词/URL 出境),与 maker-core READ_ONLY_CLAUDE_TOOLS 边界一致,
+        // 不免审批(Greptile P1 security)。
+        'WebSearch',
+        'WebFetch',
+        'mcp__cindy__ghost_call',
+        'mcp__cindy_helper__call_tool',
+        'mcp__cindy_slack__slack_list_tools',
+      ]),
+    );
     expect(tools.every((tool) => !tool.includes('*'))).toBe(true);
     expect(tools.every((tool) => !tool.endsWith('__call_tool'))).toBe(true);
   });
@@ -101,7 +105,6 @@ describe('desktop MCP approval policy', () => {
       'cindy_computer',
       'cindy_feishu_bot',
       'cindy_slack',
-      'cindy_scheduler',
       'cindy_memory',
       'cindy_helper',
       'cindy_orca',
@@ -112,6 +115,10 @@ describe('desktop MCP approval policy', () => {
     ]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName })).toBe('auto-approve');
     }
+
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler' })).toBe(
+      'prompt-each-time',
+    );
 
     // gitlab_lizi 已于 2026-07-14 退役(迁入内置意识 cindy-gitlab):
     // `<平台>_lizi` 显式白名单清空后,该名字回落到默认 prompt,不再自动放行。
@@ -126,17 +133,17 @@ describe('desktop MCP approval policy', () => {
     expect(
       getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh', toolName: 'list_tools' }),
     ).toBe('auto-approve');
-    expect(
-      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_list' }),
-    ).toBe('auto-approve');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_list' })).toBe(
+      'auto-approve',
+    );
 
     // 同一个 server 的执行入口不跟着沾光。
     expect(
       getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh', toolName: 'call_tool' }),
     ).toBe('prompt');
-    expect(
-      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call' }),
-    ).toBe('prompt');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call' })).toBe(
+      'prompt',
+    );
   });
 
   it('auto-approves the browser call_tool entry that Claude used to prompt for every time', () => {
@@ -147,6 +154,33 @@ describe('desktop MCP approval policy', () => {
         serverName: 'cindy_browser',
         toolName: 'call_tool',
         toolParams: { name: 'browser', args: { action: 'navigate', url: 'https://example.com' } },
+      }),
+    ).toBe('auto-approve');
+  });
+
+  it('requires per-call approval before reading system Codex automations', () => {
+    for (const name of ['codex_automation_list', 'codex_automation_get']) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_scheduler',
+          toolName: 'call_tool',
+          toolParams: { name, args: name.endsWith('_get') ? { id: 'ddl' } : {} },
+        }),
+      ).toBe('prompt-each-time');
+    }
+
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_scheduler',
+        toolParams: { name: 'codex_automation_list', args: {} },
+      }),
+    ).toBe('prompt-each-time');
+
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_scheduler',
+        toolName: 'call_tool',
+        toolParams: { name: 'schedule_list', args: {} },
       }),
     ).toBe('auto-approve');
   });

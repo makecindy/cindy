@@ -264,11 +264,25 @@ export function createCodexAutomationReader(
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
         throw new Error(filesystemDiagnostic('list', error));
       }
-      const items = await Promise.all(
+      const candidates = await Promise.all(
         entries
           .filter((entry) => entry.isDirectory())
-          .map((entry) => readAutomationFile(rootDir, entry.name)),
+          .map(async (entry) => {
+            try {
+              const directoryStats = await fs.lstat(path.join(rootDir, entry.name));
+              if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) return null;
+              return readAutomationFile(rootDir, entry.name);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+              return fallbackItem(
+                entry.name,
+                path.join(rootDir, entry.name, 'automation.toml'),
+                filesystemDiagnostic('read', error),
+              );
+            }
+          }),
       );
+      const items = candidates.filter((item): item is CodexAutomationDetail => item !== null);
       items.sort((a, b) => a.id.localeCompare(b.id));
       const byId = new Map<string, CodexAutomationDetail[]>();
       for (const item of items) {
@@ -285,7 +299,7 @@ export function createCodexAutomationReader(
       return items;
     },
     async get(id: string): Promise<CodexAutomationDetail | null> {
-      if (!id || id === '.' || id.includes('..') || path.basename(id) !== id) return null;
+      if (!id || id === '.' || id === '..' || path.basename(id) !== id) return null;
       const automationDir = path.join(rootDir, id);
       try {
         const directoryStats = await fs.lstat(automationDir);
