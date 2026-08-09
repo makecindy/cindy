@@ -113,7 +113,13 @@ describe('CustomProviderRuntimeFillOverlay', () => {
           {
             agent: 'claude-code',
             draft: draft({ wireProtocol: 'anthropic-messages' }),
-            diffs: [{ field: 'wireProtocol', targetState: 'incompatible' }],
+            diffs: [
+              {
+                field: 'wireProtocol',
+                targetState: 'incompatible',
+                incompatibilityReason: 'protocol',
+              },
+            ],
           },
         ],
         selected: {},
@@ -124,6 +130,34 @@ describe('CustomProviderRuntimeFillOverlay', () => {
       screen.getByText('settings.providers.custom.runtimeFill.incompatibleProtocol'),
     ).not.toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('does not mislabel endpoint incompatibility as an unsupported protocol', () => {
+    renderOverlay(
+      state({
+        targets: [
+          {
+            agent: 'pi',
+            draft: draft(),
+            diffs: [
+              {
+                field: 'requestPath',
+                targetState: 'incompatible',
+                incompatibilityReason: 'endpoint',
+              },
+            ],
+          },
+        ],
+        selected: {},
+      }),
+    );
+
+    expect(
+      screen.getByText('settings.providers.custom.runtimeFill.incompatibleEndpoint'),
+    ).not.toBeNull();
+    expect(
+      screen.queryByText('settings.providers.custom.runtimeFill.incompatibleProtocol'),
+    ).toBeNull();
   });
 
   it('focuses the primary action, traps keyboard focus, closes on Escape, and restores focus', async () => {

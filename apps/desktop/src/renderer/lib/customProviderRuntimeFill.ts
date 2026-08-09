@@ -21,9 +21,11 @@ export interface RuntimeFillDraft {
 export type RuntimeFillField =
   'baseUrl' | 'requestPath' | 'wireProtocol' | 'apiKey' | 'models' | 'headers' | 'modelsUrl';
 export type RuntimeFillTargetState = 'empty' | 'same' | 'conflict' | 'incompatible';
+export type RuntimeFillIncompatibilityReason = 'protocol' | 'endpoint';
 export interface RuntimeFillFieldDiff {
   field: RuntimeFillField;
   targetState: RuntimeFillTargetState;
+  incompatibilityReason?: RuntimeFillIncompatibilityReason;
 }
 
 export const RUNTIME_FILL_ENDPOINT_FIELDS = [
@@ -270,10 +272,18 @@ export function buildRuntimeFillDiffs(
       (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(field) &&
       !endpointSupported
     ) {
-      return { field, targetState: 'incompatible' };
+      return { field, targetState: 'incompatible', incompatibilityReason: 'endpoint' };
     }
     if (!transferFieldSupported(source, options.sourceAgent, options.targetAgent, field, wire)) {
-      return { field, targetState: 'incompatible' };
+      return {
+        field,
+        targetState: 'incompatible',
+        incompatibilityReason:
+          field === 'requestPath' &&
+          (options.sourceAgent === 'pi' || options.targetAgent === 'pi')
+            ? 'endpoint'
+            : 'protocol',
+      };
     }
 
     const sourceValue =

@@ -109,6 +109,13 @@ describe('custom provider runtime fill', () => {
         )
         .every((diff) => diff.targetState === 'incompatible'),
     ).toBe(true);
+    expect(
+      diffs
+        .filter((diff) =>
+          ['baseUrl', 'requestPath', 'wireProtocol', 'headers'].includes(diff.field),
+        )
+        .every((diff) => diff.incompatibilityReason === 'protocol'),
+    ).toBe(true);
     expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([]);
     expect(
       applyRuntimeFillFields(
@@ -146,6 +153,11 @@ describe('custom provider runtime fill', () => {
       diffs
         .filter((diff) => ['baseUrl', 'requestPath', 'wireProtocol'].includes(diff.field))
         .every((diff) => diff.targetState === 'incompatible'),
+    ).toBe(true);
+    expect(
+      diffs
+        .filter((diff) => ['baseUrl', 'requestPath', 'wireProtocol'].includes(diff.field))
+        .every((diff) => diff.incompatibilityReason === 'endpoint'),
     ).toBe(true);
     expect(diffs.find((diff) => diff.field === 'modelsUrl')?.targetState).toBe('conflict');
     expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([]);

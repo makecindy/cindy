@@ -172,6 +172,17 @@ export function CustomProviderRuntimeFillOverlay({
   const fieldLabel = (field: RuntimeFillField): string =>
     t(`settings.providers.custom.runtimeFill.fields.${field}`);
 
+  const incompatibleSummary = (
+    diff: RuntimeFillFieldDiff,
+    targetName: string,
+  ): string =>
+    t(
+      diff.incompatibilityReason === 'protocol'
+        ? 'settings.providers.custom.runtimeFill.incompatibleProtocol'
+        : 'settings.providers.custom.runtimeFill.incompatibleEndpoint',
+      { target: targetName },
+    );
+
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
@@ -318,22 +329,12 @@ export function CustomProviderRuntimeFillOverlay({
                                 )}
                                 title={
                                   diff.targetState === 'incompatible'
-                                    ? t(
-                                        'settings.providers.custom.runtimeFill.incompatibleProtocol',
-                                        {
-                                          target: targetName,
-                                        },
-                                      )
+                                    ? incompatibleSummary(diff, targetName)
                                     : targetSummary
                                 }
                               >
                                 {diff.targetState === 'incompatible'
-                                  ? t(
-                                      'settings.providers.custom.runtimeFill.incompatibleProtocol',
-                                      {
-                                        target: targetName,
-                                      },
-                                    )
+                                  ? incompatibleSummary(diff, targetName)
                                   : targetSummary}
                               </span>
                             </div>
