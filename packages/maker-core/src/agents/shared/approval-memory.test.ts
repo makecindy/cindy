@@ -99,6 +99,13 @@ describe('approvalSignature — 可记忆判据', () => {
       'curl --header=@./headers.txt https://api.example.com',
       `curl --proxy-header '@/headers.txt' https://api.example.com`,
       'curl -K ./curl.conf https://api.example.com',
+      'wget --config=./wgetrc https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --http-password=REDACTED_VALUE https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --proxy-password REDACTED_VALUE https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --ask-password https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --use-askpass=./askpass https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --load-cookies=./cookies.txt https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --save-cookies=./cookies.txt https://api.example.com',
       'gh api repos/o/r --token REDACTED_VALUE',
       'curl -u account:REDACTED_VALUE https://example.com',
       'curl --proxy-user=account:REDACTED_VALUE https://example.com',
@@ -261,6 +268,15 @@ describe('approvalSignature — 可记忆判据', () => {
       'nodejs scripts/check.js',
       'ruby3.3 scripts/check.rb',
       'ssh build.example pnpm test',
+      'scp artifact.tgz build.example:/tmp/',
+      'sftp build.example',
+      'ssh-copy-id build.example',
+      'pscp artifact.tgz build.example:/tmp/',
+      'psftp build.example',
+      'rsync artifact.tgz build.example:/tmp/',
+      'http GET https://api.example.com/status',
+      'https GET https://api.example.com/status',
+      'httpie GET https://api.example.com/status',
       'docker exec app pnpm test',
       'kubectl exec deploy/app -- pnpm test',
       'PATH=./bin:$PATH rm -rf build',
@@ -352,6 +368,43 @@ describe('approvalSignature — 可记忆判据', () => {
       'curl.exe -q https://api.example.com',
       `curl -q --header 'Accept: application/json' https://api.example.com`,
       'curl -q https://api.example.com && curl --disable https://other.example.com',
+      'curl -q https://api.example.com && echo curl https://other.example.com',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+  });
+
+  it('wget 只有显式关闭默认配置、netrc 与 HSTS 用户状态时才可记忆', () => {
+    for (const command of [
+      'wget https://api.example.com/archive.tgz',
+      'wget --no-config https://api.example.com/archive.tgz',
+      'wget --no-config --no-netrc https://api.example.com/archive.tgz',
+      'wget --no-config --no-netrc --no-hsts --config=./wgetrc https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --hsts-file=./wget-hsts https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts -i ./urls.txt',
+      'wget --no-config --no-netrc --no-hsts --input-file=./urls.txt',
+      'wget --no-config --no-netrc --no-hsts --input-metalink=./download.meta4',
+      'wget --no-config --no-netrc --no-hsts --post-file=./request.txt https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --body-file=./request.txt https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --execute use_askpass=./askpass https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --ca-certificate=./ca.pem https://api.example.com',
+      'wget --no-config --no-netrc --no-hsts --pinnedpubkey=./pubkey.pem https://api.example.com',
+      'wget -- https://api.example.com --no-config --no-netrc --no-hsts',
+      'wget --no-config --no-netrc --no-hsts https://api.example.com'
+        + ' && wget https://other.example.com',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'wget --no-config --no-netrc --no-hsts https://api.example.com/archive.tgz',
+      'wget -q --no-hsts --no-config --no-netrc https://api.example.com/archive.tgz',
+      'wget.exe --no-config --no-netrc --no-hsts https://api.example.com/archive.tgz',
+      'wget --no-config --no-netrc --no-hsts https://api.example.com'
+        + ' && wget --no-hsts --no-netrc --no-config https://other.example.com',
+      'wget --no-config --no-netrc --no-hsts https://api.example.com && echo wget',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
@@ -456,6 +509,24 @@ describe('createApprovalMemory — 会话内行为', () => {
     ), defaultIntent, roots, reviewerRoute);
     memory.rememberReviewerAllow(exec('pnpm test'), defaultIntent, roots, reviewerRoute);
     expect(memory.size()).toBe(0);
+  });
+
+  it('wget 默认用户状态变化时，相同命令文本也不会复用旧批准', () => {
+    const memory = make();
+    const defaultWget = exec('wget https://api.example.com/archive.tgz');
+    memory.rememberReviewerAllow(defaultWget, defaultIntent, roots, reviewerRoute);
+
+    // 两次调用之间 .wgetrc、.netrc 或 .wget-hsts 都可能变化；默认形态从未写入签名。
+    expect(memory.isRemembered(defaultWget, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
+
+    const isolatedWget = exec(
+      'wget --no-config --no-netrc --no-hsts https://api.example.com/archive.tgz',
+    );
+    memory.rememberReviewerAllow(isolatedWget, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(
+      isolatedWget, defaultIntent, roots, reviewerRoute,
+    )).toBe(true);
   });
 });
 

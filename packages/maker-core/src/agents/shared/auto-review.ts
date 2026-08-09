@@ -3275,15 +3275,17 @@ function classifyShellSegment(
  * 全部只读→auto-approve。空/畸形命令 → prompt(交 reviewer，故障时静默 block)。
  */
 /**
- * 一条命令实际会调起的**可执行文件名**集合(去包装器、去路径、含各管道/串联段)。
+ * 一条命令实际会调起的 executable 与 argv(去包装器、去路径、含各管道/串联段)。
  *
  * 供需要按实际 executable 做安全判定的调用方复用。这里负责剥掉 `env`、环境变量赋值、
- * `timeout` 等包装，并覆盖管道/串联的每一段；调用方仍须按自己的边界解释这些名字，不能
- * 把集合直接当成命令级 allowlist。
+ * `timeout` 等包装，并覆盖管道/串联的每一段；调用方仍须按自己的边界解释 argv，不能
+ * 把结果直接当成命令级 allowlist。
  */
-export function commandExecutableNames(command: string): string[] {
+export function commandExecutableInvocations(
+  command: string,
+): { name: string; args: string[] }[] {
   if (typeof command !== 'string' || command.trim().length === 0) return [];
-  const names = new Set<string>();
+  const invocations: { name: string; args: string[] }[] = [];
   for (const { text } of splitExecutableSegments(command)) {
     // unwrapWrappers 已经剥掉 `env` / 环境变量赋值前缀等包装,`NODE_OPTIONS=… pnpm test`
     // 到这里 tokens[0] 就是 `pnpm`(有用例钉住)。这里只需兜住取不到 bin 的段。
@@ -3292,9 +3294,14 @@ export function commandExecutableNames(command: string): string[] {
     // 仍取不到可执行文件名的段(空段、纯赋值段如 `FOO=1`)不贡献名字。**不是**跳过整条命令:
     // 其余段照常收集,所以 `FOO=1 rm -rf x && ls` 得到 {rm, ls},破坏性 bin 不会隐身。
     if (!bin || /^[A-Za-z_]\w*=/.test(bin)) continue;
-    names.add(bin);
+    invocations.push({ name: bin, args: tokens.slice(1) });
   }
-  return [...names];
+  return invocations;
+}
+
+/** 去重后的实际 executable 名集合，供只需要按命令名判定的调用方使用。 */
+export function commandExecutableNames(command: string): string[] {
+  return [...new Set(commandExecutableInvocations(command).map(({ name }) => name))];
 }
 
 /**

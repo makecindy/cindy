@@ -43,7 +43,7 @@ import {
   type AutoReviewRouteIdentity,
 } from './auto-review-decision.js';
 import {
-  commandExecutableNames,
+  commandExecutableInvocations,
   commandUsesExplicitExecutablePath,
   type ReviewableAction,
 } from './auto-review.js';
@@ -120,11 +120,50 @@ const SECRET_CONFIG_KEY_SOURCE = String.raw`\S*(?:TOKEN|SECRET|API[_-]?KEY|APIKE
 const CURL_EXPLICIT_CONFIG_PATTERN =
   /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-K(?:\s*=?\s*)\S|--config(?:\s+|=)\S)/i;
 
-// curl 默认会读取用户级 curlrc；文件内容可在命令文本不变时注入新的 header、body 或 URL。
-// `-q` / `--disable` 只有作为 curl 的**首参数**时才禁用默认配置。选项大小写不能放宽：
-// `-Q` 是另一个 curl 选项，不能因大小写不敏感匹配而被误当成 `-q`。
-const CURL_MAY_LOAD_DEFAULT_CONFIG_PATTERN =
-  /(?:^|[\s;&|('"`])(?:\S*[\\/])?[cC][uU][rR][lL](?:\.[eE][xX][eE])?['"]?(?=[ \t;&|)\r\n]|$)(?![ \t]+(?:-q|--disable)(?=[ \t;&|)\r\n]|$))/;
+function curlMayLoadMutableConfig(args: readonly string[]): boolean {
+  // curl 只有**首参数**精确为小写 -q / --disable 时才禁用默认 curlrc。
+  if (args[0] !== '-q' && args[0] !== '--disable') return true;
+  // 显式配置即使出现在禁用默认 curlrc 之后，仍会重新引入可变文件内容。
+  return args.some((arg) => /^-K/.test(arg) || /^--conf/.test(arg));
+}
+
+const WGET_EXPLICIT_CONFIG_PATTERN =
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?wget(?:\.exe)?\b[^;&|\r\n]*--conf[\w-]*(?:\s+|=)\S/i;
+const WGET_REQUIRED_USER_STATE_DISABLE_FLAGS = [
+  '--no-config',
+  '--no-netrc',
+  '--no-hsts',
+] as const;
+
+const WGET_MUTABLE_FILE_OR_COMMAND_OPTION_PATTERNS: readonly RegExp[] = [
+  // Wget accepts unique long-option abbreviations; match the shortest unambiguous stems we trust.
+  /^--conf/,
+  /^--exec/,
+  /^--hsts-f/,
+  /^--input-/,
+  /^--load-c/,
+  /^--save-c/,
+  /^--post-f/,
+  /^--body-f/,
+  /^--(?:ask-p|use-a)/,
+  /^--ca-/,
+  /^--crl-f/,
+  /^--pinnedp/,
+  // -e/--execute and -i/--input-file may be attached or appear in a short-option cluster.
+  /^-[^-]*[ei]/,
+];
+
+function wgetMayLoadMutableUserState(args: readonly string[]): boolean {
+  const optionTerminator = args.indexOf('--');
+  const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
+  // 启动文件、rc 命令、askpass，以及请求/凭证/TLS 的文件输入都能在 argv 不变时改变真实行为。
+  if (options.some((arg) =>
+    WGET_MUTABLE_FILE_OR_COMMAND_OPTION_PATTERNS.some((pattern) => pattern.test(arg)))) {
+    return true;
+  }
+  // 只信任完整、大小写精确的禁用选项；缩写或 `--` 后的位置参数保持逐次审核。
+  return WGET_REQUIRED_USER_STATE_DISABLE_FLAGS.some((flag) => !options.includes(flag));
+}
 
 const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   // HTTP 鉴权头：curl/wget 的 -H、--header、--proxy-header，含空格/等号/紧凑短选项。
@@ -132,6 +171,10 @@ const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   // curl 的 @file header/config 内容可在命令不变时换成新凭证，不能让旧摘要静默复用。
   /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?@\S/i,
   CURL_EXPLICIT_CONFIG_PATTERN,
+  // Wget 启动文件可注入鉴权头、代理凭证、URL 与落盘选项；显式文件同样不可长期记忆。
+  WGET_EXPLICIT_CONFIG_PATTERN,
+  // Wget 的协议专用密码、交互 askpass 与 cookie jar 都属于凭证消费/存储动作。
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?wget(?:\.exe)?\b[^;&|\r\n]*(?:--(?:http|ftp|proxy)-pass[\w-]*(?:\s+|=)\S|--(?:ask-p|use-a)[\w-]*(?=\s|=|$)|--(?:load|save)-c[\w-]*(?:\s+|=)\S)/i,
   /\bbearer\s+[\w.\-~+/]{8,}/i,
   // 显式凭证 flag（含 = 与空格两种写法）。要求后面真有值，避免把 --auth-mode 误判。
   /(?:^|\s)--(?:token|password|passwd|api[-_]?key|secret|client[-_]?secret|access[-_]?token|session[-_]?token|oauth2[-_]?bearer|authorization|auth|credential|credentials|private[-_]?key|secret[-_]?access[-_]?key|access[-_]?key(?:[-_]?id)?)(?:\s+|=)\S/i,
@@ -232,8 +275,11 @@ const MUTABLE_INDIRECT_EXECUTABLES: ReadonlySet<string> = new Set([
   '.', 'source', 'eval', 'exec', 'command', 'builtin', 'call',
   'start', 'iex', 'invoke-expression', 'start-process', 'saps',
   'invoke-command', 'icm', 'start-job', 'sajb', 'start-threadjob',
-  // launchers that execute argv supplied later in the same command or on stdin/remote hosts
-  'xargs', 'parallel', 'find', 'ssh', 'plink', 'docker', 'podman', 'nerdctl', 'kubectl',
+  // launchers and remote clients whose unchanged argv can be redirected by user config/session state
+  'xargs', 'parallel', 'find',
+  'ssh', 'scp', 'sftp', 'ssh-copy-id', 'plink', 'pscp', 'psftp', 'rsync',
+  'http', 'https', 'httpie',
+  'docker', 'podman', 'nerdctl', 'kubectl',
   'chroot', 'nsenter', 'unshare', 'systemd-run', 'wsl', 'winrs',
   // aliases/extensions/config can redirect these stable-looking commands into project code
   'git', 'gh', 'glab',
@@ -284,14 +330,13 @@ const DYNAMIC_COMMAND_INPUT_PATTERNS: readonly RegExp[] = [
 export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (MUTABLE_EXECUTION_ENV_PATTERN.test(command)) return true;
   if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
-  const executableNames = commandExecutableNames(command);
-  if (
-    executableNames.includes('curl')
-    && (CURL_EXPLICIT_CONFIG_PATTERN.test(command)
-      || CURL_MAY_LOAD_DEFAULT_CONFIG_PATTERN.test(command))
-  ) return true;
+  const invocations = commandExecutableInvocations(command);
+  if (invocations.some(({ name, args }) =>
+    name === 'curl' && curlMayLoadMutableConfig(args))) return true;
+  if (invocations.some(({ name, args }) =>
+    name === 'wget' && wgetMayLoadMutableUserState(args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
-  return executableNames.some((rawName) => {
+  return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。
     if (rawName.startsWith('-')) return true;
     if (/\.(?:cmd|bat)$/i.test(rawName)) return true;
