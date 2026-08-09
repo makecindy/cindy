@@ -293,6 +293,24 @@ export function isLegacyOwnerNamespaceClaimedByOtherOwner(
   return !invalid && marker !== null && marker.ownerKey !== dataOwnerStorageKey(ownerId);
 }
 
+/**
+ * Read-only inspection for consumers opening data that is already owner-scoped.
+ * This is not permission to move shared legacy files: unlike
+ * hasLegacyOwnerNamespaceClaim, it intentionally ignores passive/live peers.
+ */
+export function isLegacyOwnerNamespaceClaimCompleteForOwner(
+  ownerId: string,
+  userDataDir = app.getPath('userData'),
+): boolean {
+  const { marker, invalid } = readMarkerSync(userDataDir);
+  return (
+    !invalid &&
+    marker !== null &&
+    marker.ownerKey === dataOwnerStorageKey(ownerId) &&
+    marker.complete
+  );
+}
+
 interface LegacyGhostDir {
   root: string;
   id: string;

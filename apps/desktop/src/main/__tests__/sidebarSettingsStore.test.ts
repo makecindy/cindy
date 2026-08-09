@@ -21,6 +21,7 @@ const harness = vi.hoisted(() => ({
   destroyedSend: vi.fn(),
   assertTrusted: vi.fn(),
   legacyClaimReady: true,
+  legacyClaimCompleteForOwner: false,
   legacyClaimedByOtherOwner: false,
   loggerInfo: vi.fn(),
   loggerError: vi.fn(),
@@ -71,6 +72,7 @@ vi.mock('../appSessionState.js', () => ({
 
 vi.mock('../ownerNamespaceMigration.js', () => ({
   hasLegacyOwnerNamespaceClaim: () => harness.legacyClaimReady,
+  isLegacyOwnerNamespaceClaimCompleteForOwner: () => harness.legacyClaimCompleteForOwner,
   isLegacyOwnerNamespaceClaimedByOtherOwner: () => harness.legacyClaimedByOtherOwner,
 }));
 
@@ -154,6 +156,7 @@ describe('sidebarSettingsStore', () => {
     harness.destroyedSend.mockReset();
     harness.assertTrusted.mockReset();
     harness.legacyClaimReady = true;
+    harness.legacyClaimCompleteForOwner = false;
     harness.legacyClaimedByOtherOwner = false;
     harness.loggerInfo.mockReset();
     harness.loggerError.mockReset();
@@ -463,6 +466,107 @@ describe('sidebarSettingsStore', () => {
     });
   });
 
+  it('lets a passive same-owner instance use fully migrated scoped state', async () => {
+    fs.writeFileSync(
+      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
+      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
+      'utf-8',
+    );
+    fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
+    fs.writeFileSync(
+      ownerFile(),
+      JSON.stringify({ pinnedOrder: ['scoped-session'], hiddenProjectKeys: [] }),
+      'utf-8',
+    );
+    harness.legacyClaimReady = false;
+    harness.legacyClaimCompleteForOwner = true;
+
+    expect(loadSnapshot().pinnedOrder).toEqual(['scoped-session']);
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
+    ).resolves.toEqual(['new-session', 'scoped-session']);
+    await expect(
+      hiddenHandler(request({ projectKey: 'local:/workspace/passive', hidden: true })),
+    ).resolves.toBe(true);
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8'))).toMatchObject({
+      pinnedOrder: ['new-session', 'scoped-session'],
+      hiddenProjectKeys: ['local:/workspace/passive'],
+    });
+  });
+
+  it('keeps a passive same-owner instance blocked while shared legacy state remains', async () => {
+    const legacy = path.join(harness.root, 'sidebar-settings.json');
+    fs.writeFileSync(
+      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
+      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
+      'utf-8',
+    );
+    fs.writeFileSync(legacy, JSON.stringify({ pinnedOrder: ['legacy-session'] }), 'utf-8');
+    harness.legacyClaimReady = false;
+    harness.legacyClaimCompleteForOwner = true;
+
+    expect(loadSnapshot().pinnedOrder).toEqual([]);
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
+    ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings migration is pending');
+    expect(JSON.parse(fs.readFileSync(legacy, 'utf-8'))).toEqual({
+      pinnedOrder: ['legacy-session'],
+    });
+    expect(fs.existsSync(ownerFile())).toBe(false);
+  });
+
+  it('treats a dangling shared legacy symlink as present in passive mode', async () => {
+    const legacy = path.join(harness.root, 'sidebar-settings.json');
+    fs.writeFileSync(
+      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
+      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
+      'utf-8',
+    );
+    harness.legacyClaimReady = false;
+    harness.legacyClaimCompleteForOwner = true;
+    const lstatSync = vi.spyOn(fs, 'lstatSync').mockImplementation((file) => {
+      if (file === legacy) return { isFile: () => false } as fs.Stats;
+      throw new Error(`unexpected lstat: ${String(file)}`);
+    });
+
+    try {
+      expect(loadSnapshot().pinnedOrder).toEqual([]);
+      await expect(
+        pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
+      ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings migration is pending');
+      expect(fs.existsSync(ownerFile())).toBe(false);
+    } finally {
+      lstatSync.mockRestore();
+    }
+  });
+
+  it('fails closed when the shared legacy path cannot be inspected', async () => {
+    const legacy = path.join(harness.root, 'sidebar-settings.json');
+    fs.writeFileSync(
+      path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'),
+      JSON.stringify({ version: 1, ownerKey: 'key-owner-a' }),
+      'utf-8',
+    );
+    harness.legacyClaimReady = false;
+    harness.legacyClaimCompleteForOwner = true;
+    const lstatSync = vi.spyOn(fs, 'lstatSync').mockImplementation((file) => {
+      if (file === legacy) {
+        throw Object.assign(new Error('private path detail'), { code: 'EACCES' });
+      }
+      throw new Error(`unexpected lstat: ${String(file)}`);
+    });
+
+    try {
+      expect(loadSnapshot().pinnedOrder).toEqual([]);
+      await expect(
+        pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
+      ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings migration is pending');
+      expect(fs.existsSync(ownerFile())).toBe(false);
+    } finally {
+      lstatSync.mockRestore();
+    }
+  });
+
   it('does not expose sidebar identity values through the uploadable settings logger', async () => {
     const sensitiveSession = 'private-session-sentinel';
     const sensitiveProject = 'local:/workspace/private-project-sentinel';
@@ -503,6 +607,31 @@ describe('sidebarSettingsStore', () => {
     );
     expect(JSON.stringify(harness.loggerWarn.mock.calls)).not.toContain(sensitiveValue);
     expect(fs.existsSync(ownerFile())).toBe(true);
+  });
+
+  it('does not overwrite malformed scoped state when a mutation arrives', async () => {
+    const malformed = '{"pinnedOrder":[private-sidebar-sentinel]}';
+    fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
+    fs.writeFileSync(ownerFile(), malformed, 'utf-8');
+
+    expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
+    ).rejects.toThrow('[INTERNAL] failed to persist sidebar settings');
+    await expect(
+      hiddenHandler(request({ projectKey: 'local:/workspace/new', hidden: true })),
+    ).rejects.toThrow('[INTERNAL] failed to persist sidebar settings');
+    expect(fs.readFileSync(ownerFile(), 'utf-8')).toBe(malformed);
+    expect(harness.send).not.toHaveBeenCalled();
+
+    fs.writeFileSync(
+      ownerFile(),
+      JSON.stringify({ pinnedOrder: ['repaired-session'], hiddenProjectKeys: [] }),
+      'utf-8',
+    );
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
+    ).resolves.toEqual(['new-session', 'repaired-session']);
   });
 
   it('atomically reconciles legacy and scoped sidebar files', async () => {

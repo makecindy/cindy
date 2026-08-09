@@ -19,7 +19,12 @@ const DEFAULTS: TestSettings = {
 
 function createTempStore(
   existing?: { dir: string; file: string },
-  options: { logLoadedValue?: boolean; logReadErrorDetails?: boolean } = {},
+  options: {
+    logLoadedValue?: boolean;
+    logReadErrorDetails?: boolean;
+    maxBytes?: number;
+    preserveUnreadableFile?: boolean;
+  } = {},
 ) {
   const dir = existing?.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-override-settings-'));
   const file = existing?.file ?? path.join(dir, 'settings.json');
@@ -49,6 +54,8 @@ function createTempStore(
     },
     log,
     label: 'test',
+    maxBytes: options.maxBytes,
+    preserveUnreadableFile: options.preserveUnreadableFile,
     logLoadedValue: options.logLoadedValue,
     logReadErrorDetails: options.logReadErrorDetails,
   });
@@ -116,6 +123,51 @@ describe('createOverrideSettingsFile', () => {
         { path: file },
       );
       expect(JSON.stringify(log.warn.mock.calls)).not.toContain(sensitiveValue);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves unreadable settings and rejects mutations until the file is repaired', async () => {
+    const { dir, file, store } = createTempStore(undefined, {
+      preserveUnreadableFile: true,
+    });
+    const malformed = '{"limit":private-settings-sentinel}';
+    const updater = vi.fn(() => ({ limit: 9 }));
+    try {
+      fs.writeFileSync(file, malformed, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+
+      expect(() => store.writePatch({ enabled: false })).toThrow(/unreadable/);
+      await expect(store.writePatchAtomic({ limit: 8 })).rejects.toThrow(/unreadable/);
+      await expect(store.updateAtomic(updater)).rejects.toThrow(/unreadable/);
+      expect(updater).not.toHaveBeenCalled();
+      expect(fs.readFileSync(file, 'utf-8')).toBe(malformed);
+
+      fs.writeFileSync(file, JSON.stringify({ enabled: false }), 'utf-8');
+      await expect(store.writePatchAtomic({ limit: 8 })).resolves.toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({
+        enabled: false,
+        limit: 8,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['a non-object root', 'null', undefined],
+    ['an oversized file', '{"limit":8}', 4],
+  ])('treats %s as unreadable when preservation is enabled', (_label, contents, maxBytes) => {
+    const { dir, file, store } = createTempStore(undefined, {
+      maxBytes,
+      preserveUnreadableFile: true,
+    });
+    try {
+      fs.writeFileSync(file, contents, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(() => store.writePatch({ limit: 9 })).toThrow(/unreadable/);
+      expect(fs.readFileSync(file, 'utf-8')).toBe(contents);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

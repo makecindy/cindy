@@ -31,6 +31,7 @@ import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
   hasLegacyOwnerNamespaceClaim,
+  isLegacyOwnerNamespaceClaimCompleteForOwner,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
@@ -525,6 +526,16 @@ function readLegacyOwnerKey(markerPath: string): string | null | undefined {
   }
 }
 
+type LegacySidebarPathState = 'missing' | 'regular-file' | 'blocked';
+
+function legacySidebarPathState(file: string): LegacySidebarPathState {
+  try {
+    return fs.lstatSync(file).isFile() ? 'regular-file' : 'blocked';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'blocked';
+  }
+}
+
 type LegacySidebarClaimResult = 'blocked' | 'ready' | 'snapshot-changed';
 
 function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
@@ -538,8 +549,15 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   if (existing !== undefined && existing !== ownerKey) return 'blocked';
   const legacyPath = path.join(root, SETTINGS_FILE_NAME);
   const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
+  const legacyPathState = legacySidebarPathState(legacyPath);
 
-  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) return 'blocked';
+  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
+    return existing === ownerKey &&
+      isLegacyOwnerNamespaceClaimCompleteForOwner(session.dataOwnerId) &&
+      legacyPathState === 'missing'
+      ? 'ready'
+      : 'blocked';
+  }
   if (existing === undefined) {
     try {
       fs.writeFileSync(markerPath, JSON.stringify({ version: 1, ownerKey }, null, 2), {
@@ -557,7 +575,8 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
     }
   }
 
-  if (!fs.existsSync(legacyPath)) return 'ready';
+  if (legacyPathState === 'missing') return 'ready';
+  if (legacyPathState === 'blocked') return 'blocked';
   if (fs.existsSync(scopedPath) || fs.existsSync(`${scopedPath}.bak`)) {
     return reconcileLegacySidebarSettings(legacyPath, scopedPath, ownerKey)
       ? 'snapshot-changed'

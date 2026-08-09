@@ -8,6 +8,7 @@ import {
   claimLegacyOwnerNamespace,
   getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
+  isLegacyOwnerNamespaceClaimCompleteForOwner,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
   listLegacyGhostTombstoneRoots,
   recoverLegacyGhostPlugins,
@@ -1411,6 +1412,31 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
 
     await fs.writeFile(path.join(root, __testing.CLAIM_MARKER), '{ invalid');
     expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(false);
+  });
+
+  it('reads a completed same-owner marker without granting migration permission', async () => {
+    const root = await tempRoot();
+    expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(false);
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
+    );
+    process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
+    try {
+      expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(true);
+      expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-b', root)).toBe(false);
+      expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(false);
+    } finally {
+      delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
+    }
+
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: false }),
+    );
+    expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(false);
+    await fs.writeFile(path.join(root, __testing.CLAIM_MARKER), '{ invalid');
+    expect(isLegacyOwnerNamespaceClaimCompleteForOwner('cloud-a', root)).toBe(false);
   });
 
   it('answers false while another live instance shares this userData, true again after it exits', async () => {
