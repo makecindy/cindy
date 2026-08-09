@@ -46,13 +46,15 @@ const DEFAULT_MAX_FILE_BYTES = 32_000_000;
  * OUTBOX_MAX_DELAY_MS): the server already gives up on publishing a reply this
  * old, so a client that reconnects later has nothing useful left to hand over.
  *
- * INVARIANT: the horizon must hold at *every* exit that pushes a terminal frame
- * on our own initiative. There are four, and they are easy to miss one at a time:
+ * INVARIANT: a terminal frame past the horizon is never sent — no exceptions,
+ * whoever asked. The exits are easy to miss one at a time:
  *  1. the durable outbox here (`listPending`);
  *  2. the dispatcher's ACK retry timer (`sendPendingDelivery`);
  *  3. its offline `turn.end` buffer, replayed on reconnect;
  *  4. its ACK buffer on reconnect — which has *two* consumers, the ACK replay and
- *     the capability-downgrade fallback that sends the frame directly.
+ *     the capability-downgrade fallback that sends the frame directly;
+ *  5. the dispatcher's replay of a persisted terminal when the server explicitly
+ *     re-dispatches the same requestId.
  *
  * Because of (4) the age check belongs where the frames are *taken* (a sweep at
  * the top of `onConnected`), not at each consumer: guarding consumers one by one
@@ -60,13 +62,16 @@ const DEFAULT_MAX_FILE_BYTES = 32_000_000;
  * slip through the same way. Guarding only (1) additionally makes the behaviour
  * depend on whether the process happened to restart during the outage.
  *
- * Serving an explicit server re-dispatch is *not* one of those exits: there the
- * server is asking, and it owns its own staleness policy. The dispatcher tags
- * those ACK-buffer entries `origin: 'server-request'` so the sweeps skip them,
- * and that tag only ever *upgrades*: a re-dispatch for a requestId already
- * queued on our own initiative must flip the existing entry to
- * `'server-request'`, or the horizon would refuse the very request that asked
- * for it — leaving the server with neither a terminal nor a rejection.
+ * (5) briefly carried an exemption — "the server is asking, so answer it" — and
+ * that exemption is why this rule is now unconditional. It had no place in the
+ * persisted record (there is no provenance field here), so every path that could
+ * queue or re-queue a frame had to propagate it by hand, and three consecutive
+ * review rounds each found one more path that had not. Dropping the exemption
+ * deletes that whole class of defect. The cost is bounded: the ACK is still
+ * replayed, so the server learns the requestId was handled and never re-invokes
+ * the agent; it only misses a terminal it had already given up publishing
+ * (server-side give-up is the same ≈24h, and a result is always younger than its
+ * request, so a re-dispatch this old is already past the server's own horizon).
  */
 export const HOOK_TERMINAL_DELIVERY_TTL_MS = 24 * 60 * 60_000;
 

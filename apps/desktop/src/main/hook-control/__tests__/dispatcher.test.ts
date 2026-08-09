@@ -2055,7 +2055,10 @@ describe('dispatcher 核心语义', () => {
       set: stored.set,
       markSent: () => false,
     };
-    const completedAt = 123_456;
+    // 本例测的是「回放时账目回退」, 这要求记录**还在投递时效内** —— 原先的 123_456
+    // (≈1970)只是个占位值, 而 completedAt 现在是时效判据的输入, 过线的记录按设计
+    // 只回放 ack、不发终稿(见「显式重投一份过线终稿」用例)。
+    const completedAt = Date.now();
     stored.set({
       connectionId: 'conn-1',
       requestId: 'pending-replay-fallback',
@@ -2119,7 +2122,8 @@ describe('dispatcher 核心语义', () => {
           usage: { durationMs: 1 },
         },
         delivery: 'sent',
-        completedAt: 123_456,
+        // 「重连补发」按定义要求记录仍在投递时效内; 过线记录不进补发路径。
+        completedAt: Date.now(),
       });
 
       const { d } = makeDispatcher({ runner: fr.runner, terminalLedger: stored });
@@ -2486,84 +2490,55 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
-  it('过线的本地条目被 server 显式重投时升级为豁免，不回绝这次索取', async () => {
-    vi.useFakeTimers();
-    const terminalLedger = memoryTerminalLedger();
-    const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
-    const c = collector();
-    try {
-      // 1) 我方算完, 以 origin='local' 进 ACK 缓冲, 但**首投就失败**(连接已断)。
-      //    这一步是关键: sendPendingDelivery 只在发送成功后才武装退避 timer, 失败
-      //    直接 return —— 于是这条项没有任何后续唤醒, 会一直躺在缓冲里过线。
-      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      d.handleDispatch('conn-1', dispatch(), c.send);
-      await tick();
-      c.setOnline(false);
-      fr.finish({ finalText: '本地先排的队' });
-      await tick();
-      expect(c.ofType('turn.end')).toHaveLength(0);
-
-      // 2) 跨过时效。没有 timer, 所以这条过线的 local 项仍在缓冲里。
-      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
-      c.setOnline(true);
-      const beforeRequest = c.ofType('turn.end').length;
-
-      // 3) server 显式重投同一个 requestId —— 它在索取。必须照答, 不能因为缓冲里
-      //    那条是 local 且已过线就回绝(否则 server 既拿不到终态也拿不到拒绝)。
-      d.handleDispatch('conn-1', dispatch(), c.send);
-      await tick();
-      expect(c.ofType('turn.end').length).toBeGreaterThan(beforeRequest);
-    } finally {
-      d.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it('入口清扫不碰 server 索取的条目：origin=server-request 过线仍照答', async () => {
-    vi.useFakeTimers();
-    const terminalLedger = memoryTerminalLedger();
-    terminalLedger.records.push({
-      connectionId: 'conn-1',
-      requestId: 'req-1',
-      ack: {
+  it.each([
+    ['ACK server', [HOOK_FEATURE_TURN_DELIVERY]],
+    ['非 ACK server', [] as string[]],
+  ])(
+    '%s 显式重投一份过线终稿: 只回放 ack, 不发终稿, 也不把记录改回 pending',
+    async (_name, features) => {
+      const terminalLedger = memoryTerminalLedger();
+      terminalLedger.records.push({
+        connectionId: 'conn-1',
         requestId: 'req-1',
-        result: 'accepted',
-        reason: null,
-        sessionId: 'session-sweep-exempt',
-        queuePosition: null,
-      },
-      turnEnd: {
-        requestId: 'req-1',
-        externalKey: 'team-slack:C1:sweep-exempt',
-        sessionId: 'session-sweep-exempt',
-        status: 'ok',
-        finalText: '被索取的老结果',
-        errorMessage: null,
-        usage: { durationMs: 1 },
-      },
-      delivery: 'sent',
-      completedAt: 123_456, // ≈1970: 远超时效
-    });
-    const fr = fakeRunner();
-    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
-    const c = collector();
-    try {
-      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      // server 显式重投 -> 回放帧标 server-request 进 ACK 缓冲。
-      d.handleDispatch('conn-1', dispatch(), c.send);
-      await tick();
-      expect(c.ofType('turn.end')).toHaveLength(1);
+        ack: {
+          requestId: 'req-1',
+          result: 'accepted',
+          reason: null,
+          sessionId: 'session-stale-replay',
+          queuePosition: null,
+        },
+        turnEnd: {
+          requestId: 'req-1',
+          externalKey: 'team-slack:C1:stale-replay',
+          sessionId: 'session-stale-replay',
+          status: 'ok',
+          finalText: '早已过时的结果',
+          errorMessage: null,
+          usage: { durationMs: 1 },
+        },
+        delivery: 'sent',
+        completedAt: 123_456, // ≈1970: 远超时效
+      });
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+      const c = collector();
+      try {
+        d.onConnected('conn-1', c.send, features);
+        d.handleDispatch('conn-1', dispatch(), c.send);
+        await tick();
 
-      // 再来一次重连: 入口清扫必须跳过它(不是我方主动排的队)。
-      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
-      await tick();
-      expect(c.ofType('turn.end').length).toBeGreaterThan(1);
-    } finally {
-      d.dispose();
-      vi.useRealTimers();
-    }
-  });
+        // ack 照回放: server 由此知道这个 requestId 受理并处理过, 不会再叫 Agent。
+        expect(c.ofType('task.ack')).toHaveLength(1);
+        expect(fr.calls).toHaveLength(0);
+        // 终稿过线, 一律不发 —— 规则对 server 的索取同样成立, 没有豁免。
+        expect(c.ofType('turn.end')).toHaveLength(0);
+        // 也不能把它改回 pending: 那会让下次重连的持久出箱再判一次过期, 白留垃圾。
+        expect(terminalLedger.records[0]?.delivery).toBe('sent');
+      } finally {
+        d.dispose();
+      }
+    },
+  );
 
   it('离线缓冲里超过投递时效的 turn.end 重连时丢弃，不因进程是否重启而分叉', async () => {
     vi.useFakeTimers();
@@ -2797,7 +2772,8 @@ describe('dispatcher 核心语义', () => {
         usage: { durationMs: 1 },
       },
       delivery: 'sent',
-      completedAt: 123_456,
+      // 本例测的是「回放帧走 ACK 缓冲并按退避重发」, 需要记录仍在时效内。
+      completedAt: Date.now(),
     });
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
