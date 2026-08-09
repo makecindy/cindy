@@ -418,6 +418,10 @@ import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
 import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
 import { SessionListDrawer } from '@/session/SessionListDrawer';
+import {
+  switchDrawerSessionInPlace,
+  type SessionRouteParamsNavigation,
+} from '@/session/sessionDrawerNavigation';
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import {
   findMobileMessageSearchHits,
@@ -768,7 +772,7 @@ export default function SessionScreen() {
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualFocusComposer) === '1';
   const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';
   const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;
-  const navigation = useNavigation();
+  const navigation = useNavigation<SessionRouteParamsNavigation & { isFocused(): boolean }>();
   const router = useRouter();
   const auth = useAuth();
   const windowDimensions = useWindowDimensions();
@@ -869,7 +873,7 @@ export default function SessionScreen() {
       setContextSheetOpen(true);
     }
   }, [goalError]);
-  // goal 接回载荷按任务换代清理(codex review P2):任务抽屉 router.replace 原地
+  // goal 接回载荷按任务换代清理(codex review P2):任务抽屉 replaceParams 原地
   // 更新同一 SessionScreen 实例,goalRestore/goalError 只在首次挂载初始化——切
   // 任务后残留会让新任务的 Goal 表单预填旧任务的 objective/limits,甚至把旧目标
   // 提交到新任务。prevSessionIdRef 与当前 sessionId 同步初始化:首次挂载
@@ -2017,7 +2021,7 @@ export default function SessionScreen() {
     screenWidth: windowDimensions.width,
   }), [windowDimensions.width]);
   // 宽屏导航形态(iPad / 安卓折叠屏与横屏大屏机):左上角三条杠 + 任务列表抽屉,
-  // 原地 replace 切任务;窄屏保持传统返回键。断点与按平台分闸(iOS 仅 iPad,
+  // 原地替换当前路由参数切任务;窄屏保持传统返回键。断点与按平台分闸(iOS 仅 iPad,
   // iPhone 不发)见 wideSessionNav.ts。
   const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
     iosPad: Platform.OS === 'ios' && Platform.isPad,
@@ -2110,18 +2114,18 @@ export default function SessionScreen() {
       Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
-    // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
+    // 不派发 NativeStack REPLACE:它会创建新 route key 并走 Android 原生 Screen 替换，
+    // 上次仅延后到抽屉卸载后仍未消除 crash / 白屏。当前 SessionScreen 已完整支持
+    // sessionId 原地换代，replaceParams 保持栈与 native Screen 不动，并整包替换 params
+    // 以清掉旧任务的 draft / goal / focus 等一次性参数。
     queueDrawerNavigation(() => {
-      router.replace({
-        pathname: '/sessions/[sessionId]',
-        params: {
-          deviceId: targetDeviceId,
-          deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
-          sessionId: targetSession.id,
-        },
+      switchDrawerSessionInPlace(navigation, {
+        deviceId: targetDeviceId,
+        deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+        sessionId: targetSession.id,
       });
     });
-  }, [closeSessionListDrawer, queueDrawerNavigation, router, sessionId, t]);
+  }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();

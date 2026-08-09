@@ -72,9 +72,11 @@ describe('mobile session header desktop-first surface', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
     // 宽屏(iPad / 折叠屏展开 / 横屏手机)导航形态:断点判定走 wideSessionNav 纯函数,
-    // 左上角三条杠替代返回,抽屉原地 replace 切任务;窄屏保持 ScreenBackButton(上一用例已锁)。
+    // 左上角三条杠替代返回,抽屉在当前 native Screen 内切任务;窄屏保持 ScreenBackButton。
     expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
     expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
+    expect(source).toContain('switchDrawerSessionInPlace,');
+    expect(source).toContain("from '@/session/sessionDrawerNavigation';");
     // 按平台分闸(发布策略):iOS 只发 iPad,iPhone 横屏也保持返回键;安卓纯宽度闸。
     expect(source).toContain('iosPad: Platform.OS === \'ios\' && Platform.isPad,');
     expect(source).toContain('platform: Platform.OS,');
@@ -82,11 +84,17 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('icon={Menu}');
     expect(source).toContain('testID="session.sessionListButton"');
     expect(source).toContain('{onOpenSessionList ? (');
-    // 抽屉切任务是「原地切换」:replace 保持导航栈 [主页, 会话],不逐层压栈。
-    expect(source).toContain("pathname: '/sessions/[sessionId]'");
+    // 抽屉切任务只替换当前 route params：不压栈，也不派发会创建新 route key 的
+    // NativeStack REPLACE（后者正是 Android crash / 白屏仍存的生命周期入口）。
     expect(source).toContain('const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {');
-    expect(source).toContain('router.replace({');
-    // Android 原生换屏必须等 drawer overlay 完整卸载;三个导航入口共用同一延后队列。
+    const drawerSelectionStart = source.indexOf('const handleDrawerSelectSession = useCallback');
+    const drawerSelectionEnd = source.indexOf('// 前进导航防连点', drawerSelectionStart);
+    const drawerSelectionSource = source.slice(drawerSelectionStart, drawerSelectionEnd);
+    expect(drawerSelectionSource).toContain('switchDrawerSessionInPlace(navigation, {');
+    expect(drawerSelectionSource).not.toContain('router.replace');
+    expect(drawerSelectionSource).not.toContain("pathname: '/sessions/[sessionId]'");
+    // 三个导航入口都等 drawer overlay 完整卸载；新建 / 回主页可能原生换屏，
+    // 切任务虽已改为 replaceParams，也不和 Reanimated 子树退场抢同一帧。
     expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
     expect(source).toContain('const sessionListDrawerClosingRef = useRef(false);');
     expect(source).toContain('const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);');
@@ -100,7 +108,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
     expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
-    expect(source).toContain('queueDrawerNavigation(() => {\n      router.replace({');
+    expect(source).toContain('queueDrawerNavigation(() => {\n      switchDrawerSessionInPlace(navigation, {');
     expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
     expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
@@ -127,7 +135,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
     expect(source).toContain('width={sessionListDrawerWidthRef.current}');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
-    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // replace");
+    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {
