@@ -151,20 +151,20 @@ describe('sessionRemovalRecycle', () => {
       expect(removeMock).not.toHaveBeenCalled();
     });
 
-    it('terminal owner with a store meta still retries a shared owner', async () => {
-      const parentMeta = makeMeta('parent');
+    it('shared session with its own store meta still retries the owner', async () => {
       const ownerMeta = makeMeta('owner');
-      storeMap.set('parent', parentMeta);
+      const sharedMeta = makeMeta('shared');
       storeMap.set('owner', ownerMeta);
-      addSession('parent', 'archived', { workingDir: parentMeta.path });
-      addSession('owner', 'archived', { workingDir: parentMeta.path });
+      storeMap.set('shared', sharedMeta);
+      addSession('owner', 'archived', { worktreePath: ownerMeta.path });
+      addSession('shared', 'archived', { workingDir: ownerMeta.path });
 
-      await mod.recycleWorktreeForRemovedSession('owner');
+      await mod.recycleWorktreeForRemovedSession('shared');
 
       expect(removeMock).toHaveBeenCalledTimes(2);
       expect(removeMock.mock.calls.map(([sessionId]) => sessionId).sort()).toEqual([
         'owner',
-        'parent',
+        'shared',
       ]);
     });
 
