@@ -16,8 +16,11 @@
  * 丢更新;跨实例无需同步(一个组的开/关只由它自己的箭头触发)。
  */
 
-import { useCallback, useState } from 'react';
-import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 
@@ -89,19 +92,43 @@ export function setAutomationGroupCollapsed(
 
 /**
  * 组件侧 hook:返回 [collapsed, toggle]。collapsed 由 localStorage 初始化(默认展开),
- * toggle 翻转并持久化。组件以 group.id 作为 key 渲染,故 groupKey 在实例生命周期内稳定。
+ * 并在 owner / group 边界变化时重新绑定；toggle 只写入创建它时对应的当前 binding。
  */
 export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean, () => void] {
-  const ownerId = getDataOwnerGeneration().dataOwnerId;
+  const { dataOwnerId: ownerId, generation: ownerGeneration } = getDataOwnerGeneration();
   const [collapsed, setCollapsedState] = useState(() =>
     isAutomationGroupCollapsed(groupKey, ownerId),
   );
+  const committedBindingRef = useRef({ groupKey, ownerId });
+
+  // AuthContext 先同步发布 data owner，再触发 React 重渲染。layout effect 在浏览器绘制前
+  // 装载新 binding，避免短暂展示上一账号或上一分组的折叠态。
+  useLayoutEffect(() => {
+    const committedBinding = committedBindingRef.current;
+    if (committedBinding.groupKey === groupKey && committedBinding.ownerId === ownerId) return;
+    committedBindingRef.current = { groupKey, ownerId };
+    setCollapsedState(isAutomationGroupCollapsed(groupKey, ownerId));
+  }, [groupKey, ownerId]);
+
   const toggle = useCallback(() => {
+    const ownerAtRender = { dataOwnerId: ownerId, generation: ownerGeneration };
+    const isCurrentBinding = (): boolean => {
+      const currentBinding = committedBindingRef.current;
+      return (
+        currentBinding.groupKey === groupKey &&
+        currentBinding.ownerId === ownerId &&
+        isDataOwnerGenerationCurrent(ownerAtRender)
+      );
+    };
+    // Owner generation is published synchronously before React rerenders. Reject an old callback
+    // even during that boundary window, then check again inside the state updater.
+    if (!isCurrentBinding()) return;
     setCollapsedState((prev) => {
+      if (!isCurrentBinding()) return prev;
       const next = !prev;
       setAutomationGroupCollapsed(groupKey, next, ownerId);
       return next;
     });
-  }, [groupKey, ownerId]);
+  }, [groupKey, ownerGeneration, ownerId]);
   return [collapsed, toggle] as const;
 }
