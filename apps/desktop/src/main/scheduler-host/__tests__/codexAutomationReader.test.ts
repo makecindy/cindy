@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createCodexAutomationReader,
@@ -79,6 +79,36 @@ describe('createCodexAutomationReader', () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ id: 'broken', name: 'broken', prompt: '' });
     expect(items[0].diagnostics.join(' ')).toContain('id');
+  });
+
+  it('sanitizes filesystem error diagnostics without exposing the source path', async () => {
+    const root = await makeRoot();
+    await writeAutomation(
+      root,
+      'blocked',
+      [
+        'version = 1',
+        'id = "blocked"',
+        'name = "blocked"',
+        'prompt = "read only"',
+        'status = "ACTIVE"',
+        'rrule = "FREQ=DAILY;BYHOUR=9;BYMINUTE=0"',
+      ].join('\n'),
+    );
+
+    const sourcePath = path.join(root, 'blocked', 'automation.toml');
+    const readFile = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, open '${sourcePath}'`), {
+        code: 'EACCES',
+      }),
+    );
+    try {
+      const item = await createCodexAutomationReader({ rootDir: root }).get('blocked');
+      expect(item?.diagnostics).toEqual(['cannot read automation.toml: EACCES']);
+      expect(item?.diagnostics.join(' ')).not.toContain(sourcePath);
+    } finally {
+      readFile.mockRestore();
+    }
   });
 
   it('reports string length violations accurately', async () => {
@@ -183,5 +213,49 @@ describe('createCodexAutomationReader', () => {
 
     await expect(reader.get('missing')).resolves.toBeNull();
     await expect(reader.list()).resolves.toEqual([]);
+  });
+
+  it('sanitizes root filesystem errors without exposing the root path', async () => {
+    const root = await makeRoot();
+    const sourcePath = path.join(root, 'automation.toml');
+    const readdir = vi.spyOn(fs, 'readdir').mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, scandir '${sourcePath}'`), {
+        code: 'EACCES',
+      }),
+    );
+    try {
+      const error = await createCodexAutomationReader({ rootDir: root })
+        .list()
+        .then(
+          () => null,
+          (reason) => reason as Error,
+        );
+      expect(error?.message).toBe('cannot list Codex automations: EACCES');
+      expect(error?.message).not.toContain(root);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('sanitizes get access errors without exposing the source path', async () => {
+    const root = await makeRoot();
+    const sourcePath = path.join(root, 'blocked', 'automation.toml');
+    const access = vi.spyOn(fs, 'access').mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, access '${sourcePath}'`), {
+        code: 'EACCES',
+      }),
+    );
+    try {
+      const error = await createCodexAutomationReader({ rootDir: root })
+        .get('blocked')
+        .then(
+          () => null,
+          (reason) => reason as Error,
+        );
+      expect(error?.message).toBe('cannot read automation.toml: EACCES');
+      expect(error?.message).not.toContain(root);
+    } finally {
+      access.mockRestore();
+    }
   });
 });

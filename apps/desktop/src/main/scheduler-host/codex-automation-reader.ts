@@ -126,6 +126,27 @@ function recurrenceDiagnostics(rrule: string): string[] {
   return diagnostics;
 }
 
+const SAFE_FILESYSTEM_ERROR_CODES = new Set([
+  'EACCES',
+  'EISDIR',
+  'ELOOP',
+  'EMFILE',
+  'ENFILE',
+  'ENOENT',
+  'ENOTDIR',
+  'EPERM',
+]);
+
+function filesystemErrorCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === 'string' && SAFE_FILESYSTEM_ERROR_CODES.has(code) ? code : 'UNKNOWN';
+}
+
+function filesystemDiagnostic(action: 'read' | 'list', error: unknown): string {
+  if (action === 'list') return `cannot list Codex automations: ${filesystemErrorCode(error)}`;
+  return `cannot read automation.toml: ${filesystemErrorCode(error)}`;
+}
+
 function fallbackItem(id: string, sourcePath: string, diagnostic: string): CodexAutomationDetail {
   return {
     id,
@@ -210,11 +231,7 @@ async function readAutomationFile(rootDir: string, id: string): Promise<CodexAut
     const rawText = await fs.readFile(sourcePath, 'utf8');
     return parseAutomation(id, sourcePath, rawText);
   } catch (error) {
-    return fallbackItem(
-      id,
-      sourcePath,
-      `cannot read automation.toml: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    return fallbackItem(id, sourcePath, filesystemDiagnostic('read', error));
   }
 }
 
@@ -230,7 +247,7 @@ export function createCodexAutomationReader(
         entries = await fs.readdir(rootDir, { withFileTypes: true });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-        throw error;
+        throw new Error(filesystemDiagnostic('list', error));
       }
       const items = await Promise.all(
         entries
@@ -259,7 +276,7 @@ export function createCodexAutomationReader(
         await fs.access(sourcePath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-        throw error;
+        throw new Error(filesystemDiagnostic('read', error));
       }
       return readAutomationFile(rootDir, id);
     },
