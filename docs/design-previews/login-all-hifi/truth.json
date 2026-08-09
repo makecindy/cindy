@@ -3566,7 +3566,7 @@
       "zh-TW": {
         "back": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.back",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3574,7 +3574,7 @@
         },
         "binding.emailSubtitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.binding.emailSubtitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3582,7 +3582,7 @@
         },
         "binding.emailTitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.binding.emailTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3590,7 +3590,7 @@
         },
         "binding.phoneSubtitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.binding.phoneSubtitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3598,7 +3598,7 @@
         },
         "binding.phoneTitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.binding.phoneTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3606,7 +3606,7 @@
         },
         "browserWaiting": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.browserWaiting",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3614,7 +3614,7 @@
         },
         "cancel": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.cancel",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3622,7 +3622,7 @@
         },
         "chooseAccount": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.chooseAccount",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3630,7 +3630,7 @@
         },
         "chooseAccountSubtitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.chooseAccountSubtitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3638,7 +3638,7 @@
         },
         "chooseMethod": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.chooseMethod",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3646,7 +3646,7 @@
         },
         "codePlaceholder": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.codePlaceholder",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3654,7 +3654,7 @@
         },
         "codeSentTo": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.codeSentTo",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3662,7 +3662,7 @@
         },
         "completeSignIn": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.completeSignIn",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3670,7 +3670,7 @@
         },
         "consentDialog.agree": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.consentDialog.agree",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3678,15 +3678,15 @@
         },
         "consentDialog.body": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.consentDialog.body",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
-          "value": "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私協議</privacy>"
+          "value": "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私政策</privacy>"
         },
         "consentDialog.disagree": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.consentDialog.disagree",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3694,23 +3694,23 @@
         },
         "consentDialog.title": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.consentDialog.title",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
-          "value": "服務條款和隱私協議"
+          "value": "服務條款和隱私政策"
         },
         "consentStatement": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.consentStatement",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
-          "value": "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私協議</privacy>"
+          "value": "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私政策</privacy>"
         },
         "continue": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.continue",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3718,7 +3718,7 @@
         },
         "deletion.completedCopy": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "accountDeletion.status.completedCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3726,7 +3726,7 @@
         },
         "deletion.completedTitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "accountDeletion.status.completedTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3734,7 +3734,7 @@
         },
         "deletion.dismissButton": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "accountDeletion.status.dismissButton",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3742,7 +3742,7 @@
         },
         "deletion.pendingCopy": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "accountDeletion.status.pendingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3750,7 +3750,7 @@
         },
         "deletion.pendingTitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "accountDeletion.status.pendingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3758,7 +3758,7 @@
         },
         "deletion.processingCopy": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "accountDeletion.status.processingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3766,7 +3766,7 @@
         },
         "deletion.processingTitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "accountDeletion.status.processingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3774,7 +3774,7 @@
         },
         "emailPlaceholder": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.emailPlaceholder",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3782,7 +3782,7 @@
         },
         "enterCode": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.enterCode",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3790,7 +3790,7 @@
         },
         "enterpriseLogin": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.enterpriseLogin",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3798,7 +3798,7 @@
         },
         "enterpriseVia": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.enterpriseVia",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3806,7 +3806,7 @@
         },
         "errors.AUTH_SERVICE_UNAVAILABLE": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.errors.AUTH_SERVICE_UNAVAILABLE",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3814,7 +3814,7 @@
         },
         "errors.INVALID_CODE": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.errors.INVALID_CODE",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3822,7 +3822,7 @@
         },
         "errors.fallback": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.errors.fallback",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3830,7 +3830,7 @@
         },
         "invalidEmail": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.invalidEmail",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3838,7 +3838,7 @@
         },
         "invalidPhone": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.invalidPhone",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3846,7 +3846,7 @@
         },
         "localModeDescription": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.localModeDescription",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3854,7 +3854,7 @@
         },
         "localModeEntry": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.localModeEntry",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3862,7 +3862,7 @@
         },
         "orgDetected": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.orgDetected",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3870,7 +3870,7 @@
         },
         "personalAccount": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.personalAccount",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3878,7 +3878,7 @@
         },
         "personalDesc": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.personalDesc",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3886,7 +3886,7 @@
         },
         "personalLogin": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.personalLogin",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3894,7 +3894,7 @@
         },
         "phonePlaceholder": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.phonePlaceholder",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3902,7 +3902,7 @@
         },
         "preparing": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.preparing",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3910,7 +3910,7 @@
         },
         "preparingSubtitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.preparingSubtitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3918,7 +3918,7 @@
         },
         "regionPill.cn": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.regionPill.cn",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3926,7 +3926,7 @@
         },
         "regionPill.dev": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.regionPill.dev",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3934,7 +3934,7 @@
         },
         "resendCode": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.resendCode",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3942,7 +3942,7 @@
         },
         "resendCountdown": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.resendCountdown",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3950,7 +3950,7 @@
         },
         "retry": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.retry",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3958,7 +3958,7 @@
         },
         "sendCode": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.sendCode",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3966,7 +3966,7 @@
         },
         "signIn": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.signIn",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3974,7 +3974,7 @@
         },
         "social.apple": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.social.apple",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3982,7 +3982,7 @@
         },
         "social.google": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.social.google",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3990,7 +3990,7 @@
         },
         "social.wechat": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.social.wechat",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -3998,7 +3998,7 @@
         },
         "ssoEntry": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoEntry",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4006,7 +4006,7 @@
         },
         "ssoOrgDetected": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoOrgDetected",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4014,7 +4014,7 @@
         },
         "ssoOrgHint": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoOrgHint",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4022,7 +4022,7 @@
         },
         "ssoOrgPlaceholder": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoOrgPlaceholder",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4030,7 +4030,7 @@
         },
         "ssoOrgSubtitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoOrgSubtitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4038,7 +4038,7 @@
         },
         "ssoOrgTitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoOrgTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4046,7 +4046,7 @@
         },
         "ssoRequired": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoRequired",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4054,7 +4054,7 @@
         },
         "ssoVerificationSubtitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoVerificationSubtitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4062,7 +4062,7 @@
         },
         "ssoVerificationTitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.ssoVerificationTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4070,7 +4070,7 @@
         },
         "subtitle": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.subtitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4078,7 +4078,7 @@
         },
         "title": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.title",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4086,7 +4086,7 @@
         },
         "unavailable": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.unavailable",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4094,7 +4094,7 @@
         },
         "verifying": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.verifying",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -4102,7 +4102,7 @@
         },
         "working": {
           "provenance": {
-            "hash": "sha256:52e683e2f770d1f96facd61378080c0b865c269e910e997457da5ac970467dff",
+            "hash": "sha256:0fa7b4113941640fffec120db124fa29b3f9a74632596df0a4c2bd095a6c6b8a",
             "locator": "login.working",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
           },
@@ -6585,7 +6585,7 @@
       "en": {
         "accountDeletionCompletedCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.accountDeletionCompletedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6593,7 +6593,7 @@
         },
         "accountDeletionCompletedTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.accountDeletionCompletedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6601,7 +6601,7 @@
         },
         "accountDeletionDismiss": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.accountDeletionDismiss",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6609,7 +6609,7 @@
         },
         "accountDeletionPendingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.accountDeletionPendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6617,7 +6617,7 @@
         },
         "accountDeletionPendingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.accountDeletionPendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6625,7 +6625,7 @@
         },
         "accountDeletionProcessingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.accountDeletionProcessingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6633,7 +6633,7 @@
         },
         "accountDeletionProcessingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.accountDeletionProcessingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6641,7 +6641,7 @@
         },
         "apple": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.apple",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6649,7 +6649,7 @@
         },
         "back": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.back",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6657,7 +6657,7 @@
         },
         "bindEmailSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.bindEmailSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6665,7 +6665,7 @@
         },
         "bindEmailTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.bindEmailTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6673,7 +6673,7 @@
         },
         "bindPhoneSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.bindPhoneSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6681,7 +6681,7 @@
         },
         "bindPhoneTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.bindPhoneTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6689,7 +6689,7 @@
         },
         "browserSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.browserSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6697,7 +6697,7 @@
         },
         "browserTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.browserTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6705,7 +6705,7 @@
         },
         "cancel": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.cancel",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6713,7 +6713,7 @@
         },
         "chooseAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.chooseAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6721,7 +6721,7 @@
         },
         "chooseAccountSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.chooseAccountSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6729,7 +6729,7 @@
         },
         "chooseMethod": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.chooseMethod",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6737,7 +6737,7 @@
         },
         "codePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.codePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6745,7 +6745,7 @@
         },
         "codeSentTo": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.codeSentTo",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6753,7 +6753,7 @@
         },
         "configIssueAuthBaseUrl": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.configIssueAuthBaseUrl",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6761,7 +6761,7 @@
         },
         "configTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.configTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6769,7 +6769,7 @@
         },
         "consentAgree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.consentAgree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6777,7 +6777,7 @@
         },
         "consentDialogBody": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.consentDialogBody",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6785,7 +6785,7 @@
         },
         "consentDialogTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.consentDialogTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6793,7 +6793,7 @@
         },
         "consentDisagree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.consentDisagree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6801,7 +6801,7 @@
         },
         "consentStatement": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.consentStatement",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6809,7 +6809,7 @@
         },
         "continue": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.continue",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6817,7 +6817,7 @@
         },
         "emailCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.emailCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6825,7 +6825,7 @@
         },
         "emailPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.emailPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6833,7 +6833,7 @@
         },
         "enterCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.enterCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6841,7 +6841,7 @@
         },
         "enterpriseLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.enterpriseLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6849,7 +6849,7 @@
         },
         "errorFallback": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.errorFallback",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6857,7 +6857,7 @@
         },
         "errors.AUTH_REQUEST_FAILED": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.AUTH_REQUEST_FAILED.en",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6865,7 +6865,7 @@
         },
         "errors.INVALID_CODE": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.INVALID_CODE.en",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6873,7 +6873,7 @@
         },
         "errors.NETWORK_ERROR": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.NETWORK_ERROR.en",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6881,7 +6881,7 @@
         },
         "google": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.google",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6889,7 +6889,7 @@
         },
         "invalidEmail": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.invalidEmail",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6897,7 +6897,7 @@
         },
         "invalidPhone": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.invalidPhone",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6905,7 +6905,7 @@
         },
         "orgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.orgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6913,7 +6913,7 @@
         },
         "personalAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.personalAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6921,7 +6921,7 @@
         },
         "personalLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.personalLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6929,7 +6929,7 @@
         },
         "phonePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.phonePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6937,7 +6937,7 @@
         },
         "resendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.resendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6945,7 +6945,7 @@
         },
         "resendCountdown": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.resendCountdown",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6953,7 +6953,7 @@
         },
         "retry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.retry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6961,7 +6961,7 @@
         },
         "sendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.sendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6969,7 +6969,7 @@
         },
         "signIn": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.signIn",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6977,7 +6977,7 @@
         },
         "ssoEntry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoEntry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6985,7 +6985,7 @@
         },
         "ssoOrgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoOrgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -6993,7 +6993,7 @@
         },
         "ssoOrgHint": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoOrgHint",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7001,7 +7001,7 @@
         },
         "ssoOrgPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoOrgPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7009,7 +7009,7 @@
         },
         "ssoOrgSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoOrgSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7017,7 +7017,7 @@
         },
         "ssoOrgTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoOrgTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7025,7 +7025,7 @@
         },
         "ssoRequired": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoRequired",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7033,7 +7033,7 @@
         },
         "ssoVerificationSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoVerificationSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7041,7 +7041,7 @@
         },
         "ssoVerificationTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.ssoVerificationTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7049,7 +7049,7 @@
         },
         "title": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.title",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7057,7 +7057,7 @@
         },
         "wechat": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.wechat",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7065,7 +7065,7 @@
         },
         "working": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.en.working",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7075,7 +7075,7 @@
       "ja": {
         "accountDeletionCompletedCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.accountDeletionCompletedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7083,7 +7083,7 @@
         },
         "accountDeletionCompletedTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.accountDeletionCompletedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7091,7 +7091,7 @@
         },
         "accountDeletionDismiss": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.accountDeletionDismiss",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7099,7 +7099,7 @@
         },
         "accountDeletionPendingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.accountDeletionPendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7107,7 +7107,7 @@
         },
         "accountDeletionPendingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.accountDeletionPendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7115,7 +7115,7 @@
         },
         "accountDeletionProcessingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.accountDeletionProcessingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7123,7 +7123,7 @@
         },
         "accountDeletionProcessingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.accountDeletionProcessingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7131,7 +7131,7 @@
         },
         "apple": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.apple",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7139,7 +7139,7 @@
         },
         "back": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.back",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7147,7 +7147,7 @@
         },
         "bindEmailSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.bindEmailSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7155,7 +7155,7 @@
         },
         "bindEmailTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.bindEmailTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7163,7 +7163,7 @@
         },
         "bindPhoneSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.bindPhoneSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7171,7 +7171,7 @@
         },
         "bindPhoneTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.bindPhoneTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7179,7 +7179,7 @@
         },
         "browserSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.browserSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7187,7 +7187,7 @@
         },
         "browserTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.browserTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7195,7 +7195,7 @@
         },
         "cancel": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.cancel",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7203,7 +7203,7 @@
         },
         "chooseAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.chooseAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7211,7 +7211,7 @@
         },
         "chooseAccountSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.chooseAccountSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7219,7 +7219,7 @@
         },
         "chooseMethod": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.chooseMethod",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7227,7 +7227,7 @@
         },
         "codePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.codePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7235,7 +7235,7 @@
         },
         "codeSentTo": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.codeSentTo",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7243,7 +7243,7 @@
         },
         "configIssueAuthBaseUrl": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.configIssueAuthBaseUrl",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7251,7 +7251,7 @@
         },
         "configTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.configTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7259,7 +7259,7 @@
         },
         "consentAgree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.consentAgree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7267,7 +7267,7 @@
         },
         "consentDialogBody": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.consentDialogBody",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7275,7 +7275,7 @@
         },
         "consentDialogTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.consentDialogTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7283,7 +7283,7 @@
         },
         "consentDisagree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.consentDisagree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7291,7 +7291,7 @@
         },
         "consentStatement": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.consentStatement",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7299,7 +7299,7 @@
         },
         "continue": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.continue",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7307,7 +7307,7 @@
         },
         "emailCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.emailCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7315,7 +7315,7 @@
         },
         "emailPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.emailPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7323,7 +7323,7 @@
         },
         "enterCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.enterCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7331,7 +7331,7 @@
         },
         "enterpriseLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.enterpriseLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7339,7 +7339,7 @@
         },
         "errorFallback": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.errorFallback",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7347,7 +7347,7 @@
         },
         "errors.AUTH_REQUEST_FAILED": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.AUTH_REQUEST_FAILED.ja",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7355,7 +7355,7 @@
         },
         "errors.INVALID_CODE": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.INVALID_CODE.ja",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7363,7 +7363,7 @@
         },
         "errors.NETWORK_ERROR": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.NETWORK_ERROR.ja",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7371,7 +7371,7 @@
         },
         "google": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.google",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7379,7 +7379,7 @@
         },
         "invalidEmail": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.invalidEmail",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7387,7 +7387,7 @@
         },
         "invalidPhone": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.invalidPhone",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7395,7 +7395,7 @@
         },
         "orgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.orgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7403,7 +7403,7 @@
         },
         "personalAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.personalAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7411,7 +7411,7 @@
         },
         "personalLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.personalLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7419,7 +7419,7 @@
         },
         "phonePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.phonePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7427,7 +7427,7 @@
         },
         "resendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.resendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7435,7 +7435,7 @@
         },
         "resendCountdown": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.resendCountdown",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7443,7 +7443,7 @@
         },
         "retry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.retry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7451,7 +7451,7 @@
         },
         "sendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.sendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7459,7 +7459,7 @@
         },
         "signIn": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.signIn",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7467,7 +7467,7 @@
         },
         "ssoEntry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoEntry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7475,7 +7475,7 @@
         },
         "ssoOrgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoOrgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7483,7 +7483,7 @@
         },
         "ssoOrgHint": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoOrgHint",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7491,7 +7491,7 @@
         },
         "ssoOrgPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoOrgPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7499,7 +7499,7 @@
         },
         "ssoOrgSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoOrgSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7507,7 +7507,7 @@
         },
         "ssoOrgTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoOrgTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7515,7 +7515,7 @@
         },
         "ssoRequired": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoRequired",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7523,7 +7523,7 @@
         },
         "ssoVerificationSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoVerificationSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7531,7 +7531,7 @@
         },
         "ssoVerificationTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.ssoVerificationTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7539,7 +7539,7 @@
         },
         "title": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.title",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7547,7 +7547,7 @@
         },
         "wechat": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.wechat",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7555,7 +7555,7 @@
         },
         "working": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ja.working",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7565,7 +7565,7 @@
       "ko": {
         "accountDeletionCompletedCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.accountDeletionCompletedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7573,7 +7573,7 @@
         },
         "accountDeletionCompletedTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.accountDeletionCompletedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7581,7 +7581,7 @@
         },
         "accountDeletionDismiss": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.accountDeletionDismiss",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7589,7 +7589,7 @@
         },
         "accountDeletionPendingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.accountDeletionPendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7597,7 +7597,7 @@
         },
         "accountDeletionPendingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.accountDeletionPendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7605,7 +7605,7 @@
         },
         "accountDeletionProcessingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.accountDeletionProcessingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7613,7 +7613,7 @@
         },
         "accountDeletionProcessingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.accountDeletionProcessingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7621,7 +7621,7 @@
         },
         "apple": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.apple",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7629,7 +7629,7 @@
         },
         "back": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.back",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7637,7 +7637,7 @@
         },
         "bindEmailSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.bindEmailSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7645,7 +7645,7 @@
         },
         "bindEmailTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.bindEmailTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7653,7 +7653,7 @@
         },
         "bindPhoneSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.bindPhoneSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7661,7 +7661,7 @@
         },
         "bindPhoneTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.bindPhoneTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7669,7 +7669,7 @@
         },
         "browserSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.browserSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7677,7 +7677,7 @@
         },
         "browserTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.browserTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7685,7 +7685,7 @@
         },
         "cancel": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.cancel",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7693,7 +7693,7 @@
         },
         "chooseAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.chooseAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7701,7 +7701,7 @@
         },
         "chooseAccountSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.chooseAccountSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7709,7 +7709,7 @@
         },
         "chooseMethod": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.chooseMethod",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7717,7 +7717,7 @@
         },
         "codePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.codePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7725,7 +7725,7 @@
         },
         "codeSentTo": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.codeSentTo",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7733,7 +7733,7 @@
         },
         "configIssueAuthBaseUrl": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.configIssueAuthBaseUrl",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7741,7 +7741,7 @@
         },
         "configTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.configTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7749,7 +7749,7 @@
         },
         "consentAgree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.consentAgree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7757,7 +7757,7 @@
         },
         "consentDialogBody": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.consentDialogBody",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7765,7 +7765,7 @@
         },
         "consentDialogTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.consentDialogTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7773,7 +7773,7 @@
         },
         "consentDisagree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.consentDisagree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7781,7 +7781,7 @@
         },
         "consentStatement": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.consentStatement",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7789,7 +7789,7 @@
         },
         "continue": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.continue",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7797,7 +7797,7 @@
         },
         "emailCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.emailCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7805,7 +7805,7 @@
         },
         "emailPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.emailPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7813,7 +7813,7 @@
         },
         "enterCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.enterCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7821,7 +7821,7 @@
         },
         "enterpriseLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.enterpriseLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7829,7 +7829,7 @@
         },
         "errorFallback": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.errorFallback",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7837,7 +7837,7 @@
         },
         "errors.AUTH_REQUEST_FAILED": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.AUTH_REQUEST_FAILED.ko",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7845,7 +7845,7 @@
         },
         "errors.INVALID_CODE": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.INVALID_CODE.ko",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7853,7 +7853,7 @@
         },
         "errors.NETWORK_ERROR": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.NETWORK_ERROR.ko",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7861,7 +7861,7 @@
         },
         "google": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.google",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7869,7 +7869,7 @@
         },
         "invalidEmail": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.invalidEmail",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7877,7 +7877,7 @@
         },
         "invalidPhone": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.invalidPhone",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7885,7 +7885,7 @@
         },
         "orgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.orgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7893,7 +7893,7 @@
         },
         "personalAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.personalAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7901,7 +7901,7 @@
         },
         "personalLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.personalLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7909,7 +7909,7 @@
         },
         "phonePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.phonePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7917,7 +7917,7 @@
         },
         "resendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.resendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7925,7 +7925,7 @@
         },
         "resendCountdown": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.resendCountdown",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7933,7 +7933,7 @@
         },
         "retry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.retry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7941,7 +7941,7 @@
         },
         "sendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.sendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7949,7 +7949,7 @@
         },
         "signIn": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.signIn",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7957,7 +7957,7 @@
         },
         "ssoEntry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoEntry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7965,7 +7965,7 @@
         },
         "ssoOrgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoOrgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7973,7 +7973,7 @@
         },
         "ssoOrgHint": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoOrgHint",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7981,7 +7981,7 @@
         },
         "ssoOrgPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoOrgPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7989,7 +7989,7 @@
         },
         "ssoOrgSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoOrgSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -7997,7 +7997,7 @@
         },
         "ssoOrgTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoOrgTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8005,7 +8005,7 @@
         },
         "ssoRequired": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoRequired",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8013,7 +8013,7 @@
         },
         "ssoVerificationSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoVerificationSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8021,7 +8021,7 @@
         },
         "ssoVerificationTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.ssoVerificationTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8029,7 +8029,7 @@
         },
         "title": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.title",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8037,7 +8037,7 @@
         },
         "wechat": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.wechat",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8045,7 +8045,7 @@
         },
         "working": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.ko.working",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8055,7 +8055,7 @@
       "zh-CN": {
         "accountDeletionCompletedCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.accountDeletionCompletedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8063,7 +8063,7 @@
         },
         "accountDeletionCompletedTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.accountDeletionCompletedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8071,7 +8071,7 @@
         },
         "accountDeletionDismiss": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.accountDeletionDismiss",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8079,7 +8079,7 @@
         },
         "accountDeletionPendingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.accountDeletionPendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8087,7 +8087,7 @@
         },
         "accountDeletionPendingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.accountDeletionPendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8095,7 +8095,7 @@
         },
         "accountDeletionProcessingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.accountDeletionProcessingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8103,7 +8103,7 @@
         },
         "accountDeletionProcessingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.accountDeletionProcessingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8111,7 +8111,7 @@
         },
         "apple": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.apple",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8119,7 +8119,7 @@
         },
         "back": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.back",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8127,7 +8127,7 @@
         },
         "bindEmailSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.bindEmailSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8135,7 +8135,7 @@
         },
         "bindEmailTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.bindEmailTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8143,7 +8143,7 @@
         },
         "bindPhoneSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.bindPhoneSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8151,7 +8151,7 @@
         },
         "bindPhoneTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.bindPhoneTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8159,7 +8159,7 @@
         },
         "browserSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.browserSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8167,7 +8167,7 @@
         },
         "browserTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.browserTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8175,7 +8175,7 @@
         },
         "cancel": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.cancel",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8183,7 +8183,7 @@
         },
         "chooseAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.chooseAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8191,7 +8191,7 @@
         },
         "chooseAccountSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.chooseAccountSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8199,7 +8199,7 @@
         },
         "chooseMethod": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.chooseMethod",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8207,7 +8207,7 @@
         },
         "codePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.codePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8215,7 +8215,7 @@
         },
         "codeSentTo": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.codeSentTo",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8223,7 +8223,7 @@
         },
         "configIssueAuthBaseUrl": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.configIssueAuthBaseUrl",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8231,7 +8231,7 @@
         },
         "configTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.configTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8239,7 +8239,7 @@
         },
         "consentAgree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.consentAgree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8247,7 +8247,7 @@
         },
         "consentDialogBody": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.consentDialogBody",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8255,7 +8255,7 @@
         },
         "consentDialogTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.consentDialogTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8263,7 +8263,7 @@
         },
         "consentDisagree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.consentDisagree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8271,7 +8271,7 @@
         },
         "consentStatement": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.consentStatement",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8279,7 +8279,7 @@
         },
         "continue": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.continue",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8287,7 +8287,7 @@
         },
         "emailCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.emailCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8295,7 +8295,7 @@
         },
         "emailPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.emailPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8303,7 +8303,7 @@
         },
         "enterCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.enterCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8311,7 +8311,7 @@
         },
         "enterpriseLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.enterpriseLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8319,7 +8319,7 @@
         },
         "errorFallback": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.errorFallback",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8327,7 +8327,7 @@
         },
         "errors.AUTH_REQUEST_FAILED": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.AUTH_REQUEST_FAILED.zh-CN",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8335,7 +8335,7 @@
         },
         "errors.INVALID_CODE": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.INVALID_CODE.zh-CN",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8343,7 +8343,7 @@
         },
         "errors.NETWORK_ERROR": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.NETWORK_ERROR.zh-CN",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8351,7 +8351,7 @@
         },
         "google": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.google",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8359,7 +8359,7 @@
         },
         "invalidEmail": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.invalidEmail",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8367,7 +8367,7 @@
         },
         "invalidPhone": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.invalidPhone",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8375,7 +8375,7 @@
         },
         "orgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.orgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8383,7 +8383,7 @@
         },
         "personalAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.personalAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8391,7 +8391,7 @@
         },
         "personalLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.personalLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8399,7 +8399,7 @@
         },
         "phonePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.phonePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8407,7 +8407,7 @@
         },
         "resendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.resendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8415,7 +8415,7 @@
         },
         "resendCountdown": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.resendCountdown",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8423,7 +8423,7 @@
         },
         "retry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.retry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8431,7 +8431,7 @@
         },
         "sendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.sendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8439,7 +8439,7 @@
         },
         "signIn": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.signIn",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8447,7 +8447,7 @@
         },
         "ssoEntry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoEntry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8455,7 +8455,7 @@
         },
         "ssoOrgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoOrgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8463,7 +8463,7 @@
         },
         "ssoOrgHint": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoOrgHint",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8471,7 +8471,7 @@
         },
         "ssoOrgPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoOrgPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8479,7 +8479,7 @@
         },
         "ssoOrgSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoOrgSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8487,7 +8487,7 @@
         },
         "ssoOrgTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoOrgTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8495,7 +8495,7 @@
         },
         "ssoRequired": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoRequired",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8503,7 +8503,7 @@
         },
         "ssoVerificationSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoVerificationSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8511,7 +8511,7 @@
         },
         "ssoVerificationTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.ssoVerificationTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8519,7 +8519,7 @@
         },
         "title": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.title",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8527,7 +8527,7 @@
         },
         "wechat": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.wechat",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8535,7 +8535,7 @@
         },
         "working": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-CN.working",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8545,7 +8545,7 @@
       "zh-TW": {
         "accountDeletionCompletedCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.accountDeletionCompletedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8553,7 +8553,7 @@
         },
         "accountDeletionCompletedTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.accountDeletionCompletedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8561,7 +8561,7 @@
         },
         "accountDeletionDismiss": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.accountDeletionDismiss",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8569,7 +8569,7 @@
         },
         "accountDeletionPendingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.accountDeletionPendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8577,7 +8577,7 @@
         },
         "accountDeletionPendingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.accountDeletionPendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8585,7 +8585,7 @@
         },
         "accountDeletionProcessingCopy": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.accountDeletionProcessingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8593,7 +8593,7 @@
         },
         "accountDeletionProcessingTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.accountDeletionProcessingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8601,7 +8601,7 @@
         },
         "apple": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.apple",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8609,7 +8609,7 @@
         },
         "back": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.back",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8617,7 +8617,7 @@
         },
         "bindEmailSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.bindEmailSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8625,7 +8625,7 @@
         },
         "bindEmailTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.bindEmailTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8633,7 +8633,7 @@
         },
         "bindPhoneSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.bindPhoneSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8641,7 +8641,7 @@
         },
         "bindPhoneTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.bindPhoneTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8649,7 +8649,7 @@
         },
         "browserSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.browserSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8657,7 +8657,7 @@
         },
         "browserTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.browserTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8665,7 +8665,7 @@
         },
         "cancel": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.cancel",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8673,7 +8673,7 @@
         },
         "chooseAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.chooseAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8681,7 +8681,7 @@
         },
         "chooseAccountSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.chooseAccountSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8689,7 +8689,7 @@
         },
         "chooseMethod": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.chooseMethod",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8697,7 +8697,7 @@
         },
         "codePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.codePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8705,7 +8705,7 @@
         },
         "codeSentTo": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.codeSentTo",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8713,7 +8713,7 @@
         },
         "configIssueAuthBaseUrl": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.configIssueAuthBaseUrl",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8721,7 +8721,7 @@
         },
         "configTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.configTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8729,7 +8729,7 @@
         },
         "consentAgree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.consentAgree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8737,23 +8737,23 @@
         },
         "consentDialogBody": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.consentDialogBody",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
-          "value": "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私協議</privacy>"
+          "value": "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私政策</privacy>"
         },
         "consentDialogTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.consentDialogTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
-          "value": "服務條款和隱私協議"
+          "value": "服務條款和隱私政策"
         },
         "consentDisagree": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.consentDisagree",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8761,15 +8761,15 @@
         },
         "consentStatement": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.consentStatement",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
-          "value": "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私協議</privacy>"
+          "value": "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私政策</privacy>"
         },
         "continue": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.continue",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8777,7 +8777,7 @@
         },
         "emailCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.emailCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8785,7 +8785,7 @@
         },
         "emailPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.emailPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8793,7 +8793,7 @@
         },
         "enterCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.enterCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8801,7 +8801,7 @@
         },
         "enterpriseLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.enterpriseLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8809,7 +8809,7 @@
         },
         "errorFallback": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.errorFallback",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8817,7 +8817,7 @@
         },
         "errors.AUTH_REQUEST_FAILED": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.AUTH_REQUEST_FAILED.zh-TW",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8825,7 +8825,7 @@
         },
         "errors.INVALID_CODE": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.INVALID_CODE.zh-TW",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8833,7 +8833,7 @@
         },
         "errors.NETWORK_ERROR": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "authErrorMessages.NETWORK_ERROR.zh-TW",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8841,7 +8841,7 @@
         },
         "google": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.google",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8849,7 +8849,7 @@
         },
         "invalidEmail": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.invalidEmail",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8857,7 +8857,7 @@
         },
         "invalidPhone": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.invalidPhone",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8865,7 +8865,7 @@
         },
         "orgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.orgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8873,7 +8873,7 @@
         },
         "personalAccount": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.personalAccount",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8881,7 +8881,7 @@
         },
         "personalLogin": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.personalLogin",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8889,7 +8889,7 @@
         },
         "phonePlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.phonePlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8897,7 +8897,7 @@
         },
         "resendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.resendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8905,7 +8905,7 @@
         },
         "resendCountdown": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.resendCountdown",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8913,7 +8913,7 @@
         },
         "retry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.retry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8921,7 +8921,7 @@
         },
         "sendCode": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.sendCode",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8929,7 +8929,7 @@
         },
         "signIn": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.signIn",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8937,7 +8937,7 @@
         },
         "ssoEntry": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoEntry",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8945,7 +8945,7 @@
         },
         "ssoOrgDetected": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoOrgDetected",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8953,7 +8953,7 @@
         },
         "ssoOrgHint": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoOrgHint",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8961,7 +8961,7 @@
         },
         "ssoOrgPlaceholder": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoOrgPlaceholder",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8969,7 +8969,7 @@
         },
         "ssoOrgSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoOrgSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8977,7 +8977,7 @@
         },
         "ssoOrgTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoOrgTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8985,7 +8985,7 @@
         },
         "ssoRequired": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoRequired",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -8993,7 +8993,7 @@
         },
         "ssoVerificationSubtitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoVerificationSubtitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -9001,7 +9001,7 @@
         },
         "ssoVerificationTitle": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.ssoVerificationTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -9009,7 +9009,7 @@
         },
         "title": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.title",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -9017,7 +9017,7 @@
         },
         "wechat": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.wechat",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -9025,7 +9025,7 @@
         },
         "working": {
           "provenance": {
-            "hash": "sha256:598b8bfb59a4d4c55fc1084c72cbb102956a90644442fc304a2bd0d487735d56",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "messages.zh-TW.working",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -13769,5 +13769,47 @@
         }
       }
     }
-  }
+  },
+  "supportedLocales": [
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[0]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-CN"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[1]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-TW"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[2]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "en"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[3]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "ja"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[4]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "ko"
+    }
+  ]
 }

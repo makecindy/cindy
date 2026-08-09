@@ -898,10 +898,16 @@
           "click": ".lp-skip-entry"
         },
         {
+          "expect": "desk.consent.dialog"
+        },
+        {
+          "click": ".lp-dialog-agree"
+        },
+        {
           "expect": "desk.main.skip"
         }
       ],
-      "note": "跳过登录链路终点:点面板内「跳过登录」→ 无协议弹窗、radio 未勾选 → 直达主界面(2026-07-27 拍板)"
+      "note": "跳过登录链路终点:点面板内「跳过登录」→ 未同意时先过协议门 → 进入本地模式(2026-07-29 产品调整)"
     },
     {
       "id": "desk.skip.hitzone",
