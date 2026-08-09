@@ -74,7 +74,7 @@ export async function resolveDefaultScheduleRoute(
   agent: AgentKind,
   preferredProviderId?: string | null,
   modelId?: string,
-): Promise<{ model: string; providerId: string } | null> {
+): Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null> {
   // Scheduler fire is a trusted main-process operation, not an untrusted status projection.
   // Allow the provider service to claim an existing native subscription before materializing
   // the route; otherwise legacy/local owners can look disconnected until another UI read heals it.
@@ -91,7 +91,18 @@ export async function resolveDefaultScheduleRoute(
       preferredModelId,
       agent,
     );
-    return providerId ? { model: preferredModelId, providerId } : null;
+    if (providerId) return { model: preferredModelId, providerId };
+
+    // A schedule may intentionally name a model newer than the current catalog. Keep
+    // the legacy null-provider/native-default path for that case; a catalog-known
+    // model with no connected source must still fail closed in the scheduler.
+    const catalogKnown = views.some((provider) =>
+      (provider.models[agent] ?? []).some((model) => model.id === preferredModelId),
+    );
+    if (!catalogKnown && agent === 'claude-code') {
+      return { model: preferredModelId, providerId: null, catalogKnown: false };
+    }
+    return null;
   }
   const connected = connectedProvidersForAgent(views, agent);
   const candidates = preferredProviderId

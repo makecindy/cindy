@@ -274,7 +274,7 @@ export interface MakerScheduleRunnerDeps {
     agent: AgentKind,
     preferredProviderId?: string | null,
     modelId?: string,
-  ) => Promise<{ model: string; providerId: string } | null>;
+  ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
 }
 
 /**
@@ -710,7 +710,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // silently choose the Cindy gateway even when the only usable source is an Anthropic subscription.
     const shouldMaterializeFreshClaudeProvider =
       !isHeartbeat && effectiveAgentKind === 'claude-code' && !explicitProviderId;
-    let dynamicDefaultRoute: { model: string; providerId: string } | null = null;
+    let dynamicDefaultRoute: {
+      model: string;
+      providerId: string | null;
+      catalogKnown?: boolean;
+    } | null = null;
     if (!modelHint && effectiveAgentKind === 'pi') {
       dynamicDefaultRoute =
         (await this.deps.resolveDefaultModelRoute?.(
@@ -734,7 +738,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (
       shouldMaterializeFreshClaudeProvider &&
       this.deps.resolveDefaultModelRoute &&
-      !dynamicDefaultRoute
+      (!dynamicDefaultRoute ||
+        (dynamicDefaultRoute.providerId === null && dynamicDefaultRoute.catalogKnown !== false))
     ) {
       throw new Error(
         `schedule route unavailable: Claude Code has no connected source for model "${model}"`,

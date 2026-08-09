@@ -93,4 +93,24 @@ describe('resolveDefaultScheduleRoute', () => {
       'claude-code',
     );
   });
+
+  it('keeps the legacy null-provider fallback for a catalog-unknown Claude model', async () => {
+    h.effectiveSourceIdForModel.mockReturnValue(null);
+
+    await expect(
+      resolveDefaultScheduleRoute('claude-code', null, 'claude-from-future'),
+    ).resolves.toEqual({
+      model: 'claude-from-future',
+      providerId: null,
+      catalogKnown: false,
+    });
+  });
+
+  it('does not turn a catalog-known but unavailable model into a null-provider route', async () => {
+    h.effectiveSourceIdForModel.mockReturnValue(null);
+
+    await expect(
+      resolveDefaultScheduleRoute('claude-code', null, 'claude-first-fire'),
+    ).resolves.toBeNull();
+  });
 });

@@ -1053,6 +1053,27 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.send).not.toHaveBeenCalled();
     });
 
+    it('非 heartbeat Claude + 目录未知模型 → 保留 legacy null-provider fallback', async () => {
+      const h = createSessionHarness();
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'claude-from-future',
+        providerId: null,
+        catalogKnown: false,
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ model: 'claude-from-future' }),
+      );
+
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'claude-from-future', providerId: null }),
+      );
+      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+    });
+
     it('非 heartbeat + 显式 providerId → setSessionProvider 覆盖 + 落库', async () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h);
