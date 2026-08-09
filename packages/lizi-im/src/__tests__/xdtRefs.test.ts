@@ -212,9 +212,10 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
 
   it('parses a plain destination with an optional Markdown title', () => {
     const quoted = '[报告](xdt-file:///tmp/report.pdf "下载")';
+    const quotedWithParen = '[报告](xdt-file:///tmp/report.pdf "第 1) 版")';
     const parenthesized = '[报告](xdt-file:///tmp/report.pdf (下载))';
 
-    for (const text of [quoted, parenthesized]) {
+    for (const text of [quoted, quotedWithParen, parenthesized]) {
       expect(collectXdtFileRefs(text)).toEqual([
         {
           alt: '报告',

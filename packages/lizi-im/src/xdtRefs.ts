@@ -603,9 +603,23 @@ function markdownParenPairs(text: string): {
   closeByOpen.fill(-1);
   openByClose.fill(-1);
   const stack: number[] = [];
+  let titleQuote: '"' | "'" | null = null;
   for (let cursor = 0; cursor < text.length; cursor += 1) {
     if (text[cursor] === '\\') {
       cursor += 1;
+      continue;
+    }
+    if (titleQuote) {
+      if (text[cursor] === titleQuote) titleQuote = null;
+      if (text[cursor] === '\n' || text[cursor] === '\r') titleQuote = null;
+      continue;
+    }
+    if (
+      (text[cursor] === '"' || text[cursor] === "'") &&
+      stack.length > 0 &&
+      (text[cursor - 1] === ' ' || text[cursor - 1] === '\t')
+    ) {
+      titleQuote = text[cursor] as '"' | "'";
       continue;
     }
     if (text[cursor] === '(') {

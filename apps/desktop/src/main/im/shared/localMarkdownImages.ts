@@ -257,6 +257,17 @@ function hasUnescapedMarkdownWhitespace(value: string): boolean {
   return false;
 }
 
+function hasInvalidAngleDestinationChar(value: string): boolean {
+  for (let cursor = 0; cursor < value.length; cursor += 1) {
+    if (value[cursor] === '\\') {
+      cursor += 1;
+      continue;
+    }
+    if (value[cursor] === '<' || value[cursor] === '\n' || value[cursor] === '\r') return true;
+  }
+  return false;
+}
+
 function markdownImageDestination(raw: string): string {
   let target = raw.trim();
   if (target.startsWith('<')) {
@@ -265,6 +276,8 @@ function markdownImageDestination(raw: string): string {
     // `![alt](</private/file.png> "title")`. Extract only the destination.
     // A malformed missing `>` remains fail-closed for local-path detection.
     if (closingBracket < 0) return '';
+    const destination = target.slice(1, closingBracket);
+    if (hasInvalidAngleDestinationChar(destination)) return '';
     const tail = target.slice(closingBracket + 1).trim();
     if (
       tail &&
@@ -272,7 +285,7 @@ function markdownImageDestination(raw: string): string {
     ) {
       return '';
     }
-    target = target.slice(1, closingBracket).trim();
+    target = destination.trim();
   } else {
     // A plain destination may be followed by a quoted/parenthesized title:
     // `![alt](/work/out.png "preview")`. Unescaped whitespace is not part of
