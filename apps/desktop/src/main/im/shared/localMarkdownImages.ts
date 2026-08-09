@@ -37,10 +37,24 @@ const DEFAULT_MAX_IMAGES = 4;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 
-function localMarkdownImageMatches(text: string): RegExpMatchArray[] {
+function isEscapedMarkdownMarker(text: string, markerIndex: number): boolean {
+  let backslashes = 0;
+  for (let index = markerIndex - 1; index >= 0 && text[index] === '\\'; index -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function localMarkdownImageMatches(
+  text: string,
+  options: { includeEscaped?: boolean } = {},
+): RegExpMatchArray[] {
   const codeRanges = markdownCodeRanges(text);
   return Array.from(text.matchAll(LOCAL_MARKDOWN_IMAGE_RE)).filter(
-    (match) => match.index !== undefined && !isMarkdownCodePosition(codeRanges, match.index),
+    (match) =>
+      match.index !== undefined &&
+      !isMarkdownCodePosition(codeRanges, match.index) &&
+      (options.includeEscaped === true || !isEscapedMarkdownMarker(text, match.index)),
   );
 }
 
@@ -128,6 +142,30 @@ function isManagedImageTarget(value: string): boolean {
 function pathKey(value: string): string {
   const resolved = path.resolve(value);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function attachmentDisplayName(raw: string, extension: string): string {
+  const sanitized = Array.from(raw, (char) => {
+    const code = char.charCodeAt(0);
+    if (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069)
+    ) {
+      return ' ';
+    }
+    if (char === '\\' || char === '/') return '_';
+    return char;
+  })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return Array.from(sanitized || `附件${extension}`)
+    .slice(0, 120)
+    .join('');
 }
 
 export interface MaterializedLocalMarkdownImages {
@@ -230,7 +268,7 @@ export async function materializeLocalMarkdownFiles(
         accepted.add(key);
         files.push({
           absPath: stagedPath,
-          displayName: ref.alt.trim() || `附件${extension}`,
+          displayName: attachmentDisplayName(ref.alt, extension),
         });
       } catch {
         // A bad or missing file is omitted; the readable label remains below.
@@ -242,7 +280,7 @@ export async function materializeLocalMarkdownFiles(
     files,
     tempDirs: tempDir ? [tempDir] : [],
     text: transformXdtRefs(params.text, {
-      file: ({ alt }) => alt.trim() || '附件',
+      file: ({ alt }) => attachmentDisplayName(alt, ''),
     }),
   };
 }
@@ -259,7 +297,9 @@ function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
 
 /** Remove unresolved host-local image targets before a plain-text IM fallback. */
 export function sanitizeLocalMarkdownImageRefs(text: string): string {
-  const matches = localMarkdownImageMatches(text);
+  // Escaped image syntax is not materialized, but local paths still must not
+  // cross the IM boundary in a plain-text fallback.
+  const matches = localMarkdownImageMatches(text, { includeEscaped: true });
   let sanitized = text;
   for (let index = matches.length - 1; index >= 0; index -= 1) {
     const match = matches[index];

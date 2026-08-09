@@ -491,7 +491,16 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
         ? -1
         : angleReferenceEnd(text, closingAngle)
       : nextParen(schemeStart + scheme.length);
-    if (initialEndParen === -1) break;
+    if (initialEndParen === -1) {
+      // A malformed angle-wrapped candidate must not terminate the whole
+      // scan: a later, independent managed-media reference may still be valid.
+      // Advance beyond this scheme so recovery remains strictly linear.
+      if (angleWrapped) {
+        cursor = schemeStart + scheme.length;
+        continue;
+      }
+      break;
+    }
     const bounds = angleWrapped
       ? { endParen: initialEndParen, urlEnd: closingAngle }
       : plainReferenceBounds(text, schemeStart, initialEndParen);

@@ -83,6 +83,9 @@ describe('feishu streaming text', () => {
     await handle.finalize('正文');
 
     expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(['/tmp/ok.png']);
+    const delivered = handle.getDeliveredExtraImageAbsPaths?.() as string[];
+    delivered.push('/tmp/injected.png');
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(['/tmp/ok.png']);
   });
 
   it('acknowledges an extra image delivered through the matching body URL', async () => {

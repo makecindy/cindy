@@ -69,7 +69,7 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
   }
 
   getDeliveredExtraImageAbsPaths(): readonly string[] {
-    return this.deliveredExtraImageAbsPaths;
+    return [...this.deliveredExtraImageAbsPaths];
   }
 
   close(): void {

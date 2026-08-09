@@ -28,8 +28,6 @@ async function makeTempRoot(): Promise<string> {
 function makeDeps(mediaAbsPath: string) {
   return {
     realpath: (value: string) => fs.realpath(value),
-    stat: (value: string) => fs.stat(value),
-    readFile: (value: string) => fs.readFile(value),
     readBoundedFile: (value: string, maxBytes: number, containWithin?: string) =>
       import('../../../utils/readBoundedFile').then(({ readBoundedFileFollowLinks }) =>
         readBoundedFileFollowLinks(
@@ -117,6 +115,41 @@ describe('materializeLocalMarkdownImages', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe('a]b');
   });
 
+  it('does not materialize an escaped local image marker but still redacts its path', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    const escaped = `\\![private](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text: escaped, workingDir, sessionId: 'session-escaped-marker' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text: escaped });
+    expect(deps.ingest).not.toHaveBeenCalled();
+    expect(sanitizeLocalMarkdownImageRefs(escaped)).toBe('\\private');
+  });
+
+  it('materializes an image marker preceded by an even number of backslashes', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'image.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+
+    await expect(
+      materializeLocalMarkdownImages(
+        {
+          text: `\\\\![image](${sourcePath})`,
+          workingDir,
+          sessionId: 'session-even-escape',
+        },
+        makeDeps(mediaAbsPath),
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: '\\\\image' });
+  });
+
   it('captures a balanced parenthesized Markdown title without leaving a trailing bracket', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'generated.png');
@@ -155,10 +188,7 @@ describe('materializeLocalMarkdownImages', () => {
     ].join('\n');
 
     await expect(
-      materializeLocalMarkdownImages(
-        { text, workingDir, sessionId: 'session-code-example' },
-        deps,
-      ),
+      materializeLocalMarkdownImages({ text, workingDir, sessionId: 'session-code-example' }, deps),
     ).resolves.toEqual({ absPaths: [], text });
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe(text);
     expect(deps.ingest).not.toHaveBeenCalled();
@@ -218,7 +248,7 @@ describe('materializeLocalMarkdownImages', () => {
     });
   });
 
-  it('does not reopen a validated local image path for reading', async () => {
+  it('rejects a parent symlink swap at the bounded read boundary', async () => {
     const parent = await makeTempRoot();
     const workingDir = path.join(parent, 'work');
     const sourceDir = path.join(workingDir, 'slot');
@@ -233,13 +263,12 @@ describe('materializeLocalMarkdownImages', () => {
     outsideBytes[outsideBytes.length - 1] ^= 0xff;
     await fs.writeFile(outsidePath, outsideBytes);
     const deps = makeDeps(path.join(parent, 'media-store.png'));
-    deps.stat = async (value: string) => {
-      const stat = await fs.stat(value);
+    const readBoundedFile = deps.readBoundedFile;
+    deps.readBoundedFile = vi.fn(async (value, maxBytes, containWithin) => {
       await fs.rename(sourceDir, `${sourceDir}-original`);
       await fs.symlink(outsideDir, sourceDir);
-      return stat;
-    };
-    deps.readBoundedFile = vi.fn(async () => null);
+      return readBoundedFile(value, maxBytes, containWithin);
+    });
 
     const result = await materializeLocalMarkdownImages(
       {
@@ -352,10 +381,9 @@ describe('materializeLocalMarkdownImages', () => {
     const deps = {
       ...makeDeps(alias),
       realpath,
-      // 去重命中时下面两个不会被调用;留桩是为了让回退的失败表现为「多追加一张」
-      // 而不是抛错,断言才指向真正的原因。
-      stat: async () => ({ isFile: () => true, size: PNG_BYTES.length }),
-      readFile: async () => PNG_BYTES,
+      // If canonical dedupe regresses, keep the fallback path viable so the
+      // assertion fails by appending a duplicate instead of by missing bytes.
+      readBoundedFile: vi.fn(async () => PNG_BYTES),
     };
 
     const result = await materializeLocalMarkdownImages(
@@ -380,12 +408,10 @@ describe('materializeLocalMarkdownFiles', () => {
     const reportPath = path.join(workingDir, 'report.pdf');
     await fs.writeFile(reportPath, '%PDF-1.4');
     const url = `xdt-file://${reportPath}`;
-    const result = await materializeLocalMarkdownFiles(
-      {
-        text: `ready\n[report](${url})\n[duplicate](${url})`,
-        workingDir,
-      },
-    );
+    const result = await materializeLocalMarkdownFiles({
+      text: `ready\n[report](${url})\n[duplicate](${url})`,
+      workingDir,
+    });
 
     tempRoots.push(...result.tempDirs);
     expect(result.files).toHaveLength(1);
@@ -409,6 +435,26 @@ describe('materializeLocalMarkdownFiles', () => {
 
     expect(result.files).toHaveLength(1);
     await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('approved content');
+  });
+
+  it('sanitizes control characters, path separators, and oversized attachment names', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'report.txt');
+    await fs.writeFile(reportPath, 'approved content');
+    const unsafeLabel = `../private\\report\t\u202esecret${'x'.repeat(200)}`;
+
+    const result = await materializeLocalMarkdownFiles({
+      text: `[${unsafeLabel}](xdt-file://${reportPath})`,
+      workingDir,
+    });
+    tempRoots.push(...result.tempDirs);
+
+    const displayName = result.files[0]?.displayName ?? '';
+    expect(displayName).not.toMatch(/[\\/]/);
+    expect(Array.from(displayName).every((char) => char.charCodeAt(0) > 0x1f)).toBe(true);
+    expect(displayName).not.toContain('\u202e');
+    expect(Array.from(displayName)).toHaveLength(120);
+    expect(result.text).toBe(displayName);
   });
 
   it('materializes SSH workdir attachments through the remote file service', async () => {

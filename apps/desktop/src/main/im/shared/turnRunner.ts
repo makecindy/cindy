@@ -31,6 +31,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -42,8 +43,6 @@ import path from 'node:path';
  */
 const GROUP_APPROVAL_OWNER_DM_NOTE =
   '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
-
-import fs from 'node:fs/promises';
 
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
@@ -2593,6 +2592,7 @@ export function createTurnRunner(
     userId: string,
     threadTs: string | undefined,
   ): Promise<void> {
+    const delivered = new Set<string>();
     for (const absPath of turn.mediaAbsPaths) {
       try {
         const result = await output.im.sendFile(
@@ -2601,7 +2601,10 @@ export function createTurnRunner(
           turn.mediaDisplayNames.get(absPath),
           { threadTs },
         );
-        if (result.ok) continue;
+        if (result.ok) {
+          delivered.add(absPath);
+          continue;
+        }
         log.error(`${channel} media fallback failed`, {
           kind: 'terminal-media-fallback',
           source: 'sendFile',
@@ -2615,6 +2618,10 @@ export function createTurnRunner(
           error,
         });
       }
+    }
+    if (delivered.size > 0) {
+      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
+      for (const absPath of delivered) turn.mediaDisplayNames.delete(absPath);
     }
   }
 
@@ -2706,8 +2713,16 @@ export function createTurnRunner(
             threadTs: state.scopeKey,
           });
         }
-      } catch {
-        /* swallow */
+      } catch (err) {
+        if (output.kind === 'chunked-text') {
+          if (turn) turn.terminalErrorCode = 'terminal_output_commit_failed';
+        }
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} plain-text fallback failed`, {
+          kind: 'terminal-output-fallback',
+          source: output.kind === 'chunked-text' ? 'commitFinal' : 'sendText',
+          error,
+        });
       }
       if (turn && output.kind === 'rich-card') {
         try {
@@ -2979,13 +2994,48 @@ export function createTurnRunner(
    * sending an interaction card so the post-decision reply lands chronologically
    * after the user's selection patch — not in a card that pre-dates the ask.
    *
-   * No-op when there's no active streaming handle (typical when the agent goes
-   * straight to ask_user_question without emitting prior text).
+   * If card creation failed after text was buffered, send that segment as
+   * plain text before the interaction card and reset the output surface.
    */
   async function finalizeActiveStream(localSessionId: string): Promise<void> {
     const state = sessionStates.get(localSessionId);
     const turn = state?.queue[0];
-    if (!turn?.streamingHandle) return;
+    if (!turn) return;
+    if (!turn.streamingHandle && turn.streamingHandlePromise) {
+      await turn.streamingHandlePromise;
+    }
+    if (!turn.streamingHandle) {
+      if (output.kind !== 'rich-card') return;
+      if (composeStreamingView(turn).length === 0) {
+        // If media exists but its failed card never received it, keep the
+        // cached-null surface so terminal fallback remains responsible for a
+        // retry instead of opening a fresh card that cannot accept files.
+        if (turn.mediaAbsPaths.length === 0) turn.streamingHandlePromise = null;
+        return;
+      }
+      await materializeTurnLocalImages(state, turn, { richCardFallback: true });
+      await materializeTurnLocalFiles(state, turn);
+      const fallbackText = composeStreamingView(turn);
+      try {
+        if (fallbackText.length > 0) {
+          await output.im.sendText(turn.userId, fallbackText, { threadTs: turn.scopeKey });
+        }
+        await sendFallbackMedia(turn, turn.userId, turn.scopeKey);
+        if (turn.mediaAbsPaths.length === 0) {
+          await cleanupFallbackMedia(turn);
+          turn.streamingHandlePromise = null;
+        }
+        turn.presenter.replaceBody('');
+      } catch (err) {
+        const error = sanitizeSendOutcomeError(err);
+        log.error(`${channel} interaction output fallback failed`, {
+          kind: 'interaction-output-fallback',
+          source: 'sendText',
+          error,
+        });
+      }
+      return;
+    }
     const view = composeStreamingView(turn);
     let deliveredMediaAbsPaths: readonly string[] = [];
     if (view.length > 0) {

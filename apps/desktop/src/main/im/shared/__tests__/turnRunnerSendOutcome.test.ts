@@ -832,6 +832,83 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('sends pre-interaction text when streaming initialization failed, then starts a fresh stream', async () => {
+    const nextHandle = {
+      messageId: 'stream-after-interaction',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText
+      .mockRejectedValueOnce(new Error('first card create failed'))
+      .mockResolvedValueOnce(nextHandle);
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-failed-init' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: 'before ask', isFinal: true } });
+    await flushMicrotasks();
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-after-failed-init',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'before ask', {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.sendText.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.feishuIm.sendInteractiveCard.mock.invocationCallOrder[0],
+    );
+
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => expect(nextHandle.finalize).toHaveBeenCalledWith('after ask'));
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps failed interaction media for terminal fallback instead of losing it to a fresh card', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.resolveXdtImageUrl.mockReturnValue({
+      absPath: '/tmp/retry-after-interaction.png',
+      mimeType: 'image/png',
+    });
+    mocks.feishuIm.sendFile
+      .mockResolvedValueOnce({ ok: false, reason: 'UPLOAD_FAIL' })
+      .mockResolvedValueOnce({ ok: true });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-media-retry' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: 'before ask', isFinal: true } });
+    h.emit({
+      type: 'tool_result_full',
+      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://retry.png' }) },
+    });
+    await flushMicrotasks();
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-media-retry',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: 'after ask', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => expect(mocks.feishuIm.sendFile).toHaveBeenCalledTimes(2));
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'before ask', {
+      threadTs: undefined,
+    });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'after ask', {
+      threadTs: undefined,
+    });
+  });
+
   it('does not resend media already delivered before an interaction boundary', async () => {
     const firstHandle = {
       messageId: 'stream-before-interaction',
@@ -1042,6 +1119,31 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(loggedPayload).not.toContain('PROMPT_SECRET');
     expect(loggedPayload).not.toContain('TOKEN_VALUE');
     expect(loggedPayload).not.toContain('ou_sensitive_openid');
+  });
+
+  it('logs a sanitized terminal-error fallback failure and still settles the turn', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+    mocks.feishuIm.sendText.mockRejectedValueOnce(
+      new Error('terminal fallback failed with ou_sensitive_openid'),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'partial answer', isFinal: true } });
+    h.emit({ type: 'error', data: { message: 'terminal failure' } });
+
+    await waitForAssertion(() => {
+      expect(mocks.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('plain-text fallback failed'),
+        expect.objectContaining({
+          kind: 'terminal-output-fallback',
+          source: 'sendText',
+        }),
+      );
+    });
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(mocks.logger.error.mock.calls)).not.toContain('ou_sensitive_openid');
   });
 
   it('anchors direct IM capture to the durable accepted user message', async () => {
@@ -3273,7 +3375,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(h).toBeTruthy();
       expect(mocks.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
     });
-  
+
     it('未受保护的消息照常落库(既有行为不变)', async () => {
       setupSession(async () => ({ accepted: true }));
       mocks.persistUserMessage.mockClear();

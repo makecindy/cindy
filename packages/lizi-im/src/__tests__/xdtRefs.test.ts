@@ -195,6 +195,13 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
   });
 
+  it('continues after a malformed angle-bracket destination and finds the next ref', () => {
+    const text =
+      '[broken](<xdt-file:///tmp/broken.pdf "missing angle" [report](xdt-file:///tmp/report.pdf)';
+
+    expect(collectXdtFileLinks(text)).toEqual([{ alt: 'report', absPath: '/tmp/report.pdf' }]);
+  });
+
   it('parses a plain destination with an optional Markdown title', () => {
     const quoted = '[报告](xdt-file:///tmp/report.pdf "下载")';
     const parenthesized = '[报告](xdt-file:///tmp/report.pdf (下载))';

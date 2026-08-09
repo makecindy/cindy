@@ -166,7 +166,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   }
 
   getDeliveredExtraImageAbsPaths(): readonly string[] {
-    return this.deliveredExtraImageAbsPaths;
+    return [...this.deliveredExtraImageAbsPaths];
   }
 
   // ── intermediate (throttled) patch ────────────────────────────────────────

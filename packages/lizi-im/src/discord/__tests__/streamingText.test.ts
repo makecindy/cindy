@@ -132,6 +132,9 @@ describe('discord streaming text', () => {
 
     await expect(handle.finalize('two batches')).rejects.toBe(uploadError);
     expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
+    const delivered = handle.getDeliveredExtraImageAbsPaths?.() as string[];
+    delivered.push('/tmp/injected.png');
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
   });
 
   it('close prevents future edits', async () => {

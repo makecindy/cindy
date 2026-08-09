@@ -186,6 +186,9 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
     await handle.finalize('answer');
 
     expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
+    const delivered = handle.getDeliveredExtraImageAbsPaths?.() as string[];
+    delivered.push('/tmp/injected.png');
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
   });
 
   it('补送后剩余分段照常发出', async () => {
