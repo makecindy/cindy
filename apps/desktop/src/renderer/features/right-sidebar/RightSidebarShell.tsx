@@ -361,10 +361,11 @@ export function RightSidebarShell({
   // "用户正在看的 session"喂给 router 作无归属 popup 的回落目标(保留最后
   // 已知值,Shell 卸载期间到达的 popup 仍有处可去)。
   useEffect(() => {
-    initPopupRouter();
-  }, []);
-  useEffect(() => {
+    // session 尚未就绪时不要订阅:订阅会同步 drain preload backlog,此时无
+    // fallback 会把无 openerSessionId 的一次性 OAuth popup 当成无主消息丢掉。
+    if (!sessionId) return;
     setPopupFallbackSession(sessionId);
+    initPopupRouter();
   }, [sessionId]);
 
   useEffect(() => {

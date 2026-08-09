@@ -20,7 +20,9 @@ vi.mock('../plugins', () => ({}));
 
 // eagerSpawnAndReport 会真的 acquire 一个 <webview> 并等 dom-ready(jsdom 里永远
 // 不来 → 8s 兜底),跨 session popup 用例只关心它前后的编排,所以桩掉这一个导出。
-const eagerSpawnAndReport = vi.fn(async (_s: string, _t: string, _u: string) => undefined);
+const eagerSpawnAndReport = vi.fn(async (...args: [string, string, string]) => {
+  void args;
+});
 vi.mock('../lib/rsbBrowserBridge', async () => {
   const actual =
     await vi.importActual<typeof import('../lib/rsbBrowserBridge')>('../lib/rsbBrowserBridge');
@@ -41,7 +43,6 @@ import {
   type SidebarVisibilityRequestOptions,
 } from '../lib/sidebarCommands';
 import { _resetStore, closeTab, getBucket } from '../store';
-import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
 interface RightSidebarTabsIpcStub {
@@ -802,6 +803,63 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
       await Promise.resolve();
     });
   }
+
+  it('冷启动 replay 先建立 fallback session,只投递一次且不关闭 native surface', async () => {
+    const electronApi = (
+      window as unknown as {
+        electronAPI: { onRsbBrowserPopup: ReturnType<typeof vi.fn> };
+      }
+    ).electronAPI;
+    electronApi.onRsbBrowserPopup.mockImplementation(
+      (callback: (payload: RsbBrowserPopupPayloadStub) => void) => {
+        rsbBrowserPopupListeners.push(callback);
+        // 模拟 preload 在订阅建立时同步 replay backlog。
+        callback({
+          url: 'about:blank',
+          disposition: 'foreground-tab',
+          nativePopupSurfaceId: 'surface-cold-start',
+        });
+        return () => {
+          rsbBrowserPopupListeners = rsbBrowserPopupListeners.filter((cb) => cb !== callback);
+        };
+      },
+    );
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
+    await waitFor(() => expect(rsbNativePopupClaim).toHaveBeenCalledTimes(1));
+    expect(rsbNativePopupClaim).toHaveBeenCalledWith({
+      surfaceId: 'surface-cold-start',
+      sessionId: 's1',
+      tabId: getBucket('s1').tabs[0].id,
+    });
+    expect(rsbNativePopupClose).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's2',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getBucket('s1').tabs).toHaveLength(1);
+    expect(getBucket('s2').tabs).toHaveLength(0);
+    expect(rsbNativePopupClaim).toHaveBeenCalledTimes(1);
+  });
 
   it('把 popup 落进 opener session,并以 userInitiated:false 请求展开', async () => {
     renderShell();
