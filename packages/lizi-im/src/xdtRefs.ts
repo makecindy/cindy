@@ -638,7 +638,10 @@ function markdownParenPairs(text: string): {
     if (
       (text[cursor] === '"' || text[cursor] === "'") &&
       stack.length > 0 &&
-      (text[cursor - 1] === ' ' || text[cursor - 1] === '\t')
+      (text[cursor - 1] === ' ' ||
+        text[cursor - 1] === '\t' ||
+        text[cursor - 1] === '\n' ||
+        text[cursor - 1] === '\r')
     ) {
       titleQuote = text[cursor] as '"' | "'";
       continue;
@@ -699,11 +702,63 @@ function hasWhitespaceBetween(positions: readonly number[], start: number, end: 
   return low < positions.length && positions[low] < end;
 }
 
-function angleReferenceEnd(text: string, closingAngle: number): number {
-  let cursor = closingAngle + 1;
+function markdownTitleWhitespaceEnd(text: string, start: number): number {
+  let cursor = start;
   while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  if (text[cursor] === '\r') {
+    cursor += text[cursor + 1] === '\n' ? 2 : 1;
+  } else if (text[cursor] === '\n') {
+    cursor += 1;
+  }
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  return text[cursor] === '\r' || text[cursor] === '\n' ? -1 : cursor;
+}
+
+function plainTitleUrlEnd(text: string, titleStart: number, schemeStart: number): number {
+  let cursor = titleStart;
+  while (text[cursor - 1] === ' ' || text[cursor - 1] === '\t') cursor -= 1;
+  if (text[cursor - 1] === '\n') {
+    cursor -= text[cursor - 2] === '\r' ? 2 : 1;
+  } else if (text[cursor - 1] === '\r') {
+    cursor -= 1;
+  }
+  while (text[cursor - 1] === ' ' || text[cursor - 1] === '\t') cursor -= 1;
+  if (
+    cursor === titleStart ||
+    cursor <= schemeStart ||
+    text[cursor - 1] === '\r' ||
+    text[cursor - 1] === '\n'
+  ) {
+    return -1;
+  }
+  return cursor;
+}
+
+const MAX_COMMONMARK_LINK_DESTINATION_PAREN_DEPTH = 32;
+
+function exceedsPlainDestinationParenDepth(text: string, start: number, end: number): boolean {
+  let depth = 0;
+  for (let cursor = start; cursor < end; cursor += 1) {
+    if (text[cursor] === '\\' && isMarkdownEscapablePunctuation(text[cursor + 1])) {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === '(') {
+      depth += 1;
+      if (depth > MAX_COMMONMARK_LINK_DESTINATION_PAREN_DEPTH) return true;
+    } else if (text[cursor] === ')') {
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+function angleReferenceEnd(text: string, closingAngle: number): number {
+  const whitespaceStart = closingAngle + 1;
+  let cursor = markdownTitleWhitespaceEnd(text, whitespaceStart);
+  if (cursor === -1) return -1;
   if (text[cursor] === ')') return cursor;
-  if (cursor === closingAngle + 1) return -1;
+  if (cursor === whitespaceStart) return -1;
   const opener = text[cursor];
   const closer = opener === '"' ? '"' : opener === "'" ? "'" : opener === '(' ? ')' : null;
   if (!closer) return -1;
@@ -719,7 +774,8 @@ function angleReferenceEnd(text: string, closingAngle: number): number {
   }
   if (text[cursor] !== closer) return -1;
   cursor += 1;
-  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  cursor = markdownTitleWhitespaceEnd(text, cursor);
+  if (cursor === -1) return -1;
   return text[cursor] === ')' ? cursor : -1;
 }
 
@@ -746,9 +802,8 @@ function plainReferenceBounds(
   } else if (closingTitle === ')') {
     const titleStart = openByClose[titleEnd];
     if (titleStart <= schemeStart) return fallback();
-    let urlEnd = titleStart;
-    while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
-    if (urlEnd === titleStart || urlEnd <= schemeStart) return fallback();
+    const urlEnd = plainTitleUrlEnd(text, titleStart, schemeStart);
+    if (urlEnd === -1) return fallback();
     if (hasWhitespaceBetween(whitespacePositions, schemeStart, urlEnd)) {
       return { endParen, urlEnd: schemeStart };
     }
@@ -772,9 +827,8 @@ function plainReferenceBounds(
   if (text[titleStart] !== openingTitle) {
     return fallback();
   }
-  let urlEnd = titleStart;
-  while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
-  if (urlEnd === titleStart || urlEnd <= schemeStart) {
+  const urlEnd = plainTitleUrlEnd(text, titleStart, schemeStart);
+  if (urlEnd === -1) {
     return fallback();
   }
   if (hasWhitespaceBetween(whitespacePositions, schemeStart, urlEnd)) {
@@ -901,6 +955,10 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
           whitespacePositions,
         );
     const { endParen, urlEnd } = bounds;
+    if (!angleWrapped && exceedsPlainDestinationParenDepth(text, schemeStart, urlEnd)) {
+      cursor = schemeStart + scheme.length;
+      continue;
+    }
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
     // 把整段错误改写。判据是 URL 段里出现**构成引用起点**的 '['(#1856 review

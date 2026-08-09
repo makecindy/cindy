@@ -195,6 +195,22 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
   });
 
+  it('allows one line ending between an angle destination and its title', () => {
+    for (const lineEnding of ['\n', '\r', '\r\n']) {
+      const text = `[报告](<xdt-file:///tmp/report.pdf>${lineEnding}"说明")`;
+      expect(collectXdtFileRefs(text)).toEqual([
+        {
+          alt: '报告',
+          url: 'xdt-file:///tmp/report.pdf',
+          start: 0,
+          end: text.length,
+        },
+      ]);
+    }
+
+    expect(collectXdtFileRefs('[报告](<xdt-file:///tmp/report.pdf>\n\n"说明")')).toEqual([]);
+  });
+
   it('continues after a malformed angle-bracket destination and finds the next ref', () => {
     const text =
       '[broken](<xdt-file:///tmp/broken.pdf "missing angle" [report](xdt-file:///tmp/report.pdf)';
@@ -227,6 +243,20 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     }
   });
 
+  it('allows one line ending between a plain destination and its title', () => {
+    const text = '[报告](xdt-file:///tmp/report.pdf\n"第 1) 版")';
+
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告',
+        url: 'xdt-file:///tmp/report.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(collectXdtFileRefs('[报告](xdt-file:///tmp/report.pdf\n\n"说明")')).toEqual([]);
+  });
+
   it('parses balanced parentheses in a plain file destination', () => {
     const text = '[报告](xdt-file:///work/a(b)c.pdf)';
 
@@ -239,6 +269,17 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
       },
     ]);
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
+  });
+
+  it('limits balanced parentheses in a plain destination to CommonMark depth', () => {
+    const destination = (depth: number): string =>
+      `xdt-file:///work/${'('.repeat(depth)}secret.pdf${')'.repeat(depth)}`;
+    const accepted = `[示例](${destination(32)})`;
+    const rejected = `[示例](${destination(33)})`;
+
+    expect(collectXdtFileRefs(accepted)).toHaveLength(1);
+    expect(collectXdtFileRefs(rejected)).toEqual([]);
+    expect(transformXdtRefs(rejected, { file: ({ alt }) => alt })).toBe(rejected);
   });
 
   it('parses nested brackets in an attachment label', () => {
