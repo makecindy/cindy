@@ -49,6 +49,16 @@ export type RsbWindowCommand =
       sessionId: string;
       focusTaskId?: string | null;
     }
+  /** 打开/聚焦 Cindy 持久化的 Subagent 工作区(每个父任务单例)。 */
+  | {
+      type: 'open-subagents-tab';
+      sessionId: string;
+      focusRunId?: string | null;
+      /** False adds the singleton without replacing the user's active tab. */
+      focusTab?: boolean;
+      /** False persists the tab without expanding the sidebar. */
+      revealSidebar?: boolean;
+    }
   | {
       type: 'open-turn-review';
       sessionId: string;

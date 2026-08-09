@@ -91,6 +91,13 @@ CREATE TABLE messages (
   rewind_at INTEGER,
   UNIQUE(session_id, client_id)
 );
+CREATE TABLE subagent_runs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  parent_tool_use_id TEXT,
+  started_at INTEGER NOT NULL,
+  rewind_at INTEGER
+);
 CREATE TABLE im_bindings (
   channel TEXT NOT NULL,
   bot_context_id TEXT NOT NULL,
@@ -532,6 +539,79 @@ describe('db worker tx handlers', () => {
       );
     });
   });
+
+  it.each([false, true])(
+    'rewind.commit hides linked and parentless Subagent tail rows atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          await client.exec(
+            `INSERT INTO messages
+             (id, client_id, session_id, role, content, tool_use_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              'before',
+              'before-client',
+              's1',
+              'user',
+              'before',
+              null,
+              100,
+              'target',
+              'target-client',
+              's1',
+              'tool_use',
+              '{}',
+              'spawn-tool',
+              200,
+            ],
+          );
+          await client.exec(
+            `INSERT INTO subagent_runs
+             (id, session_id, parent_tool_use_id, started_at, rewind_at)
+           VALUES (?, ?, ?, ?, NULL), (?, ?, ?, ?, NULL), (?, ?, ?, ?, NULL), (?, ?, ?, ?, NULL)`,
+            [
+              'linked',
+              's1',
+              'spawn-tool',
+              50,
+              'orphan-before',
+              's1',
+              null,
+              100,
+              'orphan-same-ms',
+              's1',
+              null,
+              200,
+              'orphan-after',
+              's1',
+              null,
+              201,
+            ],
+          );
+
+          await client.tx('rewind.commit', {
+            sessionId: 's1',
+            targetCreatedAt: 200,
+            targetMessageId: 'target',
+            targetClientId: 'target-client',
+            now: 999,
+          });
+
+          await expect(
+            client.query('SELECT id, rewind_at FROM subagent_runs ORDER BY id'),
+          ).resolves.toEqual([
+            { id: 'linked', rewind_at: 999 },
+            { id: 'orphan-after', rewind_at: 999 },
+            { id: 'orphan-before', rewind_at: null },
+            { id: 'orphan-same-ms', rewind_at: 999 },
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it('session.treeRehydrate atomically replaces the visible projection and preserves old branches', async () => {
     await withClient(async (client) => {

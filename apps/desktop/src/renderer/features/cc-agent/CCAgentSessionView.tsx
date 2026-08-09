@@ -111,7 +111,11 @@ import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
 import { useAuth } from '@/contexts/AuthContext';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -145,6 +149,7 @@ import {
   type MessageDeliveryMode,
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
+import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -528,6 +533,53 @@ export function CCAgentSessionView({
       navigate('/settings?tab=providers');
     });
   }, [navigate, sessionId, viewVisible]);
+
+  // A task that has Subagents owns one durable Subagent tab. On history mount
+  // we silently ensure the tab exists; the first live child also reveals the
+  // sidebar, without stealing OS focus or replacing an already-active tab.
+  useEffect(() => {
+    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
+    let disposed = false;
+    const requestOwner = getDataOwnerGeneration();
+    void window.electronAPI.localDb.subagentRuns
+      .list({ sessionId })
+      .then((response) => {
+        if (
+          disposed ||
+          !isDataOwnerGenerationCurrent(requestOwner) ||
+          !response.supported ||
+          response.runs.length === 0
+        ) {
+          return;
+        }
+        return openSubagentsTab(sessionId, {
+          focusTab: false,
+          revealSidebar: false,
+          userInitiated: false,
+        });
+      })
+      .catch(() => undefined);
+    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged(
+      (payload, ownerStamp) => {
+        if (
+          disposed ||
+          !isDataOwnerPushCurrent(ownerStamp) ||
+          payload.sessionId !== sessionId
+        ) {
+          return;
+        }
+        void openSubagentsTab(sessionId, {
+          focusTab: false,
+          revealSidebar: payload.created && payload.firstForSession,
+          userInitiated: false,
+        }).catch(() => undefined);
+      },
+    );
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [ownsWindowRoute, sessionId, viewVisible]);
   // MainLayout 经 Outlet context 下发右栏相关能力(二级路由由 CCAgentFeatureLayout
   // 透传,否则这里会断链拿不到):
   //   - rightSidebarCollapsed:折叠态,用于 useProportionalWidth 的 compact 判定;

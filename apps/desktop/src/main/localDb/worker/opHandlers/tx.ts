@@ -270,12 +270,16 @@ function messageDelete(
         }
         stmt.run(job.rowid);
       }
-      db.prepare("DELETE FROM embedding_jobs WHERE source = 'chat' AND source_id = ?").run(target.id);
+      db.prepare("DELETE FROM embedding_jobs WHERE source = 'chat' AND source_id = ?").run(
+        target.id,
+      );
     }
 
     // 旧重建标记的 handoff 可能包含本次目标消息；先删旧标记，只保留基于
     // 当前有效历史重新生成的最新版本，避免隐藏派生记录把内容留在本地。
-    db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(sessionId);
+    db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
+      sessionId,
+    );
     const scrubTarget = db.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
@@ -457,7 +461,11 @@ function codexImportMessages(db: Database.Database, args: unknown): { changed: n
   const model = expectString(payload.model, 'model');
   const rows = expectArray(payload.rows, 'rows');
   const existing = readExistingMessageFingerprints(db, sessionId, importClientIdPrefix);
-  const existingImportedClientIds = readExistingImportedClientIds(db, sessionId, importClientIdPrefix);
+  const existingImportedClientIds = readExistingImportedClientIds(
+    db,
+    sessionId,
+    importClientIdPrefix,
+  );
   const upsert = db.prepare(`
     INSERT INTO messages
       (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
@@ -561,19 +569,25 @@ function rewindCommit(db: Database.Database, args: unknown): void {
   const payload = asRecord(args, 'rewind.commit args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const targetCreatedAt = expectNumber(payload.targetCreatedAt, 'targetCreatedAt');
-  const targetMessageId = typeof payload.targetMessageId === 'string' ? payload.targetMessageId : null;
+  const targetMessageId =
+    typeof payload.targetMessageId === 'string' ? payload.targetMessageId : null;
   const targetClientId = typeof payload.targetClientId === 'string' ? payload.targetClientId : null;
-  const targetMessageUuid = typeof payload.targetMessageUuid === 'string' ? payload.targetMessageUuid : null;
-  const preserveMessageUuid = typeof payload.preserveMessageUuid === 'string' ? payload.preserveMessageUuid : null;
-  const sdkSessionId = typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
+  const targetMessageUuid =
+    typeof payload.targetMessageUuid === 'string' ? payload.targetMessageUuid : null;
+  const preserveMessageUuid =
+    typeof payload.preserveMessageUuid === 'string' ? payload.preserveMessageUuid : null;
+  const sdkSessionId =
+    typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
   const requireLatestUser = payload.requireLatestUser === true;
   const now = expectNumber(payload.now, 'now');
-  const rows = db.prepare(
-    `SELECT id, client_id, role, created_at, agent_meta
+  const rows = db
+    .prepare(
+      `SELECT id, client_id, role, created_at, agent_meta, tool_use_id
        FROM messages
       WHERE session_id = ?
         AND rewind_at IS NULL`,
-  ).all(sessionId) as RewindMessageRow[];
+    )
+    .all(sessionId) as RewindMessageRow[];
   // edit-last-message 原子守卫(requireLatestUser):与软删同一同步临界区内
   // 断言 target 之后没有更新的可见 user 消息(worker 单线程 + better-sqlite3
   // 同步执行,本函数内不可能被其它写操作打断)。命中 → 抛错,软删不发生,
@@ -597,8 +611,44 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     preserveMessageUuid,
   });
   const updateMessage = db.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
+  const hasSubagentRuns = Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+  );
+  const rewindSubagentByParent = hasSubagentRuns
+    ? db.prepare(
+        `UPDATE subagent_runs
+            SET rewind_at = ?
+          WHERE session_id = ?
+            AND rewind_at IS NULL
+            AND parent_tool_use_id = ?`,
+      )
+    : null;
+  const rewindParentlessSubagentTail = hasSubagentRuns
+    ? db.prepare(
+        `UPDATE subagent_runs
+            SET rewind_at = ?
+          WHERE session_id = ?
+            AND rewind_at IS NULL
+            AND parent_tool_use_id IS NULL
+            AND started_at >= ?`,
+      )
+    : null;
   const transaction = db.transaction(() => {
     for (const id of idsToRewind) updateMessage.run(now, id);
+    if (rewindSubagentByParent && rewindParentlessSubagentTail) {
+      const rewoundIds = new Set(idsToRewind);
+      const parentToolUseIds = new Set(
+        rows.flatMap((row) => (rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : [])),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        rewindSubagentByParent.run(now, sessionId, toolUseId);
+      }
+      // Older Claude task_updated events may not carry parentToolUseId. There
+      // is no stable ordering key for a same-millisecond orphan, so fail closed
+      // at the boundary: hiding a possibly older orphan is safer than exposing
+      // work from the branch the user explicitly withdrew.
+      rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
+    }
     if (sdkSessionId) {
       db.prepare(
         `UPDATE sessions
@@ -828,6 +878,7 @@ interface RewindMessageRow {
   role: string;
   created_at: number;
   agent_meta: string | null;
+  tool_use_id: string | null;
 }
 
 interface RewindSelectOpts {
@@ -902,8 +953,9 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
   const detachAgentSwitchSessions = payload.detachAgentSwitchSessions === true;
   const resetHandoffBoundaryClientId = nullableString(payload.resetHandoffBoundaryClientId);
   const newMessageIds = normalizeNewMessageIds(payload.newMessageIds);
-  const sourceMessages = db.prepare(
-    `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
+  const sourceMessages = db
+    .prepare(
+      `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
        FROM messages
       WHERE session_id = ?
         AND (? IS NULL OR created_at > ?)
@@ -993,7 +1045,12 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
           resetHandoffBoundaryClientId,
         }),
         message.tool_use_id,
-        remapAgentMetaUuid(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids),
+        remapAgentMetaUuid(
+          message.agent_meta,
+          uuidMap,
+          legacyTranscriptParentUuids,
+          toolParentUuids,
+        ),
         message.agent_kind,
         message.created_at,
       );

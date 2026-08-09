@@ -1778,7 +1778,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
     }> => ipcRenderer.invoke('discordBot:disconnect'),
-    setLifecycleAnnouncement: (enabled: boolean): Promise<{
+    setLifecycleAnnouncement: (
+      enabled: boolean,
+    ): Promise<{
       ok: boolean;
       lifecycleAnnouncement: boolean;
     }> => ipcRenderer.invoke('discordBot:set-lifecycle-announcement', { enabled }),
@@ -2069,10 +2071,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /**
    * 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」,
    * renderer 收到后 patchDraft 写真实草稿。仅被控端进程消费。
-  */
+   */
   onMakerWorktreePrefApply: fanOutMakerWorktreePrefApply,
   /** 读取工作端 canonical baseRepo 对应的 live 源分支选择；未选择返回 null。 */
-  getNewMakerWorktreeBranchPreference: (baseRepo: string): Promise<{
+  getNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+  ): Promise<{
     baseRepo: string;
     sourceBranch: string;
     revision: number;
@@ -4475,6 +4479,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** 按 sessionId 拉 tab 列表 + activeTabId。 */
       list: (input: { sessionId: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:right-sidebar-tabs:list', input),
+      /** Atomically creates or returns one canonical tab for a singleton kind. */
+      ensureSingleton: (input: {
+        sessionId: string;
+        kind: string;
+        state?: unknown;
+      }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:right-sidebar-tabs:ensure-singleton', input),
       /** 新增 / 更新单个 tab(state JSON / position / kind)。state 缺省 → '{}'。 */
       upsert: (input: {
         id: string;
@@ -4492,6 +4503,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** 一次性重写 session 内 tab position(orderedIds 数组下标 = 新 position)。 */
       reorder: (input: { sessionId: string; orderedIds: string[] }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:right-sidebar-tabs:reorder', input),
+    },
+    subagentRuns: {
+      /** Durable Cindy-owned Subagent records for one parent task. */
+      list: (input: { sessionId: string }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:subagent-runs:list', input),
+      /** Activity and returned result for one durable Subagent record. */
+      detail: (input: { sessionId: string; runId: string }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:subagent-runs:detail', input),
+      /** Small invalidation push; consumers re-read through list/detail. */
+      onChanged: createIpcFanOut('local-db:subagent-runs:changed'),
     },
     projectAliases: {
       list: (): Promise<unknown> => ipcRenderer.invoke('local-db:project-aliases:list'),
@@ -5228,8 +5249,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workerSessionId: string;
       workerId: string;
       workerPermissionMode: 'auto' | 'bypassPermissions';
-    }> =>
-      ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
+    }> => ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
 
     /**
      * F-COLLAB: 关闭 lead session 的当前协同 workflow。

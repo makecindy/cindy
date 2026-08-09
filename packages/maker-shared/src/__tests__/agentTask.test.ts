@@ -4,6 +4,7 @@ import {
   buildAgentTaskCardModel,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  isSubagentSpawnToolName,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
@@ -35,6 +36,18 @@ describe('isAgentTaskToolName', () => {
     expect(isAgentTaskToolName('Subagent')).toBe(false);
     expect(isAgentTaskToolName('subagents')).toBe(false);
     expect(isAgentTaskToolName('sub-agent')).toBe(false);
+  });
+});
+
+describe('isSubagentSpawnToolName', () => {
+  it('separates real launches from Codex control cards', () => {
+    for (const name of ['Task', 'Agent', 'subagent', 'collab:spawn', 'collab:spawnAgent']) {
+      expect(isSubagentSpawnToolName(name)).toBe(true);
+    }
+    for (const name of ['collab:wait', 'collab:sendInput', 'collab:resumeAgent', 'collab:closeAgent']) {
+      expect(isSubagentSpawnToolName(name)).toBe(false);
+      expect(isAgentTaskToolName(name)).toBe(true);
+    }
   });
 });
 

@@ -105,6 +105,34 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       ...(hasFocusTaskId ? { focusTaskId: r.focusTaskId as string | null } : {}),
     };
   }
+  if (r.type === 'open-subagents-tab') {
+    const hasFocusRunId =
+      Object.prototype.hasOwnProperty.call(r, 'focusRunId') && r.focusRunId !== undefined;
+    if (hasFocusRunId && r.focusRunId !== null && typeof r.focusRunId !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'command.focusRunId must be string | null');
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(r, 'focusTab') &&
+      r.focusTab !== undefined &&
+      typeof r.focusTab !== 'boolean'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.focusTab must be boolean');
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(r, 'revealSidebar') &&
+      r.revealSidebar !== undefined &&
+      typeof r.revealSidebar !== 'boolean'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'command.revealSidebar must be boolean');
+    }
+    return {
+      type: 'open-subagents-tab',
+      sessionId: r.sessionId,
+      ...(hasFocusRunId ? { focusRunId: r.focusRunId as string | null } : {}),
+      ...(typeof r.focusTab === 'boolean' ? { focusTab: r.focusTab } : {}),
+      ...(typeof r.revealSidebar === 'boolean' ? { revealSidebar: r.revealSidebar } : {}),
+    };
+  }
   if (r.type === 'open-turn-review') {
     if (
       !Array.isArray(r.changeSetIds)

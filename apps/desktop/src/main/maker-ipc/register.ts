@@ -179,6 +179,8 @@ import {
 import { invalidateWorkersByLeadSingleFlight } from '../localDb/ipc/orcaWorkerListSingleFlight.js';
 import { messageToCamel } from '../localDb/mapper.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
+import { persistSubagentTaskUpdate } from '../localDb/subagentRuns.js';
+import { broadcastSubagentRunsChanged } from '../localDb/ipc/subagentRuns.js';
 import {
   applyAgentSwitchToSessionRow,
   applyAgentSwitchResumeFallbackAtomically,
@@ -3727,6 +3729,27 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           },
           eventAgentMeta,
         );
+      }
+      if (event.type === 'agent_task_update') {
+        // Subagent workspace is an observer only: normalize the existing
+        // harness event into Cindy's durable record on the same FIFO as chat
+        // messages. No launch/control path or provider payload is modified.
+        const source =
+          event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi'
+            ? event.source
+            : undefined;
+        void enqueueDurableWrite(`subagent_update:${session.id}`, async (ownerScope) => {
+          const persisted = await persistSubagentTaskUpdate(session.id, event.data, source);
+          if (persisted) {
+            broadcastSubagentRunsChanged({ sessionId: session.id, ...persisted }, ownerScope);
+          }
+          return persisted;
+        }).catch((error) => {
+          log.warn('Subagent workspace persistence failed', {
+            sessionId: session.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       }
       // 先 broadcast 保 UI 实时性,再 flush(flush 只入队、不阻塞)。
       // Keep the raw event for main-side coordination/persistence, but only
@@ -12846,6 +12869,13 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   const data = event.data as Record<string, unknown>;
   const safeData = { ...data };
   let changed = false;
+  // Main consumes this Cindy-owned durable projection marker before the event
+  // crosses renderer/device-link boundaries. Live task-card payloads therefore
+  // keep their existing wire shape and older mobile clients need no upgrade.
+  if (event.type === 'agent_task_update' && 'subagentObservation' in safeData) {
+    delete safeData.subagentObservation;
+    changed = true;
+  }
   for (const key of ['message', 'sdkError'] as const) {
     if (typeof safeData[key] === 'string') {
       const redacted = redactSensitiveText(safeData[key]);

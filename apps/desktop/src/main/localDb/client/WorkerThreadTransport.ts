@@ -978,7 +978,7 @@ function rewindCommit(readyDb, args) {
   const requireLatestUser = payload.requireLatestUser === true;
   const now = expectNumber(payload.now, 'now');
   const rows = readyDb.prepare(
-    'SELECT id, client_id, role, created_at, agent_meta FROM messages WHERE session_id = ? AND rewind_at IS NULL',
+    'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
   ).all(sessionId);
   // edit-last-message 原子守卫(与 worker/opHandlers/tx.ts 镜像同步):软删同一
   // 临界区内断言 target 之后没有更新的可见 user 消息,命中 → 抛错,软删不发生。
@@ -1002,8 +1002,29 @@ function rewindCommit(readyDb, args) {
     preserveMessageUuid,
   });
   const updateMessage = readyDb.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
+  const hasSubagentRuns = Boolean(
+    readyDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+  );
+  const rewindSubagentByParent = hasSubagentRuns
+    ? readyDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE session_id = ? AND rewind_at IS NULL AND parent_tool_use_id = ?')
+    : null;
+  const rewindParentlessSubagentTail = hasSubagentRuns
+    ? readyDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE session_id = ? AND rewind_at IS NULL AND parent_tool_use_id IS NULL AND started_at >= ?')
+    : null;
   readyDb.transaction(() => {
     for (const id of idsToRewind) updateMessage.run(now, id);
+    if (rewindSubagentByParent && rewindParentlessSubagentTail) {
+      const rewoundIds = new Set(idsToRewind);
+      const parentToolUseIds = new Set(
+        rows.flatMap((row) => rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : []),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        rewindSubagentByParent.run(now, sessionId, toolUseId);
+      }
+      // Mirror worker/opHandlers/tx.ts: parentless same-ms rows are ambiguous,
+      // so fail closed rather than expose work from a withdrawn branch.
+      rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
+    }
     if (sdkSessionId) {
       readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {

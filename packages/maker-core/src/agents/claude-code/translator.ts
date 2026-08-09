@@ -557,19 +557,22 @@ export function translateSdkMessage(
         if (prompt) {
           ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model });
         }
-        if (model) {
-          queue.push({
-            type: 'agent_task_update',
-            data: {
-              provider: 'claude-code',
-              taskId,
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            provider: 'claude-code',
+            taskId,
+            parentToolUseId,
+            status: 'running',
+            subagentObservation: {
+              kind: 'spawn',
+              logicalSubagentId: taskId,
               parentToolUseId,
-              status: 'running',
-              model,
             },
-            source: 'claude-code',
-          });
-        }
+            ...(model ? { model } : {}),
+          },
+          source: 'claude-code',
+        });
       }
       // 单独遍历: 不能复用 extractToolResultFullText, 见 onToolResultDone JSDoc。
       const completedToolUseIds = new Set(fullPairs.map((pair) => pair.toolUseId));
@@ -854,7 +857,7 @@ function handleSystem(
   // 与上面三个事件共用 agent_task_update 通道 —— 下游 makerChatStore 按 taskId 做
   // 字段级 merge,故这里只需带上补丁里变化的字段。
   if (msg.subtype === 'task_updated') {
-    const update = toClaudeTaskUpdatedPatch(msg);
+    const update = toClaudeTaskUpdatedPatch(msg, ctx.rt);
     if (update) {
       queue.push({
         type: 'agent_task_update',
@@ -917,6 +920,22 @@ function toClaudeTaskUpdate(msg: {
     : undefined;
   // CLI 对纯心跳帧节流省略该字段;收窄失败/缺失都不下发(undefined = 下游沿用上一帧)。
   const workflowProgress = normalizeWorkflowProgressEntries(msg.workflow_progress);
+  const taskType = msg.task_type;
+  const isExcludedTask = taskType === 'local_bash' || taskType === 'local_workflow';
+  const isKnownSubagent =
+    Boolean(parentToolUseId) || taskType === 'local_agent' || taskType === 'remote_agent';
+  const subagentObservation = !isExcludedTask && isKnownSubagent
+    ? {
+        kind:
+          msg.subtype === 'task_started'
+            ? 'spawn' as const
+            : msg.subtype === 'task_notification'
+              ? 'terminal' as const
+              : 'progress' as const,
+        logicalSubagentId: msg.task_id,
+        ...(parentToolUseId ? { parentToolUseId } : {}),
+      }
+    : undefined;
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
@@ -932,6 +951,7 @@ function toClaudeTaskUpdate(msg: {
     ...(usage ? { usage } : {}),
     ...(model ? { model } : {}),
     ...(workflowProgress ? { workflowProgress } : {}),
+    ...(subagentObservation ? { subagentObservation } : {}),
   };
 }
 
@@ -949,16 +969,28 @@ function toClaudeTaskUpdate(msg: {
 function toClaudeTaskUpdatedPatch(msg: {
   task_id?: string;
   patch?: { status?: string; description?: string; error?: string };
-}): AgentTaskUpdateEventData | null {
+}, rt: RuntimeState): AgentTaskUpdateEventData | null {
   if (!msg.task_id || !msg.patch) return null;
   const { status: rawStatus, description, error } = msg.patch;
   const hasStatus = typeof rawStatus === 'string' && rawStatus.length > 0;
   const hasError = typeof error === 'string' && error.length > 0;
   if (!hasStatus && !hasError) return null;
+  const status = mapTaskUpdatedStatus(rawStatus, hasError);
+  const parentToolUseId = rt.subagentParentToolUseIdByTaskId.get(msg.task_id);
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
-    status: mapTaskUpdatedStatus(rawStatus, hasError),
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+    status,
+    ...(parentToolUseId
+      ? {
+          subagentObservation: {
+            kind: status === 'running' ? 'progress' : 'terminal',
+            logicalSubagentId: msg.task_id,
+            parentToolUseId,
+          },
+        }
+      : {}),
     ...(description ? { title: description } : {}),
     ...(hasError ? { summary: error } : {}),
   };
