@@ -8,6 +8,7 @@
  * 同步路径:
  *   - 启动: bootstrapChatEmbeddingFromMain() 调 IPC 拉 main 真值, 写 localStorage
  *   - toggle: ChatEmbeddingCell 调 IPC, 然后调 setChatEmbeddingEnabled() 更新本地镜像
+ *   - provider 变化: useChatEmbedding 重新拉 main 有效值,避免运行时可用性切换留下旧镜像
  *   - main 是 source of truth, renderer 不会从其它路径篡改
  *
  * 二态:

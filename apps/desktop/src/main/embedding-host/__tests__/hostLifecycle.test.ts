@@ -18,7 +18,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const hoisted = vi.hoisted(() => ({ instances: 0, stops: 0 }));
+const hoisted = vi.hoisted(() => ({
+  instances: 0,
+  stops: 0,
+  stopGate: null as Promise<void> | null,
+}));
 
 vi.mock('../EmbeddingService', () => ({
   EmbeddingService: class {
@@ -29,6 +33,7 @@ vi.mock('../EmbeddingService', () => ({
     start(): void {}
     async stop(): Promise<void> {
       hoisted.stops += 1;
+      await hoisted.stopGate;
     }
   },
 }));
@@ -67,6 +72,7 @@ describe('embedding-host 多 consumer 启停', () => {
   beforeEach(() => {
     hoisted.instances = 0;
     hoisted.stops = 0;
+    hoisted.stopGate = null;
   });
 
   it('chat 关 + 插件从未请求 → 不启动(零 Worker 轮询的承诺)', async () => {
@@ -188,11 +194,33 @@ describe('embedding-host 多 consumer 启停', () => {
     starter(); // chat ON 时启动
     host.ensureEmbeddingServiceForPluginVector(); // 插件也开始用
 
-    // 复刻 bootstrap 的 shutdownChatEmbeddingConsumer 判据
-    const shouldStop = host.isEmbeddingHostStarted() && !host.isPluginVectorConsumerActive();
+    const stopped = await host.stopEmbeddingHostIfNoPluginVectorConsumer();
 
-    expect(shouldStop).toBe(false);
+    expect(stopped).toBe(false);
     expect(host.isEmbeddingHostStarted()).toBe(true);
     expect(hoisted.stops).toBe(0);
+  });
+
+  it('条件停机摘除旧 service 后,并发插件请求启动并保留新实例', async () => {
+    const host = await loadHost();
+    const starter = bootstrapStarter(host, () => false);
+    host.registerEmbeddingHostLazyStart(starter);
+    host.startEmbeddingHost(fakeDeps());
+    const oldService = host.getEmbeddingService();
+    let releaseStop!: () => void;
+    hoisted.stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+
+    const stopping = host.stopEmbeddingHostIfNoPluginVectorConsumer();
+    expect(host.isEmbeddingHostStarted()).toBe(false);
+    const newService = host.ensureEmbeddingServiceForPluginVector();
+    expect(newService).not.toBe(oldService);
+    expect(host.isPluginVectorConsumerActive()).toBe(true);
+
+    releaseStop();
+    await expect(stopping).resolves.toBe(true);
+    expect(host.getEmbeddingService()).toBe(newService);
+    expect(host.isPluginVectorConsumerActive()).toBe(true);
   });
 });

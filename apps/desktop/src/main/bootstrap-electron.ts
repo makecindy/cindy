@@ -299,6 +299,7 @@ import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
 import {
   startEmbeddingHost,
   stopEmbeddingHost,
+  stopEmbeddingHostIfNoPluginVectorConsumer,
   isEmbeddingHostStarted,
   getEmbeddingService,
   isPluginVectorConsumerActive,
@@ -1048,14 +1049,12 @@ setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);
  */
 async function shutdownChatEmbeddingConsumer(): Promise<void> {
   setChatEmbeddingEnabled(false);
-  if (!isEmbeddingHostStarted()) return;
-  if (isPluginVectorConsumerActive()) {
+  if (!(await stopEmbeddingHostIfNoPluginVectorConsumer())) {
     console.log(
       '[bootstrap-electron] chat embedding off; embeddingHost kept alive for plugin vector consumer',
     );
     return;
   }
-  await stopEmbeddingHost();
   resetChatEmbedderCache();
 }
 
@@ -3494,7 +3493,6 @@ const registerIpcHandlers = () => {
     return chatEmbeddingWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET, async (_e, enabled: unknown) => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'chat embedding enabled required (boolean)');
     }
@@ -3519,7 +3517,6 @@ const registerIpcHandlers = () => {
     return chatEmbeddingWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET, async () => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     const settings = resetChatEmbeddingSettings();
     if (settings.enabled) {
       attemptStartEmbeddingHost();

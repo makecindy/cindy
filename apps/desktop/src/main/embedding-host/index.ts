@@ -92,10 +92,23 @@ export async function stopEmbeddingHost(): Promise<void> {
   // "没有活着的 host ⇒ 没有已提交的 consumer"。清了也不会丢能力: 插件下一次请求
   // 会重新打标并懒启动 (这就是"按需"的含义)。
   _pluginVectorConsumer = false;
-  if (!_service) return;
-  await _service.stop();
+  const service = _service;
+  if (!service) return;
+  // 先摘掉全局引用再 await stop：并发插件请求不能拿到正在停止的 service；它会按需
+  // 启动新实例，而旧 stop 完成后也不会误清新实例。
   _service = null;
   _client = null;
+  await service.stop();
+}
+
+/**
+ * Chat consumer 的条件停机入口。检查插件 consumer 与摘除 service 在同一同步区间完成，
+ * 插件请求要么阻止停机，要么看见空 service 后启动新实例。
+ */
+export async function stopEmbeddingHostIfNoPluginVectorConsumer(): Promise<boolean> {
+  if (_pluginVectorConsumer) return false;
+  await stopEmbeddingHost();
+  return true;
 }
 
 export function getEmbeddingService(): EmbeddingService {
