@@ -334,4 +334,33 @@ describe('isLocalSentUserMessage (#2194)', () => {
     expect(makerChatStore.isLocalSentUserMessage(sid, 'clone-0')).toBe(false);
     expect(makerChatStore.isLocalSentUserMessage(sid, 'clone-new')).toBe(true);
   });
+
+  // Copilot review nit：retry 回执到达前会话已被 purge 时，登记会把
+  // localSentUserMessageIds 条目重新创建出来——泄漏，且同 id 会话重建后
+  // 旧标记会复活。settle 时会话不存在则直接不登记。
+  it('retry 回执到达前会话已 purge 时不登记，会话重建后旧标记不复活', async () => {
+    const sid = `retry-purge-${Math.random().toString(36).slice(2, 8)}`;
+
+    let resolveRetry!: (p: AgentInputProjection) => void;
+    retryLastError.mockImplementationOnce(
+      () => new Promise<AgentInputProjection>((res) => (resolveRetry = res)),
+    );
+
+    const p = makerChatStore.retryLastError(sid);
+    makerChatStore.purgeSession(sid);
+    resolveRetry(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('retry-clone', 'failed text', { supersedesUserClientId: 'orig-user' }),
+        ],
+      }),
+    );
+    await p;
+    await flushPromises();
+
+    // 会话重建（一次新发送）后，purge 前那次 retry 的克隆标记不得复活。
+    makerChatStore.sendMessage(sid, 'again', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone')).toBe(false);
+  });
 });

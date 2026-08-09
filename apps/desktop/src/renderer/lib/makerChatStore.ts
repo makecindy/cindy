@@ -12196,6 +12196,9 @@ function retryLastError(sessionId: string): Promise<void> {
     // 本次克隆；drain 可能抢在本回调前消费克隆并推送新投影覆盖 state
     // （Greptile review P1），那时扫 state.pendingQueue 会漏记。
     // superseded / no-op 时回执队列里没有克隆项，自然不标记。
+    // 会话在 retry settle 前被 purge 时不登记——否则会把 localSentUserMessageIds
+    // 条目重新创建出来（泄漏 + 同 id 会话重建后旧标记复活，Copilot review nit）。
+    if (!sessions.has(sessionId)) return;
     for (const item of projection.pendingQueue) {
       if (item.supersedesUserClientId) markLocalSentUserMessage(sessionId, item.clientId);
     }
