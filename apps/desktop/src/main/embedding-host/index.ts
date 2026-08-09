@@ -27,6 +27,7 @@ import { EmbeddingClient, type EmbeddingClientOptions } from '@cindy/embedding-c
 import type { createLogger } from '../logger';
 import type { DbClient } from '../localDb/client/DbClient';
 import { EmbeddingService } from './EmbeddingService';
+import { isProviderSuspended, setProviderSuspended } from './providers';
 
 export type { EmbeddingProvider, EmbeddingJobForProvider } from './providers';
 export type { EmbeddingService } from './EmbeddingService';
@@ -160,6 +161,15 @@ export function ensureEmbeddingServiceForPluginVector(): EmbeddingService {
 /** 本次 host 生命周期内是否有插件向量 consumer —— chat 开关的停机判据 */
 export function isPluginVectorConsumerActive(): boolean {
   return _pluginVectorConsumer;
+}
+
+/** Pause or resume queued jobs for one consumer while a shared host stays alive. */
+export function setEmbeddingSourceSuspended(source: string, suspended: boolean): void {
+  setProviderSuspended(source, suspended);
+}
+
+export function isEmbeddingSourceSuspended(source: string): boolean {
+  return isProviderSuspended(source);
 }
 
 /** dev / debug: 是否已启动 */

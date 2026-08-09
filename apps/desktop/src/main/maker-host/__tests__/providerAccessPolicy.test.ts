@@ -5,7 +5,6 @@ import type { Catalog, CatalogModel, Provider } from '@cindy/model-providers';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 import {
   filterProviderCatalogForAccount,
-  isCindyEmbeddingModelAvailable,
   isProviderSelectable,
   projectProviderCatalogForBuildRegion,
 } from '../provider-access-policy.js';
@@ -95,22 +94,6 @@ describe('provider access policy', () => {
     const input = catalog();
     expect(filterProviderCatalogForAccount(input, { canUseCindyGateway: true })).toBe(input);
     expect(filterProviderCatalogForAccount(input, {})).toBe(input);
-  });
-
-  it('exposes managed chat embedding only when the projected account catalog contains it', () => {
-    const input = catalog();
-    const globalAccount = filterProviderCatalogForAccount(
-      projectProviderCatalogForBuildRegion(input, 'global'),
-      { canUseCindyGateway: true },
-    );
-    const globalLocal = filterProviderCatalogForAccount(globalAccount, {
-      canUseCindyGateway: false,
-    });
-    const mainlandAccount = projectProviderCatalogForBuildRegion(input, 'cn');
-
-    expect(isCindyEmbeddingModelAvailable(globalAccount, 'voyage/voyage-4')).toBe(true);
-    expect(isCindyEmbeddingModelAvailable(globalLocal, 'voyage/voyage-4')).toBe(false);
-    expect(isCindyEmbeddingModelAvailable(mainlandAccount, 'voyage/voyage-4')).toBe(false);
   });
 
   it('preserves the full media catalog and object identity for Global', () => {

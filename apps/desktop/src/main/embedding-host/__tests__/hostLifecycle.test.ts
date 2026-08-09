@@ -223,4 +223,56 @@ describe('embedding-host 多 consumer 启停', () => {
     expect(host.getEmbeddingService()).toBe(newService);
     expect(host.isPluginVectorConsumerActive()).toBe(true);
   });
+
+  it('暂停的 chat source 在 SQL 层排除,不阻塞插件队列', async () => {
+    const host = await loadHost();
+    host.setEmbeddingSourceSuspended('chat', true);
+    const { EmbeddingWorker } = await import('../EmbeddingWorker');
+    const query = vi.fn().mockResolvedValue([]);
+    const worker = new EmbeddingWorker({
+      getDbClient: () => ({ query }) as never,
+      getClient: () => ({ embed: vi.fn() }) as never,
+      isVecAvailable: () => true,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+    });
+
+    await (worker as unknown as { tick(): Promise<void> }).tick();
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('source NOT IN (?)');
+    expect(params.slice(1)).toEqual(['chat', 32]);
+  });
+
+  it('query 后丢失 availability 时不处理已选中的 chat job', async () => {
+    const host = await loadHost();
+    const { EmbeddingWorker } = await import('../EmbeddingWorker');
+    const { registerProvider } = await import('../providers');
+    const getTextsForJobs = vi.fn().mockResolvedValue([{ rowid: 1, text: 'queued chat' }]);
+    registerProvider({ source: 'chat', getTextsForJobs });
+    const embed = vi.fn();
+    const query = vi.fn().mockResolvedValue([
+      {
+        rowid: 1,
+        source: 'chat',
+        source_id: 'm1',
+        chunk_index: 0,
+        model_id: 'voyage/voyage-4',
+        vec_table: 'chat_messages_vec_v1',
+        attempts: 0,
+      },
+    ]);
+    const worker = new EmbeddingWorker({
+      getDbClient: () => ({ query }) as never,
+      getClient: () => ({ embed }) as never,
+      isVecAvailable: () => true,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+    });
+
+    const tick = (worker as unknown as { tick(): Promise<void> }).tick();
+    host.setEmbeddingSourceSuspended('chat', true);
+    await tick;
+
+    expect(getTextsForJobs).not.toHaveBeenCalled();
+    expect(embed).not.toHaveBeenCalled();
+  });
 });

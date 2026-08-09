@@ -304,6 +304,7 @@ import {
   getEmbeddingService,
   isPluginVectorConsumerActive,
   registerEmbeddingHostLazyStart,
+  setEmbeddingSourceSuspended,
   type EmbeddingService,
 } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
@@ -949,8 +950,9 @@ function isChatEmbeddingAvailable(): boolean {
 function attemptStartEmbeddingHost(): void {
   // 谁都不要用就别启:插件 consumer 的标记由 ensureEmbeddingServiceForPluginVector
   // 在回调本函数之前打上,所以这里读到的是"含本次请求"的最新意向。
-  const chatEnabled =
-    isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled;
+  const chatAvailable = isChatEmbeddingAvailable();
+  setEmbeddingSourceSuspended('chat', !chatAvailable);
+  const chatEnabled = chatAvailable && readChatEmbeddingSettings().enabled;
   if (!chatEnabled && !isPluginVectorConsumerActive()) {
     console.log(
       '[bootstrap-electron] no embedding consumer active (chat off, no plugin vector); embeddingHost not started',
@@ -1022,7 +1024,9 @@ let chatEmbeddingRuntimeReconcile: Promise<void> = Promise.resolve();
 function scheduleChatEmbeddingRuntimeReconcile(): void {
   // Stop new enqueue work before an async host shutdown can run. The queued
   // reconciliation re-reads the latest catalog so rapid refreshes are last-write-wins.
-  if (!isChatEmbeddingAvailable()) setChatEmbeddingEnabled(false);
+  const chatAvailable = isChatEmbeddingAvailable();
+  setEmbeddingSourceSuspended('chat', !chatAvailable);
+  if (!chatAvailable) setChatEmbeddingEnabled(false);
   chatEmbeddingRuntimeReconcile = chatEmbeddingRuntimeReconcile
     .then(async () => {
       if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled) {
@@ -1043,9 +1047,8 @@ setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);
  * 向量 consumer 时才停 host —— 否则会把另一个 consumer 的能力一起关掉 (插件的
  * embed_text 全变 INTERNAL)。
  *
- * 插件在用时保留 host 的副作用是: chat provider 仍注册着, 已入队的旧 job 会继续做完。
- * 这与 chat-history-embedder 自己的设计一致 (开关只控制入队, 不取消 provider 注册,
- * 旧 pending job 不浪费用户已花的钱)。
+ * 用户手动关闭时,已入队的旧 job 仍可做完;provider access 丢失时 runtime reconcile
+ * 会另外暂停 chat source,旧 job 保持 pending,恢复可用后再续跑。
  */
 async function shutdownChatEmbeddingConsumer(): Promise<void> {
   setChatEmbeddingEnabled(false);

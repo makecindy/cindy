@@ -43,7 +43,10 @@ describe('chat embedding availability wiring', () => {
 
   it('stops unavailable consumers and restores an enabled preference when access returns', () => {
     expect(bootstrapSource).toContain(
-      'if (!isChatEmbeddingAvailable()) setChatEmbeddingEnabled(false);',
+      "setEmbeddingSourceSuspended('chat', !chatAvailable);",
+    );
+    expect(bootstrapSource).toContain(
+      'if (!chatAvailable) setChatEmbeddingEnabled(false);',
     );
     expect(bootstrapSource).toContain(
       'if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled)',
