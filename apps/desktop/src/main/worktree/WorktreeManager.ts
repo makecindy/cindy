@@ -124,7 +124,6 @@ const precreatedWorktreeOperationQueues = new Map<string, Promise<void>>();
 const MIN_RECOVERY_KEY_LENGTH = 16;
 const MAX_RECOVERY_KEY_LENGTH = 256;
 const RECOVERY_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
-const LEGACY_AUTO_NAME_PATTERN = /^auto-[a-z0-9]{1,6}$/;
 
 async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>): Promise<T> {
   const key = path.resolve(baseRepo);
@@ -675,17 +674,11 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
   const totalStartedAt = Date.now();
   try {
     // 0. 防御性校验显式 worktree name(IPC 不可信, 调试 / 未来扩展 / 误用
-    //    都可能传入非法值)。空白名是生成请求；带 recoveryKey 的远程移动端请求
-    //    仍用合法 auto-* 兼容旧 host，并由新版 Main 识别为历史 fallback。
-    //    本地无 recoveryKey 的显式 auto-* 名保持兼容。
+    //    都可能传入非法值)。只有空白名是生成请求；包括 auto-* 在内的合法非空名
+    //    都按显式名称保留。
     //    要求: [a-z0-9-], 首尾字母数字, 无连续 --, 长度 ≤20。
     //    符合 git ref + Windows/POSIX 路径 + cli flag 安全的交集。
-    const shouldGenerateName =
-      typeof req.name === 'string'
-      && (req.name.trim().length === 0
-        || (typeof req.recoveryKey === 'string'
-          && req.recoveryKey.length > 0
-          && LEGACY_AUTO_NAME_PATTERN.test(req.name)));
+    const shouldGenerateName = typeof req.name === 'string' && req.name.trim().length === 0;
     const explicitNameError = shouldGenerateName ? null : validateWorktreeName(req.name);
     if (explicitNameError) {
       return {
