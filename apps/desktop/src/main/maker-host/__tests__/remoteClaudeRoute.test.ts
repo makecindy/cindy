@@ -15,12 +15,19 @@ vi.mock('../auth-adapters.js', () => ({ readClaudeApiKey: () => readClaudeApiKey
 vi.mock('../claude-oauth-refresh.js', () => ({
   getClaudeAiOAuthForSpawn: () => getClaudeAiOAuthForSpawn(),
 }));
-vi.mock('../claude-credentials-store.js', () => ({ hasClaudeAiOAuth: () => hasClaudeAiOAuth() }));
+vi.mock('../claude-credentials-store.js', () => ({
+  hasClaudeAiOAuth: () => hasClaudeAiOAuth(),
+  getClaudeAiOAuthSessionAuthorizationRevision: (oauth: Record<string, unknown>) =>
+    typeof oauth.cindyAuthorizationRevision === 'string'
+      ? oauth.cindyAuthorizationRevision
+      : 'cindy-unattributed-v1',
+}));
 vi.mock('../active-catalog.js', () => ({ getActiveCatalog: () => getActiveCatalog() }));
 vi.mock('../provider-route.js', () => ({
   resolveProviderRouteDecision: (...args: unknown[]) => resolveProviderRouteDecision(...args),
   gatewayDefaultRouteDecision: (...args: unknown[]) => gatewayDefaultRouteDecision(...args),
-  isProviderRouteMutationInProgress: (...args: unknown[]) => isProviderRouteMutationInProgress(...args),
+  isProviderRouteMutationInProgress: (...args: unknown[]) =>
+    isProviderRouteMutationInProgress(...args),
 }));
 
 import { resolveRemoteClaudeRoute } from '../remote-claude-route.js';
@@ -52,6 +59,7 @@ describe('resolveRemoteClaudeRoute — 默认路由(未显式选供应商)', () 
       scopes: ['user:inference'],
       subscriptionType: 'max',
       rateLimitTier: 'tier-1',
+      cindyAuthorizationRevision: 'login-revision-1',
     });
     const route = await resolveRemoteClaudeRoute({ providerId: null, model: 'claude-opus-5' });
     expect(route).not.toBeNull();
@@ -60,6 +68,7 @@ describe('resolveRemoteClaudeRoute — 默认路由(未显式选供应商)', () 
     expect(route!.env.CLAUDE_CODE_OAUTH_SCOPES).toBe('user:inference');
     expect(route!.env.CLAUDE_CODE_SUBSCRIPTION_TYPE).toBe('max');
     expect(route!.env.CLAUDE_CODE_RATE_LIMIT_TIER).toBe('tier-1');
+    expect(route!.env.CINDY_CLAUDE_OAUTH_REVISION).toBe('login-revision-1');
     // 订阅直连不塞 api key / bearer 门,凭证走 OAuth token
     expect(route!.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(route!.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
@@ -83,9 +92,7 @@ describe('resolveRemoteClaudeRoute — 默认路由(未显式选供应商)', () 
     getClaudeAiOAuthForSpawn.mockReturnValue({ accessToken: 'tok-sub' });
     readClaudeApiKey.mockReturnValue('gw-key');
     gatewayDefaultRouteDecision.mockReturnValue({ headerOverride: { 'x-api-key': 'gw-key' } });
-    expect(
-      await resolveRemoteClaudeRoute({ providerId: null, model: 'claude-opus-5' }),
-    ).toBeNull();
+    expect(await resolveRemoteClaudeRoute({ providerId: null, model: 'claude-opus-5' })).toBeNull();
     expect(gatewayDefaultRouteDecision).toHaveBeenCalledWith('claude-code', 'gw-key');
   });
 
@@ -101,7 +108,9 @@ describe('resolveRemoteClaudeRoute — 默认路由(未显式选供应商)', () 
 
 describe('resolveRemoteClaudeRoute — 显式供应商', () => {
   it('显式 xd 网关 → null(维持网关远端路径)', async () => {
-    expect(await resolveRemoteClaudeRoute({ providerId: 'xd', model: 'deepseek-v4-flash' })).toBeNull();
+    expect(
+      await resolveRemoteClaudeRoute({ providerId: 'xd', model: 'deepseek-v4-flash' }),
+    ).toBeNull();
     expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 
@@ -113,9 +122,13 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
     });
     hasClaudeAiOAuth.mockReturnValue(true);
     getClaudeAiOAuthForSpawn.mockReturnValue({ accessToken: 'tok-sub' });
-    const route = await resolveRemoteClaudeRoute({ providerId: 'anthropic', model: 'claude-opus-5' });
+    const route = await resolveRemoteClaudeRoute({
+      providerId: 'anthropic',
+      model: 'claude-opus-5',
+    });
     expect(route!.endpoint).toBe('https://api.anthropic.com');
     expect(route!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-sub');
+    expect(route!.env.CINDY_CLAUDE_OAUTH_REVISION).toBe('cindy-unattributed-v1');
     expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 
@@ -132,7 +145,10 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
         },
       },
     });
-    const route = await resolveRemoteClaudeRoute({ providerId: 'my-anthropic', model: 'claude-opus-5' });
+    const route = await resolveRemoteClaudeRoute({
+      providerId: 'my-anthropic',
+      model: 'claude-opus-5',
+    });
     expect(route!.endpoint).toBe('https://api.myprovider.com/v1');
     // 单鉴权门 = ANTHROPIC_API_KEY;另一个鉴权头 + 定制头进 custom headers
     expect(route!.env.ANTHROPIC_API_KEY).toBe('k-user');
@@ -154,7 +170,10 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
         },
       },
     });
-    const route = await resolveRemoteClaudeRoute({ providerId: 'my-anthropic', model: 'claude-opus-5' });
+    const route = await resolveRemoteClaudeRoute({
+      providerId: 'my-anthropic',
+      model: 'claude-opus-5',
+    });
     const custom = parseCustomHeaders(route!.env.ANTHROPIC_CUSTOM_HEADERS);
     // 换行被剥成单行,不产生注入的头行
     expect(custom['x-evil']).toBe('line1 injected-header: bad line2');
@@ -206,7 +225,11 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
   it('自定义 requestPath → REMOTE_PROVIDER_UNSUPPORTED', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       ...base,
-      routing: { upstream: 'https://x/v1', authStrategy: 'api-key-header', requestPath: '/v2/messages' },
+      routing: {
+        upstream: 'https://x/v1',
+        authStrategy: 'api-key-header',
+        requestPath: '/v2/messages',
+      },
     });
     await expect(resolveRemoteClaudeRoute({ providerId: 'p', model: 'm' })).rejects.toThrow(
       /REMOTE_PROVIDER_UNSUPPORTED/,
@@ -233,9 +256,9 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
       routing: { upstream: 'https://api.x.ai/v1', authStrategy: 'oauth-passthrough' },
       decision: { upstreamOverride: 'https://api.x.ai/v1' },
     });
-    await expect(resolveRemoteClaudeRoute({ providerId: 'xai', model: 'xai/grok-4.5' })).rejects.toThrow(
-      /REMOTE_PROVIDER_UNSUPPORTED/,
-    );
+    await expect(
+      resolveRemoteClaudeRoute({ providerId: 'xai', model: 'xai/grok-4.5' }),
+    ).rejects.toThrow(/REMOTE_PROVIDER_UNSUPPORTED/);
   });
 
   it('decision 解析为 null(如非 xd 的 gateway-key 路由缺网关 key)→ 前置报错,不拿占位鉴权打真上游', async () => {
@@ -244,16 +267,16 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
       routing: { upstream: 'https://partner.example/v1', authStrategy: 'gateway-key' },
       decision: null,
     });
-    await expect(resolveRemoteClaudeRoute({ providerId: 'partner-gw', model: 'm' })).rejects.toThrow(
-      /REMOTE_PROVIDER_UNSUPPORTED/,
-    );
+    await expect(
+      resolveRemoteClaudeRoute({ providerId: 'partner-gw', model: 'm' }),
+    ).rejects.toThrow(/REMOTE_PROVIDER_UNSUPPORTED/);
   });
 
   it('路由凭证 mutation 窗口内 → REMOTE_PROVIDER_UPDATING(不误报不支持)', async () => {
     isProviderRouteMutationInProgress.mockReturnValue(true);
-    await expect(resolveRemoteClaudeRoute({ providerId: 'my-provider', model: 'm' })).rejects.toThrow(
-      /REMOTE_PROVIDER_UPDATING/,
-    );
+    await expect(
+      resolveRemoteClaudeRoute({ providerId: 'my-provider', model: 'm' }),
+    ).rejects.toThrow(/REMOTE_PROVIDER_UPDATING/);
     expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 
@@ -261,9 +284,9 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
     // 前置检查通过(false),resolver 返回 null,兜底检查命中(true)—— 模拟窗口在两次判定之间开启。
     isProviderRouteMutationInProgress.mockReturnValueOnce(false).mockReturnValue(true);
     resolveProviderRouteDecision.mockResolvedValue(null);
-    await expect(resolveRemoteClaudeRoute({ providerId: 'my-provider', model: 'm' })).rejects.toThrow(
-      /REMOTE_PROVIDER_UPDATING/,
-    );
+    await expect(
+      resolveRemoteClaudeRoute({ providerId: 'my-provider', model: 'm' }),
+    ).rejects.toThrow(/REMOTE_PROVIDER_UPDATING/);
   });
 
   it('显式未知供应商(无 claude-code 路由)→ REMOTE_PROVIDER_UNSUPPORTED', async () => {

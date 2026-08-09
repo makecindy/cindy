@@ -23,6 +23,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -101,6 +102,7 @@ import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
+import { CINDY_CLAUDE_OAUTH_REVISION_ENV } from '../../interfaces/auth-adapter.js';
 import {
   applyOAuthSpawnEntrypointGate,
   applySubagentModelEnv,
@@ -508,24 +510,44 @@ const CLAUDE_EFFORTS: EffortDescriptor[] = [
  * 纯附加能力:不阻塞 send / 不进事件热路径 / 不改 prompt 组装(缓存前缀零影响);
  * 失败静默(发现通道有 HTTP + 磁盘缓存互补,见 host 侧)。
  */
-let supportedModelsListener: ((models: unknown[]) => void) | null = null;
+export interface ClaudeSupportedModelsSource {
+  accessTokenFingerprint: string;
+  authorizationRevision: string;
+}
+
+let supportedModelsListener:
+  | ((models: unknown[], source: ClaudeSupportedModelsSource | null) => void)
+  | null = null;
 
 /** host 注入 SDK supportedModels 捕获回调;传 null 解除。 */
 export function setClaudeSupportedModelsListener(
-  listener: ((models: unknown[]) => void) | null,
+  listener: ((models: unknown[], source: ClaudeSupportedModelsSource | null) => void) | null,
 ): void {
   supportedModelsListener = listener;
 }
 
 /** fire-and-forget 捕获(远端 RemoteQuery 无 supportedModels 方法时静默跳过)。 */
-function notifySupportedModels(q: Query): void {
+function notifySupportedModels(q: Query, env: Readonly<Record<string, string>>): void {
   if (!supportedModelsListener) return;
   const fn = (q as { supportedModels?: () => Promise<unknown[]> }).supportedModels;
   if (typeof fn !== 'function') return;
+  // Snapshot the session credential before the async SDK call. A result from
+  // an old query must not be attributed to whichever OAuth credential happens
+  // to be current when the promise resolves. Only one-way token evidence
+  // leaves maker-core; raw token bytes are never exposed to the host callback.
+  const token = env.CLAUDE_CODE_OAUTH_TOKEN;
+  const authorizationRevision = env[CINDY_CLAUDE_OAUTH_REVISION_ENV];
+  const source: ClaudeSupportedModelsSource | null =
+    token && authorizationRevision
+      ? {
+          accessTokenFingerprint: createHash('sha256').update(token, 'utf8').digest('hex'),
+          authorizationRevision,
+        }
+      : null;
   void fn.call(q).then(
     (models) => {
       try {
-        if (Array.isArray(models)) supportedModelsListener?.(models);
+        if (Array.isArray(models)) supportedModelsListener?.(models, source);
       } catch {
         /* listener 异常不得外溢成 unhandled rejection */
       }
@@ -645,9 +667,28 @@ export class ClaudeCodeAgent extends BaseAgent {
    */
   private async refreshSubscriptionTokenInPlace(env: Record<string, string>): Promise<string | null> {
     try {
-      const fresh = await this.deps.auth.getFreshSubscriptionToken!(env.CLAUDE_CODE_OAUTH_TOKEN);
-      if (fresh) env.CLAUDE_CODE_OAUTH_TOKEN = fresh;
-      return fresh ?? null;
+      const staleRevision = env[CINDY_CLAUDE_OAUTH_REVISION_ENV];
+      const refreshed = staleRevision
+        ? await this.deps.auth.getFreshSubscriptionToken!(
+            env.CLAUDE_CODE_OAUTH_TOKEN,
+            staleRevision,
+          )
+        : await this.deps.auth.getFreshSubscriptionToken!(env.CLAUDE_CODE_OAUTH_TOKEN);
+      if (!refreshed) return null;
+      if (typeof refreshed === 'string') {
+        // Backward compatibility for hosts that predate authorization epochs.
+        env.CLAUDE_CODE_OAUTH_TOKEN = refreshed;
+        return refreshed;
+      }
+      env.CLAUDE_CODE_OAUTH_TOKEN = refreshed.token;
+      if (refreshed.authorizationRevision) {
+        env[CINDY_CLAUDE_OAUTH_REVISION_ENV] = refreshed.authorizationRevision;
+      } else {
+        // A revision-aware host explicitly returned no epoch. Keeping the stale
+        // epoch would make the next 401 compare a new token against old evidence.
+        delete env[CINDY_CLAUDE_OAUTH_REVISION_ENV];
+      }
+      return refreshed.token;
     } catch (e) {
       this.deps.logger
         .child('claude-code/oauth-refresh')
@@ -4379,7 +4420,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     q = await buildQuery();
     startForwardLoop(q);
     // Anthropic 清单动态发现:init 后 fire-and-forget 捕获 supportedModels(见文件顶注)。
-    notifySupportedModels(q);
+    notifySupportedModels(q, env);
 
     // ── AgentSessionHandle 包装 ─────────────────────────────────────────────
     // Rewind rebuild 已创建新 q、但本次 send 尚未登记 turnInFlight / bridge state 的短窗口。
@@ -4538,7 +4579,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw new Error('Claude send cancelled before acceptance');
           }
           startForwardLoop(q);
-          notifySupportedModels(q);
+          notifySupportedModels(q, env);
           await replayRuntimeDrift(runtimeSnapshot, 'cancelled continuation rebuild');
           // Cancellation rebuilds used by send need the compact→user bridge for deferred
           // model/window drift. Rewind preview/commit use the same fresh-query isolation but
@@ -5389,8 +5430,6 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // - ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN(自定义供应商 key,**无**
                 //   refresh 通道)的**值**:仍比对 —— 用户改 key 后远端 daemon 会持续
                 //   401,必须拒绝(Greptile 六轮)。存在性(在/不在)同样比对(路由类型)。
-                const SUBSCRIPTION_TOKEN_KEY = 'CLAUDE_CODE_OAUTH_TOKEN';
-                const PROVIDER_KEY_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
                 // 订阅身份元数据(scopes/subscriptionType/rateLimitTier)与 token 同源,
                 // 会在用户零操作下漂移(登录后 backfill 补齐 / 订阅计划变更刷新)——
                 // 与 token 同组按存在性比对,不按值(Fable 5 评估 B1:值比对会误拒)。

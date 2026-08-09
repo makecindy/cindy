@@ -18,8 +18,12 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(end).toBeGreaterThan(start);
     const wiring = registerSource.slice(start, end);
 
-    expect(wiring).toContain('const catalog = getDesktopSelectableCatalog();');
-    expect(wiring).toContain('catalog,');
+    expect(wiring).toContain('let catalog: ReturnType<typeof getDesktopSelectableCatalog> | undefined;');
+    expect(wiring).not.toContain('let catalog = getDesktopSelectableCatalog();');
+    expect(wiring).toContain('getCatalog: () => {');
+    expect(wiring).toContain('catalog ??= getDesktopSelectableCatalog();');
+    expect(wiring).toContain('return catalog;');
+    expect(wiring).toContain("if (!catalog) throw new Error('provider service did not project a catalog snapshot');");
     expect(wiring).toContain('const modelRegistry = catalog.modelRegistry;');
     expect(wiring).not.toContain('getActiveCatalog().modelRegistry');
     expect(registerSource).toContain('getProviderRoutingContext,');

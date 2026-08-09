@@ -87,6 +87,7 @@ vi.mock('../auth-adapters.js', () => ({
 vi.mock('../claude-credentials-store.js', () => ({
   hasClaudeAiOAuth: () => false,
   hasClaudeAiOAuthUnbound: () => false,
+  hasClaudeAiOAuthUnboundForBindingTransaction: () => false,
 }));
 vi.mock('../grok-oauth-login.js', () => ({
   getGrokAccessToken: () => null,
@@ -123,6 +124,11 @@ vi.mock('../codex-model-discovery.js', () => ({
 vi.mock('../model-discovery/anthropic.js', () => ({
   getAnthropicModelDiscoveryFailure: () => null,
   loadAnthropicModelsFromDiskCache: async () => undefined,
+  observeAnthropicCredentialEpoch: () => true,
+  runWithAnthropicCredentialEpochProjection: <T>(
+    _options: { allowHydration?: boolean },
+    project: (connected: boolean) => T,
+  ) => project(true),
   refreshAnthropicModelsFromHttp: async () => undefined,
 }));
 vi.mock('../custom-provider-header-secrets.js', () => ({

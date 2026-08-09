@@ -3243,7 +3243,8 @@ const registerIpcHandlers = () => {
     // 订阅余量同步: 凭证已清, read() 会清快照并广播 null, chip 立即回占位态。
     syncClaudeSubscriptionUsageForAuthChange();
     // 模型清单动态发现:登出完成前清空清单 + 删磁盘缓存,并等待旧 SDK 写盘收尾。
-    await clearAnthropicDiscoveredModels();
+    const replacementDetected = await clearAnthropicDiscoveredModels();
+    if (replacementDetected) await broadcastClaudeAuthStateChanged();
     return { authorized: hasClaudeAiOAuth() };
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async () => {

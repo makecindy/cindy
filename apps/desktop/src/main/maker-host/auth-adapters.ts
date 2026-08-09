@@ -22,12 +22,14 @@ import { promises as fsp, existsSync } from 'node:fs';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import type {
-  AgentLoginMode,
-  AuthAdapter,
-  AuthAdapterOptions,
-  AuthLoginOptions,
-  AuthState,
+import {
+  CINDY_CLAUDE_OAUTH_REVISION_ENV,
+  type AgentLoginMode,
+  type AuthAdapter,
+  type AuthAdapterOptions,
+  type AuthLoginOptions,
+  type AuthState,
+  type SubscriptionTokenRefreshResult,
 } from '@cindy/maker-core';
 import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
@@ -63,16 +65,20 @@ import {
 } from './codex-gateway-config.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
 import {
-  clearClaudeAiOAuth,
+  clearClaudeAiOAuthIfMatchesWithBindingInvalidation,
+  getClaudeAiOAuthSessionAuthorizationRevision,
   hasClaudeAiOAuth,
-  hasClaudeAiOAuthUnbound,
+  persistClaudeAiOAuthCredentialRejectionRecovery,
+  runWithClaudeAiOAuthCredentialNotReplaced,
 } from './claude-credentials-store.js';
 import {
   disconnectClaudeAiOAuth,
   getClaudeAiOAuthForSpawn,
   getValidClaudeAiOAuth,
   invalidateClaudeOAuthRefresh,
+  rejectClaudeOAuthCredential,
   setClaudeOAuthInvalidGrantHandler,
+  type ClaudeOAuthInvalidGrantProof,
 } from './claude-oauth-refresh.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
@@ -420,60 +426,259 @@ export function readClaudeApiKey(): string | null {
   return readOwnerScopedXdGatewayKey();
 }
 
+/** Transactional invalid_grant cleanup may wait briefly for a synchronous binding writer. */
+const CLAUDE_INVALIDATION_SETUP_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_600] as const;
 /**
- * cc 401 回调(getFreshSubscriptionToken)的总预算。必须显著小于 cc 侧
- * oauth_token_refresh control 请求的 30s 超时(反编译 eqf=30000),超时快速返回 null
- * 让 cc 落磁盘兜底,不把 turn 吊在锁等待 + 慢网络上。
+ * The final compare-and-broadcast also needs to outlive a normal 15s stale
+ * storage lock. Otherwise a valid rejection can be cleaned up correctly but
+ * never reach the renderer merely because another process was writing when
+ * the detached handoff made its single attempt.
  */
-export const CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS = 12_000;
+const CLAUDE_INVALIDATION_BROADCAST_RETRY_DELAYS_MS = [
+  100, 250, 500, 1_000, 2_000, 4_000, 8_000, 8_000,
+] as const;
+
+function nestedErrorCode(error: unknown): string | undefined {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== 'object') return undefined;
+    const code = (current as NodeJS.ErrnoException).code;
+    if (typeof code === 'string') return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+const waitForClaudeInvalidationRetry = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Claude AuthAdapter —— 只回鉴权 env, endpoint / behavior flag 走 runtime-configs.ts。 */
 export class DesktopClaudeAuthAdapter implements AuthAdapter {
   private pendingSharedSkillsPrep: Promise<void> | null = null;
 
   /** invalidate() 触发时把 auth state 推给 renderer(maker-host 装配注入,对齐 codex)。 */
-  private onInvalidatedBroadcast?: (reason: string) => void;
+  private onInvalidatedBroadcast?: (
+    reason: string,
+    rejectedCredential?: ClaudeOAuthInvalidGrantProof['rejectedCredential'],
+  ) => void;
+  /** A positively observed replacement login must retire the old model epoch without a false logout event. */
+  private onCredentialReplacementDetected?: () => void;
 
   constructor() {
     // 订阅 refresh token 被服务端作废(锁内确认的 invalid_grant)→ 清态 + 广播重登提示,
     // 不让用户停在「显示已连接、会话连环 401」的假状态。纯内存接线,构造期零文件系统
     // 副作用(authAdaptersImportPurity 约定)。
-    setClaudeOAuthInvalidGrantHandler(() => {
-      void this.invalidate('claude_oauth_refresh_invalid_grant');
+    setClaudeOAuthInvalidGrantHandler(async (proof) => {
+      // Keep the already-durable common path synchronous until the cleanup's
+      // own first wait. Only the exceptional false proof needs the additional
+      // awaited recovery loop.
+      if (proof.durabilityEstablished === false) {
+        await this.ensureRejectedCredentialDurability(proof);
+      }
+      try {
+        await this.invalidateRejectedCredential(proof);
+      } catch (error) {
+        log.error('unexpected claude invalid_grant cleanup failure', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await this.broadcastInvalidGrantIfCurrent('claude_oauth_refresh_invalid_grant', proof);
+      }
     });
   }
 
   /** maker-host 注入: invalidate() 触发后给 renderer push auth state。 */
-  setOnInvalidatedBroadcast(cb: (reason: string) => void): void {
+  setOnInvalidatedBroadcast(
+    cb: (
+      reason: string,
+      rejectedCredential?: ClaudeOAuthInvalidGrantProof['rejectedCredential'],
+    ) => void,
+  ): void {
     this.onInvalidatedBroadcast = cb;
   }
 
+  setOnCredentialReplacementDetected(cb: () => void): void {
+    this.onCredentialReplacementDetected = cb;
+  }
+
+  private isInvalidGrantOwnerCurrent(proof: ClaudeOAuthInvalidGrantProof): boolean {
+    const session = getActiveAppSession();
+    return (
+      !isAppSessionBoundaryPending() &&
+      session.dataOwnerId === proof.owner.dataOwnerId &&
+      session.generation === proof.owner.generation
+    );
+  }
+
+  private broadcastInvalidGrant(
+    reason: string,
+    rejectedCredential?: ClaudeOAuthInvalidGrantProof['rejectedCredential'],
+  ): void {
+    if (!this.onInvalidatedBroadcast) return;
+    try {
+      this.onInvalidatedBroadcast(reason, rejectedCredential);
+    } catch (error) {
+      log.warn('onInvalidatedBroadcast threw', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private notifyCredentialReplacementDetected(): void {
+    if (!this.onCredentialReplacementDetected) return;
+    try {
+      this.onCredentialReplacementDetected();
+    } catch (error) {
+      log.warn('onCredentialReplacementDetected threw', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async ensureRejectedCredentialDurability(
+    proof: ClaudeOAuthInvalidGrantProof,
+  ): Promise<boolean> {
+    if (proof.durabilityEstablished !== false) return true;
+    try {
+      if (persistClaudeAiOAuthCredentialRejectionRecovery(proof.rejectedCredential)) return true;
+    } catch (error) {
+      log.warn('initial claude rejection recovery fence failed', {
+        code: nestedErrorCode(error) ?? 'unknown',
+      });
+    }
+    for (const delay of CLAUDE_INVALIDATION_BROADCAST_RETRY_DELAYS_MS) {
+      await waitForClaudeInvalidationRetry(delay);
+      try {
+        if (persistClaudeAiOAuthCredentialRejectionRecovery(proof.rejectedCredential)) return true;
+      } catch (error) {
+        log.warn('retrying claude rejection recovery fence failed', {
+          code: nestedErrorCode(error) ?? 'unknown',
+        });
+      }
+    }
+    log.error('claude rejection recovery fence could not be persisted after retries');
+    return false;
+  }
+
   /**
-   * 订阅凭证被服务端作废时的收尾:清系统凭证(cc 对 invalid_grant 同样清盘)+ 失效
-   * 刷新器 + 广播 UI 重登。对齐 DesktopCodexAuthAdapter.invalidate 模式。
+   * Keep the last credential check and its synchronous UI/catalog handoff in
+   * one storage transaction. Otherwise another Cindy process can commit a new
+   * login after a standalone comparison but before the stale `authenticated:
+   * false` event is sent.
+   */
+  private async broadcastInvalidGrantIfCurrent(
+    reason: string,
+    proof: ClaudeOAuthInvalidGrantProof,
+  ): Promise<void> {
+    let attempt = 0;
+    for (;;) {
+      if (!this.isInvalidGrantOwnerCurrent(proof)) return;
+      try {
+        const guarded = runWithClaudeAiOAuthCredentialNotReplaced(proof.rejectedCredential, () => {
+          // Owner changes run on this process' event loop, so this second check
+          // cannot be interleaved with the synchronous broadcast below.
+          if (!this.isInvalidGrantOwnerCurrent(proof)) return false;
+          this.broadcastInvalidGrant(reason, proof.rejectedCredential);
+          return true;
+        });
+        if (guarded.state === 'changed') {
+          log.info('claude invalid_grant broadcast skipped after replacement credential');
+          this.notifyCredentialReplacementDetected();
+        }
+        return;
+      } catch (error) {
+        // Unknown storage state is fail-closed: a false logout event is more
+        // destructive than temporarily leaving the renderer stale. ELOCKED is
+        // retried long enough for the normal stale-lock window, and every retry
+        // rechecks both the owner and rejected grant before it can broadcast.
+        const code = nestedErrorCode(error);
+        const delay =
+          code === 'ELOCKED' ? CLAUDE_INVALIDATION_BROADCAST_RETRY_DELAYS_MS[attempt] : undefined;
+        log.warn('guard claude invalid_grant broadcast failed', {
+          code: code ?? 'unknown',
+          retrying: delay !== undefined,
+          attempt: attempt + 1,
+        });
+        if (delay === undefined) return;
+        attempt += 1;
+        await waitForClaudeInvalidationRetry(delay);
+      }
+    }
+  }
+
+  /**
+   * Cleanup for the exact credential rejected by Anthropic. Every destructive
+   * step is fenced by both owner generation and token identity, so a callback
+   * from an old account cannot remove a replacement login.
+   */
+  private async invalidateRejectedCredential(proof: ClaudeOAuthInvalidGrantProof): Promise<void> {
+    const reason = 'claude_oauth_refresh_invalid_grant';
+    if (!this.isInvalidGrantOwnerCurrent(proof)) return;
+    // Idempotent safety net for direct handler injection/tests. Production has
+    // already installed this exact in-memory fence before it emits the proof.
+    if (!rejectClaudeOAuthCredential(proof)) return;
+
+    let attempt = 0;
+    for (;;) {
+      if (!this.isInvalidGrantOwnerCurrent(proof)) return;
+      try {
+        const result = clearClaudeAiOAuthIfMatchesWithBindingInvalidation(
+          proof.rejectedCredential,
+          proof.owner,
+        );
+        if (result === 'changed') {
+          log.info('late claude invalid_grant observed a replacement credential');
+          this.notifyCredentialReplacementDetected();
+          return;
+        }
+        if (result === 'binding-changed') {
+          log.info('late claude invalid_grant ignored because credential or auth intent changed');
+          return;
+        }
+        break;
+      } catch (error) {
+        // The refresher already installed the exact in-memory fence and owned
+        // the durable mark/exact-clear fallback. Delay the UI broadcast because
+        // this lock holder may be a replacement login that is still staging.
+        const code = nestedErrorCode(error);
+        // ELOCKED is normal short contention and may be a replacement login.
+        // Every other failure is final: this path writes no pre-clear intent,
+        // while the refresher's grant-scoped rejection remains fail-closed.
+        const retryLimit =
+          code === 'ELOCKED' ? CLAUDE_INVALIDATION_SETUP_RETRY_DELAYS_MS.length : 0;
+        const retrying = attempt < retryLimit;
+        log.warn('transactional claude invalid_grant cleanup failed', {
+          code: code ?? 'unknown',
+          retrying,
+          attempt: attempt + 1,
+        });
+        if (!retrying) {
+          await this.broadcastInvalidGrantIfCurrent(reason, proof);
+          return;
+        }
+        const delay =
+          CLAUDE_INVALIDATION_SETUP_RETRY_DELAYS_MS[
+            Math.min(attempt, CLAUDE_INVALIDATION_SETUP_RETRY_DELAYS_MS.length - 1)
+          ];
+        attempt += 1;
+        await waitForClaudeInvalidationRetry(delay);
+      }
+    }
+
+    if (!this.isInvalidGrantOwnerCurrent(proof)) return;
+    await this.broadcastInvalidGrantIfCurrent(reason, proof);
+  }
+
+  /**
+   * Generic invalidation is only a local/UI signal. It intentionally cannot
+   * mutate the shared Claude credential store or ownership binding: a reason
+   * string carries no owner generation or rejected-token identity, so a late
+   * callback could otherwise delete a replacement login. Destructive cleanup
+   * is reserved for invalidateRejectedCredential(), whose proof is fenced by
+   * both owner generation and credential identity.
    */
   async invalidate(reason: string): Promise<void> {
     log.warn('claude auth invalidated', { reason });
     invalidateClaudeOAuthRefresh();
-    try {
-      if (hasClaudeAiOAuth()) clearClaudeAiOAuth();
-      // 凭证删除是 best-effort 的(clearClaudeAiOAuth 的 unlink 失败静默吞掉)。删干净了就
-      // **不**留抑制标记 —— 服务端作废不是用户意图,本机 CLI 重新登录后仍应享有设计内的自动
-      // 继承;可一旦没删掉,slot 空 + 凭证还在,下一次可信读取就会把这份刚被作废的凭证认领
-      // 回来、拿它重启发现,再 401、再 invalidate,在「已连接 / 失效」之间打转
-      // (PR #548 review)。所以按残留与否分流。
-      const residual = hasClaudeAiOAuthUnbound();
-      unbindNativeProviderAuth('anthropic', residual ? { revoked: true } : undefined);
-      if (residual) {
-        log.warn('claude credential still present after invalidate; suppressing auto-claim', {
-          reason,
-        });
-      }
-    } catch (e) {
-      log.warn('clear claude oauth on invalidate failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
     if (this.onInvalidatedBroadcast) {
       try {
         this.onInvalidatedBroadcast(reason);
@@ -550,15 +755,15 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   async logout(): Promise<void> {
     // 连了订阅时,logout 清系统 Claude.ai OAuth 凭证(⚠️ 会同时登出本地 claude),
     // **不动** gateway api_key(它是 XD 托管 key,网关来源 + oneShot 都还要用)。
-    if (hasClaudeAiOAuth()) {
-      // disconnect = 先失效刷新器再清凭证(唯一正确入口,见 claude-oauth-refresh 文档)
-      // —— 否则「已断开」状态下在途刷新回写会让凭证复活。
-      disconnectClaudeAiOAuth();
-      // 用户显式登出:留撤销标记。凭证删除是 best-effort(文件删除吞错),残留凭证不该在
-      // 下一次读连接态时被自动认领回来(PR #548 review)。
-      unbindNativeProviderAuth('anthropic', { revoked: true });
-      return;
-    }
+    // Always establish a serialized logout operation before deciding that no
+    // OAuth is bound. A browser login can be in flight before its first token
+    // write, so a separate read preflight would observe "absent", skip the
+    // cancellation/revoke fence, and let that older login commit after logout.
+    // The shared helper's exact operation makes the ordering atomic: only a
+    // confirmed-unbound result permits this adapter to fall through to gateway
+    // key removal; a bound credential is fully revoked and returns immediately.
+    const disconnectResult = disconnectClaudeAiOAuth();
+    if (disconnectResult === 'revoked') return;
     // 经统一 store 移除本机 XD 网关 key。store.remove 把"文件本不存在"视为成功
     // (幂等,等价旧逻辑忽略 ENOENT);其它真实失败保持上抛语义。
     const removed = getProviderSecretStore().remove('xd');
@@ -598,6 +803,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       const oauth = getClaudeAiOAuthForSpawn();
       if (oauth?.accessToken) {
         Object.assign(env, claudeOAuthSpawnEnv(oauth));
+        env[CINDY_CLAUDE_OAUTH_REVISION_ENV] = getClaudeAiOAuthSessionAuthorizationRevision(oauth);
       }
     } else if (options?.credentialMode === 'oauth-bearer') {
       // 显式订阅模式没有 OAuth 时,getState 已 fail-closed;这里保持不注入 key。
@@ -639,22 +845,29 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
    * 按需刷:凭证库已比失败 token 新 → 直接返回不刷(防多会话同时 401 连环旋转);
    * 仍旧才单飞刷新;失败返回 null(绝不把已知坏 token 递回去)。
    *
-   * 超时预算 12s —— 必须显著小于 cc 侧 control 请求的 30s(反编译 eqf=30000):
-   * 超时快速返回 null 让 cc 落磁盘兜底(host 刷新总会写回凭证库,在途刷新即使超过
-   * 预算也会完成写回,cc 第二条恢复路 tengu_oauth_401_recovered_from_disk 能捡到),
-   * 不把整个 turn 吊在一次慢网络上。
+   * 普通网络刷新由 refresher 自己的 10s HTTP 超时和有界锁等待收口；这里不能另设
+   * 更短的 Promise.race。invalid_grant 只有在 durable rejection / recovery fence 真正
+   * 落盘后才能报告完成，否则进程恰在回调返回后退出会让旧 grant 在重启后复活。
+   * cc SDK 的 control 请求仍保留自己的 30s 总超时。
    */
-  async getFreshSubscriptionToken(staleToken?: string): Promise<string | null> {
-    const timeout = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS).unref?.(),
-    );
+  async getFreshSubscriptionToken(
+    staleToken?: string,
+    staleAuthorizationRevision?: string,
+  ): Promise<SubscriptionTokenRefreshResult | null> {
     // staleToken = 该会话实际撞 401 的那枚(spawn 注入 / 上次回调返回)。库值已比它新
     // (后台预续期换代)时刷新器直接返回库值,不再消耗一次轮换 —— 防多个长会话对同
     // 一枚旧 token 群体 401 时串行连环旋转。
-    const refresh = getValidClaudeAiOAuth({ forceRefresh: true, staleToken }).then(
-      (oauth) => oauth?.accessToken ?? null,
-    );
-    return Promise.race([refresh, timeout]);
+    const oauth = await getValidClaudeAiOAuth({
+      forceRefresh: true,
+      staleToken,
+      staleAuthorizationRevision,
+    });
+    if (!oauth?.accessToken) return null;
+    const authorizationRevision = getClaudeAiOAuthSessionAuthorizationRevision(oauth);
+    return {
+      token: oauth.accessToken,
+      authorizationRevision,
+    };
   }
 
   // cancelLogin 不实现 —— Claude 走 renderer useApiKey hook 的同步弹窗式登录,

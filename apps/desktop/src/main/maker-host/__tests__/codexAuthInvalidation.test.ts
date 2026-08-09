@@ -31,7 +31,9 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }));
 
-vi.mock('@cindy/maker-core', () => ({}));
+vi.mock('@cindy/maker-core', () => ({
+  CINDY_CLAUDE_OAUTH_REVISION_ENV: 'CINDY_CLAUDE_OAUTH_REVISION',
+}));
 
 vi.mock('../../appSessionState.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../appSessionState.js')>();
