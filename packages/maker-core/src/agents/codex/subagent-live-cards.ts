@@ -41,7 +41,7 @@ export interface SubagentLiveCardUpdate {
   agentPath?: string;
   /** Observed child-thread model, or Cindy's explicit display fallback. `null` clears a stale badge. */
   model?: string | null;
-  /** 本卡全部子线程的累计 token 之和;未知为 0。 */
+  /** 本卡全部子线程从各自本次 spawn 开始的累计 token 之和;未知为 0。 */
   totalTokens: number;
   /** 本卡全部子线程内的工具类 item 数;未知为 0。 */
   toolUses: number;
@@ -155,8 +155,15 @@ const MAX_COUNTED_ITEM_IDS = 4096;
 
 interface ThreadState {
   status: SubagentLiveCardStatus;
-  /** 该子线程最新的**累计** token(tokenUsage.total 是快照,按线程覆盖而非相加)。 */
+  /** 该子线程从本次 spawn 开始实际消耗的累计 token。 */
   totalTokens: number;
+  /**
+   * app-server 在 fork / resume 连接建立时会先重放一帧恢复后的 tokenUsage；其中 total
+   * 含父线程继承历史，不能直接展示。保存该绝对水位，后续 live 快照只显示相对增量。
+   */
+  tokenUsageBaseline?: number;
+  /** 最近一次真实 live turn id；由 turn/started 或 item 通知确认，用于区分恢复帧。 */
+  liveTurnId?: string;
   /** Model observed from thread metadata or a spawn item. */
   model?: string;
   /** A failed nested spawn remains terminal despite late lifecycle events. */
@@ -373,7 +380,15 @@ export function createSubagentLiveCardTracker(opts: {
       case 'item/started':
       case 'item/updated':
       case 'item/completed': {
-        const item = (params as { item?: { type?: unknown; id?: unknown } } | null)?.item;
+        const itemParams = params as {
+          turnId?: unknown;
+          item?: { type?: unknown; id?: unknown };
+        } | null;
+        const itemTurnId = typeof itemParams?.turnId === 'string' ? itemParams.turnId : undefined;
+        // app-server 不会把历史 item 重放成 live 通知；即使 turn/started 丢失，item 也能
+        // 证明这个 turn 已经真实开跑，避免把随后到来的 live usage 误判成恢复帧。
+        if (itemTurnId) thread.liveTurnId = itemTurnId;
+        const item = itemParams?.item;
         const itemType = typeof item?.type === 'string' ? item.type : '';
         const itemId = typeof item?.id === 'string' ? item.id : '';
         if (!itemId || !TOOL_ITEM_TYPES.has(itemType)) return false;
@@ -389,17 +404,67 @@ export function createSubagentLiveCardTracker(opts: {
         return true;
       }
       case 'thread/tokenUsage/updated': {
-        const total = (params as { tokenUsage?: { total?: { totalTokens?: unknown } } } | null)
-          ?.tokenUsage?.total?.totalTokens;
-        if (typeof total !== 'number' || !Number.isFinite(total)) return false;
-        // total 是该线程的累计快照 → 覆盖本线程分量,卡片总量由各线程求和。
-        thread.totalTokens = total;
+        const usageParams = params as {
+          turnId?: unknown;
+          tokenUsage?: {
+            total?: { totalTokens?: unknown };
+            last?: { totalTokens?: unknown };
+          };
+        } | null;
+        const total = usageParams?.tokenUsage?.total?.totalTokens;
+        if (typeof total !== 'number' || !Number.isFinite(total) || total < 0) return false;
+        const usageTurnId = typeof usageParams?.turnId === 'string' ? usageParams.turnId : undefined;
+        const last = usageParams?.tokenUsage?.last?.totalTokens;
+
+        // 旧宿主只给 total（即使附带 turnId），没有 last 就无法从第一帧反推出 spawn 水位。
+        // 这种载荷保持既有绝对快照语义；当前 app-server 的恢复帧与 live 帧都会带 last。
+        if (thread.tokenUsageBaseline === undefined && last === undefined) {
+          if (thread.totalTokens === total) return false;
+          thread.totalTokens = total;
+          return true;
+        }
+
+        // fork / resume 会在子线程第一个 live turn 之前重放恢复后的 usage。它的 total 是
+        // 父线程历史 + 子线程增量的绝对累计值；若直接展示，就会把整段父会话历史算到卡上。
+        // live 用量通知带当前 turnId，恢复帧没有对应的 live turn / item（或 id 不同），
+        // 所以只把它记成基线而不产可见帧。无 turnId 的旧宿主载荷沿用原来的绝对快照口径。
+        if (
+          usageTurnId
+          && usageTurnId !== thread.liveTurnId
+          && thread.tokenUsageBaseline === undefined
+        ) {
+          thread.tokenUsageBaseline = total;
+          return false;
+        }
+        if (!usageTurnId && !thread.liveTurnId) {
+          if (thread.totalTokens === total) return false;
+          thread.totalTokens = total;
+          return true;
+        }
+
+        if (thread.tokenUsageBaseline === undefined) {
+          // 若宿主或 fork 配置没先发恢复帧，用本次 live 增量反推出 spawn 前水位。协议缺
+          // last 时宁可从当前 total 起算（本帧显示 0），也不要再次把继承历史误报成用量。
+          thread.tokenUsageBaseline = typeof last === 'number'
+            && Number.isFinite(last)
+            && last >= 0
+            && last <= total
+            ? total - last
+            : total;
+        }
+        const relativeTotal = Math.max(0, total - thread.tokenUsageBaseline);
+        // total 是累计快照，乱序旧帧或重复恢复帧都不能让卡片数字回退。
+        if (relativeTotal <= thread.totalTokens) return false;
+        thread.totalTokens = relativeTotal;
         return true;
       }
-      case 'turn/started':
+      case 'turn/started': {
         if (thread.spawnFailed) return false;
+        const turnId = (params as { turn?: { id?: unknown } } | null)?.turn?.id;
+        if (typeof turnId === 'string' && turnId) thread.liveTurnId = turnId;
         thread.status = 'running';
         return true;
+      }
       case 'turn/completed': {
         if (thread.spawnFailed) return false;
         const turnStatus = (params as { turn?: { status?: unknown } } | null)?.turn?.status;
