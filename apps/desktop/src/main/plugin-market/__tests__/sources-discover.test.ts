@@ -4,6 +4,9 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const electronRuntime = vi.hoisted(() => ({ isPackaged: true }));
+vi.mock('electron', () => ({ app: electronRuntime }));
+
 // 跳过明细只落日志(不进返回值、不进 IPC),所以断言必须打在 logger 上。
 const mocks = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock('../../logger.js', () => ({
@@ -38,6 +41,7 @@ const canSymlink = (() => {
 
 beforeEach(() => {
   mocks.warn.mockClear();
+  electronRuntime.isPackaged = true;
 });
 
 afterEach(() => {
@@ -240,6 +244,27 @@ describe('discoverMarketplace', () => {
       expect(logged.entries).toEqual([
         { index: 1, path: 'plugins/reserved', reason: 'reserved-ghost-id' },
       ]);
+    },
+  );
+
+  it.each(['cindy-dev', 'filo-dev', 'xd-dev'])(
+    'keeps reserved-prefix plugin in dev builds: %s',
+    async (reservedId) => {
+      electronRuntime.isPackaged = false;
+      const root = makeRoot();
+      writePlugin(root, 'plugins/reserved', reservedId);
+      writeManifest(root, {
+        name: 'reserved-dev-market',
+        plugins: [{ name: 'reserved', source: 'plugins/reserved' }],
+      });
+
+      const result = await discoverMarketplace(root);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual([reservedId]);
+        expect(result.marketplace.skippedCount).toBe(0);
+      }
     },
   );
 

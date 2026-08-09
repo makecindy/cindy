@@ -31,6 +31,7 @@ const pickerDialog = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({
   app: {
+    isPackaged: true,
     getPath: vi.fn(() => os.tmpdir()),
     getVersion: vi.fn(() => '1.0.0'),
   },

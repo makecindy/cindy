@@ -12,6 +12,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { app } from 'electron';
 
 import { isOfficialGhostId, validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
 import { createLogger } from '../../logger.js';
@@ -359,12 +360,11 @@ async function resolvePluginDir(
   }
   const validated = validateGhostManifest(raw);
   if (!validated.ok) return { kind: 'invalid', reason: 'manifest-invalid' };
-  // 官方保留前缀(cindy- / filo- / xd-,单源见 shared/ghost.ts 的
-  // GHOST_OFFICIAL_ID_PREFIXES)在自定义市场是永久非法:装入管道必拒
-  // (rejectReservedGhostIdForCustomMarket,防抢注官方身份蹭凭证别名),
-  // 发现层不滤会让市场列表出现一个必然失败的安装按钮。install 侧闸保留
-  // 不动(纵深防御:防发现后目录被改的 TOCTOU)。
-  if (isOfficialGhostId(validated.manifest.id)) {
+  // packaged 版本的自定义市场安装闸会拒绝官方保留前缀(cindy- / filo- / xd-),
+  // 因此发现层同步过滤,避免展示必然失败的安装按钮。dev 构建刻意豁免安装闸,
+  // 供官方插件开发迭代,发现层也必须保留这条路径。install 侧闸保留不动
+  // (纵深防御:防发现后目录被改的 TOCTOU)。
+  if (app.isPackaged && isOfficialGhostId(validated.manifest.id)) {
     return { kind: 'invalid', reason: 'reserved-ghost-id' };
   }
   return {
