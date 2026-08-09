@@ -1749,6 +1749,12 @@
         "cellLabel": "訊息通知",
         "hint": "上下線時向 Bot 傳送通知訊息"
       },
+      "sessionNotification": {
+        "label": "任務完成通知",
+        "cellLabel": "任務完成或需要回復時傳送飛書 / Lark 訊息",
+        "hint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
+        "disabledHint": "需要先配置 Bot 並向它傳送一條訊息以完成繫結。"
+      },
       "bind": "繫結"
     },
     "wechatBot": {
@@ -7925,6 +7931,9 @@
       "deny": "拒絕"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "信任此專案後即可使用"
+  },
   "skillhub": {
     "home": {
       "title": "技能",
@@ -7952,7 +7961,12 @@
     },
     "common": {
       "openFolderFailed": "開啟資料夾失敗",
-      "close": "關閉"
+      "close": "關閉",
+      "statusDiscovered": "已發現",
+      "statusApproved": "已批准",
+      "statusLoaded": "已載入",
+      "statusFailed": "載入失敗",
+      "statusUnknown": "未知"
     },
     "welcome": {
       "scanning": "正在掃描本地 Skill…",
