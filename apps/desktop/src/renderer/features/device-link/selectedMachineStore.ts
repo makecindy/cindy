@@ -118,6 +118,7 @@ export function getSelectedMachineId(): MachineSelection {
 
 /** 用户显式切换选择:更新 + 落盘。值未变时不通知,避免无谓重渲染。 */
 export function setSelectedMachineId(next: MachineSelection): void {
+  if (!activeOwnerId) return;
   if (commit(next)) persistSelection(currentSelection);
 }
 

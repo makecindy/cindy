@@ -210,7 +210,6 @@ export function useSidebarFilter(
   );
   const pinnedWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingPinnedWritesRef = useRef(0);
-  const legacyPinnedOrderRef = useRef(Array.from(loadedPinned.order));
   const legacyMigrationStartedRef = useRef(false);
   const legacyMigrationPendingRef = useRef(loadedPinned.needsLegacyMigration);
 
@@ -244,7 +243,7 @@ export function useSidebarFilter(
         try {
           if (mutation.kind !== 'migrate-legacy' && legacyMigrationPendingRef.current) {
             const migrated = await persistManualPinnedOrder(
-              { kind: 'migrate-legacy', order: legacyPinnedOrderRef.current },
+              { kind: 'migrate-legacy', order: durablePinnedOrderRef.current },
               ownerStamp,
             );
             if (isDataOwnerPushStampCurrent(ownerStamp)) {

@@ -55,7 +55,7 @@ export function createOverrideSettingsFile<T>(options: {
   label: string;
   /** owner/session 跨 await 切换时让原子写 fail closed。 */
   scopeKey?: () => string;
-  /** 同步读取前的文件大小硬上限；超限按读取失败处理，避免主进程无界分配。 */
+  /** 读写文件的大小硬上限；超限时拒绝读取或落盘，避免主进程无界分配。 */
   maxBytes?: number;
   /** 读取/解析失败时保留原文件并拒绝普通写入；reset 仍可显式恢复。 */
   preserveUnreadableFile?: boolean;
@@ -244,8 +244,15 @@ export function createOverrideSettingsFile<T>(options: {
     }
     const file = options.filePath();
     const tmp = `${file}.tmp`;
+    const serialized = JSON.stringify(overrides, null, 2);
+    if (
+      options.maxBytes !== undefined &&
+      Buffer.byteLength(serialized, 'utf-8') > options.maxBytes
+    ) {
+      throw new Error(`file exceeds ${options.maxBytes} byte limit`);
+    }
     fs.mkdirSync(pathDirname(file), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(overrides, null, 2), 'utf-8');
+    fs.writeFileSync(tmp, serialized, 'utf-8');
     fs.renameSync(tmp, file);
     cachedFileMtimeMs = statFileMtimeMs();
     const next = options.normalize({ ...defaults(), ...overrides });

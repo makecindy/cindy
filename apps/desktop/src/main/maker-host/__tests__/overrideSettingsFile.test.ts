@@ -40,16 +40,19 @@ function createTempStore(
       return {
         enabled: typeof r.enabled === 'boolean' ? r.enabled : DEFAULTS.enabled,
         limit: typeof r.limit === 'number' ? r.limit : DEFAULTS.limit,
-        nested: r.nested && typeof r.nested === 'object' && !Array.isArray(r.nested)
-          ? {
-              a: typeof (r.nested as Record<string, unknown>).a === 'number'
-                ? (r.nested as Record<string, number>).a
-                : DEFAULTS.nested.a,
-              b: typeof (r.nested as Record<string, unknown>).b === 'number'
-                ? (r.nested as Record<string, number>).b
-                : DEFAULTS.nested.b,
-            }
-          : DEFAULTS.nested,
+        nested:
+          r.nested && typeof r.nested === 'object' && !Array.isArray(r.nested)
+            ? {
+                a:
+                  typeof (r.nested as Record<string, unknown>).a === 'number'
+                    ? (r.nested as Record<string, number>).a
+                    : DEFAULTS.nested.a,
+                b:
+                  typeof (r.nested as Record<string, unknown>).b === 'number'
+                    ? (r.nested as Record<string, number>).b
+                    : DEFAULTS.nested.b,
+              }
+            : DEFAULTS.nested,
       };
     },
     log,
@@ -118,10 +121,9 @@ describe('createOverrideSettingsFile', () => {
     try {
       fs.writeFileSync(file, `{"limit":${sensitiveValue}}`, 'utf-8');
       expect(store.read()).toEqual(DEFAULTS);
-      expect(log.warn).toHaveBeenCalledWith(
-        'test settings read failed; falling back to defaults',
-        { path: file },
-      );
+      expect(log.warn).toHaveBeenCalledWith('test settings read failed; falling back to defaults', {
+        path: file,
+      });
       expect(JSON.stringify(log.warn.mock.calls)).not.toContain(sensitiveValue);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -168,6 +170,22 @@ describe('createOverrideSettingsFile', () => {
       expect(store.read()).toEqual(DEFAULTS);
       expect(() => store.writePatch({ limit: 9 })).toThrow(/unreadable/);
       expect(fs.readFileSync(file, 'utf-8')).toBe(contents);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects writes over maxBytes before touching the target or temp file', () => {
+    const { dir, file, store } = createTempStore(undefined, { maxBytes: 32 });
+    try {
+      const original = JSON.stringify({ enabled: false });
+      fs.writeFileSync(file, original, 'utf-8');
+
+      expect(() => store.writePatch({ nested: { a: 123_456_789, b: 987_654_321 } })).toThrow(
+        /file exceeds 32 byte limit/,
+      );
+      expect(fs.readFileSync(file, 'utf-8')).toBe(original);
+      expect(fs.existsSync(`${file}.tmp`)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

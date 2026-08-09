@@ -94,6 +94,7 @@ vi.mock('../windowFocusClassifier.js', () => ({
 }));
 
 const originalPlatform = process.platform;
+let sidebarTesting: (typeof import('../sidebarSettingsStore'))['__testing'];
 
 function setPlatform(value: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value, configurable: true });
@@ -163,7 +164,8 @@ describe('sidebarSettingsStore', () => {
     harness.loggerWarn.mockReset();
     vi.resetModules();
 
-    const { registerSidebarSettingsIpc } = await import('../sidebarSettingsStore');
+    const { registerSidebarSettingsIpc, __testing } = await import('../sidebarSettingsStore');
+    sidebarTesting = __testing;
     registerSidebarSettingsIpc();
   });
 
@@ -199,9 +201,7 @@ describe('sidebarSettingsStore', () => {
       pinnedOrder: [],
       hiddenProjectKeys: [],
     });
-    await pinnedHandler(
-      request({ mutation: { kind: 'migrate-legacy', order: ['session-b'] } }),
-    );
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ['session-b'] } }));
 
     setSession('cloud', 'owner-a');
     harness.legacyClaimReady = true;
@@ -235,6 +235,21 @@ describe('sidebarSettingsStore', () => {
     expect(harness.destroyedSend).not.toHaveBeenCalled();
   });
 
+  it('releases settled per-owner write chains after success and failure', async () => {
+    expect(sidebarTesting.pendingWriteChainCount()).toBe(0);
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } }));
+    expect(sidebarTesting.pendingWriteChainCount()).toBe(0);
+
+    setSession('cloud', 'owner-b');
+    harness.legacyClaimReady = false;
+    harness.legacyClaimedByOtherOwner = true;
+    fs.mkdirSync(ownerFile(), { recursive: true });
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-b' } })),
+    ).rejects.toThrow('[INTERNAL] failed to persist sidebar settings');
+    expect(sidebarTesting.pendingWriteChainCount()).toBe(0);
+  });
+
   it('rejects stale owner and generation stamps without touching either owner', async () => {
     const staleOwner = request({ mutation: { kind: 'promote', entryId: 'session-a' } });
     setSession('cloud', 'owner-b');
@@ -263,9 +278,7 @@ describe('sidebarSettingsStore', () => {
       'utf-8',
     );
 
-    const writing = pinnedHandler(
-      request({ mutation: { kind: 'promote', entryId: 'session-a' } }),
-    );
+    const writing = pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     setSession('cloud', 'owner-b');
     fs.unlinkSync(`${file}.lock`);
@@ -285,9 +298,7 @@ describe('sidebarSettingsStore', () => {
       'utf-8',
     );
 
-    const writing = pinnedHandler(
-      request({ mutation: { kind: 'promote', entryId: 'session-a' } }),
-    );
+    const writing = pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     harness.legacyClaimReady = false;
     fs.unlinkSync(`${file}.lock`);
@@ -329,9 +340,7 @@ describe('sidebarSettingsStore', () => {
     await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } }));
 
     await expect(
-      pinnedHandler(
-        request({ mutation: { kind: 'migrate-legacy', order: ['legacy-session'] } }),
-      ),
+      pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ['legacy-session'] } })),
     ).resolves.toEqual(['new-session']);
     expect(loadSnapshot().pinnedOrder).toEqual(['new-session']);
   });
@@ -367,12 +376,8 @@ describe('sidebarSettingsStore', () => {
 
   it('rejects malformed writes before persistence', async () => {
     await expect(
-      pinnedHandler(
-        request({ mutation: { kind: 'migrate-legacy', order: ['valid', 42] } }),
-      ),
-    ).rejects.toThrow(
-      '[INVALID_PARAMS] invalid sidebar pinned order',
-    );
+      pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ['valid', 42] } })),
+    ).rejects.toThrow('[INVALID_PARAMS] invalid sidebar pinned order');
     await expect(
       hiddenHandler(request({ projectKey: 'device:missing-working-dir', hidden: true })),
     ).rejects.toThrow('[INVALID_PARAMS]');
@@ -400,7 +405,7 @@ describe('sidebarSettingsStore', () => {
     expect(harness.send).not.toHaveBeenCalled();
   });
 
-  it('moves the shared legacy file only into the first verified cloud owner', () => {
+  it('moves legacy state only to the first cloud owner while later owners remain writable', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
     fs.writeFileSync(
       legacy,
@@ -417,12 +422,20 @@ describe('sidebarSettingsStore', () => {
     expect(fs.existsSync(legacy)).toBe(false);
 
     setSession('cloud', 'owner-b');
+    harness.legacyClaimReady = false;
+    harness.legacyClaimedByOtherOwner = true;
     expect(loadSnapshot().pinnedOrder).toEqual([]);
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'owner-b-session' } })),
+    ).resolves.toEqual(['owner-b-session']);
     expect(
       JSON.parse(
         fs.readFileSync(path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'), 'utf-8'),
       ),
     ).toEqual({ version: 1, ownerKey: 'key-owner-a' });
+    expect(JSON.parse(fs.readFileSync(ownerFile('owner-b'), 'utf-8'))).toMatchObject({
+      pinnedOrder: ['owner-b-session'],
+    });
   });
 
   it('defers scoped writes until the active owner can claim legacy sidebar state', async () => {
@@ -445,6 +458,11 @@ describe('sidebarSettingsStore', () => {
     harness.legacyClaimReady = true;
     expect(loadSnapshot()).toMatchObject(legacySettings);
     expect(fs.existsSync(legacy)).toBe(false);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'), 'utf-8'),
+      ),
+    ).toEqual({ version: 1, ownerKey: 'key-owner-a' });
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
     ).resolves.toEqual(['new-session', 'legacy-session']);
@@ -727,7 +745,7 @@ describe('sidebarSettingsStore', () => {
     fs.writeFileSync(legacy, '{"pinnedOrder":["legacy-session"]}', 'utf-8');
     fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
     fs.writeFileSync(ownerFile(), '');
-    fs.truncateSync(ownerFile(), 64 * 1024 * 1024 + 1);
+    fs.truncateSync(ownerFile(), sidebarTesting.MAX_SETTINGS_BYTES + 1);
     const readFileSync = vi.spyOn(fs, 'readFileSync');
 
     try {
@@ -741,6 +759,19 @@ describe('sidebarSettingsStore', () => {
     } finally {
       readFileSync.mockRestore();
     }
+  });
+
+  it('rejects a pinned mutation that exceeds the durable settings byte limit', async () => {
+    const oversizedOrder = Array.from(
+      { length: 1_100 },
+      (_, index) => `${index}:${'x'.repeat(4_080)}`,
+    );
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: oversizedOrder } })),
+    ).rejects.toThrow('[INTERNAL] failed to persist sidebar settings');
+    expect(fs.existsSync(ownerFile())).toBe(false);
+    expect(harness.send).not.toHaveBeenCalled();
   });
 
   it('fails closed when the sidebar legacy owner marker is malformed', () => {
@@ -761,9 +792,7 @@ describe('sidebarSettingsStore', () => {
 
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } })),
-    ).rejects.toThrow(
-      'untrusted renderer',
-    );
+    ).rejects.toThrow('untrusted renderer');
     expect(fs.existsSync(ownerFile())).toBe(false);
   });
 });

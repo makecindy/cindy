@@ -59,4 +59,20 @@ describe('selected machine owner state', () => {
     store.setSelectedMachineOwner('owner-b');
     expect(store.getSelectedMachineId()).toBe(store.MACHINE_ALL);
   });
+
+  it('ignores persistent selection changes while no owner is bound', async () => {
+    const store = await import('@/features/device-link/selectedMachineStore');
+
+    store.setSelectedMachineOwner('owner-a');
+    store.setSelectedMachineId(['device-a']);
+    store.setSelectedMachineOwner(null);
+    const storedKeysBefore = localStorage.length;
+
+    store.setSelectedMachineId(['orphan-device']);
+
+    expect(store.getSelectedMachineId()).toBe(store.MACHINE_ALL);
+    expect(localStorage.length).toBe(storedKeysBefore);
+    store.setSelectedMachineOwner('owner-a');
+    expect(store.getSelectedMachineId()).toEqual(['device-a']);
+  });
 });

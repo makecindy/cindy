@@ -49,7 +49,7 @@ const MAX_PINNED_ORDER_ENTRIES = 10_000;
 const MAX_PINNED_ORDER_ENTRY_LENGTH = 4_096;
 const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
-const MAX_SETTINGS_BYTES = 64 * 1024 * 1024;
+const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
 const SETTINGS_FILE_NAME = 'sidebar-settings.json';
 const LEGACY_OWNER_MARKER = 'sidebar-settings-legacy-owner.v1.json';
 
@@ -138,9 +138,7 @@ function sidebarSettingsErrorCode(error: unknown): string {
     error && typeof error === 'object' && 'code' in error
       ? (error as NodeJS.ErrnoException).code
       : undefined;
-  return typeof code === 'string' && /^E[A-Z0-9_]{1,31}$/.test(code)
-    ? code
-    : 'INVALID_SETTINGS';
+  return typeof code === 'string' && /^E[A-Z0-9_]{1,31}$/.test(code) ? code : 'INVALID_SETTINGS';
 }
 
 function reconcileLegacySidebarSettings(
@@ -264,11 +262,7 @@ function requirePinnedOrder(raw: unknown): string[] {
 }
 
 function requirePinnedEntry(raw: unknown): string {
-  if (
-    typeof raw !== 'string' ||
-    raw.length === 0 ||
-    raw.length > MAX_PINNED_ORDER_ENTRY_LENGTH
-  ) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PINNED_ORDER_ENTRY_LENGTH) {
     throwIpcError('INVALID_PARAMS', 'invalid sidebar pinned entry');
   }
   return raw;
@@ -384,14 +378,11 @@ function enqueueWrite<T>(scopeKey: string, task: () => Promise<T>): Promise<T> {
     return task();
   };
   const next = previous.then(run, run);
-  writeChains.set(
-    scopeKey,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return next;
+  const tracked: Promise<T> = next.finally(() => {
+    if (writeChains.get(scopeKey) === tracked) writeChains.delete(scopeKey);
+  });
+  writeChains.set(scopeKey, tracked);
+  return tracked;
 }
 
 function assertScopeCurrent(scopeKey: string): void {
@@ -560,8 +551,7 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   const legacyPathState = legacySidebarPathState(legacyPath);
 
   if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
-    return isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) &&
-      legacyPathState === 'missing'
+    return isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) && legacyPathState === 'missing'
       ? 'ready'
       : 'blocked';
   }
@@ -603,11 +593,6 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   }
 }
 
-/** Backfills users whose global owner migration completed before sidebar state was included. */
-export function claimLegacySidebarSettings(): boolean {
-  return claimLegacySidebarSettingsResult() !== 'blocked';
-}
-
 export function registerSidebarSettingsIpc(): void {
   ipcMain.on('sidebar-settings:load-snapshot-sync', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -626,4 +611,6 @@ export function registerSidebarSettingsIpc(): void {
 export const __testing = {
   normalizeSettings,
   LEGACY_OWNER_MARKER,
+  MAX_SETTINGS_BYTES,
+  pendingWriteChainCount: () => writeChains.size,
 };
