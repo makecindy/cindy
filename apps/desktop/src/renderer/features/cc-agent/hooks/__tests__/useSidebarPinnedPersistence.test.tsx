@@ -151,6 +151,46 @@ describe('pinned sidebar persistence', () => {
     expect(view.result.current.manualPinnedOrder).toEqual(['owner-a-session']);
   });
 
+  it('uses the drag snapshot as the reorder base when a newer pin broadcast arrives', async () => {
+    durablePinnedOrder = ['session-a', 'session-b'];
+    const initialSnapshot = {
+      ...SNAPSHOT,
+      pinnedOrder: Array.from(durablePinnedOrder),
+    };
+    const view = renderHook(() => useSidebarFilter(new Set(), initialSnapshot));
+    const dragBaseOrder = Array.from(view.result.current.manualPinnedOrder);
+
+    durablePinnedOrder = ['session-c', 'session-a', 'session-b'];
+    act(() => {
+      pinnedListeners[0]?.(Array.from(durablePinnedOrder), OWNER_STAMP);
+    });
+    expect(view.result.current.manualPinnedOrder).toEqual(['session-c', 'session-a', 'session-b']);
+
+    mutatePinnedOrder.mockImplementationOnce(async (mutation: SidebarPinnedOrderMutation) => {
+      expect(mutation).toEqual({
+        kind: 'reorder',
+        baseOrder: ['session-a', 'session-b'],
+        order: ['session-b', 'session-a'],
+      });
+      durablePinnedOrder = ['session-c', 'session-b', 'session-a'];
+      return Array.from(durablePinnedOrder);
+    });
+
+    let write!: Promise<void>;
+    act(() => {
+      write = view.result.current.setManualPinnedOrder(
+        ['session-b', 'session-a'],
+        ['session-a', 'session-b'],
+        dragBaseOrder,
+      );
+    });
+    await act(async () => {
+      await expect(write).resolves.toBeUndefined();
+    });
+
+    expect(view.result.current.manualPinnedOrder).toEqual(['session-c', 'session-b', 'session-a']);
+  });
+
   it('keeps the legacy localStorage copy when its first main-process write fails', async () => {
     window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["legacy-session"]');
     mutatePinnedOrder.mockRejectedValueOnce(new Error('read-only disk'));

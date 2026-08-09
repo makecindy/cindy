@@ -154,10 +154,12 @@ export interface UseSidebarFilterReturn {
   /** 直接替换 Project 手动排序顺序，持久化到 localStorage。 */
   setManualProjectOrder: (order: readonly string[], activeWorkingDirs: readonly string[]) => void;
   /** 直接替换 Pinned 手动排序顺序并持久化。
-   *  activeEntryIds 是当前所有仍有效的 pinned session / project entry id。 */
+   *  activeEntryIds 是拖拽开始时所有仍有效的 pinned session / project entry id；
+   *  baseOrder 是该次拖拽实际看到的完整顺序，供 Main 在最新快照上安全 rebase。 */
   setManualPinnedOrder: (
     order: readonly string[],
     activeEntryIds: readonly string[],
+    baseOrder: readonly string[],
   ) => Promise<void>;
   /** 把一个 pinned entry 提到 manualPinnedOrder 首位（已存在则去重移位）。
    *  pin / re-pin 都调它，确保新置顶立刻可见 rank=0；不调它则 re-pin 会带着
@@ -443,10 +445,14 @@ export function useSidebarFilter(
   );
 
   const setManualPinnedOrder = useCallback(
-    (order: readonly string[], activeEntryIds: readonly string[]) =>
+    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
       updatePinnedOrder(
         () => normalizeManualPinnedOrder(order, activeEntryIds),
-        (baseOrder, nextOrder) => ({ kind: 'reorder', baseOrder, order: nextOrder }),
+        (_latestOrder, nextOrder) => ({
+          kind: 'reorder',
+          baseOrder: Array.from(baseOrder),
+          order: nextOrder,
+        }),
       ),
     [updatePinnedOrder],
   );
@@ -466,8 +472,7 @@ export function useSidebarFilter(
   const removePin = useCallback(
     (entryId: string) =>
       updatePinnedOrder(
-        (prev) =>
-          prev.includes(entryId) ? prev.filter((id) => id !== entryId) : Array.from(prev),
+        (prev) => (prev.includes(entryId) ? prev.filter((id) => id !== entryId) : Array.from(prev)),
         () => ({ kind: 'remove', entryId }),
       ),
     [updatePinnedOrder],

@@ -101,9 +101,7 @@ import {
   useSessionAttentionKinds,
   useSessionAttentionSnapshot,
 } from '@/lib/sessionAttentionStore';
-import {
-  patchDraft as patchNewMakerDraft,
-} from '@/state/newMakerDraft';
+import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
 import { requestConversationSearch } from '@/state/conversationSearchRequest';
 
@@ -606,11 +604,9 @@ export function CCAgentSidebarUpper() {
         filter.manualPinnedOrder,
         pinnedSessionIds,
       );
-      const merged = mergeVisibleReorder(
-        normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds),
-        visibleNewOrder,
-      );
-      void filter.setManualPinnedOrder(merged, fullActivePinnedIds).catch((err) => {
+      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
@@ -1630,11 +1626,9 @@ function ExpandedView({
         filter.manualPinnedOrder,
         pinnedSessionIds,
       );
-      const merged = mergeVisibleReorder(
-        normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds),
-        visibleNewOrder,
-      );
-      void filter.setManualPinnedOrder(merged, fullActivePinnedIds).catch((err) => {
+      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
@@ -3903,9 +3897,7 @@ function RailPanels({
 
   const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
-      <span className="min-w-0 flex-1 truncate text-12 font-semibold text-foreground">
-        {title}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-12 font-semibold text-foreground">{title}</span>
       <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
         {t('ccAgent.sidebar.railNavCount', { count })}
       </span>
