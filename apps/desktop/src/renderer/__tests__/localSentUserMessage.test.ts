@@ -136,13 +136,21 @@ const enqueue = vi.fn((sessionId: string, item: AgentInputQueuedMessage) =>
 
 const retryLastError = vi.fn((sessionId: string) => Promise.resolve(projection(sessionId)));
 
+let projectionHandler: ((projection: AgentInputProjection) => void) | null = null;
+
+const onInputProjection = vi.fn((cb: (projection: AgentInputProjection) => void) => {
+  projectionHandler = cb;
+  return vi.fn();
+});
+
 function installElectronBridge(): void {
+  projectionHandler = null;
   const w = globalThis as unknown as { window?: Record<string, unknown> };
   if (!w.window) w.window = {};
   w.window.electronAPI = {
     maker: {
       input: { enqueue, retryLastError },
-      onInputProjection: vi.fn(() => vi.fn()),
+      onInputProjection,
       onEvent: vi.fn(() => vi.fn()),
       onStatusChanged: vi.fn(() => vi.fn()),
       onInteractionRequest: vi.fn(() => vi.fn()),
@@ -255,5 +263,37 @@ describe('isLocalSentUserMessage (#2194)', () => {
     await flushPromises();
 
     expect(makerChatStore.isLocalSentUserMessage(sid, 'anything')).toBe(false);
+  });
+
+  // review P1（第四轮，Greptile）: main 的 drain 可能在 retry 回执 apply 之后、
+  // renderer 登记之前抢先消费克隆并推送新投影覆盖 state.pendingQueue——登记
+  // 必须读回执自带的投影快照（main 在 scheduleDrain 前同步生成），不能扫
+  // 当前 state，否则克隆漏记、重试气泡被按外部消息处理。
+  it('drain 抢先消费克隆并覆盖 state 时，仍按回执快照登记克隆', async () => {
+    const sid = `retry-drain-${Math.random().toString(36).slice(2, 8)}`;
+
+    makerChatStore.initGlobalListeners();
+    expect(projectionHandler).toBeTypeOf('function');
+
+    let resolveRetry!: (p: AgentInputProjection) => void;
+    retryLastError.mockImplementationOnce(
+      () => new Promise<AgentInputProjection>((res) => (resolveRetry = res)),
+    );
+
+    const p = makerChatStore.retryLastError(sid);
+    resolveRetry(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('retry-clone', 'failed text', { supersedesUserClientId: 'orig-user' }),
+        ],
+      }),
+    );
+    // 让回执 apply 先跑一拍，再模拟 drain 推送：克隆已被消费，队列空了。
+    await Promise.resolve();
+    projectionHandler!(projection(sid, { pendingQueue: [] }));
+    await p;
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone')).toBe(true);
   });
 });

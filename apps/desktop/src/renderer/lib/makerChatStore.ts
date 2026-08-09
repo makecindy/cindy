@@ -12184,9 +12184,13 @@ function retryLastError(sessionId: string): Promise<void> {
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
-  ).then(() => {
-    // superseded / no-op 时队列里没有克隆项，自然不标记。
-    for (const item of getOrCreateState(sessionId).pendingQueue) {
+  ).then(({ projection }) => {
+    // 扫**回执自带的投影快照**而非当前 state：回执由 main 在 scheduleDrain 之前
+    // 同步生成（agent-input-coordinator.ts performRetryLastError 末尾），必然含
+    // 本次克隆；drain 可能抢在本回调前消费克隆并推送新投影覆盖 state
+    // （Greptile review P1），那时扫 state.pendingQueue 会漏记。
+    // superseded / no-op 时回执队列里没有克隆项，自然不标记。
+    for (const item of projection.pendingQueue) {
       if (item.supersedesUserClientId) markLocalSentUserMessage(sessionId, item.clientId);
     }
   });

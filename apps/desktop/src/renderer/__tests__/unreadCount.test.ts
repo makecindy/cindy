@@ -74,4 +74,20 @@ describe('countUnreadAdded', () => {
       }),
     ).toBe(0);
   });
+
+  // Codex P1（第四轮）：合成指令行（手动「继续」/ Mivo 触发指令）渲染 null，
+  // sendUiTrigger 也不登记本端发送——若计数会留下点对不掉的幻影未读。
+  it('合成指令行（isSyntheticTrigger）不计数', () => {
+    expect(
+      countUnreadAdded({
+        prevIds: new Set(),
+        messages: [
+          { clientId: 'syn', role: 'user', isSyntheticTrigger: true },
+          msg('ext', 'user'),
+        ],
+        nearBottom: false,
+        isLocalUserSend: () => false,
+      }),
+    ).toBe(1);
+  });
 });
