@@ -431,6 +431,87 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(1);
   });
 
+  it('MySQL 与 MariaDB 只有明确关闭各自启动配置时才可记忆', () => {
+    for (const command of [
+      "mysql app -e 'DELETE FROM jobs'",
+      "mariadb app -e 'DELETE FROM jobs'",
+      "mysql --no-defaults app -e 'select 1'",
+      "mysql --no-login-paths app -e 'select 1'",
+      "mysql --no-login-paths --no-defaults app -e 'select 1'",
+      "mysql app --no-defaults --no-login-paths -e 'select 1'",
+      "mysql --no-defaults=true --no-login-paths app -e 'select 1'",
+      "mysql --no-defaults --no-login-paths=1 app -e 'select 1'",
+      "mysql --no-defaults--no-login-paths app -e 'select 1'",
+      "mysql --no-defaults --no-login-paths --defaults-file=./client.cnf app",
+      "mysql --no-defaults --no-login-paths --defaults-file ./client.cnf app",
+      "mysql --no-defaults --no-login-paths --defaults-extra-file ./client.cnf app",
+      "mariadb app --no-defaults -e 'select 1'",
+      "mariadb --no-defaults=true app -e 'select 1'",
+      "mariadb --no-defaults --defaults-file=./client.cnf app",
+      "mariadb --no-defaults --defaults-extra-file ./client.cnf app",
+      "mariadb --no-defaults --defaults-group-suffix=_prod app",
+      "mariadb --no-defaults --no-login-paths app -e 'select 1'",
+      "mysql --no-defaults --no-login-paths --login-path=prod app",
+      "mysql --no-defaults --no-login-paths --login-path prod app",
+      "mysql.exe app -e 'select 1'",
+      "env MYSQL_HOME=/tmp/mysql mysql app -e 'select 1'",
+      "mysql --no-defaults --no-login-paths app -e 'select 1'"
+        + " && mariadb app -e 'select 2'",
+      'mysqldump app jobs',
+      'mariadb-dump app jobs',
+      'mysqlbinlog binlog.000001',
+      'mariadb-binlog binlog.000001',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      "mysql --no-defaults --no-login-paths app -e 'select 1'",
+      "mariadb --no-defaults app -e 'select 1'",
+      "mariadb.exe --no-defaults app -e 'select 1'",
+      "mysql.exe --no-defaults --no-login-paths app -e 'select 1'",
+      "env MYSQL_HOME=/tmp/mysql mysql --no-defaults --no-login-paths app -e 'select 1'",
+      'mysqldump --no-defaults --no-login-paths app jobs',
+      'mariadb-dump --no-defaults app jobs',
+      "mysql --no-defaults --no-login-paths defaults -e \"select 'login-path'\"",
+      "mysql --no-defaults --no-login-paths app -e 'select 1'"
+        + " && mariadb --no-defaults app -e 'select 2'",
+      "echo mysql app -e 'DELETE FROM jobs'",
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    for (const action of [
+      exec("mysql app -e 'select 1'"),
+      exec("mariadb app -e 'select 1'"),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    }
+    expect(memory.size()).toBe(0);
+
+    const isolatedAction = exec(
+      "mysql --no-defaults --no-login-paths app -e 'select 1'",
+    );
+    memory.rememberReviewerAllow(isolatedAction, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(isolatedAction, defaultIntent, roots, reviewerRoute)).toBe(true);
+    expect(memory.size()).toBe(1);
+
+    const isolatedMariaDbAction = exec("mariadb --no-defaults app -e 'select 1'");
+    memory.rememberReviewerAllow(
+      isolatedMariaDbAction, defaultIntent, roots, reviewerRoute,
+    );
+    expect(memory.isRemembered(
+      isolatedMariaDbAction, defaultIntent, roots, reviewerRoute,
+    )).toBe(true);
+    expect(memory.size()).toBe(2);
+  });
+
   it('curl 只有首参数显式禁用配置且未另行指定 config 时才可记忆', () => {
     for (const command of [
       'curl https://api.example.com',

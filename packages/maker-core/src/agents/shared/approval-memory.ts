@@ -297,6 +297,36 @@ function psqlMayLoadMutableUserState(args: readonly string[]): boolean {
   return !options.includes('-X') && !options.includes('--no-psqlrc');
 }
 
+const MYSQL_FAMILY_OPTION_FILE_CLIENTS: ReadonlySet<string> = new Set([
+  'mysql', 'mysqladmin', 'mysqlcheck', 'mysqldump', 'mysqlimport', 'mysqlshow',
+  'mysqlslap', 'mysqlpump', 'mysqlbinlog', 'mysql_upgrade', 'mysqltest',
+  'mariadb', 'mariadb-admin', 'mariadb-check', 'mariadb-dump', 'mariadb-import',
+  'mariadb-show', 'mariadb-slap', 'mariadb-binlog', 'mariadb-upgrade', 'mariadb-test',
+]);
+
+const MYSQL_MUTABLE_STARTUP_OPTION_PATTERN =
+  /^--(?:defaults(?:(?:-extra)?-file|-group-suffix)|login-path|no-(?:defaults|login-paths))(?:=|$)/i;
+
+function mysqlFamilyMayLoadMutableUserState(
+  name: string,
+  args: readonly string[],
+): boolean {
+  const optionTerminator = args.indexOf('--');
+  const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
+  // MySQL 的 option-file 控制项必须先于普通参数。`.mylogin.cnf` 即使在 --no-defaults
+  // 下仍会读取，因此 MySQL 名称只信任前两个参数按文档顺序精确关闭两类启动状态。
+  // MariaDB 不支持 `.mylogin.cnf`，其原生命令只需首参数精确为 --no-defaults。
+  const isMariaDbClient = name.startsWith('mariadb');
+  if (options[0] !== '--no-defaults') return true;
+  const disabledOptionCount = isMariaDbClient ? 1 : 2;
+  if (!isMariaDbClient && options[1] !== '--no-login-paths') return true;
+
+  // 显式 option file、group suffix 或 login path 会重新引入可变主机、凭证与其它行为。
+  // 同时拒绝带值／紧凑的伪禁用形态，避免把 boolean 覆写误当成已隔离。
+  return options.some((arg, index) => index >= disabledOptionCount
+    && MYSQL_MUTABLE_STARTUP_OPTION_PATTERN.test(arg));
+}
+
 const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   // HTTP 鉴权头：curl/wget 的 -H、--header、--proxy-header，含空格/等号/紧凑短选项。
   /(?:^|\s)(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?\s*(?:authorization|proxy-authorization|cookie|x-api-key|x-auth)/i,
@@ -519,6 +549,9 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (invocations.some(({ name, args }) =>
     // 默认 psqlrc 与 `psql -f FILE` 都会让同一 argv 执行可替换的外部 SQL。
     name === 'psql' && psqlMayLoadMutableUserState(args))) return true;
+  if (invocations.some(({ name, args }) =>
+    MYSQL_FAMILY_OPTION_FILE_CLIENTS.has(name)
+    && mysqlFamilyMayLoadMutableUserState(name, args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。
