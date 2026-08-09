@@ -696,6 +696,34 @@ describe('createSubagentLiveCardTracker', () => {
     ).toBeNull();
   });
 
+  it('counts delayed usage from a failed nested child turn without an item notification', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    // nested spawn 先失败，receiver 随后才补发 turn/started；失败状态必须锁住，但 turn id
+    // 仍要记下，否则后续现代 usage 会被当成恢复帧，烧掉的 token 永久漏计。
+    expect(tracker.noteDescendantThread('t-grand', 't-child', undefined, true)).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/started', {
+        turn: { id: 'failed-child-turn' },
+      }),
+    ).toBeNull();
+
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'thread/tokenUsage/updated', {
+        turnId: 'failed-child-turn',
+        tokenUsage: {
+          total: { totalTokens: 1_250 },
+          last: { totalTokens: 250 },
+        },
+      }),
+    ).toMatchObject({ status: 'running', totalTokens: 250 });
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', {
+        turn: { status: 'completed' },
+      }),
+    ).toMatchObject({ status: 'failed', totalTokens: 250 });
+  });
+
   it('ignores lineage for threads unrelated to any subagent card', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     // 父线程不属于任何卡(例如主线程的后代未经 spawn 登记)→ 无副作用。

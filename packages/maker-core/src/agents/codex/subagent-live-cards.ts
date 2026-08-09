@@ -472,9 +472,11 @@ export function createSubagentLiveCardTracker(opts: {
         return true;
       }
       case 'turn/started': {
-        if (thread.spawnFailed) return false;
         const turnId = (params as { turn?: { id?: unknown } } | null)?.turn?.id;
         noteObservedLiveTurn(thread, typeof turnId === 'string' ? turnId : undefined);
+        // nested spawn 的失败闩可能早于迟到的 turn/started；状态仍须保持 failed，但 live
+        // turn 身份必须先留下，后续 usage 才不会被误判成 fork / resume 的恢复快照。
+        if (thread.spawnFailed) return false;
         thread.status = 'running';
         return true;
       }
