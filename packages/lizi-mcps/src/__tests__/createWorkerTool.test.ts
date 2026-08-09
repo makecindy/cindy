@@ -66,6 +66,9 @@ describe('create_worker tool', () => {
     expect(registry.get('create_worker')?.description).toContain(
       'route_provider_id 是 host 最终解析的供应商路由',
     );
+    expect(registry.get('create_worker')?.description).toContain(
+      '旧 host 可能缺失这些可选回执字段',
+    );
   });
 
   it('surfaces structured hard-limit details to the lead', async () => {

@@ -66,8 +66,9 @@ describe('create_workers tool', () => {
     expect(registry.get('create_workers')?.description).toContain(
       '用户一次要求创建多个 Worker 时必须使用本工具，不要并行或连续多次调用 create_worker。',
     );
+    expect(registry.get('create_workers')?.description).toContain('route_provider_id');
     expect(registry.get('create_workers')?.description).toContain(
-      'route_provider_id 是 host 最终解析的供应商路由',
+      '旧 host 可能缺失这些可选回执字段',
     );
     expect(registry.get('create_workers')?.description).toContain(
       'WORKER_LIMIT_HARD_EXCEEDED 或 HOST_NOT_READY 后立即停止',

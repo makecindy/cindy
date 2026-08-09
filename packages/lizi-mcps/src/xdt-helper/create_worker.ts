@@ -133,7 +133,7 @@ const DESCRIPTION = [
   '- fast: 可选 boolean, 是否给 worker 开启 Fast 模式 (更快输出)。用户明确说「fast / 快速 / 开/关 fast」时显式传。对 codex 与 pi worker 生效 (且需所选模型声明 supportsFastMode; 否则自动降级为关); claude-code worker 忽略此参数 (其 fast mode 在 agent 层为 no-op)。不传则继承默认 (New Maker 面板默认或 lead session 的 fastMode)。',
   '- label: worker 短标识, 1-32 chars, 只能含字母、数字、-、_, 同 workflow 内唯一, 用于 switch_focus 定位',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 list_worker_queue / update_queued_message / cancel_queued_message 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
-  '- 成功返回: resolved_model 是最终使用的模型; provider_id 是显式保存的供应商选择; route_provider_id 是 host 最终解析的供应商路由。',
+  '- host 支持时成功返回: resolved_model 是最终使用的模型; provider_id 是显式保存的供应商选择; route_provider_id 是 host 最终解析的供应商路由。旧 host 可能缺失这些可选回执字段。',
   '',
   '【硬边界】',
   '- worker 数量达软上限 → 创建仍成功, payload.warning = WORKER_LIMIT_SOFT_EXCEEDED',
