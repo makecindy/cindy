@@ -12,6 +12,7 @@ import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage } from '../maker-orchestration/rewind.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { getGoalController } from '../goal-host/index.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
@@ -34,7 +35,7 @@ async function commitAfterStopping(
   const deadline = Date.now() + STOPPED_REWIND_TIMEOUT_MS;
   while (true) {
     try {
-      return await commitRewindAtMessage(sessionId, clientId, opts);
+      return await commitAfterPersistBarrier(sessionId, clientId, opts);
     } catch (err) {
       if (!isIpcError(err) || err.code !== 'SESSION_RUNNING' || Date.now() >= deadline) {
         throw err;
@@ -42,6 +43,20 @@ async function commitAfterStopping(
       await new Promise<void>((resolve) => setTimeout(resolve, STOPPED_REWIND_RETRY_MS));
     }
   }
+}
+
+async function commitAfterPersistBarrier(
+  sessionId: string,
+  clientId: string,
+  opts: { requireLatestUser: boolean },
+) {
+  // Rewind must see every chat/Subagent observation that was already queued
+  // before its transaction chooses the visible tail. Otherwise a delayed
+  // spawn can be inserted after the transaction with rewind_at=NULL and make
+  // withdrawn work visible again. Drain first, then let commitRewindAtMessage
+  // reload its target and transaction boundary from the durable store.
+  await drainPersistQueue();
+  return commitRewindAtMessage(sessionId, clientId, opts);
 }
 
 function wrapErr(err: unknown): never {
@@ -95,7 +110,7 @@ export function registerMakerRewindIpc(): void {
         const result = stopIfRunning
           ? await withSessionInputStoppedForRewind(sid, () =>
               commitAfterStopping(sid, cid, { requireLatestUser }))
-          : await commitRewindAtMessage(sid, cid, { requireLatestUser });
+          : await commitAfterPersistBarrier(sid, cid, { requireLatestUser });
         // 回滚后缓存的待注入交接 / fork 来源标记都是按截断前的历史算出来的,丢弃它,
         // 让下次 send 按回滚后的现状重新判定——被回滚掉的正是当初携带来源标记的那一轮时,
         // DB 侧判定会自动重新 arm(它按 rewind_at 过滤)。

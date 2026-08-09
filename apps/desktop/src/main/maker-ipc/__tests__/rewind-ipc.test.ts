@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   previewRewindAtMessage: vi.fn(),
   commitRewindAtMessage: vi.fn(),
+  drainPersistQueue: vi.fn(),
   withSessionInputStoppedForRewind: vi.fn(),
   ownerScope: { ownerScopeKey: 'owner-1' },
   broadcastSubagentRunsInvalidated: vi.fn(),
@@ -20,6 +21,10 @@ vi.mock('electron', () => ({
 vi.mock('../../maker-orchestration/rewind.js', () => ({
   previewRewindAtMessage: mocks.previewRewindAtMessage,
   commitRewindAtMessage: mocks.commitRewindAtMessage,
+}));
+
+vi.mock('../../messagePersistBroadcaster.js', () => ({
+  drainPersistQueue: mocks.drainPersistQueue,
 }));
 
 vi.mock('../register.js', () => ({
@@ -53,6 +58,7 @@ describe('maker rewind IPC stop-then-rewind', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.handlers.clear();
+    mocks.drainPersistQueue.mockResolvedValue(undefined);
     mocks.withSessionInputStoppedForRewind.mockImplementation(
       async (_sessionId: string, action: () => Promise<unknown>) => action(),
     );
@@ -72,6 +78,10 @@ describe('maker rewind IPC stop-then-rewind', () => {
     expect(mocks.withSessionInputStoppedForRewind).toHaveBeenCalledWith(
       'session-1',
       expect.any(Function),
+    );
+    expect(mocks.drainPersistQueue).toHaveBeenCalledOnce();
+    expect(mocks.drainPersistQueue.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.commitRewindAtMessage.mock.invocationCallOrder[0]!,
     );
     expect(mocks.commitRewindAtMessage).toHaveBeenCalledWith('session-1', 'message-1', {
       requireLatestUser: false,
@@ -97,6 +107,12 @@ describe('maker rewind IPC stop-then-rewind', () => {
 
       await expect(result).resolves.toBe(session);
       expect(mocks.commitRewindAtMessage).toHaveBeenCalledTimes(2);
+      expect(mocks.drainPersistQueue).toHaveBeenCalledTimes(2);
+      for (let index = 0; index < 2; index += 1) {
+        expect(mocks.drainPersistQueue.mock.invocationCallOrder[index]!).toBeLessThan(
+          mocks.commitRewindAtMessage.mock.invocationCallOrder[index]!,
+        );
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -133,8 +149,32 @@ describe('maker rewind IPC stop-then-rewind', () => {
     );
 
     expect(mocks.withSessionInputStoppedForRewind).not.toHaveBeenCalled();
+    expect(mocks.drainPersistQueue).toHaveBeenCalledOnce();
+    expect(mocks.drainPersistQueue.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.commitRewindAtMessage.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.commitRewindAtMessage).toHaveBeenCalledWith('session-1', 'message-1', {
       requireLatestUser: true,
     });
   });
+
+  it.each(['spawn', 'progress', 'terminal'] as const)(
+    'makes an already queued %s observation durable before the rewind boundary is chosen',
+    async (observationKind) => {
+      const durableObservations: string[] = [];
+      mocks.drainPersistQueue.mockImplementationOnce(async () => {
+        durableObservations.push(observationKind);
+      });
+      mocks.commitRewindAtMessage.mockImplementationOnce(async () => {
+        expect(durableObservations).toEqual([observationKind]);
+        return { id: 'session-1' };
+      });
+      const handler = mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT);
+      if (!handler) throw new Error('rewind commit handler not registered');
+
+      await expect(handler({}, 'session-1', 'message-1', { stopIfRunning: true })).resolves.toEqual(
+        { id: 'session-1' },
+      );
+    },
+  );
 });
