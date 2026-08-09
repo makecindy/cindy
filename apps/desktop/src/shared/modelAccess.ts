@@ -52,6 +52,7 @@ export interface ModelAccessCreditPoolUsage {
 }
 
 export type ModelAccessPromotionalGrantState = 'active' | 'depleted' | 'expired' | 'voided';
+export type ModelAccessPromotionalGrantKind = 'registration' | 'admin';
 
 export interface ModelAccessPromotionalGrantUsage {
   grantId: string;
@@ -61,6 +62,9 @@ export interface ModelAccessPromotionalGrantUsage {
   remainingAmount: string;
   expiresAt: string;
   state: ModelAccessPromotionalGrantState;
+  kind?: ModelAccessPromotionalGrantKind;
+  doesNotExpire?: boolean;
+  grantedAt?: string;
 }
 
 /** Gateway 账本的当前额度、三类用量和逐笔赠送只读投影。 */

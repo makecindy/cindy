@@ -93,6 +93,9 @@ describe('billing response projection', () => {
             remainingAmount: '1',
             expiresAt: '2026-08-01T00:00:00.123456789Z',
             state: 'active',
+            kind: 'registration',
+            doesNotExpire: true,
+            grantedAt: '2026-07-01T00:00:00Z',
             internalMetadata: 'hidden',
           },
           {
@@ -135,6 +138,9 @@ describe('billing response projection', () => {
           remainingAmount: '1',
           expiresAt: '2026-08-01T00:00:00.123456789Z',
           state: 'active',
+          kind: 'registration',
+          doesNotExpire: true,
+          grantedAt: '2026-07-01T00:00:00Z',
         },
         {
           grantId: 'expired',

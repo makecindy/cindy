@@ -613,12 +613,15 @@ describe('BillingPage remote catalog rendering', () => {
       promotionalGrants: [
         {
           grantId: 'welcome',
-          displayName: 'Welcome grant',
+          displayName: '注册赠送',
           originalAmount: '10',
           usedAmount: '4',
           remainingAmount: '6',
-          expiresAt: '2026-08-01T00:00:00Z',
+          expiresAt: '9999-12-31T23:59:59Z',
           state: 'active' as const,
+          kind: 'registration' as const,
+          doesNotExpire: true,
+          grantedAt: '2026-07-01T00:00:00Z',
         },
         {
           grantId: 'depleted',
@@ -657,7 +660,12 @@ describe('BillingPage remote catalog rendering', () => {
 
     render(<BillingPage />);
 
-    expect(await screen.findByText('Welcome grant')).toBeTruthy();
+    expect(await screen.findByText('billing.usage.promotionalDetails.registration')).toBeTruthy();
+    expect(
+      screen.getByText((text) =>
+        text.startsWith('billing.usage.promotionalDetails.grantedPermanent:'),
+      ),
+    ).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.active')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.depleted')).toBeTruthy();

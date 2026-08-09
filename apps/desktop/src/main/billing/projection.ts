@@ -20,6 +20,7 @@ import type {
   ModelAccessBalance,
   ModelAccessCreditPoolUsage,
   ModelAccessCreditUsage,
+  ModelAccessPromotionalGrantKind,
   ModelAccessPromotionalGrantState,
   ModelAccessPromotionalGrantUsage,
 } from '../../shared/modelAccess.js';
@@ -42,6 +43,10 @@ const PROMOTIONAL_GRANT_STATES = new Set<ModelAccessPromotionalGrantState>([
   'depleted',
   'expired',
   'voided',
+]);
+const PROMOTIONAL_GRANT_KINDS = new Set<ModelAccessPromotionalGrantKind>([
+  'registration',
+  'admin',
 ]);
 
 const PAYMENT_ORDER_STATUSES = new Set<BillingPaymentOrderStatus>([
@@ -248,6 +253,20 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
     PROMOTIONAL_GRANT_STATES.has(value.state as ModelAccessPromotionalGrantState)
       ? (value.state as ModelAccessPromotionalGrantState)
       : null;
+  const kind =
+    value.kind === undefined
+      ? undefined
+      : typeof value.kind === 'string' &&
+          PROMOTIONAL_GRANT_KINDS.has(value.kind as ModelAccessPromotionalGrantKind)
+        ? (value.kind as ModelAccessPromotionalGrantKind)
+        : null;
+  const doesNotExpire =
+    value.doesNotExpire === undefined
+      ? undefined
+      : typeof value.doesNotExpire === 'boolean'
+        ? value.doesNotExpire
+        : null;
+  const grantedAt = value.grantedAt === undefined ? undefined : observedAt(value.grantedAt);
   if (
     !grantId ||
     displayName === undefined ||
@@ -259,6 +278,9 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
     remainingAmount.scaled < 0n ||
     !expiresAt ||
     !state ||
+    kind === null ||
+    doesNotExpire === null ||
+    grantedAt === null ||
     (state === 'active' &&
       (remainingAmount.scaled === 0n ||
         usedAmount.scaled + remainingAmount.scaled !== originalAmount.scaled)) ||
@@ -277,6 +299,9 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
     remainingAmount: remainingAmount.source,
     expiresAt,
     state,
+    ...(kind === undefined ? {} : { kind }),
+    ...(doesNotExpire === undefined ? {} : { doesNotExpire }),
+    ...(grantedAt === undefined ? {} : { grantedAt }),
   };
 }
 

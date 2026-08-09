@@ -1621,14 +1621,24 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
               <div className="col-span-3 min-w-0 lg:col-span-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <p className="truncate text-12 font-medium text-[var(--text-primary)]">
-                    {grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
+                    {grant.kind === 'registration'
+                      ? t('billing.usage.promotionalDetails.registration')
+                      : grant.kind === 'admin'
+                        ? t('billing.usage.promotionalDetails.admin')
+                        : (grant.displayName ?? t('billing.usage.promotionalDetails.unnamed'))}
                   </p>
                   <PromotionalGrantStatus state={grant.state} />
                 </div>
                 <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
-                  {t('billing.usage.promotionalDetails.expiresAt', {
-                    date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
-                  })}
+                  {grant.doesNotExpire
+                    ? grant.grantedAt
+                      ? t('billing.usage.promotionalDetails.grantedPermanent', {
+                          date: formatLedgerTimestamp(grant.grantedAt, billingLocale),
+                        })
+                      : t('billing.usage.promotionalDetails.permanent')
+                    : t('billing.usage.promotionalDetails.expiresAt', {
+                        date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
+                      })}
                 </p>
               </div>
               <GrantAmount

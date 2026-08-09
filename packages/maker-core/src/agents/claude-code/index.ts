@@ -1225,6 +1225,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       message: { role: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
       parent_tool_use_id: null;
       uuid?: string;
+      priority?: 'now' | 'next' | 'later';
     };
     // mutable 引用 — rewind 重启时整个换一份新的:
     //   - 老 abortController 在 q.close() 时被 SDK 标记为 aborted (虽然我们没显式调
@@ -2003,6 +2004,18 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 的边界事件正常放行、清 turnInFlight。计数 = "已注入但 SDK 还没跑完的桥接 turn 数"。
      */
     let queuedBridgeTurns = 0;
+    // Claude SDK streaming input defaults to `next`, which appends a queued-command
+    // reminder to the current tool result. Native Claude understands that private
+    // convention, but Anthropic-compatible Mira models can treat it as ordinary tool
+    // output and ignore the user's same-turn correction. A `priority: 'now'` input
+    // restarts the provider segment and emits one intermediate result before the
+    // corrected request. Keep that SDK-only boundary inside the same product turn.
+    let queuedSteerRestarts = 0;
+    // Stop can race a steer after the SDK has already accepted `priority: 'now'`
+    // but before its interrupted provider result reaches this loop. Preserve that
+    // outstanding steer boundary, then re-arm the Stop marker after each hidden
+    // result because translator resetTurnState clears interruptRequested.
+    let explicitStopPendingAfterSteer = false;
     type ActiveBridgeKind = 'rewind' | 'cancellation';
     let activeBridgeKind: ActiveBridgeKind | null = null;
     // Bridge /compact 由 rewind 或 cancellation rebuild 尾部注入。若用户 Stop 打在该 bridge turn
@@ -3616,32 +3629,40 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 后台任务表旁路观察(O(1) type check,task 事件低频,不碰热路径逻辑)。
         const cancelledContinuation = noteBackgroundTaskEvent(e);
         if (ignoredLateTerminalTaskEvents.delete(e)) return true;
-        if (queuedBridgeTurns > 0) {
+        if (queuedBridgeTurns > 0 || queuedSteerRestarts > 0) {
           if (e.type === 'done') {
-            rememberBridgeSuppressedDoneData(e.data);
-            log.debug('suppress middle-turn done event (bridge turn active)', {
+            pendingTerminalStatusEvent = undefined;
+            if (queuedBridgeTurns > 0) rememberBridgeSuppressedDoneData(e.data);
+            log.debug('suppress middle-turn done event', {
               reason: (e.data as { reason?: unknown } | null | undefined)?.reason,
               queuedBridgeTurns,
+              queuedSteerRestarts,
             });
             return true;
           }
           if (e.type === 'status') {
             const running = (e.data as { isRunning?: unknown } | null | undefined)?.isRunning;
             if (running === false) {
-              log.debug('suppress middle-turn end-status (bridge turn active)', {
+              pendingTerminalStatusEvent = undefined;
+              log.debug('suppress middle-turn end-status', {
                 queuedBridgeTurns,
+                queuedSteerRestarts,
               });
               return true;
             }
           }
           if (e.type === 'error' && isTerminalAgentErrorEvent(e)) {
-            log.warn('suppress middle-turn terminal error (bridge /compact turn failed, user turn will continue)', {
+            pendingTerminalStatusEvent = undefined;
+            log.warn('suppress middle-turn terminal error (user turn will continue)', {
               reason: (e.data as { reason?: unknown } | null | undefined)?.reason,
               message: (e.data as { message?: unknown } | null | undefined)?.message,
               queuedBridgeTurns,
+              queuedSteerRestarts,
             });
-            restoreBridgeAutoCompactSnapshot('bridge_compact_failed');
-            autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            if (queuedBridgeTurns > 0) {
+              restoreBridgeAutoCompactSnapshot('bridge_compact_failed');
+              autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            }
             return true;
           }
         }
@@ -3729,16 +3750,26 @@ export class ClaudeCodeAgent extends BaseAgent {
     const getClaudeSubagentTaskUsage = this.deps.getClaudeSubagentTaskUsage;
     function completeTranslatedTurnEnd(): void {
       pendingToolIds.clear();
-      if (queuedBridgeTurns > 0) {
-        queuedBridgeTurns -= 1;
-        log.debug('onTurnEnd: consumed one bridge turn, keeping turnInFlight + plan state', {
+      if (queuedBridgeTurns > 0 || queuedSteerRestarts > 0) {
+        // A steer received during a bridge can terminate that bridge segment, so one
+        // SDK result may satisfy both counters. In all other cases only one is nonzero.
+        if (queuedBridgeTurns > 0) queuedBridgeTurns -= 1;
+        const consumedSteerRestart = queuedSteerRestarts > 0;
+        if (consumedSteerRestart) queuedSteerRestarts -= 1;
+        if (consumedSteerRestart && explicitStopPendingAfterSteer) {
+          turnState.interruptRequested = true;
+          turnState.interruptGeneration = turnState.generation;
+        }
+        log.debug('onTurnEnd: consumed one middle turn, keeping turnInFlight + plan state', {
           queuedBridgeTurns,
+          queuedSteerRestarts,
           planTurnActive,
           sdkInPlanMode,
         });
         armUpstreamResponseIdle();
         return;
       }
+      explicitStopPendingAfterSteer = false;
       resumeValidationPending = false;
       freshSessionValidationPending = false;
       replayableUserInput = null;
@@ -3759,6 +3790,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       // q 换代: 上一代 q 的 pending interrupted result 不可能从新 q drain 出来,
       // 残留的 interruptRequested 会错误抑制新 q 首个真实 is_error 终态 —— 兜底清。
       turnState.interruptRequested = false;
+      queuedSteerRestarts = 0;
+      explicitStopPendingAfterSteer = false;
       continuationCancellationGeneration = null;
       // Any successfully installed replacement Query isolates the cancelled
       // provider tail. This also covers rewind / invalid-resume rebuilds, so a
@@ -4980,13 +5013,25 @@ export class ClaudeCodeAgent extends BaseAgent {
         // side effects; doing them here would corrupt usage attribution and make
         // the UI believe a fresh turn started even though Claude is still inside
         // the existing streaming-input query.
+        // `priority: 'now'` is the SDK's explicit same-turn interruption channel.
+        // Without it, streaming input defaults to `next` and is only attached as a
+        // queued-command reminder after the current tool result.
+        queuedSteerRestarts += 1;
+        const previousInterruptRequested = turnState.interruptRequested;
+        const previousInterruptGeneration = turnState.interruptGeneration;
+        turnState.interruptRequested = true;
+        turnState.interruptGeneration = turnState.generation;
         const accepted = inputQueue.push({
           type: 'user',
           message: { role: 'user', content },
           parent_tool_use_id: null,
+          priority: 'now',
           ...(sendOpts?.messageUuid ? { uuid: sendOpts.messageUuid } : {}),
         });
         if (!accepted) {
+          queuedSteerRestarts -= 1;
+          turnState.interruptRequested = previousInterruptRequested;
+          turnState.interruptGeneration = previousInterruptGeneration;
           // close() ends the streaming input queue. Before push returned a
           // delivery signal this race looked successful to IPC, so renderer
           // removed the queued row / optimistic bubble even though Claude never
@@ -5008,6 +5053,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 先清 pending 避免后续 message 被旧 id 短路 arm (onTurnEnd 会再清一次, 幂等)。
         clearUpstreamResponseIdle();
         pendingToolIds.clear();
+        // If Stop races an accepted steer, the SDK can still emit two results:
+        // the steer-internal provider boundary followed by the real Stop boundary.
+        // Keep the former hidden and let only the latter settle the product turn.
+        explicitStopPendingAfterSteer = queuedSteerRestarts > 0;
         if (canceledBridgeQueries.has(q)) {
           log.debug('abort ignored because bridge query was already canceled');
           return;

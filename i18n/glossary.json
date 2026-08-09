@@ -13,6 +13,28 @@
   ],
   "terms": [
     {
+      "id": "registration-gift",
+      "status": "proposed",
+      "en": "Registration gift",
+      "translations": {
+        "zh-CN": "注册赠送",
+        "ja": "登録特典",
+        "ko": "가입 선물"
+      },
+      "note": "用户注册时获得的长期有效模型余额，在赠送明细中与管理员后续赠送区分；先登记为 proposed，待计费术语评审后固化。"
+    },
+    {
+      "id": "administrator-gift",
+      "status": "proposed",
+      "en": "Administrator gift",
+      "translations": {
+        "zh-CN": "管理员赠送",
+        "ja": "管理者特典",
+        "ko": "관리자 선물"
+      },
+      "note": "管理员手动追加的长期有效模型余额，在赠送明细中与注册赠送区分；先登记为 proposed，待计费术语评审后固化。"
+    },
+    {
       "id": "active",
       "status": "decided",
       "en": "Active",

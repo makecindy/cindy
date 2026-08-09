@@ -1890,4 +1890,132 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     });
     expect(handle.isTurnRunning?.()).toBe(false);
   });
+
+  it('sends steer as immediate SDK input without exposing the interrupted provider boundary', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    const events: AgentEvent[] = [];
+    void (async () => {
+      try { for await (const event of handle.events()) events.push(event); } catch { /* ignore */ }
+    })();
+
+    await handle.send({ type: 'user', content: 'Create a web page.' });
+    await handle.steer({ type: 'user', content: 'Use a visual component instead.' });
+
+    const queryArgs = sdkMock.query.mock.calls[0]?.[0] as {
+      prompt: AsyncIterable<{
+        message?: { content?: unknown };
+        priority?: 'now' | 'next' | 'later';
+      }>;
+    };
+    const promptIterator = queryArgs.prompt[Symbol.asyncIterator]();
+    const normalInput = (await promptIterator.next()).value;
+    const steerInput = (await promptIterator.next()).value;
+    expect(normalInput?.message?.content).toBe('Create a web page.');
+    expect(normalInput?.priority).toBeUndefined();
+    expect(steerInput?.message?.content).toBe('Use a visual component instead.');
+    expect(steerInput?.priority).toBe('now');
+
+    firstQuery.stream.emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      stop_reason: null,
+      result: '',
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 0 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    firstQuery.stream.emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      stop_reason: 'end_turn',
+      result: 'Using a visual component.',
+      total_cost_usd: 0,
+      usage: { input_tokens: 2, output_tokens: 1 },
+    });
+
+    await vi.waitFor(() => {
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'text' &&
+          (event.data as { text?: string }).text === 'Using a visual component.',
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.close();
+  });
+
+  it('lets an explicit stop settle a steer that is still restarting the provider segment', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    const events: AgentEvent[] = [];
+    void (async () => {
+      try { for await (const event of handle.events()) events.push(event); } catch { /* ignore */ }
+    })();
+
+    await handle.send({ type: 'user', content: 'Start the task.' });
+    await handle.steer({ type: 'user', content: 'Change direction now.' });
+    await handle.abort();
+
+    // The first result belongs to the provider segment interrupted by steer.
+    // Stop raced it after the SDK had accepted priority=now, so this boundary
+    // must remain hidden even though abort has already completed.
+    firstQuery.stream.emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      stop_reason: null,
+      result: '',
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 0 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'status' &&
+          (event.data as { isRunning?: boolean }).isRunning === false,
+      ),
+    ).toBe(false);
+
+    // The following result is the explicit Stop boundary. It is the only one
+    // visible to the product turn and must not be reported as execution-failed.
+    firstQuery.stream.emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      stop_reason: null,
+      result: '',
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    });
+    expect(
+      events.filter(
+        (event) =>
+          event.type === 'status' &&
+          (event.data as { isRunning?: boolean }).isRunning === false,
+      ),
+    ).toHaveLength(1);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.close();
+  });
 });
