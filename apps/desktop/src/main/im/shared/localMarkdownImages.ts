@@ -164,8 +164,11 @@ function localMarkdownImageSanitizationMatches(text: string): LocalMarkdownImage
         continue;
       }
       if (char === '!' && text[targetEnd + 1] === '[') {
-        nestedImageStart = targetEnd;
-        break;
+        const outerTargetPrefix = text.slice(targetStart, targetEnd);
+        if (!isSensitiveLocalMarkdownImageTarget(outerTargetPrefix)) {
+          nestedImageStart = targetEnd;
+          break;
+        }
       }
       if (char === '(') depth += 1;
       else if (char === ')') {

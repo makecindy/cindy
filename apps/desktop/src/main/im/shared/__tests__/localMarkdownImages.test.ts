@@ -696,4 +696,11 @@ describe('sanitizeLocalMarkdownImageRefs', () => {
       ),
     ).not.toContain('/Users/alice/private/output.png');
   });
+
+  it('fail-closes an outer local target before a nested remote image', () => {
+    const text =
+      '![outer](/Users/alice/private/secret![inner](https://example.com/image.png))';
+
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('outer');
+  });
 });
