@@ -239,22 +239,40 @@ describe('removeWorktreeForSession', () => {
     expect(storeMap.has('s1')).toBe(true);
   });
 
-  it.each(['archived', 'deleted'])(
-    '%s session references do not block worktree recycle without runtime observer',
-    async (status) => {
-      const meta = makeMeta('s1');
-      storeMap.set('s1', meta);
-      liveSessionRows.push({ id: 'other', status, workingDir: meta.path, worktreePath: null });
+  it('archived session references block recycle without runtime observer', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
 
-      await manager.removeWorktreeForSession('s1');
+    await manager.removeWorktreeForSession('s1');
 
-      expect(gitExecMock).toHaveBeenCalledWith(
-        ['worktree', 'remove', '--force', meta.path],
-        BASE_REPO,
-      );
-      expect(storeMap.has('s1')).toBe(false);
-    },
-  );
+    expect(gitExecMock).not.toHaveBeenCalled();
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it('deleted session references do not block recycle without runtime observer', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'deleted',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1');
+
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('s1')).toBe(false);
+  });
 
   it('terminal session reference still blocks when its runtime is alive', async () => {
     const meta = makeMeta('s1');
@@ -474,6 +492,62 @@ describe('removeWorktreeForSession', () => {
     );
     expect(storeMap.has('s1')).toBe(true);
     expect(storeSetMock).toHaveBeenCalledWith('s1', meta);
+  });
+
+  it('rechecks borrower references before removing a clean owner worktree', async () => {
+    const meta = makeMeta('owner');
+    storeMap.set('owner', meta);
+    const borrower = {
+      id: 'borrower',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: meta.path,
+    };
+    liveSessionRows.push(borrower);
+    const isSessionRuntimeAlive = vi.fn(() => false);
+    const canRemove = vi.fn().mockImplementation(async () => {
+      if (canRemove.mock.calls.length === 2) borrower.status = 'active';
+      return true;
+    });
+
+    await manager.removeWorktreeForSession('owner', { canRemove, isSessionRuntimeAlive });
+
+    expect(canRemove).toHaveBeenCalledTimes(2);
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('owner')).toBe(true);
+  });
+
+  it('restores a dirty owner snapshot when a borrower becomes active before removal', async () => {
+    const meta = makeMeta('owner');
+    storeMap.set('owner', meta);
+    isWorktreeDirtyMock.mockResolvedValue(true);
+    const borrower = {
+      id: 'borrower',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: meta.path,
+    };
+    liveSessionRows.push(borrower);
+    const isSessionRuntimeAlive = vi.fn(() => false);
+    const canRemove = vi.fn().mockImplementation(async () => {
+      if (canRemove.mock.calls.length === 2) borrower.status = 'active';
+      return true;
+    });
+
+    await manager.removeWorktreeForSession('owner', { canRemove, isSessionRuntimeAlive });
+
+    expect(canRemove).toHaveBeenCalledTimes(2);
+    expect(autoStashMock).toHaveBeenCalledWith(meta.path, 'owner');
+    expect(restoreAutoStashMock).toHaveBeenCalledWith(meta.path, 'owner');
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('owner')).toBe(true);
+    expect(storeSetMock).toHaveBeenCalledWith('owner', meta);
   });
 
   it('keeps a preserved worktree unregistered when cancelled snapshot reapply fails', async () => {

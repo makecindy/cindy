@@ -3,8 +3,9 @@
  *
  * 语义：某 worktree 路径若仍被其它会话的 workingDir / worktreePath 指向，就视为"在用"，
  * 删除/淘汰路径必须保留它。显式归档/删除回收可提供运行态观察器：archived/deleted 只在确认
- * 对应 runtime 已关闭后才不再阻挡；其它调用方没有观察器时沿用既有终态过滤。查询失败时返回
- * null，消费方按"无法确认 → 视为在用"的保守方向处理。未知或 NULL status 同样按在用处理。
+ * 对应 runtime 已关闭后才不再阻挡；其它调用方没有观察器时保守保留 archived，但继续忽略
+ * deleted。查询失败时返回 null，消费方按"无法确认 → 视为在用"的保守方向处理。未知或 NULL
+ * status 同样按在用处理。
  *
  * 原实现内联在 WorktreePool.ts（MR1），P0 重构把它抽出来给
  * removeWorktreeForSession 的删除守卫复用，并支持排除会话自身
@@ -71,17 +72,17 @@ export async function loadLiveSessionPathKeys(
       .where(
         opts.isSessionRuntimeAlive
           ? sql`${sessions.workingDir} IS NOT NULL OR ${sessions.worktreePath} IS NOT NULL`
-          : sql`${sessions.status} NOT IN ('archived', 'deleted') OR ${sessions.status} IS NULL`,
+          : sql`${sessions.status} != 'deleted' OR ${sessions.status} IS NULL`,
       );
 
     const keys = new Set<string>();
     for (const row of rows) {
       if (opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
       const isTerminal = row.status === 'archived' || row.status === 'deleted';
-      if (
-        isTerminal &&
-        (!opts.isSessionRuntimeAlive || opts.isSessionRuntimeAlive(row.id) === false)
-      ) {
+      if (!opts.isSessionRuntimeAlive && row.status === 'deleted') {
+        continue;
+      }
+      if (isTerminal && opts.isSessionRuntimeAlive?.(row.id) === false) {
         continue;
       }
       const workingDirKey = pathKey(row.workingDir);

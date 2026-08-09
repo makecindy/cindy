@@ -1135,6 +1135,31 @@ async function removeWorktreeForSessionInner(
       }
     };
 
+    const restorePreservedWorktree = async (): Promise<void> => {
+      if (!(await restoreQuarantine())) return;
+      if (!snapshotted) return;
+      if (await restoreAutoStashToPreservedWorktree(meta.path, sessionId)) {
+        await store.set(sessionId, meta);
+      } else {
+        log.warn(
+          `[worktree] recycle cancelled for ${meta.path}, but snapshot reapply failed; ` +
+            'worktree stays unregistered so SEND remains blocked until restore succeeds',
+        );
+      }
+    };
+
+    const hasCurrentLiveReference = async (): Promise<boolean> => {
+      const currentLiveKeys = await loadLiveSessionPathKeys({
+        contextPath: removalPath,
+        excludeSessionId: sessionId,
+        isSessionRuntimeAlive: removalOptions.isSessionRuntimeAlive,
+      });
+      return hasLiveSessionReference(
+        quarantinePath ? { ...meta, quarantinePath } : meta,
+        currentLiveKeys,
+      );
+    };
+
     if (removalOptions.preserveDirty && !quarantinePath && (await pathExists(meta.path))) {
       const candidate = `${meta.path}.xdt-removing-${randomUUID()}`;
       try {
@@ -1190,6 +1215,14 @@ async function removeWorktreeForSessionInner(
       }
     }
 
+    if (await hasCurrentLiveReference()) {
+      log.info(
+        `[worktree] preserved worktree at ${removalPath}: another session referenced it before removal`,
+      );
+      await restorePreservedWorktree();
+      return;
+    }
+
     let removedByGit = false;
     try {
       // 预创建补偿回收必须让 git 在删除瞬间再次确认 worktree 仍然干净：
@@ -1209,6 +1242,13 @@ async function removeWorktreeForSessionInner(
       // 不能再用 fs.rm 绕过它，否则会重新打开 dirty check 后写入的竞态窗口。
       if (removalOptions.preserveDirty) {
         await restoreQuarantine();
+        return;
+      }
+      if (await hasCurrentLiveReference()) {
+        log.info(
+          `[worktree] preserved worktree at ${removalPath}: another session referenced it before fallback removal`,
+        );
+        await restorePreservedWorktree();
         return;
       }
       // fallback: fs.rm —— 必须三条校验通过

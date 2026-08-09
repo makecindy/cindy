@@ -167,6 +167,23 @@ describe('WorktreePool safety', () => {
     expect(storeMap.has(meta.sessionId)).toBe(true);
   });
 
+  it('does not return an archived session worktree to the pool without runtime truth', async () => {
+    const meta = makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z');
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    liveSessionRows.push({
+      id: meta.sessionId,
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: meta.path,
+    });
+
+    await expect(pool.releaseWorktree(meta.sessionId)).resolves.toBe('preserved');
+
+    expect(gitExecMock).not.toHaveBeenCalled();
+    expect(storeMap.has(meta.sessionId)).toBe(true);
+  });
+
   it('does not recover a live session worktree into the reusable pool', async () => {
     const meta = makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z');
     fsSync.mkdirSync(meta.path, { recursive: true });
@@ -174,6 +191,24 @@ describe('WorktreePool safety', () => {
     liveSessionRows.push({
       id: meta.sessionId,
       status: 'active',
+      workingDir: null,
+      worktreePath: meta.path,
+    });
+
+    await pool.recoverPool();
+    await pool.drainOne(baseRepo);
+
+    expect(gitExecMock).not.toHaveBeenCalled();
+    expect(storeMap.has(meta.sessionId)).toBe(true);
+  });
+
+  it('does not recover an archived session worktree without runtime truth', async () => {
+    const meta = makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z');
+    fsSync.mkdirSync(meta.path, { recursive: true });
+    storeMap.set(meta.sessionId, meta);
+    liveSessionRows.push({
+      id: meta.sessionId,
+      status: 'archived',
       workingDir: null,
       worktreePath: meta.path,
     });
