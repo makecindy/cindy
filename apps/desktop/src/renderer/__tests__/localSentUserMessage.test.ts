@@ -146,6 +146,12 @@ const enqueue = vi.fn((sessionId: string, item: AgentInputQueuedMessage) =>
 
 const retryLastError = vi.fn((sessionId: string) => Promise.resolve(projection(sessionId)));
 
+const resume = vi.fn((sessionId: string) => Promise.resolve(projection(sessionId)));
+
+const steer = vi.fn((_sessionId: string, _item: AgentInputQueuedMessage) =>
+  Promise.resolve(true),
+);
+
 let projectionHandler: ((projection: AgentInputProjection) => void) | null = null;
 
 const onInputProjection = vi.fn((cb: (projection: AgentInputProjection) => void) => {
@@ -159,7 +165,7 @@ function installElectronBridge(): void {
   if (!w.window) w.window = {};
   w.window.electronAPI = {
     maker: {
-      input: { enqueue, retryLastError },
+      input: { enqueue, retryLastError, resume, steer },
       onInputProjection,
       onEvent: vi.fn(() => vi.fn()),
       onStatusChanged: vi.fn(() => vi.fn()),
@@ -532,5 +538,65 @@ describe('isLocalSentUserMessage (#2194)', () => {
     await makerChatStore.retryLastError(sid2);
     await flushPromises();
     expect(makerChatStore.isLocalSentUserMessage(sid2, 'continue-auto')).toBe(false);
+  });
+
+  // Codex review P2（第十一轮）: 暂停队列的「继续」与队列项 steer 也是本端
+  // 点击意图——队列可能来自上一次 renderer 生命周期或外部入口，发送侧登记
+  // 不到，动作触发时按点击归属补上。
+  it('暂停队列「继续」（resumeQueue）生效后登记队首为本端意图', async () => {
+    const sid = `resume-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, { pendingQueue: [queuedItem('q1', 'queued')], queuePaused: true }),
+    );
+    resume.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('q1', 'queued')], queuePaused: false }),
+    );
+
+    makerChatStore.resumeQueue(sid);
+    await flushPromises();
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q1')).toBe(true);
+  });
+
+  it('resume 未生效（回执仍 paused）时不登记', async () => {
+    const sid = `resume-noop-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, { pendingQueue: [queuedItem('q2', 'queued')], queuePaused: true }),
+    );
+    // 默认 mock 返回 queuePaused: false——这里显式保持 paused，模拟未生效。
+    resume.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('q2', 'queued')], queuePaused: true }),
+    );
+
+    makerChatStore.resumeQueue(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q2')).toBe(false);
+  });
+
+  it('队列项 steer 成功后登记为本端意图，失败不登记', async () => {
+    const sid = `steer-q-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [queuedItem('q3', 'queued'), queuedItem('q4', 'queued too')],
+      }),
+    );
+
+    steer.mockResolvedValueOnce(true);
+    await makerChatStore.steerQueuedMessage(sid, 'q3');
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q3')).toBe(true);
+
+    steer.mockResolvedValueOnce(false);
+    await makerChatStore.steerQueuedMessage(sid, 'q4');
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'q4')).toBe(false);
   });
 });

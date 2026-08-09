@@ -2694,12 +2694,13 @@ const lightSnapshotCache = new Map<string, SessionChatLightState>();
  * sendMessageCore / steerMessageCore are the choke points every local send
  * (composer send, edit-resend, steer, device-link send initiated on this
  * desktop) passes through, so those local user messages are recorded there.
- * Two paths register separately: local UI triggers (silent-stop Continue /
- * app-exit Continue / Mivo) are marked in sendUiTriggerCore, and a manual
- * Retry is registered in retryLastError — the active-turn clone via the
- * invoke receipt's projection (items carrying supersedesUserClientId), the
- * queue-head redispatch (same clientId, no clone) via the mirrored
- * inputRecovery captured at click time.
+ * Further paths register separately: local UI triggers (silent-stop Continue /
+ * app-exit Continue / Mivo) in sendUiTriggerCore; a manual Retry in
+ * retryLastError (clone via the receipt's supersedesUserClientId, hidden
+ * continue via originalSyntheticTrigger, queue-head redispatch via the
+ * mirrored inputRecovery captured at click time); and queue actions that
+ * dispatch a restored/externally-queued row (resumeQueue, steerQueuedMessage)
+ * at click time.
  * MessageStream uses this to tell an explicit local send — which force-pins
  * the viewport to the tail — apart from user messages injected by other
  * entries (IM channels, a mobile client driving the session remotely,
@@ -10878,10 +10879,31 @@ function setQueueExpanded(sessionId: string, expanded: boolean): void {
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
+  // #2194 (Codex review P2): 暂停队列的「继续」是本端点击意图——恢复后 drain
+  // 派发的队首项落库时会作为新尾部 user 行出现，不登记则门控误判为外部注入，
+  // 续跑在屏幕外开始（队列可能来自上一次 renderer 生命周期或外部入口）。
+  // 点击时刻快照队首，回执确认恢复生效（queuePaused 翻 false）且队首仍在队列
+  // 才登记（与 retry 的 drain 竞态同口径）。
+  const preResumeState = sessions.get(sessionId);
+  const preResumeHeadClientId =
+    preResumeState?.queuePaused === true
+      ? (preResumeState.pendingQueue[0]?.clientId ?? null)
+      : null;
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.resume(sessionId, boundaryOpts) : input.resume(sessionId),
-  ).catch((err) => log.warn('resumeQueue failed:', err));
+  )
+    .then(({ projection }) => {
+      if (
+        preResumeHeadClientId &&
+        sessions.has(sessionId) &&
+        projection.queuePaused === false &&
+        projection.pendingQueue.some((item) => item.clientId === preResumeHeadClientId)
+      ) {
+        markLocalSentUserMessage(sessionId, preResumeHeadClientId);
+      }
+    })
+    .catch((err) => log.warn('resumeQueue failed:', err));
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
@@ -11998,6 +12020,10 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
           ...getRemoteInputClearBoundaryOpts(sessionId),
         })
         .then((ok) => {
+          // #2194 (Codex review P2): 队列项 steer 是本端点击意图——落库的 steer
+          // 行作为新尾部 user 消息出现时应触发回底；队列项可能来自上一次
+          // renderer 生命周期或外部入口，发送侧登记不到，这里按点击归属补上。
+          if (ok && sessions.has(sessionId)) markLocalSentUserMessage(sessionId, clientId);
           requestInputProjection(sessionId);
           return ok;
         })
