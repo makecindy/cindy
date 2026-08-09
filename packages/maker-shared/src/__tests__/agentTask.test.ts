@@ -353,6 +353,27 @@ describe('buildAgentTaskCardModel', () => {
     expect(model.status).toBe('running');
   });
 
+  it('REPRO: recognizes the full async Claude Agent launch receipt', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { run_in_background: true, prompt: 'keep working' },
+      result: [
+        'Async agent launched successfully.',
+        "agentId: agent-1 (internal ID - do not mention to user. Use SendMessage with to: 'agent-1' to continue this agent.)",
+        'The agent is working in the background. You will be notified automatically when it completes.',
+        'Briefly tell the user what you launched and end your response.',
+      ].join('\n'),
+      update: {
+        provider: 'claude-code',
+        taskId: 'agent-1',
+        parentToolUseId: 'agent-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
   it.each(['in_progress', 'in-progress', 'started', 'active'])(
     'keeps a V1 spawn running for the %s state summary',
     (state) => {

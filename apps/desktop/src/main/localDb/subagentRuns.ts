@@ -11,7 +11,11 @@ import {
   type SubagentRunStatus,
 } from '@cindy/maker-shared/subagent-workspace';
 import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-observation';
-import { normalizeAgentTaskUpdate, type AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
+import {
+  normalizeAgentTaskUpdate,
+  subagentSpawnResultIndicatesRunning,
+  type AgentTaskUpdate,
+} from '@cindy/maker-shared/agent-task';
 import { and, desc, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from './client/current.js';
@@ -741,8 +745,14 @@ export async function getSubagentRunDetail(
       .orderBy(desc(messages.createdAt))
       .limit(1);
     const text = result ? parseMessageText(result.content) : undefined;
-    if (text) {
-      const bounded = truncateUtf8(text, MAX_RETURNED_RESULT_BYTES);
+    // Claude's background Agent tool result is only a launch receipt. Once the
+    // task reaches terminal state, expose the task_notification summary instead.
+    const returnedText = row.provider === 'claude-code'
+      && subagentSpawnResultIndicatesRunning('Agent', text)
+      ? row.summary ?? undefined
+      : text;
+    if (returnedText) {
+      const bounded = truncateUtf8(returnedText, MAX_RETURNED_RESULT_BYTES);
       returnedResult = bounded.value;
       returnedResultTruncated = bounded.truncated;
     }

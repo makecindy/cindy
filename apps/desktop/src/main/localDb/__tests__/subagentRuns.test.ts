@@ -270,6 +270,51 @@ describe('durable Subagent runs', () => {
     ).toBe('The audit found no upstream conflict.');
   });
 
+  it('uses the terminal Claude summary instead of an async launch receipt', async () => {
+    insertMessage('claude-tool-use', 'tool_use', '{}', 'claude-agent', 900);
+    const spawned = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'claude-code',
+        taskId: 'claude-child',
+        parentToolUseId: 'claude-agent',
+        status: 'running',
+        title: 'Audit persistence',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }),
+    );
+    await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'claude-code',
+          taskId: 'claude-child',
+          parentToolUseId: 'claude-agent',
+          status: 'completed',
+          summary: 'The durable audit completed successfully.',
+          updatedAt: '1970-01-01T00:00:02.000Z',
+        },
+        { kind: 'terminal' },
+      ),
+    );
+    insertMessage(
+      'claude-launch-receipt',
+      'tool_result',
+      JSON.stringify([
+        'Async agent launched successfully.',
+        "agentId: claude-child (internal ID - do not mention to user. Use SendMessage with to: 'claude-child' to continue this agent.)",
+        'The agent is working in the background. You will be notified automatically when it completes.',
+        'Briefly tell the user what you launched and end your response.',
+      ].join('\n')),
+      'claude-agent',
+      1100,
+    );
+
+    expect(
+      (await getSubagentRunDetail('session-1', 'claude-code', spawned!.runId))?.returnedResult,
+    ).toBe('The durable audit completed successfully.');
+  });
+
   it('creates a completed-only Codex spawn before later progress and terminal updates', async () => {
     // The translator reconstructs this parent tool boundary before emitting
     // the completed-only task update.

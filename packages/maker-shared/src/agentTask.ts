@@ -392,12 +392,18 @@ export function subagentSpawnResultIndicatesRunning(
   toolName: string | undefined,
   result: string | undefined,
 ): boolean {
-  const trimmed = result?.trim() ?? '';
+  const trimmed = result?.trim().replace(/\r\n/g, '\n') ?? '';
   // Claude's asynchronous Agent tool returns a textual launch receipt while the
   // child is still running. Treat it like the structured Codex V1 receipt so a
   // paired stale `running` update does not close the task prematurely.
   if ((toolName === 'Agent' || toolName === 'Task')
-    && trimmed === 'Async agent launched successfully.') {
+    && (
+      trimmed === 'Async agent launched successfully.'
+      || (
+        trimmed.startsWith('Async agent launched successfully.\nagentId: ')
+        && trimmed.includes('\nThe agent is working in the background.')
+      )
+    )) {
     return true;
   }
   if (toolName !== 'collab:spawnAgent') return false;
