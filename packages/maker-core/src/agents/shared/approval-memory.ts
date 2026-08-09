@@ -322,9 +322,10 @@ const DYNAMIC_COMMAND_INPUT_PATTERNS: readonly RegExp[] = [
   // PowerShell splatting；也保守覆盖 @file、@./file、@../file、绝对路径及带引号
   // response/request-body 文件。`=` 覆盖 --flag=@path 形态。
   /(?:^|[\s,;('"=])@(?![({])(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|,)]+)/,
-  // shell/cmd 的 stdin、here-doc 与 here-string 重定向。文件描述符可显式写成 0<file；
-  // 进程替换 <(...) 已由上面的独立规则覆盖。
-  /(?:^|[\s;&|])\d*<{1,3}\s*(?![(&])(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|]+)/,
+  // shell/cmd 的 stdin、here-doc 与 here-string 重定向。操作符可紧贴前一个命令词
+  // (`psql<input.sql`)，也可带显式文件描述符 (`3<input.sql`)；不能要求左侧边界。
+  // fd 复制 (`<&3`) 同样依赖可变输入。进程替换 <(...) 已由上面的独立规则覆盖。
+  /\d*<{1,3}\s*(?!\()(?:"[^"\r\n]+"|'[^'\r\n]+'|&(?:\d+|-)|[^\s;&|]+)/,
 ];
 
 export function isMutableIndirectExecutionCommand(command: string): boolean {

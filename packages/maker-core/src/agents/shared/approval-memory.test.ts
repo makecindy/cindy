@@ -348,6 +348,30 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(signature(exec('rm -rf build'))).not.toBeNull();
   });
 
+  it('输入重定向的紧贴、fd 前缀与 shell 分隔符形式均不可记忆', () => {
+    for (const command of [
+      'psql < input.sql',
+      'psql<input.sql',
+      'psql 0<input.sql',
+      'psql 3<input.sql',
+      'true;psql<input.sql',
+      'true && psql<input.sql',
+      'false||psql<input.sql',
+      'true\npsql<input.sql',
+      'psql<input.sql|cat',
+      'psql<input.sql && echo done',
+      '<input.sql psql',
+      'psql<"input file.sql"',
+      'psql<>database.file',
+      'cat<<EOF',
+      'cat<<<query',
+      'psql 3<&4',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+  });
+
   it('curl 只有首参数显式禁用配置且未另行指定 config 时才可记忆', () => {
     for (const command of [
       'curl https://api.example.com',
