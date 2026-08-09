@@ -13,7 +13,7 @@
  *   isAllCollapsed    activeWorkingDirs 是否全部都折叠
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createLogger } from '@/lib/logger';
 import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 import { normalizeProjectKey } from '../lib/projectGrouping';
@@ -84,6 +84,9 @@ export function useCollapsedProjects(
   ownerId: string | null,
 ): UseCollapsedProjectsReturn {
   const [stored, setStored] = useState<Stored>(() => loadFromStorage(ownerId));
+  const loadedOwnerRef = useRef(ownerId);
+  const currentOwnerRef = useRef(ownerId);
+  currentOwnerRef.current = ownerId;
 
   // 用 ref 镜像最新的 activeWorkingDirs，让 toggle/collapseAll/expandAll 都能
   // 走"依赖空数组 + 闭包内读 ref.current"的统一模式，避免在 activeWorkingDirs
@@ -91,16 +94,30 @@ export function useCollapsedProjects(
   const activeDirsRef = useRef<readonly string[]>(activeWorkingDirs);
   activeDirsRef.current = activeWorkingDirs;
 
-  // mount / owner switch 时 GC：清理 lastSeenAt 过期且不在 active 集合的条目
-  // ADR-4：useEffect 内部通过 activeDirsRef 读取最新值；依赖空数组属于
-  // "故意只跑一次"。
-  useEffect(() => {
+  const updateForOwner = useCallback(
+    (updater: (prev: Stored, writeOwnerId: string | null) => Stored) => {
+      const expectedOwnerId = ownerId;
+      if (currentOwnerRef.current !== expectedOwnerId) return;
+      setStored((prev) =>
+        currentOwnerRef.current === expectedOwnerId ? updater(prev, expectedOwnerId) : prev,
+      );
+    },
+    [ownerId],
+  );
+
+  // mount / owner switch 时先装载当前 owner，再 GC lastSeenAt 过期且不在
+  // active 集合的条目。layout effect 避免把上一个 owner 的折叠态绘制一帧。
+  useLayoutEffect(() => {
     const cutoff = Date.now() - GC_MS;
     const activeSet = new Set(activeDirsRef.current);
+    const ownerChanged = loadedOwnerRef.current !== ownerId;
+    const ownerStored = ownerChanged ? loadFromStorage(ownerId) : null;
+    loadedOwnerRef.current = ownerId;
     setStored((prev) => {
+      const source = ownerStored ?? prev;
       const next: Stored = {};
       let changed = false;
-      for (const [dir, entry] of Object.entries(prev)) {
+      for (const [dir, entry] of Object.entries(source)) {
         const lastSeen = new Date(entry.lastSeenAt).getTime();
         const fresh = Number.isFinite(lastSeen) && lastSeen >= cutoff;
         if (fresh || activeSet.has(dir)) {
@@ -113,7 +130,7 @@ export function useCollapsedProjects(
         writeToStorage(next, ownerId);
         return next;
       }
-      return prev;
+      return source;
     });
   }, [ownerId]);
 
@@ -124,18 +141,18 @@ export function useCollapsedProjects(
     (projectKeyOrWorkingDir: string) => {
       const projectKey = normalizeProjectKey(projectKeyOrWorkingDir);
       if (!projectKey) return;
-      setStored((prev) => {
+      updateForOwner((prev, writeOwnerId) => {
         const next: Stored = { ...prev };
         if (next[projectKey]) {
           delete next[projectKey];
         } else {
           next[projectKey] = { collapsed: true, lastSeenAt: new Date().toISOString() };
         }
-        writeToStorage(next, ownerId);
+        writeToStorage(next, writeOwnerId);
         return next;
       });
     },
-    [ownerId],
+    [updateForOwner],
   );
 
   // 幂等展开：仅当目标目录当前在折叠集中时才写入，避免无意义的 setState/写盘。
@@ -143,22 +160,22 @@ export function useCollapsedProjects(
     (projectKeyOrWorkingDir: string) => {
       const projectKey = normalizeProjectKey(projectKeyOrWorkingDir);
       if (!projectKey) return;
-      setStored((prev) => {
+      updateForOwner((prev, writeOwnerId) => {
         if (!prev[projectKey]) return prev;
         const next: Stored = { ...prev };
         delete next[projectKey];
-        writeToStorage(next, ownerId);
+        writeToStorage(next, writeOwnerId);
         return next;
       });
     },
-    [ownerId],
+    [updateForOwner],
   );
 
   const setCollapsed = useCallback(
     (projectKeyOrWorkingDir: string, nextCollapsed: boolean) => {
       const projectKey = normalizeProjectKey(projectKeyOrWorkingDir);
       if (!projectKey) return;
-      setStored((prev) => {
+      updateForOwner((prev, writeOwnerId) => {
         const isCollapsed = Boolean(prev[projectKey]);
         if (isCollapsed === nextCollapsed) return prev;
         const next: Stored = { ...prev };
@@ -167,17 +184,17 @@ export function useCollapsedProjects(
         } else {
           delete next[projectKey];
         }
-        writeToStorage(next, ownerId);
+        writeToStorage(next, writeOwnerId);
         return next;
       });
     },
-    [ownerId],
+    [updateForOwner],
   );
 
   // collapseAll/expandAll read the latest activeWorkingDirs through the ref;
   // callback identity changes only at an owner boundary.
   const collapseAll = useCallback(() => {
-    setStored((prev) => {
+    updateForOwner((prev, writeOwnerId) => {
       const now = new Date().toISOString();
       const next: Stored = { ...prev };
       for (const dir of activeDirsRef.current) {
@@ -185,23 +202,23 @@ export function useCollapsedProjects(
         if (!projectKey) continue;
         next[projectKey] = { collapsed: true, lastSeenAt: now };
       }
-      writeToStorage(next, ownerId);
+      writeToStorage(next, writeOwnerId);
       return next;
     });
-  }, [ownerId]);
+  }, [updateForOwner]);
 
   const expandAll = useCallback(() => {
-    setStored((prev) => {
+    updateForOwner((prev, writeOwnerId) => {
       const next: Stored = { ...prev };
       for (const dir of activeDirsRef.current) {
         const projectKey = normalizeProjectKey(dir);
         if (!projectKey) continue;
         delete next[projectKey];
       }
-      writeToStorage(next, ownerId);
+      writeToStorage(next, writeOwnerId);
       return next;
     });
-  }, [ownerId]);
+  }, [updateForOwner]);
 
   const isAllCollapsed = useMemo(
     () =>

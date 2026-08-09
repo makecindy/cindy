@@ -8,6 +8,7 @@ import {
   claimLegacyOwnerNamespace,
   getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
+  isLegacyOwnerNamespaceClaimedByOtherOwner,
   listLegacyGhostTombstoneRoots,
   recoverLegacyGhostPlugins,
   __testing,
@@ -1395,6 +1396,21 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
       JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
     );
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
+  });
+
+  it('distinguishes another owner claim even while that claim is incomplete', async () => {
+    const root = await tempRoot();
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(false);
+
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-b'), complete: false }),
+    );
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(true);
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-b', root)).toBe(false);
+
+    await fs.writeFile(path.join(root, __testing.CLAIM_MARKER), '{ invalid');
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(false);
   });
 
   it('answers false while another live instance shares this userData, true again after it exits', async () => {

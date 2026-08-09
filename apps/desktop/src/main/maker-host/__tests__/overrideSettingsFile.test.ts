@@ -17,7 +17,10 @@ const DEFAULTS: TestSettings = {
   nested: { a: 1, b: 2 },
 };
 
-function createTempStore(existing?: { dir: string; file: string }) {
+function createTempStore(
+  existing?: { dir: string; file: string },
+  options: { logLoadedValue?: boolean; logReadErrorDetails?: boolean } = {},
+) {
   const dir = existing?.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-override-settings-'));
   const file = existing?.file ?? path.join(dir, 'settings.json');
   const log = {
@@ -46,9 +49,11 @@ function createTempStore(existing?: { dir: string; file: string }) {
     },
     log,
     label: 'test',
+    logLoadedValue: options.logLoadedValue,
+    logReadErrorDetails: options.logReadErrorDetails,
   });
 
-  return { dir, file, store };
+  return { dir, file, store, log };
 }
 
 describe('createOverrideSettingsFile', () => {
@@ -76,6 +81,41 @@ describe('createOverrideSettingsFile', () => {
         defaults: DEFAULTS,
         customizedKeys: ['enabled'],
       });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('can log load metadata without exposing normalized setting values', () => {
+    const { dir, file, store, log } = createTempStore(undefined, {
+      logLoadedValue: false,
+    });
+    try {
+      fs.writeFileSync(file, JSON.stringify({ limit: 918_273 }), 'utf-8');
+      expect(store.read().limit).toBe(918_273);
+      expect(log.info).toHaveBeenCalledWith('test settings loaded', {
+        path: file,
+        isCustomized: true,
+      });
+      expect(JSON.stringify(log.info.mock.calls)).not.toContain('918273');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('can omit malformed setting contents from read failure logs', () => {
+    const { dir, file, store, log } = createTempStore(undefined, {
+      logReadErrorDetails: false,
+    });
+    const sensitiveValue = 'private-settings-sentinel';
+    try {
+      fs.writeFileSync(file, `{"limit":${sensitiveValue}}`, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(log.warn).toHaveBeenCalledWith(
+        'test settings read failed; falling back to defaults',
+        { path: file },
+      );
+      expect(JSON.stringify(log.warn.mock.calls)).not.toContain(sensitiveValue);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

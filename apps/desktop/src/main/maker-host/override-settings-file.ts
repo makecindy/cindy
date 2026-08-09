@@ -58,6 +58,10 @@ export function createOverrideSettingsFile<T>(options: {
   maxBytes?: number;
   /** 读取/解析失败时保留原文件，供用户修复；缺省维持旧 store 的删除坏文件行为。 */
   preserveUnreadableFile?: boolean;
+  /** 设置值可能含敏感数据时，仅记录加载状态，不把 normalized value 写入日志。 */
+  logLoadedValue?: boolean;
+  /** 读取错误可能带出原文件片段时，不把错误详情写入日志。 */
+  logReadErrorDetails?: boolean;
 }): OverrideSettingsFile<T> {
   let cached: CachedState<T> | null = null;
   let cachedResolvedPath: string | null = null;
@@ -98,7 +102,11 @@ export function createOverrideSettingsFile<T>(options: {
           overrides,
         };
         options.log.info(`${options.label} settings loaded`, {
-          ...(isLoggableObject(cached.value) ? cached.value : { value: cached.value }),
+          ...(options.logLoadedValue === false
+            ? {}
+            : isLoggableObject(cached.value)
+              ? cached.value
+              : { value: cached.value }),
           path: file,
           isCustomized: cached.isCustomized,
         });
@@ -106,7 +114,9 @@ export function createOverrideSettingsFile<T>(options: {
       }
     } catch (err) {
       options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
-        error: err instanceof Error ? err.message : String(err),
+        ...(options.logReadErrorDetails === false
+          ? {}
+          : { error: err instanceof Error ? err.message : String(err) }),
         path: file,
       });
       if (!options.preserveUnreadableFile) {

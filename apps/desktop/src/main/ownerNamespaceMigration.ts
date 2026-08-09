@@ -280,6 +280,19 @@ function readMarkerSync(
   }
 }
 
+/**
+ * Whether the immutable shared legacy-data claim belongs to another owner.
+ * Partial claims count: once a marker names an owner, later accounts must not
+ * reinterpret or wait on that owner's remaining legacy files.
+ */
+export function isLegacyOwnerNamespaceClaimedByOtherOwner(
+  ownerId: string,
+  userDataDir = app.getPath('userData'),
+): boolean {
+  const { marker, invalid } = readMarkerSync(userDataDir);
+  return !invalid && marker !== null && marker.ownerKey !== dataOwnerStorageKey(ownerId);
+}
+
 interface LegacyGhostDir {
   root: string;
   id: string;
