@@ -55,20 +55,20 @@ function detail(summary: string): SubagentRunDetail {
 describe('SubagentsBody', () => {
   let onChanged: (payload: SubagentRunsChangedPayload, ownerStamp?: unknown) => void = () =>
     undefined;
-  let currentSummary = 'initial progress';
+  let currentDetail: SubagentRunDetail | null = detail('initial progress');
   const list = vi.fn(async () => ({
     supported: true,
-    runs: [detail(currentSummary)],
+    runs: currentDetail ? [currentDetail] : [],
   }));
   const loadDetail = vi.fn(async () => ({
     supported: true,
-    run: detail(currentSummary),
+    run: currentDetail,
   }));
 
   beforeEach(() => {
     dataOwnerTesting.reset();
     setDataOwnerGeneration('owner-1', 1);
-    currentSummary = 'initial progress';
+    currentDetail = detail('initial progress');
     list.mockClear();
     loadDetail.mockClear();
     Object.defineProperty(window, 'electronAPI', {
@@ -113,7 +113,7 @@ describe('SubagentsBody', () => {
 
     await screen.findByText('initial progress');
     const detailCallsBeforePush = loadDetail.mock.calls.length;
-    currentSummary = 'finished result';
+    currentDetail = detail('finished result');
 
     act(() => {
       onChanged(
@@ -130,6 +130,44 @@ describe('SubagentsBody', () => {
     await screen.findByText('finished result');
     await waitFor(() => {
       expect(loadDetail.mock.calls.length).toBeGreaterThan(detailCallsBeforePush);
+    });
+  });
+
+  it('removes stale list and detail content after a session boundary invalidation', async () => {
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1',
+          sessionId: 'session-1',
+          workdir: '/workspace',
+          remoteHostId: null,
+          deviceLinkDeviceId: null,
+          patchState: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    await screen.findByText('initial progress');
+    currentDetail = null;
+
+    act(() => {
+      onChanged(
+        {
+          sessionId: 'session-1',
+          runId: null,
+          created: false,
+          firstForSession: false,
+        },
+        OWNER_STAMP,
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('initial progress')).toBeNull();
+      expect(list).toHaveBeenCalledTimes(2);
     });
   });
 });

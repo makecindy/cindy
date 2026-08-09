@@ -149,7 +149,8 @@ export interface SubagentRunDetailResponse {
 
 export interface SubagentRunsChangedPayload {
   sessionId: string;
-  runId: string;
+  /** Null invalidates the whole session projection after a clear/rewind boundary. */
+  runId: string | null;
   created: boolean;
   /** True only when this is the first visible Subagent record in the task. */
   firstForSession: boolean;

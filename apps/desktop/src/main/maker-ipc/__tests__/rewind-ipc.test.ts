@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   previewRewindAtMessage: vi.fn(),
   commitRewindAtMessage: vi.fn(),
   withSessionInputStoppedForRewind: vi.fn(),
+  ownerScope: { ownerScopeKey: 'owner-1' },
+  broadcastSubagentRunsInvalidated: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -26,6 +28,14 @@ vi.mock('../register.js', () => ({
 
 vi.mock('../../goal-host/index.js', () => ({
   getGoalController: () => null,
+}));
+
+vi.mock('../../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: () => mocks.ownerScope,
+}));
+
+vi.mock('../../localDb/ipc/subagentRuns.js', () => ({
+  broadcastSubagentRunsInvalidated: mocks.broadcastSubagentRunsInvalidated,
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -66,6 +76,10 @@ describe('maker rewind IPC stop-then-rewind', () => {
     expect(mocks.commitRewindAtMessage).toHaveBeenCalledWith('session-1', 'message-1', {
       requireLatestUser: false,
     });
+    expect(mocks.broadcastSubagentRunsInvalidated).toHaveBeenCalledWith(
+      'session-1',
+      mocks.ownerScope,
+    );
   });
 
   it('waits through the post-Stop SESSION_RUNNING race before committing', async () => {
@@ -102,6 +116,7 @@ describe('maker rewind IPC stop-then-rewind', () => {
       await rejection;
       expect(mocks.commitRewindAtMessage.mock.calls.length).toBeGreaterThan(1);
       expect(mocks.commitRewindAtMessage.mock.calls.length).toBeLessThanOrEqual(152);
+      expect(mocks.broadcastSubagentRunsInvalidated).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

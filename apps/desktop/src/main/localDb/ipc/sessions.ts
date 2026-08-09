@@ -56,6 +56,7 @@ import {
 } from './messages';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
+import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -827,6 +828,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
       },
       ownerScope,
     );
+    broadcastSubagentRunsInvalidated(sessionId, ownerScope);
   }
 }
 

@@ -13,6 +13,8 @@ import { ipcMain } from 'electron';
 import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage } from '../maker-orchestration/rewind.js';
 import { getGoalController } from '../goal-host/index.js';
+import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
+import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
@@ -77,6 +79,7 @@ export function registerMakerRewindIpc(): void {
     ) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      const ownerScope = captureDataOwnerBroadcastScope();
       // edit-last-message 专用可选项:要求 target 必须是会话最新 user 消息,
       // 在 main 侧权威校验(renderer 的切片判定有 TOCTOU 窗口)。普通 Rewind
       // 不传 → 保持"可回到任意历史消息"的既有语义。
@@ -100,6 +103,7 @@ export function registerMakerRewindIpc(): void {
         // 回滚后会话历史被截断,active 目标若继续就会对着变化后的上下文跑 —— 暂停它
         // (保留计数,用户 review 后可 resume)。fire-and-forget,失败不阻塞 rewind。
         void getGoalController()?.pauseGoal(sid, 'paused: conversation rewound').catch(() => {});
+        broadcastSubagentRunsInvalidated(sid, ownerScope);
         return result;
       } catch (err) {
         log.warn('rewind:commit failed', { sid, cid, error: String(err) });

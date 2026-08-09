@@ -54,7 +54,11 @@ vi.mock('../../subagentRuns.js', () => ({
 }));
 
 import { SUBAGENT_RUNS_CHANGED_CHANNEL } from '@cindy/maker-shared/subagent-workspace';
-import { broadcastSubagentRunsChanged, registerSubagentRunsIpc } from '../subagentRuns.js';
+import {
+  broadcastSubagentRunsChanged,
+  broadcastSubagentRunsInvalidated,
+  registerSubagentRunsIpc,
+} from '../subagentRuns.js';
 
 describe('Subagent runs broadcast boundary', () => {
   beforeEach(() => {
@@ -116,6 +120,21 @@ describe('Subagent runs broadcast boundary', () => {
       SUBAGENT_RUNS_CHANGED_CHANNEL,
       payload,
       captured,
+    );
+  });
+
+  it('broadcasts a session-level invalidation for clear and rewind boundaries', () => {
+    broadcastSubagentRunsInvalidated('session-1');
+
+    expect(h.trusted.webContents.send).toHaveBeenCalledWith(
+      SUBAGENT_RUNS_CHANGED_CHANNEL,
+      {
+        sessionId: 'session-1',
+        runId: null,
+        created: false,
+        firstForSession: false,
+      },
+      h.activeStamp,
     );
   });
 

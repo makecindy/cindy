@@ -52,6 +52,21 @@ export function broadcastSubagentRunsChanged(
   }
 }
 
+export function broadcastSubagentRunsInvalidated(
+  sessionId: string,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  broadcastSubagentRunsChanged(
+    {
+      sessionId,
+      runId: null,
+      created: false,
+      firstForSession: false,
+    },
+    ownerScope,
+  );
+}
+
 export function registerSubagentRunsIpc(): void {
   ipcMain.handle('local-db:subagent-runs:list', async (event, input: unknown) => {
     assertTrustedAppRendererEvent(event);

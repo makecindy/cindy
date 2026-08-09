@@ -565,6 +565,7 @@ export function CCAgentSessionView({
         if (
           disposed ||
           !isDataOwnerPushCurrent(ownerStamp) ||
+          payload.runId === null ||
           payload.sessionId !== sessionId
         ) {
           return;

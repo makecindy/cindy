@@ -55,6 +55,7 @@ const h = vi.hoisted(() => {
   return {
     tapWindowBroadcast: vi.fn(),
     webContentsSend: vi.fn(),
+    broadcastSubagentRunsInvalidated: vi.fn(),
     agentIslandService: {
       handleSessionClosed: vi.fn(),
       handleSessionMetadataPatch: vi.fn(),
@@ -91,6 +92,9 @@ vi.mock('../device-link/broadcast-tap', () => ({
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => h.agentIslandService,
+}));
+vi.mock('../localDb/ipc/subagentRuns.js', () => ({
+  broadcastSubagentRunsInvalidated: h.broadcastSubagentRunsInvalidated,
 }));
 
 import { notifyAgentIslandSessionPatch } from '../localDb/agentIslandSessionPatch.js';
@@ -198,6 +202,7 @@ describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收
       sessionId: 'sess-clear',
       patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso },
     });
+    expect(h.broadcastSubagentRunsInvalidated).toHaveBeenCalledWith('sess-clear', null);
   });
 
   it('把 DB 读回的有效 clear 边界登记给晚到 background 过滤器', async () => {
@@ -225,6 +230,7 @@ describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收
 
     await expect(clearSessionContextInDb(sessionId, requestedAt)).rejects.toThrow('db unavailable');
 
+    expect(h.broadcastSubagentRunsInvalidated).not.toHaveBeenCalled();
     expect(backgroundTurnPredatesSessionClear(sessionId, requestedAt - 1)).toBe(true);
     expect(backgroundTurnPredatesSessionClear(sessionId, requestedAt + 1)).toBe(false);
     noteSessionClearBoundary(sessionId, null);
