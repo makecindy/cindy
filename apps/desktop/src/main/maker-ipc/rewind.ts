@@ -115,7 +115,9 @@ export function registerMakerRewindIpc(): void {
         !!opts && typeof opts === 'object' &&
         (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
       let subagentFence: SubagentRewindFence | null = null;
-      let committed = false;
+      // This flag controls observation-generation advancement, not whether
+      // the underlying message transaction has already committed.
+      let fenceCommitted = false;
       let visibleSubagentIdentitiesAfterCommit: VisibleSubagentObservationIdentity[] = [];
       try {
         subagentFence = beginSubagentRewindFence(sid);
@@ -129,16 +131,13 @@ export function registerMakerRewindIpc(): void {
           ? await withSessionInputStoppedForRewind(sid, () =>
               commitAfterStopping(sid, cid, { requireLatestUser }))
           : await commitAfterPersistBarrier(sid, cid, { requireLatestUser });
-        committed = true;
-        try {
-          visibleSubagentIdentitiesAfterCommit =
-            await listVisibleSubagentObservationIdentities(sid);
-        } catch (error) {
-          log.warn('rewind:failed to refresh visible Subagent identities', {
-            sid,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        visibleSubagentIdentitiesAfterCommit =
+          await listVisibleSubagentObservationIdentities(sid);
+        // The fence may advance generations only after the post-commit
+        // identity refresh succeeds. A failed refresh must take the same
+        // rollback path as any other rewind failure so buffered observations
+        // are not discarded behind an empty survivor set.
+        fenceCommitted = true;
         // 回滚后缓存的待注入交接 / fork 来源标记都是按截断前的历史算出来的,丢弃它,
         // 让下次 send 按回滚后的现状重新判定——被回滚掉的正是当初携带来源标记的那一轮时,
         // DB 侧判定会自动重新 arm(它按 rewind_at 过滤)。
@@ -155,7 +154,7 @@ export function registerMakerRewindIpc(): void {
         if (subagentFence) {
           finishSubagentRewindFence(
             subagentFence,
-            committed,
+            fenceCommitted,
             visibleSubagentIdentitiesAfterCommit,
           );
         }

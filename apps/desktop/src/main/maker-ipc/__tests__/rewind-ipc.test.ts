@@ -197,6 +197,44 @@ describe('maker rewind IPC stop-then-rewind', () => {
     });
   });
 
+  it('rolls back the Subagent fence when the post-commit identity refresh fails', async () => {
+    const session = { id: 'session-1' };
+    mocks.commitRewindAtMessage.mockResolvedValue(session);
+    mocks.listVisibleSubagentObservationIdentities
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('transient identity read failure'));
+    const handler = mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT);
+    if (!handler) throw new Error('rewind commit handler not registered');
+
+    await expect(handler({}, 'session-1', 'message-1')).rejects.toThrow(
+      'transient identity read failure',
+    );
+    expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(
+      expect.any(Object),
+      false,
+      [],
+    );
+    expect(mocks.broadcastSubagentRunsInvalidated).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the Subagent fence when the initial identity query fails', async () => {
+    mocks.listVisibleSubagentObservationIdentities.mockRejectedValueOnce(
+      new Error('transient initial identity read failure'),
+    );
+    const handler = mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT);
+    if (!handler) throw new Error('rewind commit handler not registered');
+
+    await expect(handler({}, 'session-1', 'message-1')).rejects.toThrow(
+      'transient initial identity read failure',
+    );
+    expect(mocks.commitRewindAtMessage).not.toHaveBeenCalled();
+    expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(
+      expect.any(Object),
+      false,
+      [],
+    );
+  });
+
   it.each(['spawn', 'progress', 'terminal'] as const)(
     'makes an already queued %s observation durable before the rewind boundary is chosen',
     async (observationKind) => {
