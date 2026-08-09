@@ -255,6 +255,32 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告 [最终版]');
   });
 
+  it('rejects an outer file link whose label already contains a link', () => {
+    const text = '[outer [inner](https://example.com)](xdt-file:///work/secret.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtFileLinks(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+  });
+
+  it('allows code-shaped links and images inside a file label', () => {
+    const code = '[outer `[inner](https://example.com)`](xdt-file:///work/code.pdf)';
+    const image = '[outer ![inner](https://example.com/a.png)](xdt-file:///work/image.pdf)';
+
+    expect(collectXdtFileRefs(`${code}\n${image}`).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: 'outer `[inner](https://example.com)`', url: 'xdt-file:///work/code.pdf' },
+      { alt: 'outer ![inner](https://example.com/a.png)', url: 'xdt-file:///work/image.pdf' },
+    ]);
+  });
+
+  it('requires whitespace before an angle destination title', () => {
+    const text = '[示例](<xdt-file:///work/secret.pdf>"title")';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtFileLinks(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+  });
+
   it('rejects a plain file destination with unescaped whitespace', () => {
     const texts = [
       '[示例](xdt-file:///work/secret report.pdf)',

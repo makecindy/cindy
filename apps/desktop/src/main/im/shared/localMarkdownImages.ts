@@ -51,6 +51,25 @@ function isEscapedMarkdownMarker(text: string, markerIndex: number): boolean {
   return backslashes % 2 === 1;
 }
 
+function markdownImageLabelEnd(text: string, labelStart: number, limit: number): number {
+  let depth = 1;
+  for (let cursor = labelStart; cursor < limit; cursor += 1) {
+    const char = text[cursor];
+    if (char === '\r' || char === '\n') return -1;
+    if (char === '\\') {
+      cursor += 1;
+      continue;
+    }
+    if (char === '[') {
+      depth += 1;
+    } else if (char === ']') {
+      depth -= 1;
+      if (depth === 0) return text[cursor + 1] === '(' ? cursor : -1;
+    }
+  }
+  return -1;
+}
+
 function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
   const codeRanges = markdownCodeRanges(text);
   const matches: LocalMarkdownImageMatch[] = [];
@@ -62,19 +81,13 @@ function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
     if (isMarkdownCodePosition(codeRanges, start)) continue;
     if (isEscapedMarkdownMarker(text, start)) continue;
 
-    let labelEnd = start + 2;
-    const labelLimit = Math.min(text.length, labelEnd + MAX_MARKDOWN_IMAGE_LABEL_LENGTH + 1);
-    while (labelEnd < labelLimit) {
-      const char = text[labelEnd];
-      if (char === '\r' || char === '\n') break;
-      if (char === '\\') {
-        labelEnd += 2;
-        continue;
-      }
-      if (char === ']' && text[labelEnd + 1] === '(') break;
-      labelEnd += 1;
-    }
-    if (text[labelEnd] !== ']' || text[labelEnd + 1] !== '(') continue;
+    const labelStart = start + 2;
+    const labelLimit = Math.min(
+      text.length,
+      labelStart + MAX_MARKDOWN_IMAGE_LABEL_LENGTH + 1,
+    );
+    const labelEnd = markdownImageLabelEnd(text, labelStart, labelLimit);
+    if (labelEnd === -1) continue;
 
     const targetStart = labelEnd + 2;
     const targetLimit = Math.min(
@@ -126,22 +139,13 @@ function localMarkdownImageSanitizationMatches(text: string): LocalMarkdownImage
     cursor = start + 2;
     if (isMarkdownCodePosition(codeRanges, start)) continue;
 
-    let labelEnd = start + 2;
-    while (labelEnd < text.length) {
-      const char = text[labelEnd];
-      if (char === '\r' || char === '\n') break;
-      if (char === '\\') {
-        labelEnd = Math.min(labelEnd + 2, text.length);
-        continue;
-      }
-      if (char === ']' && text[labelEnd + 1] === '(') break;
-      labelEnd += 1;
-    }
-    if (text[labelEnd] !== ']' || text[labelEnd + 1] !== '(') {
+    const labelEnd = markdownImageLabelEnd(text, start + 2, text.length);
+    if (labelEnd === -1) {
       // Nothing later on this line can close this candidate without crossing
       // the same scan range. Advance monotonically instead of rescanning a
       // long malformed line once for every literal `![` it contains.
-      cursor = labelEnd < text.length ? labelEnd + 1 : text.length;
+      const lineBreak = text.indexOf('\n', cursor);
+      cursor = lineBreak === -1 ? text.length : lineBreak + 1;
       continue;
     }
 

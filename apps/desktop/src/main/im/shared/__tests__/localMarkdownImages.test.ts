@@ -202,6 +202,26 @@ describe('materializeLocalMarkdownImages', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe('a]b');
   });
 
+  it('materializes and redacts an outer local image whose label contains a link', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(mediaAbsPath);
+    const text = `![outer [inner](https://example.com)](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-linked-label' },
+        deps,
+      ),
+    ).resolves.toEqual({
+      absPaths: [mediaAbsPath],
+      text: 'outer [inner](https://example.com)',
+    });
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('outer [inner](https://example.com)');
+  });
+
   it('does not materialize an escaped local image marker but still redacts its path', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'private.png');

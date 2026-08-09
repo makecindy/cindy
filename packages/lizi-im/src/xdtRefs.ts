@@ -571,6 +571,27 @@ function markdownLabelEnd(
   return { end: text.length, nested: false };
 }
 
+function markdownLinkOpenPrefix(
+  text: string,
+  closeByOpen: Int32Array,
+  codeRanges: readonly MarkdownCodeRange[],
+): Int32Array {
+  const prefix = new Int32Array(text.length + 1);
+  let codeRangeIndex = 0;
+  for (let opening = 0; opening < text.length; opening += 1) {
+    prefix[opening + 1] = prefix[opening];
+    while (codeRanges[codeRangeIndex]?.end <= opening) codeRangeIndex += 1;
+    const codeRange = codeRanges[codeRangeIndex];
+    if (text[opening] !== '[' || (codeRange !== undefined && codeRange.start <= opening)) continue;
+    if (isEscapedAt(text, opening)) continue;
+    const closing = closeByOpen[opening];
+    if (closing === -1 || text[closing + 1] !== '(') continue;
+    const image = opening > 0 && text[opening - 1] === '!' && !isEscapedAt(text, opening - 1);
+    if (!image) prefix[opening + 1] += 1;
+  }
+  return prefix;
+}
+
 function markdownBracketPairs(text: string): Int32Array {
   const closeByOpen = new Int32Array(text.length);
   closeByOpen.fill(-1);
@@ -660,6 +681,7 @@ function angleReferenceEnd(text: string, closingAngle: number): number {
   let cursor = closingAngle + 1;
   while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
   if (text[cursor] === ')') return cursor;
+  if (cursor === closingAngle + 1) return -1;
   const opener = text[cursor];
   const closer = opener === '"' ? '"' : opener === "'" ? "'" : opener === '(' ? ')' : null;
   if (!closer) return -1;
@@ -774,6 +796,7 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
   const refs: ParsedXdtRef[] = [];
   const codeRanges = markdownCodeRanges(text);
   const bracketCloseByOpen = markdownBracketPairs(text);
+  const linkOpenPrefix = markdownLinkOpenPrefix(text, bracketCloseByOpen, codeRanges);
   const parenPairs = markdownParenPairs(text);
   const whitespacePositions = markdownWhitespacePositions(text);
   let cursor = 0;
@@ -806,6 +829,11 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       continue;
     }
     if (altEnd >= text.length) break;
+
+    if (!image && linkOpenPrefix[altEnd] > linkOpenPrefix[altStart]) {
+      cursor = altStart;
+      continue;
+    }
 
     const urlStart = altEnd + 2;
     const angleWrapped = text[urlStart] === '<';
