@@ -2450,6 +2450,87 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
+  it('重连时能力降级回落也受投递时效约束，不绕过 ACK 缓冲的清扫', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const warnings: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log: { info: () => {}, warn: (message: string) => warnings.push(message) },
+    });
+    const c = collector();
+    try {
+      // 先在 ACK 世界里攒一条我方主动的待回执帧。
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '隔日回复' });
+      await tick();
+      const beforeOutage = c.ofType('turn.end').length;
+      expect(beforeOutage).toBeGreaterThanOrEqual(1);
+
+      // 断线跨过时效, 重连后落到**不再宣告 ACK 能力**的老实例上(滚动发布降级)。
+      d.onDisconnected('conn-1');
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
+      const beforeReconnect = c.ofType('turn.end').length;
+      d.onConnected('conn-1', c.send, []);
+      await tick();
+
+      // 降级分支是直接 send() 的, 不经过 sendPendingDelivery 的守卫 —— 所以时效
+      // 必须在取帧入口就把它清掉。
+      expect(c.ofType('turn.end')).toHaveLength(beforeReconnect);
+      expect(warnings.some((m) => m.includes('ACK buffer entry dropped'))).toBe(true);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('入口清扫不碰 server 索取的条目：origin=server-request 过线仍照答', async () => {
+    vi.useFakeTimers();
+    const terminalLedger = memoryTerminalLedger();
+    terminalLedger.records.push({
+      connectionId: 'conn-1',
+      requestId: 'req-1',
+      ack: {
+        requestId: 'req-1',
+        result: 'accepted',
+        reason: null,
+        sessionId: 'session-sweep-exempt',
+        queuePosition: null,
+      },
+      turnEnd: {
+        requestId: 'req-1',
+        externalKey: 'team-slack:C1:sweep-exempt',
+        sessionId: 'session-sweep-exempt',
+        status: 'ok',
+        finalText: '被索取的老结果',
+        errorMessage: null,
+        usage: { durationMs: 1 },
+      },
+      delivery: 'sent',
+      completedAt: 123_456, // ≈1970: 远超时效
+    });
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      // server 显式重投 -> 回放帧标 server-request 进 ACK 缓冲。
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+
+      // 再来一次重连: 入口清扫必须跳过它(不是我方主动排的队)。
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      await tick();
+      expect(c.ofType('turn.end').length).toBeGreaterThan(1);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('离线缓冲里超过投递时效的 turn.end 重连时丢弃，不因进程是否重启而分叉', async () => {
     vi.useFakeTimers();
     const fr = fakeRunner();

@@ -47,11 +47,22 @@ const DEFAULT_MAX_FILE_BYTES = 32_000_000;
  * old, so a client that reconnects later has nothing useful left to hand over.
  *
  * INVARIANT: the horizon must hold at *every* exit that pushes a terminal frame
- * on our own initiative — the durable outbox here, the dispatcher's ACK retry
- * timer, and its offline `turn.end` buffer. Guarding only the durable one makes
- * the behaviour depend on whether the process happened to restart during the
- * outage. Serving an explicit server re-dispatch is *not* one of those exits:
- * there the server is asking, and it owns its own staleness policy.
+ * on our own initiative. There are four, and they are easy to miss one at a time:
+ *  1. the durable outbox here (`listPending`);
+ *  2. the dispatcher's ACK retry timer (`sendPendingDelivery`);
+ *  3. its offline `turn.end` buffer, replayed on reconnect;
+ *  4. its ACK buffer on reconnect — which has *two* consumers, the ACK replay and
+ *     the capability-downgrade fallback that sends the frame directly.
+ *
+ * Because of (4) the age check belongs where the frames are *taken* (a sweep at
+ * the top of `onConnected`), not at each consumer: guarding consumers one by one
+ * is what let the downgrade branch through, and the next consumer added would
+ * slip through the same way. Guarding only (1) additionally makes the behaviour
+ * depend on whether the process happened to restart during the outage.
+ *
+ * Serving an explicit server re-dispatch is *not* one of those exits: there the
+ * server is asking, and it owns its own staleness policy. The dispatcher tags
+ * those ACK-buffer entries `origin: 'server-request'` so the sweeps skip them.
  */
 export const HOOK_TERMINAL_DELIVERY_TTL_MS = 24 * 60 * 60_000;
 

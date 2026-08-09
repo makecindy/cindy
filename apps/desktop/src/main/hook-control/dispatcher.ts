@@ -2601,6 +2601,19 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // opId 由 requestId 派生, 服务端按它去重, 补发不会打出第二个。
       ackReactions.onReconnected(connectionId, send);
       const deliveryAck = supportsDeliveryAck(connectionId);
+      // ACK 缓冲有**两个**消费分支: 下面的 ACK 重放走 sendPendingDelivery(自带
+      // 时效守卫), 能力降级回落则直接 send()。所以时效在**入口**一次性收口, 而不是
+      // 在每个分支各加一道判据 —— 后者漏过的正是降级这一支, 而且以后再多一个消费
+      // 分支还会再漏一次。清在这里, 后面无论谁取帧都取不到过线的我方主动条目。
+      for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
+        if (pending.connectionId !== connectionId) continue;
+        if (pending.origin !== 'local') continue; // server 索取的豁免, 见 origin 注释
+        if (!terminalDeliveryExpired(pending.completedAt, Date.now())) continue;
+        log.warn(
+          `ACK buffer entry dropped (past delivery horizon): ${pending.message.payload.requestId}`,
+        );
+        clearPendingDelivery(key);
+      }
       for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
         if (pending.connectionId !== connectionId) continue;
         if (deliveryAck) {
