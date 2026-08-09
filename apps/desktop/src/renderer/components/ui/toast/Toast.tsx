@@ -54,6 +54,13 @@ export function Toast({ item }: ToastProps) {
       // hover 悬停时暂停自动关闭，移开后按剩余时长继续（正在阅读时不消失）
       onMouseEnter={() => toast.pauseAutoDismiss(item.id)}
       onMouseLeave={() => toast.resumeAutoDismiss(item.id)}
+      // 操作按钮获得键盘焦点时同样暂停；否则短时 Toast 会在键盘用户操作前消失。
+      onFocusCapture={() => toast.pauseAutoDismiss(item.id)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          toast.resumeAutoDismiss(item.id);
+        }
+      }}
       className={cn(
         // 基础布局：单行 pill，内容驱动宽度
         'pointer-events-auto inline-flex flex-wrap items-center gap-2',
