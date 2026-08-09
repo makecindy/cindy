@@ -74,11 +74,28 @@ export function providerSecretStorageKey(id: ProviderSecretId): string {
  */
 export const REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY = 'remote_mcp_bridge_token';
 
+/**
+ * 对外开放的本地模型代理(给用户自己的 Claude Code CLI 用)所生成的 **对外访问 token**
+ * 的存储键名。它是外部客户端访问 loopback 代理的鉴权凭据(不是真供应商 key),需要跨 app
+ * 重启稳定,故落 safeStorage。main-only:renderer 只拿到掩码版,永不经通用 safe-storage IPC
+ * 读到明文。
+ */
+export const LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY = 'local_proxy_external_token';
+
+/**
+ * Codex / 通用 OpenAI 出口(B 族)独立的**对外访问 token** 存储键名。与上面的 Anthropic
+ * 出口(A 族)token 完全独立:两族各自开关、各自 token,跨族不互通。同样 main-only、跨重启
+ * 稳定,只把掩码版交给 renderer。
+ */
+export const LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY = 'local_proxy_codex_external_token';
+
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   STORAGE_KEYS['voice-asr'].toLowerCase(),
   STORAGE_KEYS['gemini'].toLowerCase(),
   STORAGE_KEYS['openai-images'].toLowerCase(),
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
+  LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY.toLowerCase(),
+  LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY.toLowerCase(),
 ]);
 
 /** Custom-provider runtime header blobs are main-only credential material. */

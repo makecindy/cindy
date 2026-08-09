@@ -63,6 +63,14 @@ import type {
   LocalThemeWriteResult,
 } from '../shared/local-themes';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
+import type {
+  LocalProxyCodexConfigPreviewResult,
+  LocalProxyConfigPreviewResult,
+  LocalProxyConfigWriteResult,
+  LocalProxyCopyResult,
+  LocalProxyMutationResult,
+  LocalProxyServiceState,
+} from '../shared/localProxyService';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import type { RawReleaseNotes } from '../shared/releaseNotesContent';
 import {
@@ -892,6 +900,49 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 任何路径参数。失败走 IPC 错误协议(reject,renderer 用 extractIpcError 解码)。
     importExternal: (): Promise<LocalThemeImportResult> =>
       ipcRenderer.invoke('local-themes:import') as Promise<LocalThemeImportResult>,
+  },
+
+  // 对外模型代理(给用户自己的 Claude Code CLI 用):设置页 → 模型供应商 → 模型代理子区块。
+  // 明文 token 绝不回传 renderer:复制走 copy* 通道(main 侧 clipboard.writeText,只回 {success});
+  // getState 与两个 preview 通道只给掩码。
+  localProxyService: {
+    getState: (): Promise<LocalProxyServiceState> =>
+      ipcRenderer.invoke('local-proxy:get-state'),
+    setEnabled: (enabled: boolean): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:set-enabled', enabled),
+    setDefaultProvider: (providerId: string): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:set-default-provider', providerId),
+    regenerateToken: (): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:regenerate-token'),
+    setPort: (port: number): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:set-port', port),
+    copyToken: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-token'),
+    copyEnv: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-env'),
+    previewExternalConfig: (): Promise<LocalProxyConfigPreviewResult> =>
+      ipcRenderer.invoke('local-proxy:preview-external-config'),
+    writeExternalConfig: (): Promise<LocalProxyConfigWriteResult> =>
+      ipcRenderer.invoke('local-proxy:write-external-config'),
+    // Codex / 通用 OpenAI 出口(第三期:独立开关 + 独立 token,另一个 loopback 端口)。
+    setCodexEnabled: (enabled: boolean): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:set-codex-enabled', enabled),
+    regenerateCodexToken: (): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:regenerate-codex-token'),
+    setCodexDefaultProvider: (providerId: string): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:set-codex-default-provider', providerId),
+    setCodexPort: (port: number): Promise<LocalProxyMutationResult> =>
+      ipcRenderer.invoke('local-proxy:set-codex-port', port),
+    copyCodexToken: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-codex-token'),
+    copyCodexEnv: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-codex-env'),
+    copyCodexTokenExport: (): Promise<LocalProxyCopyResult> =>
+      ipcRenderer.invoke('local-proxy:copy-codex-token-export'),
+    previewCodexConfig: (): Promise<LocalProxyCodexConfigPreviewResult> =>
+      ipcRenderer.invoke('local-proxy:preview-codex-config'),
+    writeCodexConfig: (): Promise<LocalProxyConfigWriteResult> =>
+      ipcRenderer.invoke('local-proxy:write-codex-config'),
   },
 
   // RSB terminal tab(PTY 后端 + xterm.js)

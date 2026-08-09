@@ -1115,6 +1115,59 @@ interface ElectronAPI {
     importExternal: () => Promise<import('../shared/theme-import/types').LocalThemeImportResult>;
   };
 
+  /**
+   * 对外模型代理(给用户自己的 Claude Code CLI 用):设置页 → 模型供应商 → 模型代理子区块。
+   * 明文 token 绝不回传 renderer:复制走 copy* 通道(main 侧 clipboard.writeText,只回 {success});
+   * getState 与两个 preview 通道只给掩码。
+   */
+  localProxyService: {
+    getState: () => Promise<import('../shared/localProxyService').LocalProxyServiceState>;
+    setEnabled: (
+      enabled: boolean,
+    ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
+    setDefaultProvider: (
+      providerId: string,
+    ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
+    regenerateToken: () => Promise<
+      import('../shared/localProxyService').LocalProxyMutationResult
+    >;
+    setPort: (
+      port: number,
+    ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
+    copyToken: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
+    copyEnv: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
+    previewExternalConfig: () => Promise<
+      import('../shared/localProxyService').LocalProxyConfigPreviewResult
+    >;
+    writeExternalConfig: () => Promise<
+      import('../shared/localProxyService').LocalProxyConfigWriteResult
+    >;
+    // Codex / 通用 OpenAI 出口(第三期:独立开关 + 独立 token,另一个 loopback 端口)。
+    setCodexEnabled: (
+      enabled: boolean,
+    ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
+    regenerateCodexToken: () => Promise<
+      import('../shared/localProxyService').LocalProxyMutationResult
+    >;
+    setCodexDefaultProvider: (
+      providerId: string,
+    ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
+    setCodexPort: (
+      port: number,
+    ) => Promise<import('../shared/localProxyService').LocalProxyMutationResult>;
+    copyCodexToken: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
+    copyCodexEnv: () => Promise<import('../shared/localProxyService').LocalProxyCopyResult>;
+    copyCodexTokenExport: () => Promise<
+      import('../shared/localProxyService').LocalProxyCopyResult
+    >;
+    previewCodexConfig: () => Promise<
+      import('../shared/localProxyService').LocalProxyCodexConfigPreviewResult
+    >;
+    writeCodexConfig: () => Promise<
+      import('../shared/localProxyService').LocalProxyConfigWriteResult
+    >;
+  };
+
   /** RSB terminal tab —— PTY 后端 + xterm.js,详见 shared/terminal-bridge.ts 注释。 */
   terminal: import('../shared/terminal-bridge').TerminalBridge;
 

@@ -368,6 +368,7 @@ import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
+import { registerLocalProxyServiceIpc } from './local-proxy-service/register';
 import {
   registerRemoteSshIpc,
   disposeRemoteSshPool,
@@ -423,12 +424,14 @@ import { clearXaiRateLimitSnapshot } from './usageBroadcaster.js';
 import {
   ensureAnthropicCompatProxyReady,
   disposeAnthropicCompatProxy,
+  disposeAnthropicExternalProxy,
 } from './maker-host/anthropic-compat-proxy-host.js';
 import {
   onClaudeSessionRouteChange,
   readClaudeSessionRoute,
 } from './maker-host/claude-session-route-registry.js';
 import {
+  disposeCodexExternalProxy,
   disposeCodexProxy,
   getCodexProxyAuthInjectionState,
 } from './maker-host/codex-proxy-host.js';
@@ -6525,6 +6528,7 @@ app.on('ready', async () => {
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
   });
   registerLocalThemesIpc();
+  registerLocalProxyServiceIpc();
   registerVoiceInputIpc();
   registerGlobalVoiceInputIpc({
     getMainWindow: () => mainWindowRef,
@@ -6764,11 +6768,15 @@ onQuit('embedding-host', () => stopEmbeddingHost(), 'async');
 // Claude CLI 子进程收到 ECONNRESET, 但 session 本来就在 close 路径上, 这种 error 直接
 // 被吞, 影响可接受。
 onQuit('anthropic-compat-proxy', () => disposeAnthropicCompatProxy(), 'async');
+// 对外 loopback(端口拆分,#1666)是独立 handle,单独关。同为 async 阶段,权衡同上。
+onQuit('anthropic-external-proxy', () => disposeAnthropicExternalProxy(), 'async');
 // browser-runtime: stop the managed Chrome so it doesn't outlive the app (headed
 // browser + locked user-data-dir would otherwise survive quit and force a stale
 // SingletonLock recovery next launch). `stop` is idempotent / no-op if never started.
 onQuit('browser-runtime', () => disposeBrowserRuntime(), 'async');
 onQuit('codex-proxy', () => disposeCodexProxy(), 'async');
+// 对外 codex loopback(端口拆分,#1666 Finding 2)是独立 handle,单独关。同为 async 阶段。
+onQuit('codex-external-proxy', () => disposeCodexExternalProxy(), 'async');
 // Remote file-service clients: 先于 pool 关闭, 挂断远端 daemon 的 exec channel。
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
 // Remote SSH pool: 主动断开所有活动连接, 防止 ssh2 子句柄阻塞 Node 进程退出。

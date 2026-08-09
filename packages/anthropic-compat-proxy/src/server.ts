@@ -1587,9 +1587,21 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // upstream(订阅直连 api.anthropic.com / 走网关 endpoint),而非静态默认上游。
     let decision: RoutingDecision | null = null;
     let rawParsed: unknown = undefined;
-    if (opts.routingTransform && contentType.toLowerCase().startsWith('application/json')) {
+    if (opts.routingTransform) {
+      // 仅 JSON body 解析出 rawParsed 供基于字段(如 body.model)的路由;非 JSON / 解析失败时
+      // rawParsed 保持 undefined。但**无论 content-type 如何都调用 routingTransform** —— 它可据
+      // method/url/headers(如对外访问 token)判路由或拒绝。若像旧逻辑那样只在 application/json
+      // 时才调,携带对外 token 但 content-type 缺失/错误的请求会绕过外部检查、带着 token 头透传
+      // 上游(凭证泄漏 / 误路由)。transform 对 undefined body 应自行短路返回 null(= 默认上游 +
+      // 透传 headers,与 GET 无 body 路径同契约),故对内部请求向后兼容。
+      if (contentType.toLowerCase().startsWith('application/json')) {
+        try {
+          rawParsed = JSON.parse(rawBody.toString('utf8'));
+        } catch {
+          rawParsed = undefined;
+        }
+      }
       try {
-        rawParsed = JSON.parse(rawBody.toString('utf8'));
         const maybeDecision = opts.routingTransform(rawParsed, requestCtx);
         decision = isPromiseLike<RoutingDecision | null>(maybeDecision)
           ? await maybeDecision
@@ -2102,7 +2114,17 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     socket.on('close', () => inflightSockets.delete(socket));
   });
 
-  const port = await listenOnFetchSafeLoopbackPort(server, host, logger);
+  // 固定端口(opts.port)时只绑这一个,失败即抛(host 负责 fallback);否则随机选 Fetch-safe 端口。
+  // 固定端口若落在 Fetch 屏蔽端口(fetch/undici 会直接 ERR_INVALID_ARGUMENT 拒连,SDK 根本连不上)
+  // 里,先自证拒绝再抛 —— 与随机选口路径的 isFetchBlockedPort 过滤同源,host 据此 fallback 随机口。
+  if (opts.port !== undefined && isFetchBlockedPort(opts.port)) {
+    throw new Error(
+      `anthropic-compat-proxy: refusing to bind Fetch-blocked loopback port ${opts.port}`,
+    );
+  }
+  const port = opts.port !== undefined
+    ? await listenOnLoopbackPort(server, host, opts.port)
+    : await listenOnFetchSafeLoopbackPort(server, host, logger);
   const hostInUrl = host.includes(':') ? `[${host}]` : host;
   const url = `http://${hostInUrl}:${port}`;
 

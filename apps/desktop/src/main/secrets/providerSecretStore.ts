@@ -18,6 +18,8 @@ import {
   GHOST_SECRET_HINT_PREFIX,
   PROVIDER_SECRET_IDS,
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
+  LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY,
+  LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY,
   type ProviderSecretId,
 } from '../../shared/providerSecrets.js';
 import {
@@ -275,6 +277,11 @@ export function createProviderSecretStore(
     // SSH 远端 daemon 直连 MCP bridge 的 persistent token 同清:同机换账号后,
     // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
     io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
+    // 对外模型代理的对外访问 token:同机换账号后,旧账号生成的 token 必须失效,
+    // 防止新账号沿用旧 token 访问代理(背后是新账号的付费凭证)。A 族(Anthropic)与
+    // B 族(Codex/OpenAI)两个独立 token 都要清,漏清任一族都会让旧客户端串到新账号凭证。
+    io.remove(LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY);
+    io.remove(LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
@@ -563,6 +570,90 @@ export function writeRemoteMcpBridgeToken(value: string): boolean {
       'write remote mcp bridge token failed',
     );
     return false;
+  }
+}
+
+/**
+ * 读取对外模型代理的**对外访问 token**(**main 侧鉴权专用**)。不存在 / safeStorage
+ * 不可用 / 读失败均返回 null。main-only 键,renderer 不经通用 safe-storage IPC 访问。
+ */
+export function readLocalProxyExternalToken(): string | null {
+  try {
+    return electronSecretIo.read(LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'read local proxy external token failed',
+    );
+    return null;
+  }
+}
+
+/** 写入(覆盖)对外模型代理的对外访问 token;返回是否成功落盘。 */
+export function writeLocalProxyExternalToken(value: string): boolean {
+  try {
+    return electronSecretIo.write(LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY, value);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'write local proxy external token failed',
+    );
+    return false;
+  }
+}
+
+/** 删除对外模型代理的对外访问 token;不存在视为成功(幂等)。 */
+export function removeLocalProxyExternalToken(): { success: boolean; error?: string } {
+  try {
+    return electronSecretIo.remove(LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'remove local proxy external token failed',
+    );
+    return { success: false, error: 'remove_failed' };
+  }
+}
+
+/**
+ * 读取 Codex / 通用 OpenAI 出口(B 族)的**对外访问 token**(main 侧鉴权专用)。与 A 族
+ * token 独立存储。不存在 / safeStorage 不可用 / 读失败均返回 null。
+ */
+export function readLocalProxyCodexExternalToken(): string | null {
+  try {
+    return electronSecretIo.read(LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'read local proxy codex external token failed',
+    );
+    return null;
+  }
+}
+
+/** 写入(覆盖)B 族对外访问 token;返回是否成功落盘。 */
+export function writeLocalProxyCodexExternalToken(value: string): boolean {
+  try {
+    return electronSecretIo.write(LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY, value);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'write local proxy codex external token failed',
+    );
+    return false;
+  }
+}
+
+/** 删除 B 族对外访问 token;不存在视为成功(幂等)。 */
+export function removeLocalProxyCodexExternalToken(): { success: boolean; error?: string } {
+  try {
+    return electronSecretIo.remove(LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY);
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'remove local proxy codex external token failed',
+    );
+    return { success: false, error: 'remove_failed' };
   }
 }
 

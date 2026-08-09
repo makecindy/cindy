@@ -127,6 +127,16 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(result).toEqual({ status: 200, text: JSON.stringify({ ok: true }) });
   });
 
+  it('refuses to bind a pinned Fetch-blocked loopback port (host falls back to random)', async () => {
+    await expect(
+      createAnthropicCompatProxy({
+        upstream: 'https://gateway.example/v1',
+        transformRequest: [],
+        port: 6000,
+      }),
+    ).rejects.toThrow(/refusing to bind Fetch-blocked loopback port 6000/);
+  });
+
   it('jumps out of a Windows excluded-port range after EACCES and cleans listeners', async () => {
     const attemptedPorts: number[] = [];
     let boundPort = 0;

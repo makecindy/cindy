@@ -51,6 +51,8 @@ import {
   GHOST_SECRET_TAIL_MIN_VALUE_CHARS,
   isRendererAccessibleSafeStorageKey,
   PROVIDER_SECRET_IDS,
+  LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY,
+  LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY,
 } from '../../../shared/providerSecrets';
 
 /** 内存版 SecretStorageIo:按"存储键名"读写一个 Map,模拟 safeStorage 文件层。 */
@@ -340,6 +342,15 @@ describe('providerSecretStore account boundary (clearAll + reconcileOwner)', () 
     expect(io.store.has(ghostSecretStorageKey('web-search', 'tavily_api_key'))).toBe(false);
     expect(io.store.has(ghostSecretHintStorageKey('my-ghost', 'api_key'))).toBe(false);
     expect(io.store.get('unrelated_key')).toBe('keep-me');
+  });
+
+  it('clearAll 清掉两族对外代理 token(A=Anthropic / B=Codex),换账号后旧 token 不能串新账号凭证', () => {
+    const store = createProviderSecretStore(io);
+    io.store.set(LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY, 'cindy-local-anthropic');
+    io.store.set(LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY, 'cindy-local-codex');
+    store.clearAll();
+    expect(io.store.has(LOCAL_PROXY_EXTERNAL_TOKEN_STORAGE_KEY)).toBe(false);
+    expect(io.store.has(LOCAL_PROXY_CODEX_EXTERNAL_TOKEN_STORAGE_KEY)).toBe(false);
   });
 
   it('reconcileOwner for a different user clears custom MCP tokens (no cross-account bleed)', () => {

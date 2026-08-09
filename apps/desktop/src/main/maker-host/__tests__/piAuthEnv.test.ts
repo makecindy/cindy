@@ -36,6 +36,12 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: (id: string) => (id === 'my-vllm' ? 'BYOM-KEY' : null),
+  // pi-host 的 import 图经 anthropic-compat-proxy-host → local-proxy-external-auth 触及这些
+  // 对外代理 token 存取器;此处只需惰性桩(Pi 鉴权用例不涉及对外代理)。
+  readLocalProxyExternalToken: () => null,
+  writeLocalProxyExternalToken: () => true,
+  readLocalProxyCodexExternalToken: () => null,
+  writeLocalProxyCodexExternalToken: () => true,
 }));
 
 import { desktopPiAuthAdapter } from '../pi-host.js';
