@@ -55,6 +55,6 @@ export const FULL_ACCESS_CONFIRMATION_COPY: Record<
     description:
       "Full access 會關閉工作區沙箱並跳過常規審批。Cindy 可以修改工作區外的檔案、執行聯網命令且不再詢問；內建高風險操作仍會要求確認。",
     confirm: "開啟 Full access",
-    cancel: "保留當前許可權",
+    cancel: "保留當前權限",
   },
 };
