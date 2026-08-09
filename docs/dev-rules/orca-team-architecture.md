@@ -120,6 +120,9 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 保留按 agent 聚合的兼容清单，并通过 `routes` 返回每个已连接来源及当前默认来源；
 `create_worker` / `create_workers` 可选传入 `provider_id` 做精确路由。创建回执同时返回
 持久化的 `provider_id` 与实际解析后的 `route_provider_id`，两者不能混为一谈。
+`list_available_models` 全局可见且不要求 Lead 身份，因此 provider 快照必须使用
+`allowSideEffects: false` 的纯读路径；只有 handoff / Worker 创建等已经进入写操作授权边界的
+路由解析才能显式使用 `allowSideEffects: true` 做本机 provider 自愈。
 
 Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast 的“下次创建默认值”同类，不是 Lead 权限的继承项，也不是 Team 数据库字段：
 

@@ -16,8 +16,8 @@ const routingSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 
 describe('Orca provider routing snapshot wiring', () => {
-  it('delegates routing snapshot construction to the post-claim full-catalog reader', () => {
-    const start = registerSource.indexOf('const getProviderRoutingContext = () =>');
+  it('delegates route snapshots to side-effect-aware catalog readers', () => {
+    const start = registerSource.indexOf('const getProviderRoutingContext = (options:');
     const end = registerSource.indexOf('const orcaWorkerCreationService', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -25,9 +25,26 @@ describe('Orca provider routing snapshot wiring', () => {
 
     expect(wiring).toContain('readOrcaWorkerProviderRoutingContext');
     expect(wiring).toContain('providerService: getDesktopProviderService()');
-    expect(wiring).toContain('getCatalog: getActiveCatalog');
-    expect(routingSource).toContain('waitForDiscovery: true');
-    expect(registerSource).toContain('getProviderRoutingContext,');
+    expect(wiring).toContain(
+      'getCatalog: options.allowSideEffects ? getActiveCatalog : getDesktopSelectableCatalog',
+    );
+    expect(wiring).toContain('allowSideEffects: options.allowSideEffects,');
+    expect(wiring).toContain('waitForDiscovery: options.allowSideEffects,');
+    expect(routingSource).toContain('allowSideEffects: deps.allowSideEffects ?? true');
+    expect(registerSource).toContain(
+      'getProviderRoutingContext: () => getProviderRoutingContext({ allowSideEffects: true }),',
+    );
+  });
+
+  it('keeps globally visible model discovery on a read-only provider snapshot', () => {
+    const start = registerSource.indexOf('listAvailableModels: async ({ agent }) => {');
+    const end = registerSource.indexOf('\n    },\n  };', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const listing = registerSource.slice(start, end);
+
+    expect(listing).toContain('getProviderRoutingContext({ allowSideEffects: false })');
+    expect(listing).not.toContain('getProviderRoutingContext({ allowSideEffects: true })');
   });
 
   it('validates explicit execution config before allocating a handoff worktree', () => {
@@ -36,6 +53,7 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const createSetup = registerSource.slice(start, end);
+    expect(createSetup).toContain('getProviderRoutingContext({ allowSideEffects: true })');
     const validation = createSetup.indexOf(
       'const resolvedExecution = resolveSendToSessionExecutionConfig({',
     );

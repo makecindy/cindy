@@ -7957,7 +7957,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               },
               overrides: executionOverrides,
               availableModels: maker.getCapabilities(targetAgent).availableModels,
-              providerRouting: await getProviderRoutingContext(),
+              providerRouting: await getProviderRoutingContext({ allowSideEffects: true }),
               hasCindyAiApiKey: readClaudeApiKey() != null,
             });
             if (!resolvedExecution.ok) {
@@ -9312,10 +9312,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   orcaTeamServiceForEvents = orcaTeamService;
 
-  const getProviderRoutingContext = () =>
+  const getProviderRoutingContext = (options: { allowSideEffects: boolean }) =>
     readOrcaWorkerProviderRoutingContext({
       providerService: getDesktopProviderService(),
-      getCatalog: getActiveCatalog,
+      getCatalog: options.allowSideEffects ? getActiveCatalog : getDesktopSelectableCatalog,
+      allowSideEffects: options.allowSideEffects,
+      waitForDiscovery: options.allowSideEffects,
     });
 
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
@@ -9349,7 +9351,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
-    getProviderRoutingContext,
+    getProviderRoutingContext: () => getProviderRoutingContext({ allowSideEffects: true }),
     readClaudeApiKey,
     reserveWorkerCreation,
     renewWorkerCreationReservation,
@@ -9786,7 +9788,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
         const result: Record<string, Array<{ id: string; label: string }>> = {};
         const routes: Record<string, OrcaModelRoute[]> = {};
-        const routing = await getProviderRoutingContext();
+        // 该工具全局可见且不要求 Lead 身份；模型发现必须保持纯读，不能借查询
+        // 认领本机 provider 凭证或触发 credential-backed 清单刷新。
+        const routing = await getProviderRoutingContext({ allowSideEffects: false });
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
           // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。

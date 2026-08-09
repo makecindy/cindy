@@ -24,11 +24,13 @@ import {
 export async function readOrcaWorkerProviderRoutingContext(deps: {
   providerService: ProviderService;
   getCatalog: () => Catalog;
+  allowSideEffects?: boolean;
+  waitForDiscovery?: boolean;
 }): Promise<OrcaWorkerProviderRoutingContext> {
   let postClaimCatalog: Catalog | undefined;
   const views = await deps.providerService.listProviders({
-    allowSideEffects: true,
-    waitForDiscovery: true,
+    allowSideEffects: deps.allowSideEffects ?? true,
+    waitForDiscovery: deps.waitForDiscovery ?? true,
     getCatalog: () => {
       postClaimCatalog = deps.getCatalog();
       return postClaimCatalog;
