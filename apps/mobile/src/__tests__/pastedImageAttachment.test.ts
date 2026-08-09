@@ -66,7 +66,8 @@ describe('resolvePastedImageAsset', () => {
 
 describe('粘贴接线源码断言(防重构掉线)', () => {
   const mobileRoot = join(__dirname, '..', '..');
-  const read = (rel: string) => readFileSync(join(mobileRoot, rel), 'utf8');
+  // Windows checkout 使用 CRLF；源码接线断言统一到 LF，避免把换行风格误判成逻辑缺失。
+  const read = (rel: string) => readFileSync(join(mobileRoot, rel), 'utf8').replace(/\r\n/g, '\n');
 
   it('共享输入行组件包 TextInputWrapper 并只上抛 images', () => {
     const source = read('src/session/MobileComposerInputRow.tsx');
