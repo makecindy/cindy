@@ -2430,7 +2430,7 @@
         "enabled": "Chat semantic indexing enabled",
         "disabled": "Chat semantic indexing stopped",
         "unavailable": "Chat semantic indexing is unavailable for this account or region",
-        "toggleFailed": "Failed to toggle chat embedding"
+        "toggleFailed": "Failed to toggle chat semantic indexing"
       }
     },
     "messageNavRail": {
