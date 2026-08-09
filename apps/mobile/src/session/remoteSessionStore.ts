@@ -539,13 +539,13 @@ function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
 function recordInputProjectionRemoteEvidence(sessionId: string, clientIds: Iterable<string>, settled = false): void {
   const epoch = ++nextInputProjectionRemoteEpoch;
   inputProjectionRemoteEpochs.set(sessionId, epoch);
-  const evidence = inputProjectionRemoteQueuedEvidence.get(sessionId) ?? new Map<string, number>();
-  inputProjectionRemoteQueuedEvidence.set(sessionId, evidence);
+  let evidence = inputProjectionRemoteQueuedEvidence.get(sessionId);
   for (const clientId of clientIds) {
+    inputProjectionRemoteQueuedEvidence.set(sessionId, evidence ??= new Map<string, number>());
     evidence.delete(clientId);
     evidence.set(clientId, settled ? -epoch : epoch);
   }
-  while (evidence.size > INPUT_PROJECTION_REMOTE_EVIDENCE_LIMIT) evidence.delete(evidence.keys().next().value!);
+  while (evidence && evidence.size > INPUT_PROJECTION_REMOTE_EVIDENCE_LIMIT) evidence.delete(evidence.keys().next().value!);
 }
 
 function clearInputProjectionUnconfirmed(sessionId: string, confirmedClientIds: ReadonlySet<string>): boolean {
