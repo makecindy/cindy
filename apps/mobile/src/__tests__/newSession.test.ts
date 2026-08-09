@@ -2184,7 +2184,7 @@ describe('submit guard catalog wiring (source locks)', () => {
   });
 
   it('goal 接回载荷按 sessionId 换代清理:切任务不残留旧 objective/limits(codex P2)', () => {
-    // 任务抽屉 router.replace 原地更新同一 SessionScreen 实例,goalRestore/goalError
+    // 任务抽屉 replaceParams 原地更新同一 SessionScreen 实例,goalRestore/goalError
     // 只在首次挂载初始化——sessionId 变化必须清理,否则新任务 Goal 表单预填旧目标、
     // 甚至把旧目标提交到新任务(codex review P2)。
     const sessionSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');

@@ -75,6 +75,7 @@ import type {
 import type { MemoryResetResult, MemorySetResult, MemoryStatus } from '../../types/memory.js';
 import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../types/common.js';
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
+import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
 import { scanPiCustomizations } from './customization-scanner.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
@@ -2355,12 +2356,18 @@ export class PiAgent extends BaseAgent {
     }
   }
 
+  /** SkillHub raw view; project items remain discovered until runtime truth says otherwise. */
+  override async listCustomizations(
+    opts: ListCustomizationsOptions,
+  ): Promise<ListCustomizationsResult> {
+    return scanPiCustomizations(opts);
+  }
+
   /**
    * ChatInput `/` palette 的 agent-skill 类目 —— 纯文件系统发现,与 CC/Codex 对齐。
    *
-   * 扫共享根 ~/.agents/skills(cc/codex 同源,pi 因此看到一致的技能包)+ pi 原生
-   * ~/.pi/agent/skills + 项目目录。只暴露技能"存在"(name/description),技能正文仅
-   * 在 /skill:name 被调用时进上下文 —— 故此发现层零基线上下文增长(契合精简 pi)。
+   * 扫共享根 ~/.agents/skills + 项目 .pi/skills 和从 cwd 到 Git 根的
+   * .agents/skills。项目条目仅表示已发现；只有 get_commands 能确认 loaded。
    */
   override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
     const { items, errors } = await scanPiCustomizations({
@@ -2377,6 +2384,8 @@ export class PiAgent extends BaseAgent {
           path: it.absolutePath,
           scope: (it.scope === 'repo' ? 'repo' : 'user') as 'user' | 'repo',
           enabled: it.enabled ?? true,
+          runtimeStatus: it.runtimeStatus,
+          runtimeCommandName: `skill:${it.name}`,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     };

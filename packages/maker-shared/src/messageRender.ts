@@ -22,6 +22,20 @@ export interface MessageRenderSourceMessageLike {
   toolUseId?: string | null;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
+  /**
+   * Host sealed this Codex plan row because its owning turn ended successfully.
+   * The seal closes the plan's lifecycle only — step statuses stay exactly as the
+   * agent last reported them. Interrupted, failed, and auto-resumed turns never
+   * seal, so their plan stays open while the task itself is still alive.
+   */
+  terminalPlanSnapshot?: boolean;
+  /** Host time when the successful turn seal was applied. */
+  terminalPlanAtMs?: number;
+  /**
+   * user 消息投递方式:'steer' 是运行中插话,不开启新 turn——失败印记回扫的
+   * turn 所有权边界只认普通('turn')user 消息。
+   */
+  delivery?: string | null;
 }
 
 export type MessageRenderNormalizedMessageKind =
@@ -196,6 +210,19 @@ export interface MessageRenderTodoInsertion {
   createdAt?: string;
   updatedAtMs?: number;
   source: MessageRenderTodoSource;
+  /**
+   * 这份计划所属的 turn 已被 host 判定为成功收尾(见
+   * `MessageRenderSourceMessageLike.terminalPlanSnapshot`)。常驻面板据此退场,
+   * 不看勾选状态;未盖章就一直挂着。
+   */
+  sealed?: boolean;
+  /** Persisted host time of the successful terminal seal. */
+  sealedAtMs?: number;
+  /**
+   * host 在中断/失败 turn 给该计划行盖的 `turnCompleted: false`(见
+   * `persistCodexPlanOnDone`):任务还活着,常驻面板不得按"全勾完"兜底退场。
+   */
+  turnFailed?: boolean;
 }
 
 export interface MessageRenderLatestTodoState {
@@ -446,7 +473,16 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       source === 'task'
       && Boolean(previousAllDone)
       && taskToolTargetsExistingTask(message, resultText, taskState);
-    const startsNewSession = !previous || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
+    // 终态章是计划 session 的硬边界:成功收尾的 turn 常留着未勾完的步骤,只看
+    // allDone 会让下一 turn 的计划把上一轮吞成"续写"——历史里上一轮的计划卡
+    // 消失、面板复用旧 key。同 toolUseId 的活跃行被新事件清章(terminalPlanSnapshot
+    // 置 false)后不算边界,sealed-then-updated 的复亮行为不变。
+    const previousSealed =
+      Boolean(previous) && planRowSealOf(messages[previous!.lastIndex]).sealed;
+    const startsNewSession =
+      !previous
+      || previousSealed
+      || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
     if (source === 'task' && startsNewSession) {
       taskState.clear();
     }
@@ -473,12 +509,21 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   const out = new Map<number, MessageRenderTodoInsertion>();
   for (const session of sessions) {
     const first = messages[session.firstIndex];
+    const lastRow = messages[session.lastIndex];
+    const seal = planRowSealOf(lastRow);
     out.set(session.lastIndex, {
       key: `${keyPrefix}-${sourceClientId(first)}`,
       todos: session.todos,
-      createdAt: messages[session.lastIndex]?.createdAt,
-      updatedAtMs: messages[session.lastIndex]?.planUpdatedAtMs,
+      createdAt: lastRow?.createdAt,
+      updatedAtMs: lastRow?.planUpdatedAtMs,
       source: session.source,
+      ...(seal.sealed
+        ? {
+            sealed: true,
+            ...(typeof seal.sealedAtMs === 'number' ? { sealedAtMs: seal.sealedAtMs } : {}),
+          }
+        : {}),
+      ...(planRowTurnFailed(lastRow) ? { turnFailed: true } : {}),
     });
   }
   return out;
@@ -554,28 +599,28 @@ export interface CodexPlanSnapshotApplyResult<
 }
 
 /**
- * Resolve the plan payload that should survive a Codex turn terminal event.
- * A successful turn is authoritative even when Codex only returns its last
- * cached in-progress snapshot: every remaining item belongs to that finished
- * turn and must converge to completed. Other terminal states may only apply an
- * explicit snapshot; they must never infer completion from stale progress.
+ * Close out a Codex plan at its owning turn's terminal event.
+ *
+ * Two independent things happen here, and keeping them separate is the whole
+ * point:
+ *  - **Content**: an explicit `turn/plan/updated` snapshot carried by `done` is
+ *    applied verbatim. Nothing else ever rewrites a step. Codex leaves open
+ *    items on a successful turn routinely (its own prompt asks the model to tick
+ *    them, and the model complies most of the time — not always), and inventing
+ *    the missing ticks makes the transcript claim work that was never reported.
+ *  - **Lifecycle**: a successful, ownership-matched turn *seals* the row. The
+ *    seal is what retires the pinned capsule, so retiring no longer depends on
+ *    the agent having ticked every box.
+ *
+ * Interrupted / failed turns, and any turn whose id does not match, seal
+ * nothing: the task is still alive and the user is usually about to steer it,
+ * so the plan must stay on screen. A matching non-successful terminal `done`
+ * does stamp `turnCompleted:false` on its plan row, immediately in memory —
+ * main's durable stamp (`persistCodexPlanOnDone`) lands asynchronously after
+ * this event is broadcast, and without the in-memory twin an all-done
+ * interrupted plan would be retired by the legacy fallback the moment
+ * streaming ends, then flash back when the durable row arrives.
  */
-export function resolveCodexPlanSnapshotOnDone(
-  currentPlan: readonly unknown[],
-  snapshot: unknown,
-  inferCompletion: boolean,
-): unknown[] | null {
-  const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
-  if (!authoritativeSnapshot && !inferCompletion) return null;
-
-  const snapshotSource = authoritativeSnapshot ?? currentPlan;
-  if (!inferCompletion) return authoritativeSnapshot;
-  return snapshotSource.map((item) => {
-    const record = readRecord(item);
-    return record ? { ...record, status: 'completed' } : item;
-  });
-}
-
 export function applyCodexPlanSnapshotOnDone<
   TMessage extends MessageRenderSourceMessageLike,
 >(
@@ -584,11 +629,26 @@ export function applyCodexPlanSnapshotOnDone<
   turnId?: string | null,
   terminalStatus?: unknown,
   planUpdatedAtMs?: number,
+  cancelled?: boolean,
 ): CodexPlanSnapshotApplyResult<TMessage> {
   const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
-  const hasAuthoritativeSnapshot = authoritativeSnapshot !== null;
-  const canInferCompletion = terminalStatus === 'completed' && Boolean(turnId);
-  if (!hasAuthoritativeSnapshot && !canInferCompletion) {
+  // 取消标记优先于 completed:done 可同时带 cancelled:true + raw.status
+  // 'completed'(main 侧 isSuccessfulCodexDoneEventData 同序判定)。渲染端若
+  // 只看 status 会先盖章退场,随后 main 持久化 turnCompleted:false 的 DB 行
+  // 广播到达,计划复活——即时 UI 与落库分叉。
+  // 成功判据与 main 的 isSuccessfulCodexDoneEventData 逐字同序:未取消 +
+  // raw.status === 'completed'。其余一切(status 为别的值、缺失、被 cancelled
+  // 覆盖)在归属明确的 turn 上都是失败终态。
+  //
+  // "缺失也算失败"很关键:main 对缺 status 的 done 同样写 turnCompleted:false,
+  // 若这里不落印记,渲染端会按旧数据兜底先退场,随后落库行带失败印记到达又把
+  // 计划判活 → 消失再闪回(review P2)。
+  const isSuccessfulTerminal = terminalStatus === 'completed' && cancelled !== true;
+  const sealsTurn = isSuccessfulTerminal && Boolean(turnId);
+  // terminalStatus === undefined = 调用方没在描述终态(仅套用权威快照的调用),
+  // 不落任何印记;null / 其它值都来自真实 done,按失败终态处理。
+  const stampsFailed = Boolean(turnId) && terminalStatus !== undefined && !isSuccessfulTerminal;
+  if (!authoritativeSnapshot && !sealsTurn && !stampsFailed) {
     return { messages, changed: false, toolUseId: null };
   }
   const expectedToolUseId = turnId ? `plan:${turnId}` : null;
@@ -603,39 +663,108 @@ export function applyCodexPlanSnapshotOnDone<
 
     const input = readRecord(toolInputOf(message));
     if (!Array.isArray(input?.plan)) continue;
-    // maker-core attaches the latest cached turn/plan/updated snapshot to done.
-    // When Codex omits its final plan update, that array still contains open
-    // items and is in progress rather than a terminal snapshot. Converge that
-    // cached progress (or the persisted row when no snapshot exists) only for a
-    // matching, explicitly successful turn. Without a turn id, an array can
-    // still be applied as supplied but completion must never be inferred for an
-    // unrelated last plan row.
-    const nextSnapshot = resolveCodexPlanSnapshotOnDone(
-      input.plan,
-      authoritativeSnapshot,
-      canInferCompletion,
-    );
-    if (!nextSnapshot) {
-      return { messages, changed: false, toolUseId: null };
-    }
-    if (samePlanSnapshot(input.plan, nextSnapshot)) {
+
+    const nextPlan = authoritativeSnapshot ?? input.plan;
+    const planChanged =
+      authoritativeSnapshot !== null && !samePlanSnapshot(input.plan, authoritativeSnapshot);
+    // Seal an already-sealed row again would be a no-op update that still
+    // restarts the capsule's grace timer, so treat it as unchanged.
+    const sealChanged = sealsTurn && message.terminalPlanSnapshot !== true;
+    const failChanged =
+      stampsFailed && message.terminalPlanSnapshot !== true && message.turnCompleted !== false;
+    if (!planChanged && !sealChanged && !failChanged) {
       return { messages, changed: false, toolUseId };
     }
 
+    // 生命周期印记(章 / 失败标记)同时写进顶层与 content:mobile 的 live-plan
+    // 缓存只保存 content(rememberLivePlanContent),overlay 会用这份缓存覆盖
+    // main 广播里已持久化的带章 content——章只在顶层的话,overlay 一盖计划就
+    // 永远"未盖章",下一 turn 的计划会把上一轮吞进同一 session。
+    const lifecycleStamp = {
+      ...(sealsTurn
+        ? {
+            terminalPlanSnapshot: true,
+            ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
+              ? { terminalPlanAtMs: planUpdatedAtMs }
+              : {}),
+          }
+        : {}),
+      ...(failChanged ? { turnCompleted: false } : {}),
+    };
     const next = [...messages];
     next[index] = {
       ...message,
+      ...lifecycleStamp,
       ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
         ? { planUpdatedAtMs }
         : {}),
       ...(message.toolInput !== undefined
-        ? { toolInput: { ...input, plan: nextSnapshot } }
+        ? { toolInput: { ...input, plan: nextPlan } }
         : {}),
       ...(content
-        ? { content: { ...content, input: { ...input, plan: nextSnapshot } } }
+        ? { content: { ...content, input: { ...input, plan: nextPlan }, ...lifecycleStamp } }
         : {}),
     };
     return { messages: next, changed: true, toolUseId };
+  }
+  return { messages, changed: false, toolUseId: null };
+}
+
+/**
+ * 同轮 steer 插话判定。**两套字段都认**:落库位置是 `agentMeta.delivery`
+ * (mobile 与 main 侧的原始行保持这个形状),desktop 渲染层把它投影成顶层
+ * `delivery` 后丢弃原 meta。只看顶层会让 mobile / main 的所有权回扫在插话行上
+ * 提前收手,全勾完的失败计划先按旧数据退场、等 main 的异步印记广播才复活
+ * (断连时要等到重新加载,review P2)。
+ */
+function isSteerUserRow(message: MessageRenderSourceMessageLike): boolean {
+  if (message.delivery === 'steer') return true;
+  const meta = (message as { agentMeta?: { delivery?: unknown } | null }).agentMeta;
+  return meta?.delivery === 'steer';
+}
+
+/**
+ * Live-side twin of main's `persistCodexPlanOnTerminalError`: a Codex turn that
+ * dies on a terminal `error` never gets a `done`, so nothing seals its plan row
+ * and nothing stamps `turnCompleted:false` in memory. Stamp the current turn's
+ * plan row here so the pinned capsule sees the task as alive immediately, in
+ * the window before the durable stamp's row broadcast arrives. Step statuses
+ * are untouched; already-sealed or already-stamped rows are left alone.
+ *
+ * Ownership boundary: only rows inside the failing turn's segment — after the
+ * latest turn-starting user message — may be stamped. Codex plan rows are
+ * per-turn (`plan:<turnId>` is created within its own turn), so the scan stops
+ * cold at the first user row that started a turn. A mid-turn steer interjection
+ * (`delivery: 'steer'`) does NOT start a new turn — the vendor turn keeps
+ * running and its plan row stays owned by the same turn — so steer rows do not
+ * end the scan. A failed turn that never emitted `update_plan` stamps nothing;
+ * reaching past the boundary would resurrect an unrelated historical plan
+ * (pre-seal-era all-done rows retire via the legacy fallback, and a stray
+ * failure stamp would flip them back to "alive" with no durable write to
+ * correct it — main's stamper correctly no-ops in that case).
+ */
+export function markCodexPlanTurnFailed<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+): { messages: readonly TMessage[]; changed: boolean; toolUseId: string | null } {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'user' && !isSteerUserRow(message)) break;
+    if (message.role !== 'tool_use' || toolNameOf(message) !== 'update_plan') continue;
+    if (planRowSealOf(message).sealed || planRowTurnFailed(message)) {
+      return { messages, changed: false, toolUseId: null };
+    }
+    const next = [...messages];
+    // 印记同时落 content(与 applyCodexPlanSnapshotOnDone 同口径):mobile 的
+    // live-plan 缓存只存 content 并整体覆盖 overlay 之后的行,只写顶层的话
+    // 缓存一盖就把 main 广播的落库印记抹掉。
+    const content = readRecord(message.content);
+    next[index] = {
+      ...message,
+      turnCompleted: false,
+      ...(content ? { content: { ...content, turnCompleted: false } } : {}),
+    };
+    // toolUseId 回给调用方:mobile 按它把同一份 content 写回 live-plan 缓存。
+    return { messages: next, changed: true, toolUseId: toolUseIdOf(message) ?? null };
   }
   return { messages, changed: false, toolUseId: null };
 }
@@ -1718,6 +1847,37 @@ function toolInputOf(message: MessageRenderSourceMessageLike): unknown {
   if (message.toolInput !== undefined) return message.toolInput;
   const content = readRecord(message.content);
   return content?.input;
+}
+
+/**
+ * host 的终态章可能在顶层字段(desktop live / hydrate 路径),也可能只在持久化
+ * content 里(mobile 直接渲染 main 广播的行,updateDbMessageContent 把章写进
+ * content)。session 边界与 insertion 的 sealed 判定都必须两处都认。
+ */
+function planRowSealOf(
+  message: MessageRenderSourceMessageLike | undefined,
+): { sealed: boolean; sealedAtMs?: number } {
+  if (!message) return { sealed: false };
+  const content = readRecord(message.content);
+  const sealed =
+    message.terminalPlanSnapshot === true ||
+    (message.terminalPlanSnapshot === undefined && content?.terminalPlanSnapshot === true);
+  if (!sealed) return { sealed: false };
+  const sealedAtMs =
+    typeof message.terminalPlanAtMs === 'number'
+      ? message.terminalPlanAtMs
+      : typeof content?.terminalPlanAtMs === 'number'
+        ? content.terminalPlanAtMs
+        : undefined;
+  return { sealed: true, ...(sealedAtMs !== undefined ? { sealedAtMs } : {}) };
+}
+
+/** 同 planRowSealOf:失败印记(turnCompleted:false)也认 content 里的持久化位置。 */
+function planRowTurnFailed(message: MessageRenderSourceMessageLike | undefined): boolean {
+  if (!message) return false;
+  if (message.turnCompleted === false) return true;
+  const content = readRecord(message.content);
+  return message.turnCompleted === undefined && content?.turnCompleted === false;
 }
 
 function toolUseIdOf(message: MessageRenderSourceMessageLike): string | undefined {

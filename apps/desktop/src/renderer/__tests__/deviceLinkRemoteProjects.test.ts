@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createReconcileBackoff,
+  nextArchivedSessionRetryDelay,
   nextSessionListTokenRetryDelay,
   resolveIneligibleRemoteProjectAction,
   startRemoteSessionsReconciler,
@@ -64,6 +65,19 @@ describe('session-list owner token retry backoff', () => {
       delays.push(previous);
     }
     expect(delays).toEqual([2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+  });
+});
+
+describe('archived session retry backoff', () => {
+  it('从 2s 指数退避到 30s，并在成功或生命周期清理后可从首档重启', () => {
+    const delays: number[] = [];
+    let previous = 0;
+    for (let i = 0; i < 7; i += 1) {
+      previous = nextArchivedSessionRetryDelay(previous);
+      delays.push(previous);
+    }
+    expect(delays).toEqual([2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+    expect(nextArchivedSessionRetryDelay(0)).toBe(2_000);
   });
 });
 

@@ -870,6 +870,64 @@ describe('message render todo grouping', () => {
     expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
   });
 
+  it('a terminal seal ends the plan session even when steps were left open', () => {
+    // 成功收尾常留未勾完的步骤。章之后的下一 turn 计划必须开新 session:
+    // 否则新计划把上一轮吞成续写,历史里上一轮的卡消失、面板复用旧 key。
+    const sealedOpen = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Ship', status: 'in_progress' }],
+      }),
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: 1_700_000_000_000,
+    };
+    const nextTurnPlan = tool('plan2', 'update_plan', {
+      plan: [{ step: 'New task', status: 'in_progress' }],
+    });
+
+    expect(findLatestMessageTodoInsertion([sealedOpen, nextTurnPlan])).toMatchObject({
+      key: 'todo-plan2',
+      todos: [{ content: 'New task', status: 'in_progress' }],
+    });
+    // 章在持久化 content 里(mobile 渲染 main 广播行的形态)同样算边界。
+    const sealedInContent = {
+      ...tool('plan3', 'update_plan', { plan: [{ step: 'Ship', status: 'in_progress' }] }),
+      content: {
+        toolUseId: 'plan3',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'in_progress' }] },
+        terminalPlanSnapshot: true,
+        terminalPlanAtMs: 1_700_000_000_000,
+      },
+    };
+    const latest = findLatestMessageTodoInsertion([sealedInContent, nextTurnPlan]);
+    expect(latest).toMatchObject({ key: 'todo-plan2' });
+    expect(
+      findLatestMessageTodoInsertion([sealedInContent]),
+    ).toMatchObject({ sealed: true, sealedAtMs: 1_700_000_000_000 });
+  });
+
+  it('findLatestMessageTodoInsertion marks a plan whose turn failed as turnFailed', () => {
+    // persistCodexPlanOnDone 在中断/失败终态给计划行盖 turnCompleted:false。
+    // 面板据此不走"全勾完"兜底退场:任务还活着,计划必须留在屏幕上。
+    const failedPlan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Ship it', status: 'completed' }],
+      }),
+      turnCompleted: false,
+    };
+
+    expect(findLatestMessageTodoInsertion([failedPlan])).toMatchObject({
+      source: 'codex',
+      turnFailed: true,
+    });
+    // 正常行没有印记,不应引入该字段。
+    expect(
+      findLatestMessageTodoInsertion([
+        tool('plan2', 'update_plan', { plan: [{ step: 'Ship it', status: 'completed' }] }),
+      ]),
+    ).not.toHaveProperty('turnFailed');
+  });
+
   it('does not infer completion from an ambiguous legacy Codex turn seal', () => {
     const plan = {
       ...tool('plan1', 'update_plan', {

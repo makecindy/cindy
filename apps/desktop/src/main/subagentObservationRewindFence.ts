@@ -20,6 +20,8 @@ interface SessionFenceState {
   generation: number;
   acceptsNewTasks: boolean;
   activeToken: symbol | null;
+  clearRequested: boolean;
+  clearTimer: ReturnType<typeof setTimeout> | null;
   taskGenerations: Map<string, number>;
   pending: PendingObservationWrite<unknown>[];
 }
@@ -40,6 +42,17 @@ export interface SubagentObservationGenerationStamp {
 }
 
 const stateBySession = new Map<string, SessionFenceState>();
+const DEFERRED_CLEAR_TIMEOUT_MS = 30_000;
+
+function dropSessionState(sessionId: string, state: SessionFenceState): void {
+  if (state.clearTimer) {
+    clearTimeout(state.clearTimer);
+    state.clearTimer = null;
+  }
+  for (const item of state.pending.splice(0)) item.resolve(null);
+  state.activeToken = null;
+  if (stateBySession.get(sessionId) === state) stateBySession.delete(sessionId);
+}
 
 function sessionState(sessionId: string): SessionFenceState {
   let state = stateBySession.get(sessionId);
@@ -48,6 +61,8 @@ function sessionState(sessionId: string): SessionFenceState {
       generation: 0,
       acceptsNewTasks: true,
       activeToken: null,
+      clearRequested: false,
+      clearTimer: null,
       taskGenerations: new Map(),
       pending: [],
     };
@@ -104,7 +119,11 @@ function enqueuePending<T>(pending: PendingObservationWrite<T>): void {
  * durable FIFO, so a long Rewind cannot stall unrelated chat/session writes.
  */
 export function beginSubagentRewindFence(sessionId: string): SubagentRewindFence {
-  const state = sessionState(sessionId);
+  let state = sessionState(sessionId);
+  if (state.activeToken && state.clearRequested) {
+    dropSessionState(sessionId, state);
+    state = sessionState(sessionId);
+  }
   if (state.activeToken) {
     throw new Error(`Subagent Rewind already active for session ${sessionId}`);
   }
@@ -138,6 +157,10 @@ export function finishSubagentRewindFence(
 ): void {
   const state = stateBySession.get(fence.sessionId);
   if (!state || state.activeToken !== fence.token) return;
+  if (state.clearRequested) {
+    dropSessionState(fence.sessionId, state);
+    return;
+  }
   state.activeToken = null;
   const pending = state.pending.splice(0);
   if (committed) {
@@ -159,7 +182,12 @@ export function finishSubagentRewindFence(
 
 /** The next provider turn is authoritative permission to accept new task ids. */
 export function noteSubagentObservationTurnStarted(sessionId: string): void {
-  sessionState(sessionId).acceptsNewTasks = true;
+  let state = sessionState(sessionId);
+  if (state.clearRequested) {
+    dropSessionState(sessionId, state);
+    state = sessionState(sessionId);
+  }
+  state.acceptsNewTasks = true;
 }
 
 /**
@@ -208,17 +236,30 @@ export function enqueueSubagentObservationWrite<T>(args: {
 export function clearSubagentObservationRewindState(sessionId: string): boolean {
   const state = stateBySession.get(sessionId);
   if (!state) return true;
-  // Claude Rewind may close its native query while the session-local critical
-  // section is still active. Keep the fence until the IPC owner commits or
-  // rolls back it; a later ordinary close can reclaim the state.
-  if (state.activeToken) return false;
-  for (const item of state.pending) item.resolve(null);
-  stateBySession.delete(sessionId);
+  if (state.activeToken) {
+    state.clearRequested = true;
+    if (!state.clearTimer) {
+      const activeToken = state.activeToken;
+      state.clearTimer = setTimeout(() => {
+        const current = stateBySession.get(sessionId);
+        if (
+          current === state &&
+          current.clearRequested &&
+          current.activeToken === activeToken
+        ) {
+          dropSessionState(sessionId, current);
+        }
+      }, DEFERRED_CLEAR_TIMEOUT_MS);
+      state.clearTimer.unref?.();
+    }
+    return false;
+  }
+  dropSessionState(sessionId, state);
   return true;
 }
 
 export function __resetSubagentObservationRewindStateForTesting(): void {
-  for (const sessionId of stateBySession.keys()) {
-    clearSubagentObservationRewindState(sessionId);
+  for (const [sessionId, state] of stateBySession) {
+    dropSessionState(sessionId, state);
   }
 }

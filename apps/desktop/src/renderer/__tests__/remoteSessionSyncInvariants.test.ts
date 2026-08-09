@@ -93,9 +93,9 @@ describe('CCAgentSessionView 接线不变式', () => {
   it('补选目录后的续发保持 delivery mode，并按本地/远端策略清理原 composer', () => {
     expect(sessionViewSrc).toContain('deliveryMode: MessageDeliveryMode;');
     expect(sessionViewSrc).toContain(
-      "const dispatch = deliveryMode === 'steer' ? steerMessage : sendMessage;",
+      "const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;",
     );
-    expect(sessionViewSrc).toContain('if (accepted) onDeferredAccepted?.();');
+    expect(sessionViewSrc).toContain('if (accepted) pending.onDeferredAccepted?.();');
     expect(sessionViewSrc).toContain(
       '...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {})',
     );

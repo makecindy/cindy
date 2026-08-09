@@ -213,7 +213,11 @@ function legacyToSdkModelString(model: string): string {
   if (model === 'codex/gpt-5.5' || model === 'codex/gpt-5.4') return model;
   if (model === 'codex/gpt-5.6-sol' || model === 'codex/gpt-5.6-terra') return model;
   // DeepSeek 的 [1m] 是历史兼容路由后缀; 上下文大小另走 maker capabilities。
-  if (model === 'deepseek/deepseek-v4-pro' || model === 'deepseek/deepseek-v4-flash') return `${model}[1m]`;
+  if (
+    model === 'deepseek/deepseek-v4-pro' ||
+    model === 'deepseek/deepseek-v4-flash' ||
+    model === 'deepseek-v4-flash'
+  ) return `${model}[1m]`;
   if (model === 'z-ai/glm-5.2') return `${model}[1m]`;
   return model;
 }
@@ -1763,6 +1767,17 @@ export class ClaudeCodeAgent extends BaseAgent {
     const buildSettings = (): Settings =>
       buildClaudeFlagSettings({
         showThinkingSummaries,
+        // availableModels is the SDK's highest-priority allowlist. Convert the
+        // whole current catalog and the selected model through the one
+        // catalog-id → wire-string mapper so startup and live switches share
+        // the same [1m] and legacy conversion rules. Keep the selected model
+        // even when it is temporarily outside the catalog.
+        availableModels: [
+          ...new Set([
+            ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
+            sdkModelFor(mutableModel),
+          ]),
+        ],
         // Do not carry the local manager's native-memory suppression across the
         // SSH boundary: the remote host retains its own Claude memory
         // configuration. Maker Memory on remote sessions is injected via the
@@ -3444,7 +3459,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         // Install the cancelled-tail fence at the same enqueue boundary as
         // the synthetic product terminal. stopTask can win before interrupt
         // resolves, so waiting for the interrupt ACK leaves a double-terminal
-        // window for a late provider result.
+        // window for a late provider result. A live Query that owns local_bash
+        // is always retired by global Stop; the fence remains as a defensive
+        // guard until the replacement Query is installed.
         continuationCancellationGeneration = turnState.generation;
         continuationCancellationRequiresQueryRebuild = true;
       }
@@ -5100,7 +5117,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           // interrupt ACK guarantees these earlier stop requests have settled,
           // so allSettled intentionally has no extra timeout here.
           const settledStops = await Promise.allSettled(stopRequests.map(({ promise }) => promise));
-          const hasRejectedStops = settledStops.some((stop) => stop.status === 'rejected');
           const fulfilledWakeIds = stopRequests
             .filter((_, index) => settledStops[index]?.status === 'fulfilled')
             .map(({ taskId }) => taskId);
@@ -5118,7 +5134,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           // to prevent a queued automatic continuation from escaping Stop.
           const cancelledContinuation = stoppedClaim ?? cancelActiveContinuation('user_stop');
           const hasUnconfirmedWakeTasks = [...runningBackgroundTasks.values()].some((info) => info.wake);
-          if (cancelledContinuation || hasUnconfirmedWakeTasks || hasRejectedStops) {
+          // Once Stop has dispatched stopTask for any wake task, the provider
+          // Query must be retired regardless of RPC outcome. A fulfilled RPC
+          // only acknowledges the cancellation request; it cannot prove that
+          // an automatic continuation was not already queued in the provider.
+          // Closing the Query is therefore the only boundary that guarantees
+          // no later model call. Mixed local_bash tasks intentionally die with
+          // this Query; preserving them would reopen the unsafe same-Query path.
+          const shouldRetireQuery =
+            stopRequests.length > 0 ||
+            cancelledContinuation ||
+            hasUnconfirmedWakeTasks;
+          if (shouldRetireQuery) {
             // All cancellation sources share one terminal state: a cancelled
             // continuation claim, an unconfirmed wake task, or a rejected stop
             // means this Query must be retired. The provider tail is fenced by

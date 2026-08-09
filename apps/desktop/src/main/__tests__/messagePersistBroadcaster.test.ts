@@ -58,6 +58,7 @@ import {
 import {
   onToolUseEvent,
   persistCodexPlanOnDone,
+  persistCodexPlanOnTerminalError,
   onToolResultEvent,
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
@@ -69,6 +70,7 @@ import {
   isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
   resetTurnPersistState,
+  clearCodexPlanRowsForSession,
   clearSessionPersistState,
   consumeLastAssistantPersistId,
   consumeLastTopLevelAssistantPersistId,
@@ -188,7 +190,7 @@ describe('update_plan tool_use persistence', () => {
     );
   });
 
-  it('persists a successful turn plan as completed so reload cannot resurrect progress', async () => {
+  it('seals a successful turn plan as-is so reload cannot resurrect it', async () => {
     const persistId = onToolUseEvent(
       SESSION,
       {
@@ -217,23 +219,198 @@ describe('update_plan tool_use persistence', () => {
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       persistId,
-      {
+      expect.objectContaining({
         toolUseId: 'plan:turn-1',
         toolName: 'update_plan',
+        // 步骤原样落库(Codex 报的就是 in_progress),退场靠下面这枚章,
+        // 不靠把没干完的步骤改成 completed。
         input: {
           explanation: 'keep this field',
           plan: [
             { step: 'Inspect', status: 'completed' },
-            { step: 'Start dev', status: 'completed' },
+            { step: 'Start dev', status: 'in_progress' },
           ],
         },
         terminalPlanSnapshot: true,
-      },
+        terminalPlanAtMs: expect.any(Number),
+      }),
     );
     expect(broadcastMessageRow).toHaveBeenCalledWith(
       SESSION,
       expect.any(Object),
       ownerScopeState.scope,
+    );
+  });
+
+  /**
+   * 现场 bug 的确切形态:活儿干完了,Codex 收尾时没有再发一次 plan 更新,
+   * 于是 done 上压根没有 plan 快照,库里那份仍停在 in_progress/pending。
+   * 必须只靠章收口——胶囊据此退场,步骤事实一个不动。
+   */
+  it('seals a successful turn that ended without any final plan snapshot', async () => {
+    const openPlan = [
+      { step: 'Find the capsule', status: 'completed' },
+      { step: 'Reopen the task', status: 'in_progress' },
+      { step: 'Confirm it stays gone', status: 'pending' },
+    ];
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'plan:turn-no-snapshot', toolName: 'update_plan', input: { plan: openPlan } },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-no-snapshot', status: 'completed' },
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, {
+      toolUseId: 'plan:turn-no-snapshot',
+      toolName: 'update_plan',
+      input: { plan: openPlan },
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: expect.any(Number),
+    });
+  });
+
+  it('still seals after a continuation boundary cleared the per-segment maps', async () => {
+    // 分段 turn:S1 产出计划 → continuation done(reset 清空 per-segment 映射)
+    // → S2 最终 done。计划行的引用按 turnId 存活,最终 done 仍找得到它并盖章;
+    // 否则重载后胶囊无章无失败印记 → 走旧版全勾完兜底 → 永久钉住(review P1-1)。
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-seg',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Segmented work', status: 'in_progress' }] },
+      },
+      null,
+    );
+
+    // continuation boundary 上 register 只跑 resetTurnPersistState(不 persist)。
+    resetTurnPersistState(SESSION);
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-seg', status: 'completed' },
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        toolUseId: 'plan:turn-seg',
+        toolName: 'update_plan',
+        terminalPlanSnapshot: true,
+      }),
+    );
+  });
+
+  it('scopes a terminal-error failure stamp to the owning turn', async () => {
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-old',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Old turn work', status: 'in_progress' }] },
+      },
+      null,
+    );
+    const currentPersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-current',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Current work', status: 'in_progress' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnTerminalError(SESSION, 'turn-current')).toBe(true);
+    await flushWrites();
+
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      currentPersistId,
+      expect.objectContaining({ toolUseId: 'plan:turn-current', turnCompleted: false }),
+    );
+    // 同会话里其它 turn 的计划行不得被顺手盖失败印记。
+    expect(updateMessageContent).not.toHaveBeenCalledWith(
+      SESSION,
+      expect.anything(),
+      expect.objectContaining({ toolUseId: 'plan:turn-old' }),
+    );
+  });
+
+  it('carries repeated update_plan snapshots into the terminal write', async () => {
+    // 同一 turn 的第二次 update_plan 走 persistId 复用分支。按-turn 缓存若只在
+    // 首次记录,终态写入会拿首版快照整行覆盖,已勾完的进度在重载/远端同步后
+    // 倒退回第一版(review P1)。
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'in_progress' }, { step: 'Patch', status: 'pending' }] },
+      },
+      null,
+    );
+    const secondPersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'completed' }, { step: 'Patch', status: 'in_progress' }] },
+      },
+      null,
+    );
+    expect(secondPersistId).toBe(persistId);
+
+    // done 不带 plan(常见):内容只能来自缓存,必须是最新那一版。
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-multi', status: 'completed' },
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenLastCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        input: { plan: [{ step: 'Inspect', status: 'completed' }, { step: 'Patch', status: 'in_progress' }] },
+        terminalPlanSnapshot: true,
+      }),
+    );
+  });
+
+  it('stamps a terminal-error failure onto the latest repeated plan snapshot', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'in_progress' }] },
+      },
+      null,
+    );
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'completed' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnTerminalError(SESSION, 'turn-multi-err')).toBe(true);
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenLastCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        input: { plan: [{ step: 'Inspect', status: 'completed' }] },
+        turnCompleted: false,
+      }),
     );
   });
 
@@ -262,6 +439,7 @@ describe('update_plan tool_use persistence', () => {
         toolName: 'update_plan',
         input: { plan: [{ step: 'Ship', status: 'completed' }] },
         terminalPlanSnapshot: true,
+        terminalPlanAtMs: expect.any(Number),
       },
     );
     expect(broadcastMessageRow).toHaveBeenCalledWith(
@@ -304,6 +482,60 @@ describe('update_plan tool_use persistence', () => {
         turnCompleted: false,
       },
     );
+  });
+
+  it('stamps the current turn plan as failed at a terminal error without a done', async () => {
+    // Codex 在 terminal error 后显式压掉迟到的 turnCompleted,该 turn 永远等不到
+    // done → persistCodexPlanOnDone 不会跑。此时必须由 error 边界补 turnCompleted:false,
+    // 否则全勾完的失败计划没有任何存活印记,面板会当旧数据兜底退场。
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, {
+      toolUseId: 'plan:turn-err',
+      toolName: 'update_plan',
+      // 只盖存活标记,步骤状态一个不动——失败不是把勾去掉的理由。
+      input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      turnCompleted: false,
+    });
+    expect(broadcastMessageRow).toHaveBeenCalledWith(
+      SESSION,
+      expect.any(Object),
+      ownerScopeState.scope,
+    );
+  });
+
+  it('terminal error stamping is a no-op when the turn has no plan row', () => {
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(false);
+  });
+
+  it('does not carry a reconciled turn plan into a later id-less terminal error', () => {
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-reconciled',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Old turn work', status: 'completed' }] },
+      },
+      null,
+    );
+
+    // reconcileSessionTurnIdle treats the lost-terminal path as a logical turn
+    // boundary and clears this cross-segment ownership before the next turn.
+    clearCodexPlanRowsForSession(SESSION);
+    resetTurnPersistState(SESSION);
+
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(false);
   });
 
   it('does not dedupe ordinary repeated tool_use ids', async () => {

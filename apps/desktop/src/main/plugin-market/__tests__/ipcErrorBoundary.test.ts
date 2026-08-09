@@ -29,7 +29,22 @@ describe('Plugin Market IPC error boundary', () => {
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
-    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(12);
+    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(13);
+  });
+
+  it('validates local icon keys with the same reserved-prefix contract as the service', () => {
+    const start = registerSource.indexOf("ipcMain.handle('plugin-market:local-icons'");
+    const end = registerSource.indexOf("ipcMain.handle(\n    'plugin-market:install'", start);
+    const body = registerSource.slice(start, end);
+
+    expect(body).toContain('isPluginMarketCustomIconKey(expectedIconKey)');
+    expect(registerSource).toContain(
+      "import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';",
+    );
+    expect(body).toContain('localIconRequestGate.tryRun');
+    expect(body).toContain(
+      "throwIpcError('PRECONDITION_FAILED', 'Too many local Plugin icon requests');",
+    );
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {

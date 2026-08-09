@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __resetSubagentObservationRewindStateForTesting,
   beginSubagentRewindFence,
   captureSubagentObservationGeneration,
+  clearSubagentObservationRewindState,
   enqueueSubagentObservationWrite,
   finishSubagentRewindFence,
   noteSubagentObservationTurnStarted,
@@ -47,6 +48,11 @@ function enqueueWrite(data: unknown, writes: string[], value: string) {
 
 beforeEach(() => {
   __resetSubagentObservationRewindStateForTesting();
+});
+
+afterEach(() => {
+  __resetSubagentObservationRewindStateForTesting();
+  vi.useRealTimers();
 });
 
 describe('Subagent observation Rewind generation fence', () => {
@@ -232,5 +238,103 @@ describe('Subagent observation Rewind generation fence', () => {
 
     await expect(Promise.all(pending)).resolves.toEqual([null, null, null]);
     expect(writes).toEqual(['other-session']);
+  });
+
+  it('drops buffered writes when a closing session finishes its active Rewind', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const fence = beginSubagentRewindFence(SESSION);
+    const pending = enqueueWrite(update('closing-task', 'progress'), writes, 'progress');
+
+    expect(clearSubagentObservationRewindState(SESSION)).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+    finishSubagentRewindFence(fence, false);
+
+    await expect(pending).resolves.toBeNull();
+    expect(writes).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(() => beginSubagentRewindFence(SESSION)).not.toThrow();
+  });
+
+  it('bounds deferred cleanup when an active Rewind never finishes', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const fence = beginSubagentRewindFence(SESSION);
+    const pending = enqueueWrite(update('stuck-task', 'terminal'), writes, 'terminal');
+
+    expect(clearSubagentObservationRewindState(SESSION)).toBe(false);
+    expect(clearSubagentObservationRewindState(SESSION)).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBeNull();
+    expect(writes).toEqual([]);
+
+    const nextFence = beginSubagentRewindFence(SESSION);
+    finishSubagentRewindFence(fence, false);
+    finishSubagentRewindFence(nextFence, false);
+    expect(clearSubagentObservationRewindState(SESSION)).toBe(true);
+  });
+
+  it('lets a rebuilt session replace deferred state before the timeout', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const staleFence = beginSubagentRewindFence(SESSION);
+    const stalePending = enqueueWrite(update('stale-task', 'progress'), writes, 'stale');
+    expect(clearSubagentObservationRewindState(SESSION)).toBe(false);
+
+    const freshFence = beginSubagentRewindFence(SESSION);
+    await expect(stalePending).resolves.toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    const freshWrite = enqueueWrite(update('fresh-task', 'spawn'), writes, 'fresh');
+
+    finishSubagentRewindFence(staleFence, false);
+    finishSubagentRewindFence(freshFence, false);
+    await expect(freshWrite).resolves.toBe('fresh');
+    expect(writes).toEqual(['fresh']);
+  });
+
+  it('lets a rebuilt provider turn replace deferred state before the timeout', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    beginSubagentRewindFence(SESSION);
+    const stalePending = enqueueWrite(update('stale-task', 'progress'), writes, 'stale');
+    expect(clearSubagentObservationRewindState(SESSION)).toBe(false);
+
+    noteSubagentObservationTurnStarted(SESSION);
+    await expect(stalePending).resolves.toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(enqueueWrite(update('fresh-task', 'spawn'), writes, 'fresh')).resolves.toBe('fresh');
+    expect(writes).toEqual(['fresh']);
+  });
+
+  it('keeps deferred cleanup isolated to the closing session', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    beginSubagentRewindFence(SESSION);
+    const pending = enqueueWrite(update('closing-task', 'progress'), writes, 'closing');
+    expect(clearSubagentObservationRewindState(SESSION)).toBe(false);
+
+    const otherData = update('other-task', 'spawn');
+    const otherStamp = captureSubagentObservationGeneration({
+      sessionId: 'other-session',
+      data: otherData,
+      source: 'claude-code',
+    });
+    if (!otherStamp) throw new Error('expected other session stamp');
+    await expect(
+      enqueueSubagentObservationWrite({
+        sessionId: 'other-session',
+        stamp: otherStamp,
+        enqueue: async () => {
+          writes.push('other');
+          return 'other';
+        },
+      }),
+    ).resolves.toBe('other');
+
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBeNull();
+    expect(writes).toEqual(['other']);
   });
 });

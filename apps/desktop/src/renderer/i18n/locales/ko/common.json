@@ -485,6 +485,15 @@
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
       "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환",
+      "sessionEvent": {
+        "untitled": "제목 없는 세션",
+        "done": "완료됨 ✓",
+        "error": "실행 실패",
+        "needsReply": "답변이 필요합니다",
+        "externalDone": "Cindy · 세션 “{{title}}” 완료됨 ✓",
+        "externalError": "Cindy · 세션 “{{title}}” 실행 실패",
+        "externalNeedsReply": "Cindy · 세션 “{{title}}”에 답변이 필요합니다"
+      },
       "wecomGroupLabel": "WeCom 그룹 알림",
       "wecomGroupHint": "자동 작업 완료 알림에 사용됩니다. WeCom 그룹 봇 Webhook URL을 붙여넣으면 이 기기에 암호화되어 저장됩니다.",
       "wecomGroupConfiguredHint": "설정됨(키 {{maskedKey}}). 전체 스위치를 켠 후 각 자동 작업에서 필요할 때 전송할 수 있습니다.",
@@ -623,6 +632,7 @@
       "options": {
         "system": "자동 (시스템 따르기)",
         "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -934,6 +944,7 @@
         "optionDescriptions": {
           "auto": "인식 서비스가 자동 감지",
           "zh-CN": "중국어 간체(중국 본토)",
+          "zh-TW": "중국어 번체(대만)",
           "en": "영어",
           "ja": "일본어",
           "ko": "한국어"
@@ -1737,6 +1748,12 @@
         "label": "온라인/오프라인 알림",
         "cellLabel": "메시지 알림",
         "hint": "연결/해제 시 Bot에 알림 메시지를 전송합니다"
+      },
+      "sessionNotification": {
+        "label": "세션 완료 알림",
+        "cellLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
+        "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
+        "disabledHint": "먼저 Bot을 설정하고 바인딩을 완료하려면 DM을 보내주세요."
       },
       "bind": "연동"
     },
@@ -3306,6 +3323,9 @@
           "empty": "이 마켓에는 플러그인 항목이 없습니다",
           "skippedEntries": "잘못된 플러그인 항목 {{count}}개를 건너뛰었습니다",
           "unreadableEntries": "플러그인 항목 {{count}}개를 일시적으로 읽을 수 없습니다. 새로고침하여 다시 시도하세요",
+          "addedReceipt": "\"{{name}}\"을(를) 추가했고 플러그인 {{count}}개를 발견했습니다",
+          "refreshedReceipt": "\"{{name}}\"을(를) 새로고침했고 플러그인 {{count}}개를 발견했습니다",
+          "emptyWithSkippedEntries": "사용 가능한 플러그인을 찾지 못했습니다. 매니페스트의 모든 항목을 건너뛰었습니다. 소스 유형, 플러그인 디렉터리, 매니페스트를 확인하세요.",
           "localBadge": "로컬",
           "defaultRef": "기본 브랜치",
           "neverSynced": "동기화되지 않음",
@@ -7966,6 +7986,9 @@
       "deny": "거부"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "이 프로젝트를 신뢰하면 사용할 수 있습니다"
+  },
   "skillhub": {
     "home": {
       "title": "스킬",
@@ -7993,7 +8016,12 @@
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",
-      "close": "닫기"
+      "close": "닫기",
+      "statusDiscovered": "발견됨",
+      "statusApproved": "승인됨",
+      "statusLoaded": "로드됨",
+      "statusFailed": "로드 실패",
+      "statusUnknown": "알 수 없음"
     },
     "welcome": {
       "scanning": "로컬 skill 스캔 중…",

@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from '../catalog.js';
+import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
 import { mergeWithBundled } from '../source.js';
 import type { Catalog } from '../types.js';
 
@@ -295,18 +295,51 @@ describe('mergeWithBundled presets 兜底', () => {
         ?.contextWindow,
     ).toBe(512_000);
   });
+
+  it('旧远端同 id preset 缺少 nameZhTW 时从 bundled 回填，显式远端值仍优先', () => {
+    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'zhipu-glm-cn');
+    expect(bundled?.nameZhTW).toBe('智譜 GLM（中國大陸）');
+
+    const remoteBase = {
+      ...bundled!,
+      name: 'Remote GLM',
+      nameEn: 'Remote GLM',
+    };
+    const { nameZhTW: _missing, ...remoteWithoutZhTW } = remoteBase;
+    const backfilled = mergeWithBundled(minimalCatalog({ presets: [remoteWithoutZhTW] }));
+    expect(backfilled.presets?.find((preset) => preset.id === 'zhipu-glm-cn')).toMatchObject({
+      name: 'Remote GLM',
+      nameEn: 'Remote GLM',
+      nameZhTW: '智譜 GLM（中國大陸）',
+    });
+
+    const explicit = mergeWithBundled(
+      minimalCatalog({ presets: [{ ...remoteWithoutZhTW, nameZhTW: '遠端繁中名稱' }] }),
+    );
+    expect(explicit.presets?.find((preset) => preset.id === 'zhipu-glm-cn')?.nameZhTW).toBe(
+      '遠端繁中名稱',
+    );
+  });
 });
 
 describe('presetDisplayName', () => {
-  it('中文 locale 用 name;其它 locale 优先 nameEn,缺省回落 name', () => {
-    const p = { name: '智谱 GLM(中国大陆)', nameEn: 'Zhipu GLM (China)' };
+  it('简中用 name，繁中优先 nameZhTW，其它语言优先 nameEn', () => {
+    const p = {
+      name: '智谱 GLM(中国大陆)',
+      nameEn: 'Zhipu GLM (China)',
+      nameZhTW: '智譜 GLM(中國大陸)',
+    };
     expect(presetDisplayName(p, 'zh-CN')).toBe('智谱 GLM(中国大陆)');
+    expect(presetDisplayName(p, 'zh-TW')).toBe('智譜 GLM(中國大陸)');
+    expect(presetDisplayName(p, 'zh-Hant-TW')).toBe('智譜 GLM(中國大陸)');
+    expect(presetDisplayName(p, 'ZH_HANT_TW')).toBe('智譜 GLM(中國大陸)');
     expect(presetDisplayName(p, 'zh')).toBe('智谱 GLM(中国大陆)');
     expect(presetDisplayName(p, 'en')).toBe('Zhipu GLM (China)');
     expect(presetDisplayName(p, 'ja')).toBe('Zhipu GLM (China)');
     // 无 nameEn(全球厂商预设本就是英文名)→ 一律回落 name。
     expect(presetDisplayName({ name: 'DeepSeek' }, 'en')).toBe('DeepSeek');
     expect(presetDisplayName({ name: 'DeepSeek' }, 'zh-CN')).toBe('DeepSeek');
+    expect(presetDisplayName({ name: 'DeepSeek' }, 'zh-TW')).toBe('DeepSeek');
   });
 });
 
@@ -333,6 +366,16 @@ describe('regionHint 归一化与 locale 排序', () => {
     expect(out[2]!.regionHint).toBeUndefined();
   });
 
+  it('非法 nameZhTW(非字符串/空白串)剥字段，不影响预设本体', () => {
+    const out = sanitizePresets([
+      { ...VALID_PRESET, id: 'a', nameZhTW: 42 } as never,
+      { ...VALID_PRESET, id: 'b', nameZhTW: '   ' } as never,
+      { ...VALID_PRESET, id: 'c', nameZhTW: '繁中名稱' },
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out.map((p) => p.nameZhTW)).toEqual([undefined, undefined, '繁中名稱']);
+  });
+
   it('厂商按首字母分组排序；同厂商 cn/global 相邻，组内按语言排先后', () => {
     const presets = sanitizePresets([
       mk('zhipu-glm-global', 'global'),
@@ -342,31 +385,31 @@ describe('regionHint 归一化与 locale 排序', () => {
       mk('minimax-cn', 'cn'),
       mk('minimax-global', 'global'),
     ]);
-    // zh：厂商序 deepseek < minimax < openrouter < zhipu-glm；组内 cn 在前。
-    expect(sortPresetsForLocale(presets, 'zh-CN').map((p) => p.id)).toEqual([
+    // cn 版本：厂商序 deepseek < minimax < openrouter < zhipu-glm；组内 cn 在前。
+    expect(sortPresetsForRegion(presets, 'cn').map((p) => p.id)).toEqual([
       'deepseek', 'minimax-cn', 'minimax-global', 'openrouter', 'zhipu-glm-cn', 'zhipu-glm-global',
     ]);
-    // en/ja：厂商序不变，组内 global 在前。
-    expect(sortPresetsForLocale(presets, 'en').map((p) => p.id)).toEqual([
+    // global 版本：厂商序不变，组内 global 在前。
+    expect(sortPresetsForRegion(presets, 'global').map((p) => p.id)).toEqual([
       'deepseek', 'minimax-global', 'minimax-cn', 'openrouter', 'zhipu-glm-global', 'zhipu-glm-cn',
     ]);
-    expect(sortPresetsForLocale(presets, 'ja').map((p) => p.id)).toEqual(
-      sortPresetsForLocale(presets, 'en').map((p) => p.id),
+    expect(sortPresetsForRegion(presets, 'dev').map((p) => p.id)).toEqual(
+      sortPresetsForRegion(presets, 'cn').map((p) => p.id),
     );
   });
 
-  it('智谱与 Z.AI Coding Plan 使用同一厂商分组并按 locale 排区域顺序', () => {
+  it('智谱与 Z.AI Coding Plan 使用同一厂商分组并按构建区域排顺序', () => {
     const presets = sanitizePresets([
       mk('zai-coding-plan-global', 'global'),
       mk('zhipu-coding-plan-cn', 'cn'),
       mk('volcengine-coding-plan'),
     ]);
-    expect(sortPresetsForLocale(presets, 'zh-CN').map((p) => p.id)).toEqual([
+    expect(sortPresetsForRegion(presets, 'cn').map((p) => p.id)).toEqual([
       'volcengine-coding-plan',
       'zhipu-coding-plan-cn',
       'zai-coding-plan-global',
     ]);
-    expect(sortPresetsForLocale(presets, 'en').map((p) => p.id)).toEqual([
+    expect(sortPresetsForRegion(presets, 'global').map((p) => p.id)).toEqual([
       'volcengine-coding-plan',
       'zai-coding-plan-global',
       'zhipu-coding-plan-cn',

@@ -18,6 +18,7 @@ import {
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
   diffGhostPermissionItems,
+  ghostAppContextLocale,
   ghostPermissionBaselineKey,
   unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
@@ -423,7 +424,7 @@ function currentGhostAppContext() {
   const region: GhostAppRegion = CURRENT_CINDY_REGION === 'global' ? 'global' : 'cn';
   return {
     ok: true as const,
-    context: { region, locale: getResolvedMainLocale() },
+    context: { region, locale: ghostAppContextLocale(getResolvedMainLocale()) },
   };
 }
 
