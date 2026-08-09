@@ -348,8 +348,12 @@ interface TurnAccumulator {
   pendingCompletion: Promise<void> | null;
 }
 
-/** recordRunEvent 所需的 GoalState 快照子集(派发时捕获,补发时不受后续变更影响)。 */
-type GoalRunEventStateSnapshot = Parameters<GoalController['recordRunEvent']>[2];
+/** recordRunEvent 所需的 GoalState 快照子集(派发时捕获,补发时不受后续变更影响);
+ * 显式 Pick 而非 Parameters<private method>(类外索引 private 方法有 TS 可见性风险)。 */
+type GoalRunEventStateSnapshot = Pick<
+  GoalState,
+  'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'
+>;
 
 /** 生命周期序号(模块级单调递增,freshTurn 生成唯一 id)。 */
 let lifecycleSeq = 0;
@@ -1524,13 +1528,14 @@ export class GoalController {
   /** 关停所有监听 + 计时器(测试 / 进程退出)。 */
   dispose(): void {
     this.disposed = true;
+    // 先快照 in-flight:下面的 stopSession 会把 sessionId 从 goalTurnsInFlight
+    // 删掉,后遍历会为空——已派发(跨过 onDispatching)的 turn 必须先记下来,
+    // 再走 input coordinator 的 Stop 边界(与 clearGoal 一致,Copilot/Codex P1)。
+    const inflightGoalTurns = [...this.goalTurnsInFlight];
     for (const sessionId of [...this.unsubscribers.keys()]) {
       this.stopSession(sessionId);
     }
-    // 停掉已派发且跨过 onDispatching 的 in-flight goal turn:仅 detach listener
-    // 不会让旧 agent 进程停下——登出/切账号后它仍可能继续跑/消耗 token/产生
-    // 副作用,必须走 input coordinator 的 Stop 边界(与 clearGoal 一致,Codex P1)。
-    for (const sessionId of [...this.goalTurnsInFlight]) {
+    for (const sessionId of inflightGoalTurns) {
       try {
         this.deps.stopActiveGoalTurn(sessionId);
       } catch {
