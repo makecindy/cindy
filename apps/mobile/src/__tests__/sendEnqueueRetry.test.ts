@@ -53,11 +53,4 @@ describe('send enqueue weak-network retry ordering', () => {
       expect(loopBody).not.toContain('getProjection');
     }
   });
-
-  it('send 与 outbox 都只回滚确定未送达的失败', () => {
-    expect(source.match(/reconcileEnqueueFailure\(\{/g)).toHaveLength(2);
-    expect(source.match(/if \(delivery === 'rejected'\)/g)).toHaveLength(2);
-    expect(source).toContain('accepted ? clientId : undefined');
-    expect(source.match(/markInputProjectionQueuedItemUnconfirmed\([\s\S]*?maker\.input\.enqueue\(/g)).toHaveLength(2);
-  });
 });

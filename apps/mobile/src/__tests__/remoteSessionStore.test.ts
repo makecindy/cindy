@@ -2736,7 +2736,8 @@ describe('remoteSessionStore', () => {
     remoteSessionStore.setInputProjection('s1', confirmed);
     expect(remoteSessionStore.setInputProjectionIfCurrent('s1', local, staleEpoch, staleRemoteEpoch, 'q-local')).toBe(false);
     expect(remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId)).toEqual(['q-local', 'q-confirmed']);
-    expect([[...remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1')], remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', staleRemoteEpoch)]).toEqual([['q-local'], true]);
+    expect([[...remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1')], remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', staleRemoteEpoch)]).toEqual([[], true]);
+    remoteSessionStore.markInputProjectionQueuedItemUnconfirmed('s1', 'q-local');
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const [offlineEpoch, offlineRemoteEpoch] = [remoteSessionStore.captureInputProjectionAuthorityEpoch('s1'), remoteSessionStore.captureInputProjectionRemoteEpoch('s1')];
     remoteSessionStore.markDeviceOffline('dev-1');
@@ -2807,7 +2808,7 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
     expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...ownerProjection, pendingQueue: [] }, operationEpoch, operationRemoteEpoch, 'q-1')).toBe(false);
-    expect([remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId), remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-1', operationRemoteEpoch), remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size]).toEqual([['q-1'], true, 1]);
+    expect([remoteSessionStore.getInputProjection('s1').pendingQueue, remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-1', operationRemoteEpoch), remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size]).toEqual([[], true, 0]);
   });
 
   it('soft-invalidates an offline device without deleting sessions or messages', () => {

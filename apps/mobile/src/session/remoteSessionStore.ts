@@ -2043,20 +2043,20 @@ export const remoteSessionStore = {
     if ((authorityStale && expectedRemoteEpoch === undefined) || remoteStale) {
       const evidence = acceptedClientId ? inputProjectionRemoteQueuedEvidence.get(sessionId)?.get(acceptedClientId) : 0;
       const acceptedLive = Boolean(acceptedClientId && ((inputProjectionUnconfirmedQueuedClientIds.get(sessionId)?.has(acceptedClientId)) || inputProjections.get(sessionId)?.pendingQueue.some((item) => item.clientId === acceptedClientId) || (evidence ?? 0) > 0));
-      if (remoteStale && acceptedLive) recordInputProjectionRemoteEvidence(sessionId, [acceptedClientId!]);
-      return false;
+      if (!remoteStale || !acceptedLive) return false;
     }
     const next = normalizeInputProjection(projection, sessionId);
     const queuedClientIds = new Set(next.pendingQueue.map((item) => item.clientId));
     const confirmedClientIds = new Set(queuedClientIds);
     if (acceptedClientId) confirmedClientIds.add(acceptedClientId);
     const preserveSettled = Boolean(acceptedClientId && !queuedClientIds.has(acceptedClientId) && (inputProjectionRemoteQueuedEvidence.get(sessionId)?.get(acceptedClientId) ?? 0) < 0);
-    recordInputProjectionRemoteEvidence(sessionId, preserveSettled ? queuedClientIds : confirmedClientIds);
-    if (authorityStale) {
+    const evidenceClientIds = preserveSettled ? queuedClientIds : remoteStale ? new Set([acceptedClientId!]) : confirmedClientIds;
+    recordInputProjectionRemoteEvidence(sessionId, evidenceClientIds);
+    if (authorityStale || remoteStale) {
       const remove = new Set<string>();
       if (acceptedClientId && !queuedClientIds.has(acceptedClientId)) remove.add(acceptedClientId);
       const removed = resolveInputProjectionUnconfirmed(sessionId, remove);
-      const retained = clearInputProjectionUnconfirmed(sessionId, queuedClientIds);
+      const retained = clearInputProjectionUnconfirmed(sessionId, remoteStale ? new Set(queuedClientIds.has(acceptedClientId!) ? [acceptedClientId!] : []) : queuedClientIds);
       if (retained && !removed) bumpInputProjectionAuthorityEpoch(sessionId);
       if (removed || retained) emit();
       return false;

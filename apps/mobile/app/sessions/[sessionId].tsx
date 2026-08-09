@@ -353,7 +353,6 @@ import {
   type MobileOutboxItem,
   type MobileRecoverableDraftItem,
 } from '@/session/sessionOutbox';
-import { reconcileEnqueueFailure } from '@/session/enqueueReconciliation';
 import {
   AT_RESOURCE_QUERY_DEBOUNCE_MS,
   buildComposerPaletteCacheKey,
@@ -5620,13 +5619,11 @@ export default function SessionScreen() {
     } catch (err) {
       // 与原路径同口径:先对账分辨「确实没应用」vs「已应用但响应丢了」。
       const safeToRetry = isSafelyUnsentOutboxEnqueueError(err);
-      const delivery = await reconcileEnqueueFailure({
-        error: err,
-        readAuthoritativeAcceptance: () => readAuthoritativeEnqueueAcceptance(
-          item.sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
-        ),
-      });
-      if (delivery === 'rejected') {
+      const accepted = await readAuthoritativeEnqueueAcceptance(
+        item.sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
+      );
+      const acceptanceUnknown = !accepted && !safeToRetry && isAutoRecoveringRemoteError(err);
+      if (!accepted && !acceptanceUnknown) {
         const current = remoteSessionStore.getInputProjection(item.sessionId);
         remoteSessionStore.setInputProjectionOptimistically(item.sessionId, {
           ...current,
@@ -5638,7 +5635,7 @@ export default function SessionScreen() {
         }
         failItem(formatRemoteError(err));
       } else if (
-        delivery === 'unknown'
+        acceptanceUnknown
         && outboxSessionAliveRef.current === item.sessionId
       ) {
         // Preserve the original optimistic clientId and hold further dispatch until sync.
@@ -6610,13 +6607,13 @@ export default function SessionScreen() {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:弱网下 enqueue 的 invoke
         // 响应可能超时丢失而桌面端已入队——此时摘除气泡会让手机隐藏一条桌面将处理的
         // 消息,用户重发即重复(codex review R19)。优先 refetch 权威 projection 判断,
-        const delivery = await reconcileEnqueueFailure({
-          error: err,
-          readAuthoritativeAcceptance: () => readAuthoritativeEnqueueAcceptance(
-            sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
-          ),
-        });
-        if (delivery === 'rejected') {
+        const accepted = await readAuthoritativeEnqueueAcceptance(
+          sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
+        );
+        const acceptanceUnknown = !accepted
+          && !isSafelyUnsentOutboxEnqueueError(err)
+          && isAutoRecoveringRemoteError(err);
+        if (!accepted && !acceptanceUnknown) {
           // 回滚:按 clientId 精确摘除乐观气泡(期间 projection 可能已被其他事件更新,
           // 不能整体还原快照),并恢复草稿与附件托盘。
           const current = remoteSessionStore.getInputProjection(sessionId);
