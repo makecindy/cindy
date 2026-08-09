@@ -374,6 +374,10 @@ export function createCodexAutomationMigrationService(
                         manual: desiredManual,
                       });
                     }
+                    const knownIndex = knownSchedules.findIndex(
+                      (schedule) => schedule.id === recoveredSchedule.id,
+                    );
+                    if (knownIndex >= 0) knownSchedules[knownIndex] = recoveredSchedule;
                     created.push({
                       sourceId,
                       scheduleId: recoveredSchedule.id,

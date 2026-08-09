@@ -12,6 +12,7 @@ import {
 function detail(id: string, overrides: Partial<CodexAutomationDetail> = {}): CodexAutomationDetail {
   return {
     id,
+    kind: 'cron',
     name: `Task ${id}`,
     prompt: `prompt ${id}`,
     status: 'ACTIVE',
@@ -364,6 +365,42 @@ describe('CodexAutomationMigrationService', () => {
       scheduleId: 'schedule-other-process',
     });
     expect(scheduler.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the recovered schedule snapshot before deduplicating later paused imports', async () => {
+    const shared = { status: 'PAUSED', name: 'Shared paused task', prompt: 'shared prompt' };
+    const first = detail('paused-one', shared);
+    const second = detail('paused-two', shared);
+    const { service, scheduler } = setup([first, second]);
+    const concurrent = {
+      id: 'schedule-other-process',
+      ...inputFor(first),
+      originKind: 'codex-automation' as const,
+      originId: 'paused-one',
+      status: 'active' as const,
+      manual: true,
+    } as Schedule;
+    const paused = { ...concurrent, status: 'paused' as const };
+    const recovered = { ...paused, manual: false };
+    scheduler.create.mockRejectedValueOnce(
+      new Error('UNIQUE constraint failed: schedules.origin_kind, schedules.origin_id'),
+    );
+    scheduler.list.mockResolvedValueOnce([]).mockResolvedValueOnce([concurrent]);
+    scheduler.pause.mockResolvedValueOnce(paused);
+    scheduler.update.mockResolvedValueOnce(recovered);
+
+    const result = await service.import(['paused-one', 'paused-two']);
+
+    expect(scheduler.create).toHaveBeenCalledTimes(1);
+    expect(result.created[0]).toMatchObject({
+      sourceId: 'paused-one',
+      scheduleId: 'schedule-other-process',
+    });
+    expect(result.skipped[0]).toMatchObject({
+      sourceId: 'paused-two',
+      scheduleId: 'schedule-other-process',
+      reason: 'Equivalent Cindy schedule already exists',
+    });
   });
 
   it('restores the intended automatic cadence only after a paused task is safely paused', async () => {
