@@ -43,6 +43,7 @@ export {
   appendProviderRequestPath,
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  splitProviderEndpointUrl,
 } from './provider-url.js';
 export { findReservedOAuthExtraParam } from './provider-oauth.js';
 

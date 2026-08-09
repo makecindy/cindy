@@ -56,6 +56,7 @@ import {
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
   sortPresetsForLocale,
+  splitProviderEndpointUrl,
 } from '@cindy/model-providers';
 import type {
   AgentKind,
@@ -143,11 +144,27 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     baseUrl: '',
     requestPath: '',
     apiKey: '',
-    wireProtocol: defaultWireFor(agent),
+    // 手填 OpenAI 兼容端点多数只提供 Chat Completions；新建态优先一次可用。
+    // 已存配置与 preset 的缺省仍按历史 Responses 语义解析，不迁移用户选择。
+    wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
     models: [{ id: '', name: '' }],
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
   };
+}
+
+function defaultRequestPath(agent: DialogAgentKind, wireProtocol: ProviderWireProtocol): string {
+  if (agent === 'claude-code' || wireProtocol === 'anthropic-messages') return '/v1/messages';
+  return wireProtocol === 'openai-chat' ? '/chat/completions' : '/responses';
+}
+
+/** 用户可直接粘贴完整推理端点；仅在没有显式路径 override 时拆分已知协议后缀。 */
+function normalizeRuntimeEndpoint(agent: DialogAgentKind, fields: RuntimeFields): RuntimeFields {
+  const defaultPath = defaultRequestPath(agent, fields.wireProtocol);
+  const requestPath = fields.requestPath.trim();
+  if (requestPath && requestPath !== defaultPath) return fields;
+  const split = splitProviderEndpointUrl(fields.baseUrl, defaultPath);
+  return split ? { ...fields, ...split } : fields;
 }
 
 function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, RuntimeFields> {
@@ -334,7 +351,7 @@ export function CustomProviderDialog({
     clientId: initialOAuth?.clientId ?? '',
     scopes: initialOAuth?.scopes ?? '',
   });
-  // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
+  // 低频协议、路径与请求头默认折叠；OAuth 的模型也只在高级设置中手动维护。
   const [showAdvanced, setShowAdvanced] = useState(false);
   // 上下文窗口输入的行级草稿:受控输入若只回显已提交值,逐字符键入 `1,` 这类
   // 合法中间态会被整体校验拒绝后回滚,声明支持的分组格式只能粘贴、无法键入
@@ -538,7 +555,10 @@ export function CustomProviderDialog({
   /** 测试当前 Tab 的表单值（未保存也能测；key 仅内存透传给 main，不落盘）。 */
   const handleTest = useCallback(async () => {
     const agent = activeTab;
-    const rf = rt[agent];
+    const rf = normalizeRuntimeEndpoint(agent, rt[agent]);
+    if (rf !== rt[agent]) {
+      setRtSynced((prev) => ({ ...prev, [agent]: rf }));
+    }
     const baseUrl = rf.baseUrl.trim();
     const firstModel = rf.models.map((m) => m.id.trim()).find((id) => id.length > 0);
     if (!baseUrl || !firstModel) {
@@ -587,6 +607,7 @@ export function CustomProviderDialog({
         requestSig
       )
         return;
+      if (!result.ok) setShowAdvanced(true);
       setTest((prev) => ({
         ...prev,
         [agent]: result.ok
@@ -600,10 +621,11 @@ export function CustomProviderDialog({
       )
         return;
       const ipc = extractIpcError(e);
+      setShowAdvanced(true);
       setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
       if (ipc?.message) toast.error(ipc.message);
     }
-  }, [activeTab, authMode, rt, t, savedBaselineFor, initial]);
+  }, [activeTab, authMode, rt, setRtSynced, t, savedBaselineFor, initial]);
 
   // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
   // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
@@ -612,7 +634,10 @@ export function CustomProviderDialog({
   /** 获取模型列表：用当前 Tab 表单值 GET 列模型端点（key 仅内存透传），成功后开勾选弹层。 */
   const handleFetchModels = useCallback(async () => {
     const agent = activeTab;
-    const rf = rt[agent];
+    const rf = normalizeRuntimeEndpoint(agent, rt[agent]);
+    if (rf !== rt[agent]) {
+      setRtSynced((prev) => ({ ...prev, [agent]: rf }));
+    }
     if (fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi) return; // 单飞（按钮已禁用，兜底）
     const baseUrl = rf.baseUrl.trim();
     if (!baseUrl) {
@@ -711,7 +736,7 @@ export function CustomProviderDialog({
     } finally {
       setFetchingModels((prev) => ({ ...prev, [agent]: false }));
     }
-  }, [activeTab, authMode, rt, fetchingModels, t, savedBaselineFor, initial]);
+  }, [activeTab, authMode, rt, fetchingModels, setRtSynced, t, savedBaselineFor, initial]);
 
   /**
    * 勾选弹层确认：勾选集写回该 runtime 的模型行。基于**确认时的最新表单行**合并，
@@ -841,10 +866,16 @@ export function CustomProviderDialog({
       toast.error(t('settings.providers.custom.errors.contextWindowInvalid'));
       return;
     }
+    const normalizedRt = Object.fromEntries(
+      VISIBLE_AGENTS.map((agent) => [agent, normalizeRuntimeEndpoint(agent, rt[agent])]),
+    ) as Record<AgentKind, RuntimeFields>;
+    if (VISIBLE_AGENTS.some((agent) => normalizedRt[agent] !== rt[agent])) {
+      setRtSynced(() => normalizedRt);
+    }
     const runtimes: CustomProviderConfig['runtimes'] = {};
     const keys: RuntimeKeys = {};
     for (const a of VISIBLE_AGENTS) {
-      const rf = rt[a];
+      const rf = normalizedRt[a];
       if (!rf.baseUrl.trim()) continue; // 该 runtime 未配置
       try {
         const u = new URL(rf.baseUrl.trim());
@@ -1019,6 +1050,7 @@ export function CustomProviderDialog({
     onSaved,
     windowDrafts,
     showAdvanced,
+    setRtSynced,
     t,
   ]);
 
@@ -1236,7 +1268,7 @@ export function CustomProviderDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {(activeTab === 'codex' || activeTab === 'pi') && (
+            {(activeTab === 'pi' || (showAdvanced && activeTab === 'codex')) && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
                 <div className="flex flex-wrap gap-1.5">
@@ -1290,27 +1322,29 @@ export function CustomProviderDialog({
                 surface="ivory"
                 value={f.baseUrl}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
+                onBlur={() => {
+                  const normalized = normalizeRuntimeEndpoint(activeTab, f);
+                  if (normalized !== f) patch(activeTab, () => normalized);
+                }}
                 placeholder={t('settings.providers.custom.fields.baseUrlPlaceholder')}
               />
             </div>
 
-            {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
-            <div className="flex flex-col gap-[7px]">
-              <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
-              <SettingsTextInput
-                surface="ivory"
-                value={f.requestPath}
-                onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
-                placeholder={
-                  activeTab === 'claude-code' || f.wireProtocol === 'anthropic-messages'
-                    ? '/v1/messages'
-                    : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
-                }
-              />
-              <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                {t('settings.providers.custom.fields.requestPathHelp')}
-              </span>
-            </div>
+            {/* 请求路径只在高级连接设置中显示：绝大多数兼容端点直接跟随协议默认路径。 */}
+            {showAdvanced && (
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
+                <SettingsTextInput
+                  surface="ivory"
+                  value={f.requestPath}
+                  onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
+                  placeholder={t('settings.providers.custom.fields.requestPathPlaceholder')}
+                />
+                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
+                  {t('settings.providers.custom.fields.requestPathHelp')}
+                </span>
+              </div>
+            )}
 
             {/* API 密钥（OAuth 形态隐藏——鉴权走 Runner 的 Bearer，不收集 key） */}
             {authMode === 'apiKey' && (
@@ -1345,26 +1379,26 @@ export function CustomProviderDialog({
               </div>
             )}
 
-            {/* OAuth 形态:模型清单授权成功后自动发现（与内置订阅统一）,模型 / 请求头
-                收进默认折叠的「高级配置」——普通用户不需要看到这些字段。 */}
+            {/* OAuth 形态模型会在授权后自动发现；API key 形态则保留手动填写与获取模型两条路径。 */}
             {authMode === 'oauth' && (
-              <div className="flex flex-col gap-1.5">
-                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t('settings.providers.custom.authMode.modelsAutoNote')}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced((v) => !v)}
-                  className="flex items-center gap-1 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
-                >
-                  <ChevronDown
-                    size={14}
-                    className={cn('transition-transform', showAdvanced && 'rotate-180')}
-                  />
-                  {t('settings.providers.custom.advanced.label')}
-                </button>
-              </div>
+              <span className="text-12 leading-snug text-[var(--text-tertiary)]">
+                {t('settings.providers.custom.authMode.modelsAutoNote')}
+              </span>
             )}
+
+            <button
+              type="button"
+              aria-expanded={showAdvanced}
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="flex items-center gap-1 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
+            >
+              <ChevronDown
+                size={14}
+                aria-hidden="true"
+                className={cn('transition-transform', showAdvanced && 'rotate-180')}
+              />
+              {t('settings.providers.custom.advanced.label')}
+            </button>
 
             {(authMode !== 'oauth' || showAdvanced) && (
               <>
@@ -1424,7 +1458,8 @@ export function CustomProviderDialog({
                               if (draftText === undefined || !isCommittableWindowText(draftText)) {
                                 return drafts;
                               }
-                              const { [`${activeTab}:${i}`]: _drop, ...rest } = drafts;
+                              const rest = { ...drafts };
+                              delete rest[`${activeTab}:${i}`];
                               return rest;
                             })
                           }
@@ -1436,7 +1471,8 @@ export function CustomProviderDialog({
                                 if (j !== i) return y;
                                 const trimmed = v.trim();
                                 if (trimmed === '') {
-                                  const { contextWindow: _drop, ...rest } = y;
+                                  const rest = { ...y };
+                                  delete rest.contextWindow;
                                   return rest;
                                 }
                                 // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
@@ -1602,66 +1638,72 @@ export function CustomProviderDialog({
                   </button>
                 </div>
 
-                {/* 请求头（可选） */}
-                <div className="flex flex-col gap-2">
-                  <FieldLabel>{t('settings.providers.custom.fields.headers')}</FieldLabel>
-                  {f.headers.map((h, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
-                          value={h.name}
-                          onChange={(v) =>
+                {/* 请求头属于低频供应商适配，默认与其它高级连接设置一起收起。 */}
+                {showAdvanced && (
+                  <div className="flex flex-col gap-2">
+                    <FieldLabel>{t('settings.providers.custom.fields.headers')}</FieldLabel>
+                    {f.headers.map((h, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <SettingsTextInput
+                            surface="ivory"
+                            value={h.name}
+                            onChange={(v) =>
+                              patch(activeTab, (x) => ({
+                                ...x,
+                                headers: x.headers.map((y, j) =>
+                                  j === i ? { ...y, name: v } : y,
+                                ),
+                              }))
+                            }
+                            placeholder={t('settings.providers.custom.fields.headerNamePlaceholder')}
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <SettingsTextInput
+                            surface="ivory"
+                            value={h.value}
+                            onChange={(v) =>
+                              patch(activeTab, (x) => ({
+                                ...x,
+                                headers: x.headers.map((y, j) =>
+                                  j === i ? { ...y, value: v } : y,
+                                ),
+                              }))
+                            }
+                            placeholder={t('settings.providers.custom.fields.headerValuePlaceholder')}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
                             patch(activeTab, (x) => ({
                               ...x,
-                              headers: x.headers.map((y, j) => (j === i ? { ...y, name: v } : y)),
+                              headers: x.headers.filter((_, j) => j !== i),
                             }))
                           }
-                          placeholder={t('settings.providers.custom.fields.headerNamePlaceholder')}
-                        />
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
+                          aria-label={t('settings.providers.custom.fields.removeRow')}
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </div>
-                      <div className="flex-1">
-                        <SettingsTextInput
-                          surface="ivory"
-                          value={h.value}
-                          onChange={(v) =>
-                            patch(activeTab, (x) => ({
-                              ...x,
-                              headers: x.headers.map((y, j) => (j === i ? { ...y, value: v } : y)),
-                            }))
-                          }
-                          placeholder={t('settings.providers.custom.fields.headerValuePlaceholder')}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          patch(activeTab, (x) => ({
-                            ...x,
-                            headers: x.headers.filter((_, j) => j !== i),
-                          }))
-                        }
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-                        aria-label={t('settings.providers.custom.fields.removeRow')}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      patch(activeTab, (x) => ({
-                        ...x,
-                        headers: [...x.headers, { name: '', value: '' }],
-                      }))
-                    }
-                    className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
-                  >
-                    <Plus size={14} className="text-[var(--settings-section-desc)]" />
-                    {t('settings.providers.custom.fields.addHeader')}
-                  </button>
-                </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patch(activeTab, (x) => ({
+                          ...x,
+                          headers: [...x.headers, { name: '', value: '' }],
+                        }))
+                      }
+                      className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
+                    >
+                      <Plus size={14} className="text-[var(--settings-section-desc)]" />
+                      {t('settings.providers.custom.fields.addHeader')}
+                    </button>
+                  </div>
+                )}
               </>
             )}
 
