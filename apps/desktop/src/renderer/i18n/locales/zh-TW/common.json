@@ -770,7 +770,7 @@
       "debugLogDescription": "開啟後輸出全量除錯日誌：main/maker logger 抬到 debug 級，新建的 Claude Code 會話額外輸出 API 請求 URL/狀態/耗時、Node 層 DNS/TCP/TLS 握手時序，以及 SDK 內部資訊。日誌量較大，定位問題後請關閉。dev 模式下始終開啟。",
       "legal": {
         "termsOfServiceLabel": "服務條款",
-        "privacyPolicyLabel": "隱私協議",
+        "privacyPolicyLabel": "隱私政策",
         "viewDocument": "檢視{{document}}",
         "openFailed": "無法開啟文件，請檢查系統瀏覽器設定"
       },
@@ -4075,10 +4075,10 @@
     "localModeEntry": "跳過登入",
     "localModeOpening": "正在跳過登入…",
     "localModeDescription": "無需 Cindy 帳號，資料儲存在本機。雲模型、跨裝置與市場服務不可用。",
-    "consentStatement": "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私協議</privacy>",
+    "consentStatement": "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私政策</privacy>",
     "consentDialog": {
-      "title": "服務條款和隱私協議",
-      "body": "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私協議</privacy>",
+      "title": "服務條款和隱私政策",
+      "body": "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私政策</privacy>",
       "agree": "同意",
       "disagree": "暫不同意"
     },

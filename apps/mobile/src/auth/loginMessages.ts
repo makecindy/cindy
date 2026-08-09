@@ -32,10 +32,10 @@ const messages = {
     ssoRequired: "該組織要求使用企業 SSO 登入。",
     ssoEntry: "使用企業 SSO 登入",
     consentStatement:
-      "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私協議</privacy>",
-    consentDialogTitle: "服務條款和隱私協議",
+      "我已閱讀並同意 <terms>服務條款</terms> 和 <privacy>隱私政策</privacy>",
+    consentDialogTitle: "服務條款和隱私政策",
     consentDialogBody:
-      "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私協議</privacy>",
+      "請閱讀並同意 Cindy 的以下協議後繼續：<terms>服務條款</terms>、<privacy>隱私政策</privacy>",
     consentAgree: "同意",
     consentDisagree: "暫不同意",
     ssoOrgTitle: "企業 SSO 登入",

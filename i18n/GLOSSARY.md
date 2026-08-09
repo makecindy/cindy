@@ -41,6 +41,7 @@
 | **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | zh-CN: 工单；zh-CN: 议题；zh-TW: 工單；zh-TW: 議題；ja: 課題（仅当英文含 Issue） |
 | **Message** | 消息 | 訊息 | メッセージ | 메시지 | zh-CN: 条对话（仅当英文含 Message）；zh-TW: 條對話（仅当英文含 Message） |
 | **Plugin** | 插件 | 插件 | プラグイン | 플러그인 | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin；zh-TW: 外掛 |
+| **Privacy Policy** | 隐私政策 | 隱私政策 | プライバシーポリシー | 개인정보 처리방침 | zh-TW: 隱私協議（仅当英文含 Privacy Policy） |
 | **Project** | 项目 | 專案 | プロジェクト | 프로젝트 | zh-CN: Project；zh-TW: Project |
 | **Provider** | 供应商 | 供應商 | プロバイダー | 제공자 | zh-CN: 提供方；zh-CN: 提供商；zh-TW: 提供方；zh-TW: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
 | **Proxy** | `Proxy`（保留英文） | `Proxy`（保留英文） | プロキシ | 프록시 | zh-CN: 代理（仅当英文含 Proxy）；zh-TW: 代理（仅当英文含 Proxy） |
@@ -125,6 +126,7 @@
   - 豁免范围：`desktop:scheduler.editor.script.capabilityDescs.jira_comment`、`desktop:scheduler.editor.script.capabilityDescs.jira_read`
 - **Message** — 对话里的一条往来，用户看到的最小单元。此前有 42 处英文是 message、中文却译成「对话」（如 "Delete this message" → 「删除本条对话」），2026-07-31 一并修正。AI 在一轮里的思考与工具调用最终折叠成一条消息呈现，所以消息与轮次是同粒度的两种切法，不是包含关系。（门禁只精确拦「条对话」这种错译形式，不拦「对话历史 / 对话上下文」——同句里既有 message 又有合法「对话X」时机器无法区分对应关系。）
 - **Plugin** — 中文一律「插件」，不保留英文原词（现状 94:4）。历史上 Ghost / Plugin 两种叫法并存，对外统一为「插件」。
+- **Privacy Policy** — Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。
 - **Project** — 中文一律「项目」（现状 119:15）。同一个侧边栏里筛选叫「项目」、批量操作提示叫「Project」是既有 bug。小写 project 不入 forbidden——它常出现在路径与文件名里（project.json）。
 - **Provider** — 中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 "source"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。(2026-07 更新:billing 弃用「点数」概念改用金额/余额,creditParityCny/Usd 两条文案已删除,对应豁免一并移除。)
   - 豁免范围：`desktop:login.ssoVerificationSubtitle`、`mobile/loginMessages:ssoVerificationSubtitle`
