@@ -284,6 +284,16 @@ function sqliteMayLoadMutableFileState(args: readonly string[]): boolean {
   return false;
 }
 
+function psqlMayLoadMutableFileState(args: readonly string[]): boolean {
+  const optionTerminator = args.indexOf('--');
+  const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
+  return options.some((arg) =>
+    arg === '-f'
+    || (arg.startsWith('-f') && arg.length > 2)
+    || arg === '--file'
+    || arg.startsWith('--file='));
+}
+
 const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   // HTTP 鉴权头：curl/wget 的 -H、--header、--proxy-header，含空格/等号/紧凑短选项。
   /(?:^|\s)(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?\s*(?:authorization|proxy-authorization|cookie|x-api-key|x-auth)/i,
@@ -503,6 +513,9 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
       || sqliteMayLoadMutableFileState(args)))) {
     return true;
   }
+  if (invocations.some(({ name, args }) =>
+    // `psql -f FILE` 会执行可替换的外部 SQL 文件；同一 argv 不能代表同一实际操作。
+    name === 'psql' && psqlMayLoadMutableFileState(args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。

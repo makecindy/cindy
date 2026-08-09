@@ -377,6 +377,39 @@ describe('approvalSignature — 可记忆判据', () => {
     }
   });
 
+  it('psql 外部 SQL 文件入口不可记忆', () => {
+    for (const command of [
+      'psql -f ./deploy.sql prod',
+      'psql -f./deploy.sql prod',
+      'psql --file ./deploy.sql prod',
+      'psql --file=./deploy.sql prod',
+      'psql.exe --file=./deploy.sql prod',
+      'env psql -f ./deploy.sql prod',
+      'true && psql --file=./deploy.sql prod',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      "psql prod -c 'select 1'",
+      'psql -- --file=./deploy.sql',
+      'echo psql -f ./deploy.sql prod',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    const action = exec('psql -f ./deploy.sql prod');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    // deploy.sql 即使在两次调用之间被替换，这类入口也从未写入可复用摘要。
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
+  });
+
   it('curl 只有首参数显式禁用配置且未另行指定 config 时才可记忆', () => {
     for (const command of [
       'curl https://api.example.com',
