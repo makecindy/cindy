@@ -183,7 +183,12 @@
       "neutral": "重新連線",
       "pending": "重新連線中…",
       "pendingWithProgress": "重新連線中 {{attempt}}/{{total}}…",
-      "details": "本次重試 {{attempt}}/{{total}} · 本任務累計重連 {{count}} 次"
+      "details": "本次重試 {{attempt}}/{{total}} · 本任務累計重連 {{count}} 次",
+      "detail": {
+        "reason": "中斷原因",
+        "attempt": "本次重試 {{attempt}}/{{total}}",
+        "sessionTotal": "本任務累計重新連線 {{count}} 次"
+      }
     },
     "modelLabel": "模型",
     "sessionLabel": "任務",
