@@ -1545,14 +1545,15 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
 
     await handle.send({ type: 'user', content: 'foreground turn with wake task' });
     stream.emit(taskStarted('task-unconfirmed', 'local_agent'));
-    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(taskStarted('task-bash', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 2, 'wake and bash tasks observed');
 
     fakeQuery.stopTask!.mockRejectedValueOnce(new Error('remote stop rejected'));
     await handle.abort();
 
-    // The ACK succeeds, so the old provider process is retired even though its
-    // stopTask RPC was rejected. A synthetic foreground terminal replaces the
-    // interrupted result that close() intentionally prevents from arriving.
+    // The interrupt ACK succeeds, so the old provider process is retired even
+    // though its stopTask RPC was rejected. A synthetic foreground terminal
+    // replaces the interrupted result that close() intentionally prevents.
     expect(fakeQuery.close).toHaveBeenCalledTimes(1);
     await waitFor(() => events.filter(isProductTerminal).length === 1, 'synthetic foreground terminal observed');
     expect(events.filter(isProductTerminal)).toHaveLength(1);
@@ -1601,6 +1602,52 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     expect(fakeQueries).toHaveLength(2);
     stream.emit(turnResult('fresh turn complete'));
     await waitFor(() => events.filter(isProductTerminal).length === 2, 'fresh terminal observed');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('successful wake Stop preserves a sibling local_bash Query and reuses it', async () => {
+    const { handle, stream, events, fakeQuery, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'foreground with wake and dev server' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    stream.emit(taskStarted('task-bash', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 2, 'wake and bash tasks observed');
+
+    await handle.abort();
+
+    expect(fakeQuery.stopTask).toHaveBeenCalledWith('task-agent');
+    expect(fakeQuery.stopTask).not.toHaveBeenCalledWith('task-bash');
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(fakeQueries).toHaveLength(1);
+    expect(handle.listBackgroundTasks?.()).toEqual([
+      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
+    ]);
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'single Stop terminal observed');
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.send({ type: 'user', content: 'reuse the dev server Query' });
+    expect(fakeQueries).toHaveLength(1);
+
+    // A late interrupted result from the stopped generation must not become
+    // the replacement turn's terminal or clear the bash task.
+    stream.emit(interruptedTurnResult());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+    expect(handle.listBackgroundTasks?.()).toEqual([
+      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
+    ]);
+
+    stream.emit(turnResult('reused Query turn complete'));
+    await waitFor(() => events.filter(isProductTerminal).length === 2, 'reused Query terminal observed');
+    await waitFor(() => handle.isTurnRunning?.() === false, 'reused Query turn settled');
+    expect(fakeQueries).toHaveLength(1);
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(handle.listBackgroundTasks?.()).toEqual([
+      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
+    ]);
 
     stream.end();
     await handle.close().catch(() => undefined);

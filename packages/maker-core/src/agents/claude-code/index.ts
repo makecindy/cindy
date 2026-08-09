@@ -3423,6 +3423,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const emitCancelledContinuationBoundary = (
       claim: ContinuationClaim,
       reason: string,
+      options?: { retireQuery?: boolean },
     ): void => {
       log.info('emitting terminal boundary for cancelled turn continuation', {
         reason,
@@ -3434,9 +3435,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         // Install the cancelled-tail fence at the same enqueue boundary as
         // the synthetic product terminal. stopTask can win before interrupt
         // resolves, so waiting for the interrupt ACK leaves a double-terminal
-        // window for a late provider result.
+        // window for a late provider result. A live Query that owns local_bash
+        // keeps the fence but deliberately does not request a rebuild.
         continuationCancellationGeneration = turnState.generation;
-        continuationCancellationRequiresQueryRebuild = true;
+        if (options?.retireQuery !== false) {
+          continuationCancellationRequiresQueryRebuild = true;
+        }
       }
     };
 
@@ -4823,6 +4827,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
         beginNewTurn();
+        // A successful wake stop can keep a Query alive for local_bash while
+        // fencing the interrupted generation. Once this send advances the
+        // generation, let its own input through; a late interrupted result is
+        // still rejected by translator's interrupt-generation guard.
+        if (
+          continuationCancellationGeneration !== null &&
+          !continuationCancellationRequiresQueryRebuild &&
+          continuationCancellationGeneration !== turnState.generation
+        ) {
+          continuationCancellationGeneration = null;
+        }
         toolLoopGuard?.resetTurn();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
@@ -5108,16 +5123,28 @@ export class ClaudeCodeAgent extends BaseAgent {
           // to prevent a queued automatic continuation from escaping Stop.
           const cancelledContinuation = stoppedClaim ?? cancelActiveContinuation('user_stop');
           const hasUnconfirmedWakeTasks = [...runningBackgroundTasks.values()].some((info) => info.wake);
-          // A successful stopTask only proves that the task accepted cancellation; it
-          // cannot prove that the provider has not already queued its automatic wake
-          // continuation. Retire this Query whenever this Stop touched any wake task,
-          // not only when a stop was rejected or remains locally tracked.
-          if (
+          const hasRunningLocalBash = [...runningBackgroundTasks.values()].some(
+            (info) => !info.wake && info.taskType === 'local_bash',
+          );
+          // stopTask fulfilled means the cancellation RPC settled/was acknowledged;
+          // it is not proof that the provider tail is drained. If a live local_bash
+          // shares this Query, keep the Query (and fence the old generation) so q.close
+          // cannot kill the dev server. Any rejected or unconfirmed wake stop remains
+          // fail-safe: retire the Query rather than letting a wake continuation escape.
+          const preserveQueryForLocalBash =
+            stopRequests.length > 0 &&
+            hasRunningLocalBash &&
+            !hasRejectedStops &&
+            !hasUnconfirmedWakeTasks;
+          const shouldRetireQuery =
+            !preserveQueryForLocalBash &&
+            (
             stopRequests.length > 0 ||
             cancelledContinuation ||
             hasUnconfirmedWakeTasks ||
             hasRejectedStops
-          ) {
+            );
+          if (shouldRetireQuery) {
             // All cancellation sources share one terminal state: a cancelled
             // continuation claim, an unconfirmed wake task, or a rejected stop
             // means this Query must be retired. The provider tail is fenced by
@@ -5165,6 +5192,25 @@ export class ClaudeCodeAgent extends BaseAgent {
             // main 上 #2151 已给 interrupt 成功分支挂了同一守卫; 本 PR 的差异是
             // close-query / 超时 / 抛错 / bridge 分支也一并纳入同一契约。
             if (!sendInAcceptPhase) turnInFlight = false;
+          } else if (preserveQueryForLocalBash) {
+            // The stopTask/interrupt pair is the cancellation boundary for the
+            // foreground turn. Keep q alive for local_bash, but fence all late
+            // activity from this generation before the next send reuses q.
+            continuationCancellationGeneration = turnState.generation;
+            if (cancelledContinuation) {
+              retireContinuationTasks(cancelledContinuation);
+              emitCancelledContinuationBoundary(
+                cancelledContinuation,
+                'user_stop',
+                { retireQuery: false },
+              );
+            } else if (foregroundWasInFlight && !sendInAcceptPhase) {
+              turnInFlight = false;
+              if (stopTerminalEmittedGeneration !== turnState.generation) {
+                emitTurnBoundary('user_stop');
+                stopTerminalEmittedGeneration = turnState.generation;
+              }
+            }
           } else {
             // interrupt 成功且无后台任务需要清：被中断的 turn 会收到
             // error_during_execution result → translator 在 onTurnEnd 清
