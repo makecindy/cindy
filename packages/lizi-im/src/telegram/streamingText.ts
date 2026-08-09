@@ -53,8 +53,11 @@ export interface TelegramStreamingDeps {
   repost?: (markdown: string) => Promise<string>;
   /** 用 markdown 渲染结果覆盖既有消息。 */
   edit: (messageId: string, markdown: string) => Promise<void>;
-  /** 终稿里的受管图片旁路上传，返回已确认送达的原始引用。 */
-  uploadImages: (messageId: string, imageUrls: string[]) => Promise<readonly string[]>;
+  /** 终稿里的受管图片旁路上传，区分确认送达与不可安全重试的原始引用。 */
+  uploadImages: (messageId: string, imageUrls: string[]) => Promise<{
+    delivered: readonly string[];
+    nonRetryable: readonly string[];
+  }>;
   /** markdown 分段(fence 感知)。 */
   chunk: (text: string) => string[];
   /** 提取 markdown 里的受管图片 URL(渲染由 send/edit 内部完成)。 */
@@ -84,6 +87,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
   private done = false;
   private extraImageAbsPaths: string[] = [];
   private deliveredExtraImageAbsPaths: string[] = [];
+  private nonRetryableExtraImageAbsPaths: string[] = [];
   /**
    * 惰性占位(2026-07-30 review): 有真实正文才发首条消息 — ambient turn 的
    * NO_REPLY 沉默从"发 '…' 再删"变成从头到尾零消息零通知; 普通 turn 也不再
@@ -130,6 +134,10 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
 
   getDeliveredExtraImageAbsPaths(): readonly string[] {
     return [...this.deliveredExtraImageAbsPaths];
+  }
+
+  getNonRetryableExtraImageAbsPaths(): readonly string[] {
+    return [...this.nonRetryableExtraImageAbsPaths];
   }
 
   close(): void {
@@ -204,13 +212,17 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     }
     // extraImageAbsPaths(tool_result 账本图)与正文图都交 uploadImages 收口;
     // 去重职责在 index.ts 的 uploadImages 实现里(absPath / url 双口径)。
-    const deliveredImageRefs = await this.deps.uploadImages(this.messageIdValue, [
+    const uploadResult = await this.deps.uploadImages(this.messageIdValue, [
       ...imageUrls,
       ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
     ]);
-    const deliveredRefSet = new Set(deliveredImageRefs);
+    const deliveredRefSet = new Set(uploadResult.delivered);
+    const nonRetryableRefSet = new Set(uploadResult.nonRetryable);
     this.deliveredExtraImageAbsPaths = this.extraImageAbsPaths.filter((absPath) =>
       deliveredRefSet.has(`abs:${absPath}`),
+    );
+    this.nonRetryableExtraImageAbsPaths = this.extraImageAbsPaths.filter((absPath) =>
+      nonRetryableRefSet.has(`abs:${absPath}`),
     );
   }
 

@@ -365,6 +365,20 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(collectXdtImageRefs(text)).toEqual([]);
   });
 
+  it('does not let a type-7 HTML tag interrupt an open paragraph', () => {
+    const text = [
+      '说明',
+      '<span>',
+      '[报告](xdt-file:///tmp/paragraph.pdf)',
+      '</span>',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/paragraph.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toContain('\n报告\n');
+  });
+
   it('ends an unclosed HTML comment when its blockquote container ends', () => {
     const text = [
       '> <!--',

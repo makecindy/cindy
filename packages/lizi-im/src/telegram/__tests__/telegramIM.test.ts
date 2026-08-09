@@ -1494,7 +1494,7 @@ describe('TelegramIM', () => {
 
     async function sendAlbumWith(
       failure: unknown,
-    ): Promise<{ groups: number; singles: number }> {
+    ): Promise<{ groups: number; singles: number; nonRetryable: readonly string[] }> {
       await connect();
       const originalForm = api.callForm.bind(api);
       api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
@@ -1507,6 +1507,7 @@ describe('TelegramIM', () => {
       return {
         groups: api.calls.filter((c) => c.method === 'sendMediaGroup').length,
         singles: api.calls.filter((c) => c.method === 'sendPhoto').length,
+        nonRetryable: handle.getNonRetryableExtraImageAbsPaths?.() ?? [],
       };
     }
 
@@ -1537,9 +1538,10 @@ describe('TelegramIM', () => {
     });
 
     it('网络错误 → 不逐张补发(可能已经发出去了)', async () => {
-      const { singles } = await sendAlbumWith(new TypeError('fetch failed'));
+      const { singles, nonRetryable } = await sendAlbumWith(new TypeError('fetch failed'));
       // 这一组宁可丢失也不重复 —— 重复的图进了聊天记录就撤不回来了。
       expect(singles).toBe(0);
+      expect(nonRetryable).toHaveLength(3);
     });
 
     it('5xx → 不逐张补发', async () => {

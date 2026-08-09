@@ -1110,14 +1110,17 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       close: vi.fn(),
       addExtraImageAbsPath: vi.fn(),
       getDeliveredExtraImageAbsPaths: vi.fn(() => ['/tmp/already-delivered.png']),
+      getNonRetryableExtraImageAbsPaths: vi.fn(() => ['/tmp/uncertain-delivery.png']),
     };
     mocks.feishuIm.startStreamingText
       .mockResolvedValueOnce(firstHandle)
       .mockRejectedValueOnce(new Error('second card create failed'));
-    mocks.resolveXdtImageUrl.mockReturnValue({
-      absPath: '/tmp/already-delivered.png',
+    mocks.resolveXdtImageUrl.mockImplementation((url: string) => ({
+      absPath: url.includes('uncertain')
+        ? '/tmp/uncertain-delivery.png'
+        : '/tmp/already-delivered.png',
       mimeType: 'image/png',
-    });
+    }));
     mocks.buildAskUserCard.mockReturnValue({ elements: [] });
     mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-1' });
     mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
@@ -1128,7 +1131,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await flushMicrotasks();
     h.emit({
       type: 'tool_result_full',
-      data: { fullText: JSON.stringify({ xdt_image_url: 'xdt-image://delivered.png' }) },
+      data: {
+        fullText: JSON.stringify({
+          xdt_image_urls: ['xdt-image://delivered.png', 'xdt-image://uncertain.png'],
+        }),
+      },
     });
     await flushMicrotasks();
 

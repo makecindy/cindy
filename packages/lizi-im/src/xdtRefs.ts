@@ -281,10 +281,12 @@ function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
   const lowerText = text.toLowerCase();
   let lineStart = 0;
+  let paragraphOpen = false;
   while (lineStart < text.length) {
     const lineEnd = lineEndAfterNewline(text, lineStart);
     const opening = htmlBlockLineStart(text, lineStart, lineEnd);
     if (!opening) {
+      paragraphOpen = !isBlankLine(text, lineStart, lineEnd);
       lineStart = lineEnd;
       continue;
     }
@@ -300,8 +302,9 @@ function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
       const rawTag = contentLower.match(/^<(pre|script|style|textarea)(?:\s|>|$)/)?.[1];
       if (rawTag) closingMarker = `</${rawTag}>`;
       else if (HTML_BLOCK_TAG_RE.test(content)) blankTerminated = true;
-      else if (COMPLETE_HTML_TAG_RE.test(content)) blankTerminated = true;
+      else if (!paragraphOpen && COMPLETE_HTML_TAG_RE.test(content)) blankTerminated = true;
       else {
+        paragraphOpen = !isBlankLine(text, lineStart, lineEnd);
         lineStart = lineEnd;
         continue;
       }
@@ -347,6 +350,7 @@ function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
       }
     }
     ranges.push({ start: lineStart, end: blockEnd });
+    paragraphOpen = false;
     lineStart = blockEnd;
   }
   return ranges;

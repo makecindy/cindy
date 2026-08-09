@@ -328,6 +328,8 @@ export interface StreamingTextHandle {
    * entries from their retry ledger after an interaction boundary.
    */
   getDeliveredExtraImageAbsPaths?(): readonly string[];
+  /** Paths with an ambiguous remote outcome that must not be retried. */
+  getNonRetryableExtraImageAbsPaths?(): readonly string[];
 }
 
 export interface SendFileResult {

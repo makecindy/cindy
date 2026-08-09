@@ -26,7 +26,7 @@ function makeHarness(
     deleteImpl?: (messageId: string) => Promise<void>;
     chunk?: (text: string) => string[];
     extractImageUrls?: (markdown: string) => string[];
-    uploadImagesImpl?: (messageId: string, imageUrls: string[]) => Promise<readonly string[]>;
+    uploadImagesImpl?: TelegramStreamingDeps['uploadImages'];
     /** 不提供 repost 时用于验证回落 send 的行为。 */
     withoutRepost?: boolean;
   } = {},
@@ -53,7 +53,12 @@ function makeHarness(
         calls.push(`upload:${messageId}`);
         uploadAnchors.push(messageId);
       }
-      return overrides.uploadImagesImpl?.(messageId, imageUrls) ?? imageUrls;
+      return (
+        overrides.uploadImagesImpl?.(messageId, imageUrls) ?? {
+          delivered: imageUrls,
+          nonRetryable: [],
+        }
+      );
     },
     chunk: overrides.chunk ?? ((text) => [text]),
     extractImageUrls: overrides.extractImageUrls ?? (() => []),
@@ -177,7 +182,10 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
     const first = '/tmp/first.png';
     const second = '/tmp/second.png';
     const h = makeHarness({
-      uploadImagesImpl: async (_messageId, imageUrls) => [imageUrls[0]],
+      uploadImagesImpl: async (_messageId, imageUrls) => ({
+        delivered: [imageUrls[0]],
+        nonRetryable: [],
+      }),
     });
     const handle = await startTelegramStreaming(h.deps, 'working');
     handle.addExtraImageAbsPath?.(first);

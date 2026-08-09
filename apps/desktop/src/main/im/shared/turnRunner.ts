@@ -3205,6 +3205,7 @@ export function createTurnRunner(
     }
     const view = composeStreamingView(turn);
     let deliveredMediaAbsPaths: readonly string[] = [];
+    let nonRetryableMediaAbsPaths: readonly string[] = [];
     if (view.length > 0) {
       try {
         await turn.streamingHandle.finalize(view);
@@ -3216,6 +3217,8 @@ export function createTurnRunner(
         // A channel can confirm early batches and then fail a later one. Read
         // the ledger even on rejection so already-delivered media is not retried.
         deliveredMediaAbsPaths = turn.streamingHandle.getDeliveredExtraImageAbsPaths?.() ?? [];
+        nonRetryableMediaAbsPaths =
+          turn.streamingHandle.getNonRetryableExtraImageAbsPaths?.() ?? [];
       }
     } else {
       // Empty card was minted but never written to — close it without a final
@@ -3224,10 +3227,10 @@ export function createTurnRunner(
     }
     turn.streamingHandle = null;
     turn.streamingHandlePromise = null;
-    if (deliveredMediaAbsPaths.length > 0) {
-      const delivered = new Set(deliveredMediaAbsPaths);
-      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !delivered.has(absPath));
-      for (const absPath of delivered) {
+    if (deliveredMediaAbsPaths.length > 0 || nonRetryableMediaAbsPaths.length > 0) {
+      const settled = new Set([...deliveredMediaAbsPaths, ...nonRetryableMediaAbsPaths]);
+      turn.mediaAbsPaths = turn.mediaAbsPaths.filter((absPath) => !settled.has(absPath));
+      for (const absPath of settled) {
         turn.imageMediaAbsPaths.delete(absPath);
         turn.mediaDisplayNames.delete(absPath);
       }

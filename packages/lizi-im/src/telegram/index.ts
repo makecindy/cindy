@@ -1655,6 +1655,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             getDeliveredExtraImageAbsPaths: () => inner.getDeliveredExtraImageAbsPaths?.() ?? [],
           }
         : {}),
+      ...(inner.getNonRetryableExtraImageAbsPaths
+        ? {
+            getNonRetryableExtraImageAbsPaths: () =>
+              inner.getNonRetryableExtraImageAbsPaths?.() ?? [],
+          }
+        : {}),
     };
     return wrapped;
   }
@@ -1942,9 +1948,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     messageId: string,
     imageRefs: string[],
     assertLive?: () => void,
-  ): Promise<readonly string[]> {
+  ): Promise<{ delivered: readonly string[]; nonRetryable: readonly string[] }> {
     const api = this.api;
-    if (!api || imageRefs.length === 0) return [];
+    if (!api || imageRefs.length === 0) return { delivered: [], nonRetryable: [] };
     // 图片以 reply 挂回答案锚点消息: 论坛 topic 内自动跟随该 topic(裸发会
     // 落进 General), 视觉上也和答案连成一体; 锚点被删则降级普通发送。
     const { chatId, messageId: anchorNativeId } = decodeMessageId(messageId);
@@ -1978,6 +1984,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       }
     }
     const deliveredRefs = new Set<string>();
+    const nonRetryableRefs = new Set<string>();
     const markDelivered = (paths: string[]): void => {
       for (const absPath of paths) {
         for (const ref of refsByAbsPath.get(absPath) ?? []) deliveredRefs.add(ref);
@@ -1988,7 +1995,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (await this.sendSinglePhoto(chatId, absPaths[0], anchorReply)) {
         markDelivered(absPaths);
       }
-      return [...deliveredRefs];
+      return { delivered: [...deliveredRefs], nonRetryable: [] };
     }
     for (let i = 0; i < absPaths.length; i += 10) {
       const group = absPaths.slice(i, i + 10);
@@ -2000,7 +2007,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         markDelivered(group);
         continue;
       }
-      if (outcome === 'uncertain') continue; // 可能已经发出去了, 不补发
+      if (outcome === 'uncertain') {
+        for (const absPath of group) {
+          for (const ref of refsByAbsPath.get(absPath) ?? []) nonRetryableRefs.add(ref);
+        }
+        continue; // 可能已经发出去了, 不补发也不跨交互重试
+      }
       if (outcome === 'rejected') {
         for (const absPath of group) {
           assertLive?.();
@@ -2010,7 +2022,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }
       }
     }
-    return [...deliveredRefs];
+    return { delivered: [...deliveredRefs], nonRetryable: [...nonRetryableRefs] };
   }
 
   private behaviorOf(): TelegramBehaviorConfig {
