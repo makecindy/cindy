@@ -10,7 +10,7 @@ export interface AppshotMetadata {
   windowTitle: string | null;
   accessibilityText: string | null;
   accessibilityTruncated: boolean;
-  accessibilityUnavailableReason?: 'permission' | 'unsupported' | 'timeout';
+  accessibilityUnavailableReason?: 'permission' | 'unsupported' | 'timeout' | 'removed';
 }
 
 export interface AppshotCaptureResult {
@@ -44,7 +44,7 @@ export const DEFAULT_APPSHOT_SHORTCUT_PREFERENCES: AppshotShortcutPreferences = 
 
 const MAX_SCALAR_LENGTH = 4 * 1024;
 const MAX_ACCESSIBILITY_BYTES = 512 * 1024;
-const UNAVAILABLE_REASONS = new Set(['permission', 'unsupported', 'timeout']);
+const UNAVAILABLE_REASONS = new Set(['permission', 'unsupported', 'timeout', 'removed']);
 
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -95,7 +95,8 @@ export function coerceAppshotMetadata(value: unknown): AppshotMetadata | null {
           accessibilityUnavailableReason: raw.accessibilityUnavailableReason as
             | 'permission'
             | 'unsupported'
-            | 'timeout',
+            | 'timeout'
+            | 'removed',
         }
       : {}),
   };

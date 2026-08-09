@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, Mic, Pen, Scan, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
@@ -7367,6 +7367,7 @@ function ThumbnailItem({
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
   const { t } = useTranslation();
+  const { confirm: confirmDialog } = useConfirmDialog();
   const [isHovered, setIsHovered] = useState(false);
   const thumbRef = useRef<HTMLDivElement>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
@@ -7440,6 +7441,37 @@ function ThumbnailItem({
   const metaLine = [extLabel || null, hasSize ? formatBytes(shownSize) : null]
     .filter(Boolean)
     .join(' · ');
+  const appshot = file.appshot;
+  const hasAxStructure = appshot?.accessibilityText != null && appshot.accessibilityText.length > 0;
+  const handleAppshotStructure = useCallback(async () => {
+    if (!appshot) return;
+    const text = appshot.accessibilityText;
+    const remove = await confirmDialog({
+      title: t('newChat.chatInput.appshots.axPreviewTitle'),
+      description: text
+        ? t('newChat.chatInput.appshots.axPreviewDescription')
+        : t('newChat.chatInput.appshots.noAx'),
+      content: text
+        ? (
+            <pre
+              className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md p-2 text-xs leading-relaxed"
+              style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
+            >
+              {text}
+            </pre>
+          )
+        : undefined,
+      maxWidth: 560,
+      confirmText: t('newChat.chatInput.appshots.removeAx'),
+      cancelText: t('newChat.chatInput.appshots.close'),
+      confirmVariant: 'destructive',
+    });
+    if (remove) {
+      onUpdate(file.id, {
+        appshot: { ...appshot, accessibilityText: null, accessibilityUnavailableReason: 'removed' },
+      });
+    }
+  }, [appshot, confirmDialog, onUpdate, t]);
 
   return (
     <div
@@ -7474,6 +7506,16 @@ function ThumbnailItem({
               className="h-full w-full rounded-lg object-cover"
               draggable={false}
             />
+            {hasAxStructure && (
+              <span
+                className="absolute bottom-0.5 left-0.5 flex h-4 w-4 items-center justify-center rounded-full"
+                style={{ backgroundColor: 'var(--surface-elevated)' }}
+                title={t('newChat.chatInput.appshots.hasAxBadge')}
+                aria-label={t('newChat.chatInput.appshots.hasAxBadge')}
+              >
+                <Scan className="h-2.5 w-2.5" style={{ color: 'var(--text-secondary)' }} />
+              </span>
+            )}
             {file.annotationStrokes && file.annotationStrokes.length > 0 ? (
               <span
                 className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full"
@@ -7533,6 +7575,21 @@ function ThumbnailItem({
       >
         &times;
       </button>
+
+      {file.appshot && (
+        <button
+          type="button"
+          className="absolute -left-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-10 text-white opacity-0 transition-opacity group-hover:opacity-100"
+          style={{ backgroundColor: 'var(--file-remove-bg)' }}
+          onClick={(event) => {
+            event.stopPropagation();
+            void handleAppshotStructure();
+          }}
+          aria-label={t('newChat.chatInput.appshots.axPreviewTitle')}
+        >
+          <Scan className="h-2.5 w-2.5 text-white" />
+        </button>
+      )}
 
       {/* Hover preview / tooltip (F-FI-4) — rendered via portal to escape overflow clipping */}
       {file.category === 'image' && (file.url || file.base64) ? (

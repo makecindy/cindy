@@ -5451,12 +5451,19 @@
     "chatInput": {
       "defaultPlaceholder": "今天我们做点什么呢~",
       "appshots": {
+        "menuItem": "应用快照",
         "permissionTitle": "需要屏幕录制权限",
         "permissionDescription": "Appshots 需要 macOS 屏幕录制权限才能捕获当前应用窗口。Cindy 只会打开对应的系统设置页面；在你重新尝试前，不会捕获或发送任何内容。",
         "openSettings": "打开系统设置",
         "cancel": "取消",
         "openSettingsFailed": "无法打开屏幕录制设置",
-        "captureFailed": "无法捕获当前应用窗口"
+        "captureFailed": "无法捕获当前应用窗口",
+        "hasAxBadge": "含界面结构",
+        "axPreviewTitle": "Appshot 界面结构",
+        "axPreviewDescription": "发送时会随截图附带以下可访问性文本，发送前可移除。",
+        "noAx": "此快照未包含界面结构。",
+        "removeAx": "移除界面结构",
+        "close": "关闭"
       },
       "voiceInput": {
         "start": "开始语音输入",

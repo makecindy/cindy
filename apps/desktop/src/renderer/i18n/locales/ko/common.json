@@ -5451,12 +5451,19 @@
     "chatInput": {
       "defaultPlaceholder": "오늘은 무엇을 할까요~",
       "appshots": {
+        "menuItem": "앱 스냅샷",
         "permissionTitle": "화면 기록 권한이 필요합니다",
         "permissionDescription": "Appshots로 현재 앱 창을 캡처하려면 macOS 화면 기록 권한이 필요합니다. Cindy는 해당 시스템 설정 페이지만 열며, 다시 시도하기 전에는 캡처하거나 전송하지 않습니다.",
         "openSettings": "설정 열기",
         "cancel": "취소",
         "openSettingsFailed": "화면 기록 설정을 열 수 없습니다",
-        "captureFailed": "현재 앱 창을 캡처할 수 없습니다"
+        "captureFailed": "현재 앱 창을 캡처할 수 없습니다",
+        "hasAxBadge": "UI 구조 포함",
+        "axPreviewTitle": "Appshot UI 구조",
+        "axPreviewDescription": "전송 시 아래 접근성 텍스트가 스크린샷과 함께 첨부됩니다. 전송 전에 제거할 수 있습니다.",
+        "noAx": "이 스냅샷에는 UI 구조가 없습니다.",
+        "removeAx": "UI 구조 제거",
+        "close": "닫기"
       },
       "voiceInput": {
         "start": "음성 입력 시작",

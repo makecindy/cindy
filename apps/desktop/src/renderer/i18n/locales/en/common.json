@@ -5453,12 +5453,19 @@
     "chatInput": {
       "defaultPlaceholder": "What shall we work on today~",
       "appshots": {
+        "menuItem": "Capture app snapshot",
         "permissionTitle": "Screen Recording permission required",
         "permissionDescription": "Appshots needs macOS Screen Recording permission to capture the active app window. Cindy will open the matching System Settings page and will not capture or send anything until you try again.",
         "openSettings": "Open Settings",
         "cancel": "Cancel",
         "openSettingsFailed": "Failed to open Screen Recording settings",
-        "captureFailed": "Could not capture the active app window"
+        "captureFailed": "Could not capture the active app window",
+        "hasAxBadge": "Includes UI structure",
+        "axPreviewTitle": "Appshot UI structure",
+        "axPreviewDescription": "The accessibility text below is attached alongside the screenshot when sent. You can remove it before sending.",
+        "noAx": "This snapshot has no UI structure.",
+        "removeAx": "Remove UI structure",
+        "close": "Close"
       },
       "voiceInput": {
         "start": "Start voice input",

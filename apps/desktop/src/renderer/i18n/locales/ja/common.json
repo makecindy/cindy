@@ -5451,12 +5451,19 @@
     "chatInput": {
       "defaultPlaceholder": "今日は何をしましょうか〜",
       "appshots": {
+        "menuItem": "アプリのスナップショット",
         "permissionTitle": "画面収録の権限が必要です",
         "permissionDescription": "Appshots で現在のアプリウィンドウを取得するには、macOS の画面収録権限が必要です。Cindy は該当するシステム設定ページだけを開き、再試行するまで取得も送信もしません。",
         "openSettings": "設定を開く",
         "cancel": "キャンセル",
         "openSettingsFailed": "画面収録の設定を開けませんでした",
-        "captureFailed": "現在のアプリウィンドウを取得できませんでした"
+        "captureFailed": "現在のアプリウィンドウを取得できませんでした",
+        "hasAxBadge": "UI構造を含む",
+        "axPreviewTitle": "Appshot UI 構造",
+        "axPreviewDescription": "送信時には以下のアクセシビリティテキストがスクリーンショットと一緒に添付されます。送信前に削除できます。",
+        "noAx": "このスナップショットには UI 構造が含まれていません。",
+        "removeAx": "UI 構造を削除",
+        "close": "閉じる"
       },
       "voiceInput": {
         "start": "音声入力を開始",
