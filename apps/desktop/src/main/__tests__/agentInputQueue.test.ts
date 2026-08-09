@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import {
   ANNOTATED_IMAGE_NOTE,
+  UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE,
   buildMakerUserMessage,
   getAgentFacingText,
   reconcileSessionRefsForText,
@@ -10,6 +11,7 @@ import {
   updateQueuedMessageContent,
   updateQueuedMessageText,
 } from '../../shared/agentInputQueue.js';
+import { MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER } from '../../shared/inputError.js';
 
 function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueuedMessage {
   return {
@@ -165,6 +167,55 @@ describe('agentInputQueue', () => {
         { type: 'text', text: 'inspect attachment' },
         { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
         { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
+      ],
+    });
+  });
+
+  it('filters only model-bound image blocks during capability fallback', () => {
+    const entry = queuedMessage([
+      {
+        id: 'image-1',
+        name: 'shot.png',
+        path: '/repo/shot.png',
+        ext: '.png',
+        size: 128,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'xdt-image://session/shot.png',
+      },
+      {
+        id: 'gif-1',
+        name: 'clip.gif',
+        path: '/repo/clip.gif',
+        ext: '.gif',
+        size: 128,
+        category: 'image',
+        mimeType: 'image/gif',
+        url: 'xdt-image://session/clip.gif',
+      },
+    ]);
+    entry.unsupportedImageFallback = true;
+
+    expect(buildMakerUserMessage(entry)).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
+        { type: 'text', text: UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE },
+      ],
+    });
+    expect(entry.files).toHaveLength(2);
+  });
+
+  it('uses a marker-only fallback when only replayed history contains images', () => {
+    const entry = queuedMessage(undefined);
+    entry.unsupportedImageFallback = true;
+
+    expect(buildMakerUserMessage(entry)).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        { type: 'text', text: MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER },
       ],
     });
   });

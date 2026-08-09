@@ -147,6 +147,7 @@
     "systemInstruction": "系统指令",
     "retrySend": "重试发送",
     "clearError": "清除错误",
+    "modelImageInputUnsupported": "当前模型无法读取图片。请补充文字说明，或切换到支持图片的模型。",
     "piImageInputUnsupported": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
     "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
     "credentialSwitchWait": "正在等待其它 Codex 任务结束，结束后自动发送",

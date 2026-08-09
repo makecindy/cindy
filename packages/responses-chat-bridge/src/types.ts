@@ -364,6 +364,9 @@ const UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX =
   'Responses feature is not supported by the Chat Completions bridge: ';
 const RESPONSES_IMAGE_CONTENT_PART_TYPES = new Set(['input_image', 'image_url', 'image']);
 const CODEX_UNEXPECTED_BAD_REQUEST_PREFIX = /^unexpected status 400(?: Bad Request)?: /;
+/** LiteLLM may prefix the provider error with an SDK/status envelope before its exception name. */
+const LITELLM_BAD_REQUEST_PREFIX =
+  /^(?:API Error:\s*)?(?:\d{3}(?:\s+Bad Request)?\s+)?litellm\.BadRequestError:\s+[^-]*(?:Exception|Error)\s*-\s*/i;
 const CODEX_ERROR_METADATA_MARKERS = [
   ', url: ',
   ', cf-ray: ',
@@ -391,14 +394,46 @@ function isUnsupportedResponsesImageFeature(feature: string): boolean {
     || contentPartType.startsWith('input_image.');
 }
 
+/** An image field must be present before a generic deserialization failure is image-related. */
+const IMAGE_CONTENT_MARKER_PATTERN = /\b(?:image_url|input_image(?:\.[a-z0-9_]+)?)\b/i;
+const IMAGE_DESERIALIZATION_ERROR_PATTERN = /(?:unknown variant|failed to deserialize|deserializ)/i;
+const IMAGE_INPUT_UNSUPPORTED_MARKER = '[MODEL_IMAGE_INPUT_UNSUPPORTED]';
+const LEGACY_IMAGE_INPUT_UNSUPPORTED_MARKER = '[PI_IMAGE_INPUT_UNSUPPORTED]';
+
+function isImageDeserializationError(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  return IMAGE_CONTENT_MARKER_PATTERN.test(value) && IMAGE_DESERIALIZATION_ERROR_PATTERN.test(value);
+}
+
+function imageDeserializationMessageFromPayloadBody(body: string): string | null {
+  const parsed = parseCodexWrappedJson(body);
+  if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+    const error = (parsed as Record<string, unknown>).error;
+    if (typeof error === 'object' && error !== null && !Array.isArray(error)) {
+      const message = (error as Record<string, unknown>).message;
+      if (typeof message === 'string' && isImageDeserializationError(message)) return message;
+    }
+  }
+  return isImageDeserializationError(body) ? body : null;
+}
+
+function litellmImageRejectionMessage(value: string): string | null {
+  const match = LITELLM_BAD_REQUEST_PREFIX.exec(value);
+  if (!match) return null;
+  return imageDeserializationMessageFromPayloadBody(value.slice(match[0].length));
+}
+
 function isUnsupportedResponsesImageErrorObject(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const error = (value as Record<string, unknown>).error;
   if (typeof error !== 'object' || error === null || Array.isArray(error)) return false;
   const { code, message } = error as Record<string, unknown>;
-  if (code !== 'unsupported_feature' || typeof message !== 'string') return false;
-  const feature = unsupportedResponsesFeatureFromMessage(message);
-  return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  if (typeof message !== 'string') return false;
+  if (code === 'unsupported_feature') {
+    const feature = unsupportedResponsesFeatureFromMessage(message);
+    return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  }
+  return isImageDeserializationError(message) || litellmImageRejectionMessage(message) !== null;
 }
 
 function parseJson(value: string): unknown {
@@ -441,7 +476,15 @@ function stripCodexErrorMetadata(value: string): string {
  */
 export function isUnsupportedResponsesImageErrorPayload(payload: string | null): boolean {
   if (!payload) return false;
+  if (
+    payload.startsWith(IMAGE_INPUT_UNSUPPORTED_MARKER) ||
+    payload.startsWith(LEGACY_IMAGE_INPUT_UNSUPPORTED_MARKER)
+  ) {
+    return true;
+  }
   if (isUnsupportedResponsesImageErrorObject(parseJson(payload))) return true;
+
+  if (litellmImageRejectionMessage(payload) !== null) return true;
 
   const codexPrefix = CODEX_UNEXPECTED_BAD_REQUEST_PREFIX.exec(payload);
   if (!codexPrefix) return false;
@@ -451,6 +494,28 @@ export function isUnsupportedResponsesImageErrorPayload(payload: string | null):
   const message = stripCodexErrorMetadata(renderedBody);
   const feature = unsupportedResponsesFeatureFromMessage(message);
   return feature !== null && isUnsupportedResponsesImageFeature(feature);
+}
+
+/**
+ * Extracts an image deserialization rejection from a LiteLLM gateway envelope so the caller can
+ * preserve the provider detail after adding the stable friendly marker. Returns null when the
+ * payload is not a recognized LiteLLM image rejection.
+ */
+export function litellmImageErrorPayload(payload: string | null): string | null {
+  if (!payload) return null;
+  const parsed = parseJson(payload);
+  if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+    const error = (parsed as Record<string, unknown>).error;
+    if (typeof error === 'object' && error !== null && !Array.isArray(error)) {
+      const message = (error as Record<string, unknown>).message;
+      if (typeof message === 'string') {
+        const extracted = litellmImageRejectionMessage(message);
+        if (extracted) return `${IMAGE_INPUT_UNSUPPORTED_MARKER} ${extracted}`;
+      }
+    }
+  }
+  const extracted = litellmImageRejectionMessage(payload);
+  return extracted ? `${IMAGE_INPUT_UNSUPPORTED_MARKER} ${extracted}` : null;
 }
 
 export class UnsupportedResponsesFeatureError extends Error {

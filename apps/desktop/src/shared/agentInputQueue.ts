@@ -17,6 +17,7 @@ import {
   readAgentInputReferences,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
+import { MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER } from './inputError.js';
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 
@@ -270,6 +271,14 @@ export interface AgentInputQueuedMessage {
    * 旧队列快照缺省该字段(undefined = 人工),向后兼容。
    */
   autoResume?: boolean;
+  /** Internal guard: model-bound image blocks were filtered for this one capability fallback. */
+  unsupportedImageFallback?: boolean;
+  /**
+   * Internal presentation hint for the fallback request. Historical replay can contain images even
+   * when the current user turn is text-only; in that case the proxy still strips replayed images,
+   * but the model must answer the current text instead of claiming the user just attached an image.
+   */
+  unsupportedImageFallbackExplain?: boolean;
   /**
    * 本次自动续跑的展示信息（中断原因 + 本轮第几次 + 会话累计）。随 `autoResume`
    * 一起透传到落库 agentMeta，供「已重新连接」活动行的展开详情用。
@@ -660,6 +669,35 @@ export const ANNOTATED_IMAGE_NOTE =
   'Note: the red freehand marks on the attached image(s) are annotations drawn by the user ' +
   'to highlight the region(s) they are referring to; they are not part of the original image.';
 
+/**
+ * Main-owned recovery context. It is never copied into visible/persisted user text; the selected
+ * model sees it only after rejecting the original image-bearing request.
+ */
+export const UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE =
+  `${MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER} System recovery note: the user attached ` +
+  'one or more images, but the selected model cannot ' +
+  'access image content. Do not claim to have viewed, inspected, read, or understood any image, ' +
+  "and do not guess its contents. Reply politely in the language of the user's latest request, " +
+  'explain that you cannot read the attached image with the current model, and ask for a text ' +
+  'description or suggest switching to an image-capable model.';
+
+function hasAgentInputFilePayload(file: AgentInputSerializedFile): boolean {
+  return Boolean(
+    file.url ||
+      (file.path && !file.path.startsWith('clipboard://')) ||
+      file.base64,
+  );
+}
+
+/** Whether the current queued turn contributes an image block to the model-bound request. */
+export function hasModelBoundImageInput(queued: AgentInputQueuedMessage): boolean {
+  return (queued.files ?? []).some(
+    (file) =>
+      getAgentInputAttachmentBlockType(file.category, file.ext) === 'image' &&
+      hasAgentInputFilePayload(file),
+  );
+}
+
 /** Stable serialization shared by the resolver's final budget check and agent injection. */
 export function serializeSessionReferencePayload(
   sessionReferenceContexts: readonly AgentInputSessionReferenceContext[],
@@ -924,6 +962,8 @@ export function buildMakerUserMessage(
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
   const agentFacingText = getAgentFacingText(queued);
+  const explainUnsupportedImageFallback =
+    queued.unsupportedImageFallbackExplain ?? hasModelBoundImageInput(queued);
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }
@@ -933,6 +973,7 @@ export function buildMakerUserMessage(
   let hasAnnotatedImage = false;
   for (const f of queued.files ?? []) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
+    if (queued.unsupportedImageFallback && type === 'image') continue;
     if (f.url) {
       blocks.push({ type, path: f.url, mimeType: f.mimeType });
     } else if (f.path && !f.path.startsWith('clipboard://')) {
@@ -948,6 +989,14 @@ export function buildMakerUserMessage(
   // 文本紧随图片;claude 侧所有 text 会合并进文本前缀,红色笔迹自身即区分符。
   if (hasAnnotatedImage) {
     blocks.push({ type: 'text', text: ANNOTATED_IMAGE_NOTE });
+  }
+  if (queued.unsupportedImageFallback) {
+    blocks.push({
+      type: 'text',
+      text: explainUnsupportedImageFallback
+        ? UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE
+        : MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER,
+    });
   }
   if (sessionReferenceContexts.length > 0) {
     const payload = serializeSessionReferencePayload(sessionReferenceContexts);

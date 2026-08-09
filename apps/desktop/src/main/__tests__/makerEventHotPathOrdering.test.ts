@@ -103,6 +103,39 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('doneData?.is_error !== true');
   });
 
+  it('suppresses recoverable unsupported-image errors and schedules a model-authored fallback', () => {
+    const wireSessionSource = extractWireSessionSource();
+
+    expectOrder(
+      wireSessionSource,
+      'normalizeUnsupportedImageErrorMessage(message)',
+      'const broadcastEvent = redactEventForRenderer(attributedEvent);',
+    );
+    expectOrder(
+      wireSessionSource,
+      'agentInputCoordinatorHolder?.onTurnEvent(',
+      'agentInputCoordinatorHolder?.canAutoFallbackUnsupportedImageError(session.id)',
+    );
+    expect(wireSessionSource).toContain(
+      'suppressRecoverableImageErrorProjection: normalizedUnsupportedImageError',
+    );
+    expect(wireSessionSource).toContain(
+      'agentInputCoordinatorHolder?.isUnsupportedImageFallbackDeferred(session.id)',
+    );
+    expectOrder(
+      wireSessionSource,
+      'broadcastToAllWindows(MAKER_PUSH.EVENT',
+      'void coordinator.retryUnsupportedImageError(session.id)',
+    );
+    expect(wireSessionSource).toMatch(
+      /if \(!shouldSuppressUnsupportedImageError\) \{\s*broadcastToAllWindows\(MAKER_PUSH\.EVENT/,
+    );
+    expect(wireSessionSource).toMatch(
+      /if \(!shouldSuppressUnsupportedImageError\) \{\s*handleAgentIslandEventAfterBroadcast/,
+    );
+    expect(wireSessionSource).toContain('!shouldSuppressUnsupportedImageError &&');
+  });
+
   it('wakes deferred Goal resumes from the shared product-terminal idle boundary', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');

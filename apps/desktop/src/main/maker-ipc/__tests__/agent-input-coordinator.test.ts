@@ -10,11 +10,16 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
+import { UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE } from '../../../shared/agentInputQueue.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn.js';
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
+import {
+  MODEL_IMAGE_INPUT_UNSUPPORTED_MARKER,
+  MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER,
+} from '../../../shared/inputError.js';
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -163,6 +168,20 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
     'unexpected status 400 Bad Request: Responses feature is not supported by the ' +
     `Chat Completions bridge: ${feature}, url: http://127.0.0.1/v1/responses`
   );
+}
+
+function litellmGatewayImageError(): string {
+  return JSON.stringify({
+    error: {
+      message:
+        'litellm.BadRequestError: DeepseekException - {"error":{"message":"Failed to deserialize ' +
+        'the JSON body into the target type: messages[5]: unknown variant `image_url`, expected `text` ' +
+        'at line 1 column 389096","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}',
+      type: null,
+      param: null,
+      code: '400',
+    },
+  });
 }
 
 function createHarness(opts?: {
@@ -2351,7 +2370,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual', undefined);
   });
 
-  it('removes unsupported image blocks but preserves GIF and PDF files on retry', async () => {
+  it('omits unsupported image blocks from the model retry but preserves visible attachments', async () => {
     const h = createHarness();
     const sid = 'retry-unsupported-image-with-text';
     h.setHasAssistantProgressAfter(async () => false);
@@ -2432,6 +2451,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.onTurnEvent(sid, 'error', error);
     await flush();
 
+    expect(h.coordinator.canAutoFallbackUnsupportedImageError(sid)).toBe(true);
     await h.coordinator.retryLastError(sid);
     await flush();
 
@@ -2442,14 +2462,21 @@ describe('AgentInputCoordinator send transaction', () => {
         { type: 'text', text: 'describe this' },
         { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
         { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
+        { type: 'text', text: UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE },
       ],
     });
     const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
     expect(retried?.files).toEqual([
+      expect.objectContaining({ id: 'image-1', ext: '.png', category: 'image' }),
       expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
       expect.objectContaining({ id: 'file-1', category: 'pdf' }),
     ]);
     expect(retried?.chatMessage.images).toEqual([
+      {
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      },
       {
         url: 'xdt-image://session/clip.gif',
         mimeType: 'image/gif',
@@ -2464,12 +2491,18 @@ describe('AgentInputCoordinator send transaction', () => {
         }
       ).retryFiles,
     ).toEqual([
+      expect.objectContaining({ id: 'image-1', ext: '.png', category: 'image' }),
       expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
       expect.objectContaining({ id: 'file-1', category: 'pdf' }),
     ]);
     expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
       text: 'describe this',
       images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
         {
           url: 'xdt-image://session/clip.gif',
           mimeType: 'image/gif',
@@ -2480,7 +2513,7 @@ describe('AgentInputCoordinator send transaction', () => {
     });
   });
 
-  it('keeps an unsupported image-only retry recoverable without fabricating text', async () => {
+  it('lets the model politely handle an image-only request without exposing the recovery note', async () => {
     const h = createHarness();
     const sid = 'retry-unsupported-image-only';
     h.setHasAssistantProgressAfter(async () => false);
@@ -2526,17 +2559,25 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.onTurnEvent(sid, 'error', error);
     await flush();
 
-    await h.coordinator.retryLastError(sid);
+    expect(h.coordinator.canAutoFallbackUnsupportedImageError(sid)).toBe(true);
+    await h.coordinator.retryUnsupportedImageError(sid);
     await flush();
 
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestProjection(h.projections).error).toBe(error);
-    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
-
-    h.coordinator.enqueue(sid, makeItem('q-next', 'continue in text'));
-    await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'continue in text' });
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE,
+    });
+    const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(retried?.text).toBe('');
+    expect(retried?.persistedContent).toBe(item.persistedContent);
+    expect(retried?.chatMessage.images).toEqual(item.chatMessage.images);
+    expect(retried?.unsupportedImageFallback).toBe(true);
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+    expect(h.coordinator.canAutoFallbackUnsupportedImageError(sid)).toBe(false);
   });
 
   it('keeps retry recovery compatible with the legacy bridge image error', async () => {
@@ -2567,7 +2608,213 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'describe this' },
+        { type: 'text', text: UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE },
+      ],
+    });
+  });
+
+  it('normalizes an SDK-wrapped LiteLLM image rejection and retries without the image', async () => {
+    const h = createHarness();
+    const sid = 'retry-litellm-sdk-image-error';
+    h.setHasAssistantProgressAfter(async () => false);
+    const image = {
+      url: 'data:image/png;base64,aW1hZ2U=',
+      mimeType: 'image/png',
+      originalName: 'image.png',
+    };
+    const item = makeItem('q-first', 'describe this', {
+      files: [
+        {
+          id: 'image-1',
+          name: 'image.png',
+          path: 'clipboard://image.png',
+          ext: '.png',
+          size: 4,
+          category: 'image',
+          mimeType: 'image/png',
+          url: image.url,
+        },
+      ],
+      persistedContent: JSON.stringify({ text: 'describe this', images: [image], files: [] }),
+      chatMessage: {
+        ...makeItem('q-first', 'describe this').chatMessage,
+        images: [image],
+      },
+    });
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', litellmGatewayImageError());
+    await flush();
+
+    expect(latestProjection(h.projections).error).toBe(
+      `${MODEL_IMAGE_INPUT_UNSUPPORTED_MARKER} Failed to deserialize the JSON body into the target type: ` +
+        'messages[5]: unknown variant `image_url`, expected `text` at line 1 column 389096',
+    );
+    expect(h.coordinator.canAutoFallbackUnsupportedImageError(sid)).toBe(true);
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'describe this' },
+        { type: 'text', text: UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE },
+      ],
+    });
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.files).toEqual(item.files);
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.chatMessage.images).toEqual(
+      item.chatMessage.images,
+    );
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', litellmGatewayImageError());
+    await flush();
+    expect(h.coordinator.canAutoFallbackUnsupportedImageError(sid)).toBe(false);
+  });
+
+  it('cleans replayed history images without claiming a text-only current turn attached one', async () => {
+    const h = createHarness();
+    const sid = 'retry-litellm-historical-image-only';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'summarize the previous answer');
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', litellmGatewayImageError());
+    await flush();
+
+    await h.coordinator.retryUnsupportedImageError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'summarize the previous answer' },
+        { type: 'text', text: MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER },
+      ],
+    });
+    expect(JSON.stringify(h.sendToAgent.mock.calls[1]?.[1])).not.toContain(
+      'the user attached one or more images',
+    );
+    expect(
+      h.onDispatchedUserTurn.mock.calls[1]?.[1]?.unsupportedImageFallbackExplain,
+    ).toBeUndefined();
+  });
+
+  it('uses the capability note instead of a generic continue after partial assistant output', async () => {
+    const h = createHarness();
+    const sid = 'retry-litellm-image-after-partial-output';
+    h.setHasAssistantProgressAfter(async () => true);
+    const item = makeItem('q-first', '提取图片文字');
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+    ];
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const projectionCountBeforeError = h.projections.length;
+    h.coordinator.onTurnEvent(sid, 'error', litellmGatewayImageError(), undefined, {
+      suppressRecoverableImageErrorProjection: true,
+    });
+
+    expect(h.projections).toHaveLength(projectionCountBeforeError);
+    expect(h.coordinator.canAutoFallbackUnsupportedImageError(sid)).toBe(true);
+
+    await h.coordinator.retryUnsupportedImageError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: CONTINUE_AFTER_ERROR_PROMPT },
+        { type: 'text', text: UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE },
+      ],
+    });
+    const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(retried?.originalSyntheticTrigger).toBe('continue');
+    expect(retried?.unsupportedImageFallback).toBe(true);
+    expect(retried?.files).toBeUndefined();
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+  });
+
+  it('retries transparently when the image rejection arrives during user-message persistence', async () => {
+    const h = createHarness();
+    const sid = 'retry-litellm-image-during-persist';
+    h.setHasAssistantProgressAfter(async () => true);
+    const item = makeItem('q-first', '提取图片文字', {
+      files: [
+        {
+          id: 'image-1',
+          name: 'image.png',
+          path: 'clipboard://image.png',
+          ext: '.png',
+          size: 4,
+          category: 'image',
+          mimeType: 'image/png',
+          url: 'data:image/png;base64,aW1hZ2U=',
+        },
+      ],
+    });
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      return {};
+    });
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      return sendSuccess();
+    });
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', litellmGatewayImageError(), undefined, {
+      suppressRecoverableImageErrorProjection: true,
+    });
+    await flush();
+
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(h.coordinator.isUnsupportedImageFallbackDeferred(sid)).toBe(true);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    releasePersist();
+    await flush();
+    await flush();
+
+    expect(h.coordinator.isUnsupportedImageFallbackDeferred(sid)).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: CONTINUE_AFTER_ERROR_PROMPT },
+        { type: 'text', text: UNSUPPORTED_IMAGE_FALLBACK_AGENT_NOTE },
+      ],
+    });
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.unsupportedImageFallback).toBe(true);
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]?.files).toBeUndefined();
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {

@@ -445,7 +445,10 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import {
+  AgentInputCoordinator,
+  normalizeUnsupportedImageErrorMessage,
+} from './agent-input-coordinator.js';
 import {
   estimateReferenceTokens,
   MAX_REFERENCE_MESSAGES,
@@ -3376,6 +3379,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
       }
       let attributedEvent = event;
+      let normalizedUnsupportedImageError = false;
       if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
         const reason =
           !session.remoteHostId && session.agentKind === 'claude-code'
@@ -3397,7 +3401,26 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           });
         }
       }
+      if (attributedEvent.type === 'error' && isTerminalTurnErrorEvent(attributedEvent)) {
+        const eventData =
+          attributedEvent.data &&
+          typeof attributedEvent.data === 'object' &&
+          !Array.isArray(attributedEvent.data)
+            ? (attributedEvent.data as Record<string, unknown>)
+            : null;
+        const message = typeof eventData?.message === 'string' ? eventData.message : null;
+        const normalizedMessage = normalizeUnsupportedImageErrorMessage(message);
+        if (eventData && normalizedMessage !== null) {
+          attributedEvent = {
+            ...attributedEvent,
+            data: { ...eventData, message: normalizedMessage },
+          };
+          normalizedUnsupportedImageError = true;
+        }
+      }
       const broadcastEvent = redactEventForRenderer(attributedEvent);
+      let shouldAutoRetryUnsupportedImageError = false;
+      let shouldSuppressUnsupportedImageError = false;
       if (event.type === 'interaction_dismissed') {
         const data = event.data as { requestId?: unknown; reason?: unknown };
         if (typeof data.requestId === 'string') {
@@ -3642,7 +3665,18 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 ? { errorStatus: errData.errorStatus }
                 : {}),
             },
+            {
+              suppressRecoverableImageErrorProjection: normalizedUnsupportedImageError,
+            },
           );
+          shouldAutoRetryUnsupportedImageError =
+            normalizedUnsupportedImageError &&
+            agentInputCoordinatorHolder?.canAutoFallbackUnsupportedImageError(session.id) === true;
+          shouldSuppressUnsupportedImageError =
+            shouldAutoRetryUnsupportedImageError ||
+            (normalizedUnsupportedImageError &&
+              agentInputCoordinatorHolder?.isUnsupportedImageFallbackDeferred(session.id) ===
+                true);
         }
       }
       // F1-a Phase 2: assistant 文本持久化收口 main 单点(根除多窗各落一份的重复)。
@@ -3733,13 +3767,32 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 先 broadcast 保 UI 实时性,再 flush(flush 只入队、不阻塞)。
       // Keep the raw event for main-side coordination/persistence, but only
       // cross renderer/device-link boundaries with the redacted copy.
-      broadcastToAllWindows(MAKER_PUSH.EVENT, {
-        sessionId: session.id,
-        event: broadcastEvent,
-        persistId,
-        resolvedContent,
-      });
-      handleAgentIslandEventAfterBroadcast(session, broadcastEvent);
+      // A recognized image-capability rejection is an internal recovery boundary, not a user
+      // error. Keep it out of renderer/device-link and Agent Island while the text-only retry is
+      // viable; a second failure is no longer eligible and follows the normal localized path.
+      if (!shouldSuppressUnsupportedImageError) {
+        broadcastToAllWindows(MAKER_PUSH.EVENT, {
+          sessionId: session.id,
+          event: broadcastEvent,
+          persistId,
+          resolvedContent,
+        });
+      }
+      if (shouldAutoRetryUnsupportedImageError) {
+        queueMicrotask(() => {
+          const coordinator = agentInputCoordinatorHolder;
+          if (!coordinator) return;
+          void coordinator.retryUnsupportedImageError(session.id).catch((error) => {
+            log.warn('unsupported-image text fallback retry failed', {
+              sessionId: session.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        });
+      }
+      if (!shouldSuppressUnsupportedImageError) {
+        handleAgentIslandEventAfterBroadcast(session, broadcastEvent);
+      }
       if (shouldMarkTurnTerminalIdleAfterBroadcast) {
         sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(session.id);
         // #9 idle 兜底:正常 done、终止型 error（含 abort）统一在 tracker 已置 idle 后
@@ -3850,6 +3903,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           event.type === 'error' &&
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
+          !shouldSuppressUnsupportedImageError &&
           !autoResumeSuppressesPersist
         ) {
           onTurnErrorEvent(

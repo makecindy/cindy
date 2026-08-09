@@ -147,6 +147,7 @@
     "systemInstruction": "시스템 지시",
     "retrySend": "전송 재시도",
     "clearError": "오류 지우기",
+    "modelImageInputUnsupported": "현재 모델은 이미지를 읽을 수 없습니다. 내용을 텍스트로 설명하거나 이미지를 지원하는 모델로 전환하세요.",
     "piImageInputUnsupported": "현재 Pi 모델에는 이미지 입력이 활성화되어 있지 않습니다. 이미지를 지원하는 모델로 전환하세요. 사용자 지정 모델이라면 제공자 설정에서 ‘이미지 입력 지원’을 켠 다음 새 Pi 작업을 시작하세요.",
     "codexResumeNotReady": "Codex에서 현재 이 작업을 재개할 수 없습니다. 잠시 후 다시 시도해 주세요.",
     "credentialSwitchWait": "다른 Codex 작업이 끝나기를 기다리는 중입니다. 끝나면 자동으로 전송합니다",
