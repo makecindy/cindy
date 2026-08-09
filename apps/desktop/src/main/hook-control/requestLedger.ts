@@ -62,7 +62,11 @@ const DEFAULT_MAX_FILE_BYTES = 32_000_000;
  *
  * Serving an explicit server re-dispatch is *not* one of those exits: there the
  * server is asking, and it owns its own staleness policy. The dispatcher tags
- * those ACK-buffer entries `origin: 'server-request'` so the sweeps skip them.
+ * those ACK-buffer entries `origin: 'server-request'` so the sweeps skip them,
+ * and that tag only ever *upgrades*: a re-dispatch for a requestId already
+ * queued on our own initiative must flip the existing entry to
+ * `'server-request'`, or the horizon would refuse the very request that asked
+ * for it — leaving the server with neither a terminal nor a rejection.
  */
 export const HOOK_TERMINAL_DELIVERY_TTL_MS = 24 * 60 * 60_000;
 

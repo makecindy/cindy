@@ -1055,6 +1055,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const key = ackKey(connectionId, msg.payload.requestId);
     const existing = pendingDeliveryTurnEnds.get(key);
     if (existing !== undefined) {
+      // 同一 requestId 已在缓冲里。server 的显式索取要**升级**这条的来源: 否则我方
+      // 先前主动排的那条(可能已过线)会让守卫回绝这次索取 —— 而那正是本设计要避免的
+      // 状态(server 既拿不到终态也拿不到拒绝, 只能继续重投)。
+      //
+      // 只升不降: 一旦被索取过就一直豁免, 后续的 local 不把它降回去 —— 索取这件事
+      // 已经发生, 不会因为我方又排了一次队而失效。
+      if (origin === 'server-request') existing.origin = 'server-request';
       sendPendingDelivery(key, existing);
       return;
     }

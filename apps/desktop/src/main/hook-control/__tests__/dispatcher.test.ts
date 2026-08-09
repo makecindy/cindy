@@ -2486,6 +2486,40 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
+  it('过线的本地条目被 server 显式重投时升级为豁免，不回绝这次索取', async () => {
+    vi.useFakeTimers();
+    const terminalLedger = memoryTerminalLedger();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+    const c = collector();
+    try {
+      // 1) 我方算完, 以 origin='local' 进 ACK 缓冲, 但**首投就失败**(连接已断)。
+      //    这一步是关键: sendPendingDelivery 只在发送成功后才武装退避 timer, 失败
+      //    直接 return —— 于是这条项没有任何后续唤醒, 会一直躺在缓冲里过线。
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      c.setOnline(false);
+      fr.finish({ finalText: '本地先排的队' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(0);
+
+      // 2) 跨过时效。没有 timer, 所以这条过线的 local 项仍在缓冲里。
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
+      c.setOnline(true);
+      const beforeRequest = c.ofType('turn.end').length;
+
+      // 3) server 显式重投同一个 requestId —— 它在索取。必须照答, 不能因为缓冲里
+      //    那条是 local 且已过线就回绝(否则 server 既拿不到终态也拿不到拒绝)。
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      expect(c.ofType('turn.end').length).toBeGreaterThan(beforeRequest);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('入口清扫不碰 server 索取的条目：origin=server-request 过线仍照答', async () => {
     vi.useFakeTimers();
     const terminalLedger = memoryTerminalLedger();
