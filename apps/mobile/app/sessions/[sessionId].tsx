@@ -737,6 +737,38 @@ function restoreRecoverableItemsToDraft(
   }
 }
 
+interface ImmediateComposerDraftScope {
+  document: ComposerDocument;
+  ordered: ReturnType<typeof resolveOrderedQuoteDraft>;
+  quotes: ReturnType<typeof getQuotes>;
+}
+
+/**
+ * 当前任务首帧可同步取得的 composer 真相。AsyncStorage 尚未 hydrate 时宁可返回
+ * 当前任务空态，也不能让复用的 SessionScreen 把上一任务文档交给新任务编辑器。
+ */
+function readImmediateComposerDraftScope(
+  sessionId: string,
+  routeDraft: string | null,
+): ImmediateComposerDraftScope {
+  const visibleText = readComposerDraftSync(sessionId) ?? routeDraft ?? '';
+  const quotes = getQuotes(sessionId);
+  const ordered = resolveOrderedQuoteDraft(sessionId, visibleText, quotes);
+  const storedDocument = readComposerDocumentDraftSync(sessionId);
+  let document = storedDocument
+    ?? migrateLegacyComposerDraft(visibleText, quotes, ordered?.encodedBody);
+  if (storedDocument) {
+    for (const quote of quotes) {
+      document = appendComposerNode(document, { type: 'quote', quote });
+    }
+  }
+  return { document, ordered, quotes };
+}
+
+function composerDraftScopeKey(sessionId: string, routeDraft: string | null): string {
+  return JSON.stringify([sessionId, routeDraft ?? '']);
+}
+
 export default function SessionScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -801,9 +833,33 @@ export default function SessionScreen() {
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
   const taskUpdates = useSessionTaskUpdates(sessionId);
-  const [draft, setDraft] = useState('');
-  const [composerDocument, setComposerDocumentState] = useState<ComposerDocument>(emptyComposerDocument);
+  const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
+  const [composerDraftStateKey, setComposerDraftStateKey] = useState(activeComposerDraftScopeKey);
+  const [composerDocument, setComposerDocumentState] = useState<ComposerDocument>(
+    () => readImmediateComposerDraftScope(sessionId, routeDraft).document,
+  );
+  const [draft, setDraft] = useState(() => composerDocumentProjectedText(composerDocument));
   const [composerDraftHydrated, setComposerDraftHydrated] = useState(false);
+  const appliedRouteDraftRef = useRef<string | null>(null);
+  const draftRef = useRef(draft);
+  const composerDocumentRef = useRef<ComposerDocument>(composerDocument);
+  // replaceParams 复用同一 SessionScreen。任务参数变化的这次 render 仍拿着 A 的
+  // state；若直接让 key={sessionId} 子树挂载，B 编辑器会先用 A 文档初始化，再等
+  // 被动 effect 水合纠正。沿本页 read-ack 的 render-phase 换代模式同步种入 B 的
+  // 内存快照（冷缓存未 hydrate 时为空），React 会丢弃本次旧输出后重渲。
+  if (composerDraftStateKey !== activeComposerDraftScopeKey) {
+    const nextScope = readImmediateComposerDraftScope(sessionId, routeDraft);
+    const nextDraft = composerDocumentProjectedText(nextScope.document);
+    setComposerDraftStateKey(activeComposerDraftScopeKey);
+    setComposerDocumentState(nextScope.document);
+    setDraft(nextDraft);
+    setComposerDraftHydrated(false);
+    // 旧 A 的 AsyncStorage promise 可能在 effect cleanup 前落定；先让它的 key 失配。
+    // 保持 null 也确保 B 的 effect 仍会继续异步 hydrate 磁盘草稿与冷启动引用。
+    appliedRouteDraftRef.current = null;
+    composerDocumentRef.current = nextScope.document;
+    draftRef.current = nextDraft;
+  }
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
@@ -1302,9 +1358,6 @@ export default function SessionScreen() {
     setReadAckSyncedKey(null);
     readAckGateGenRef.current += 1;
   }
-  const appliedRouteDraftRef = useRef<string | null>(null);
-  const draftRef = useRef('');
-  const composerDocumentRef = useRef<ComposerDocument>(emptyComposerDocument());
   // 远程媒体取件队列:屏实例级缓存 + 同 url 去重 + 并发上限(每次取件都让桌面端
   // 真实上传一次 OSS,列表缩略图懒取件后必须收敛)。deps 经 ref 透传保持队列实例稳定;
   // 队列生命周期 = 单个会话:切 sessionId / 退屏时 releaseAll + 补删 + 换新实例
@@ -2725,22 +2778,15 @@ export default function SessionScreen() {
   }, [composerShowSendButton]);
 
   useEffect(() => {
-    const key = `${sessionId}:${routeDraft ?? ''}`;
+    const key = activeComposerDraftScopeKey;
     if (appliedRouteDraftRef.current === key) return;
     appliedRouteDraftRef.current = key;
     setComposerDraftHydrated(false);
     let cancelled = false;
-    const immediateDraft = readComposerDraftSync(sessionId) ?? routeDraft ?? '';
-    const immediateQuotes = getQuotes(sessionId);
-    const immediateOrdered = resolveOrderedQuoteDraft(sessionId, immediateDraft, immediateQuotes);
-    const immediateStoredDocument = readComposerDocumentDraftSync(sessionId);
-    let immediateDocument = immediateStoredDocument
-      ?? migrateLegacyComposerDraft(immediateDraft, immediateQuotes, immediateOrdered?.encodedBody);
-    if (immediateStoredDocument) {
-      for (const quote of immediateQuotes) {
-        immediateDocument = appendComposerNode(immediateDocument, { type: 'quote', quote });
-      }
-    }
+    const immediateScope = readImmediateComposerDraftScope(sessionId, routeDraft);
+    const immediateQuotes = immediateScope.quotes;
+    const immediateDocument = immediateScope.document;
+    const immediateOrdered = immediateScope.ordered;
     applyComposerDocument(immediateDocument, { persist: false });
     const immediateDocumentSnapshot = immediateDocument;
     // Synchronously consumed quote-store items are already in the first paint.
@@ -2801,7 +2847,7 @@ export default function SessionScreen() {
       cancelled = true;
       void flushComposerDraftWrites(sessionId);
     };
-  }, [applyComposerDocument, routeDraft, sessionId]);
+  }, [activeComposerDraftScopeKey, applyComposerDocument, routeDraft, sessionId]);
 
   useEffect(() => {
     if (!composerDraftHydrated || quotes.length === 0) return;
