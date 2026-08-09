@@ -117,6 +117,47 @@ function isCompactionItem(node: Record<string, unknown>): boolean {
 }
 
 /**
+ * Drop Codex agent-to-agent ciphertext at its protocol-defined location.
+ *
+ * A spawned Codex agent can call `send_message` from an otherwise ordinary
+ * session; the resulting `agent_message` carries readable text and an optional
+ * `{ type: 'encrypted_content', encrypted_content: '...' }` part. Deleting only
+ * the field leaves a schema-invalid encrypted-content shell, so remove the
+ * whole part before the generic recursive key strip. If the message contained
+ * only ciphertext, the message itself has no replayable content and is dropped.
+ *
+ * This intentionally inspects only top-level Responses `input[]`; nested
+ * business objects with a similarly shaped `content` array are not protocol
+ * history and must not be interpreted by shape.
+ */
+function dropEncryptedAgentMessageContentParts(body: unknown): number {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return 0;
+
+  let removed = 0;
+  const input: unknown[] = [];
+  for (const item of body.input) {
+    if (!isPlainObject(item) || item.type !== 'agent_message' || !Array.isArray(item.content)) {
+      input.push(item);
+      continue;
+    }
+
+    const content = item.content.filter((part) => {
+      if (!isPlainObject(part) || part.type !== 'encrypted_content') return true;
+      removed += 1;
+      return false;
+    });
+    if (content.length === item.content.length) {
+      input.push(item);
+    } else if (content.length > 0) {
+      input.push({ ...item, content });
+    }
+  }
+
+  if (removed > 0) body.input = input;
+  return removed;
+}
+
+/**
  * 递归删除 body 里所有 `encrypted_content` 键, 返回删掉的个数。
  * 用于 invalid_encrypted_content 报错后的透明重试 (见 stripEncryptedContentFromBody)。
  *
@@ -224,12 +265,15 @@ export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
   } catch {
     return null;
   }
+  // agent_message 的密文是 content part；必须在通用递归删键之前整块移除，否则会留下
+  // `{ type: 'encrypted_content' }` 并被 OpenAI 拒绝为 missing_required_parameter。
+  const removedAgentMessageParts = dropEncryptedAgentMessageContentParts(parsed);
   const removedKeys = deepDeleteEncryptedContent(parsed);
   // 空壳清理独立计数: 请求体里可能只带着一个缺 blob 的 compaction 空壳 (没有任何
   // encrypted_content 键可删), 那一样是必须处理的坏 payload, 不能因 removedKeys=0 放行。
   // 这一步只扫顶层 input[] (单次线性扫描), 不是第二遍深度遍历。
   const removedShells = dropEncryptedShellInputItems(parsed, removedKeys > 0);
-  if (removedKeys === 0 && removedShells === 0) return null;
+  if (removedAgentMessageParts === 0 && removedKeys === 0 && removedShells === 0) return null;
   try {
     return Buffer.from(JSON.stringify(parsed), 'utf8');
   } catch {

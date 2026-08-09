@@ -1182,15 +1182,17 @@ export class Session {
    * (review #944 第二轮)。
    */
   private fanOutEvent(event: AgentEvent, observedGeneration = this.turnGeneration): void {
-    this.lastEventAt = Date.now();
+    const isBackgroundEvent = event.turnScope === 'background';
+    if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     const isCurrentGeneration = observedGeneration === this.turnGeneration;
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
-    if (isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
+    if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
       event.turnOrigin = this.currentTurnOrigin;
     }
     if (
+      !isBackgroundEvent &&
       isCurrentGeneration &&
       this.currentTurnAttemptToken !== null &&
       event.turnAttemptToken === undefined
@@ -1240,6 +1242,10 @@ export class Session {
     for (const listener of this.eventListeners) {
       try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
     }
+    // A late child update belongs to the completed parent turn. It remains
+    // visible to listeners, but must not clear/adopt the current turn or keep
+    // its zero-event watchdog alive.
+    if (isBackgroundEvent) return;
     // turn 真正结束后清 origin,下一轮无 origin 的 turn 不被污染。
     // 关键:**只**在 done / 终止型 error 上清,**不要**在 status(isRunning=false)
     // 上清 —— translator 收尾是先 push end-status(isRunning=false)、紧接着 push

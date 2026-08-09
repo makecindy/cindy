@@ -6183,6 +6183,8 @@ export type GhostDidEventData =
   | GhostEventSessionData
   | GhostEventActivityData;
 
+export type GhostMessageHookData = { sessionId: string; text: string; model?: string };
+
 /**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。
  * did- 分支带 topic/seq(每意识单调递增,可自查漏收;dropped = 上一段
@@ -6204,7 +6206,7 @@ export type GhostPipeEventPush =
       name: 'will-user-message';
       hookId: string;
       ts: number;
-      data: { sessionId: string; text: string };
+      data: GhostMessageHookData;
     }
   | {
       type: 'event';
@@ -6212,7 +6214,7 @@ export type GhostPipeEventPush =
       hookId: string;
       ts: number;
       /** text = 本轮 AI 回复全文;意识可放行/改写/自绘(见 GhostPipeEventVerdict)。 */
-      data: { sessionId: string; text: string };
+      data: GhostMessageHookData;
     }
   | {
       /** 随包 Node 进程发来的 JSON-RPC notification / MCP 进度事件。 */

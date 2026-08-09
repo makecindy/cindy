@@ -133,6 +133,20 @@ export interface AgentEvent {
   /** 事件来源标识，便于调试 */
   source?: 'claude-code' | 'codex' | 'pi';
   /**
+   * Events that finish work owned by a completed turn can still arrive after a
+   * later turn has started (for example, a V1 collab child). These are still
+   * useful to render, but must not inherit the later turn's attribution or
+   * watchdog state.
+   */
+  turnScope?: 'turn' | 'background';
+  /**
+   * Local start time of the turn that owns a background event. Main-process
+   * persistence uses this lifecycle evidence to keep pre-clear late work from
+   * repopulating a cleared conversation. Never expose it to renderer/device
+   * boundaries.
+   */
+  backgroundTurnStartedAt?: number;
+  /**
    * 本事件所属 turn 的发起来源,由 Session 在事件 fan-out 前打标(见 session.ts
    * 的 currentTurnOrigin)。turn 结束(isTerminalTurnEvent)后清空,不污染下一轮。
    * translator 不产生此字段;消费方(IM 转播等)按需读取,默认忽略。

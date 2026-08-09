@@ -4411,7 +4411,11 @@ export function handleStreamEvent(
   };
   switch (event.type) {
     case 'text': {
-      const { text, isFinal } = event.data as { text: string; isFinal: boolean };
+      const { text, isFinal, isFullText } = event.data as {
+        text: string;
+        isFinal: boolean;
+        isFullText?: boolean;
+      };
 
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
@@ -4444,7 +4448,8 @@ export function handleStreamEvent(
             ],
           };
         }
-        // 流式中的 isFinal 不重复落库，但仍要刷新 lastAgentMeta（done 时抢救用）。
+        // 流式中的 isFinal 不重复落库。只有显式 isFullText 是 SDK 权威全文，
+        // 可校准在途气泡；Claude Code 的局部 text block / 截断尾段不能覆盖整条消息。
         // subagent-model-chip: 流式起点的 delta 事件不带 agentMeta(见 CCAgentStreamEvent
         // 注释:delta 类无此字段),只有这条来自 SDK assistant message 的 isFinal 带 ——
         // 把 model/parentToolUseId 补写到在途流式 assistant 消息上,否则纯文本(零工具)
@@ -4453,16 +4458,24 @@ export function handleStreamEvent(
           assistantMetaFields.model !== undefined ||
           assistantMetaFields.parentToolUseId !== undefined ||
           assistantMetaFields.turnCompleted === true;
-        if (!incomingMeta && !hasAssistantFields) return state;
+        const shouldCalibrateText = Boolean(
+          isFullText === true && text && state.streamingClientId && text !== state.streamingText,
+        );
+        if (!incomingMeta && !hasAssistantFields && !shouldCalibrateText) return state;
         return {
           ...state,
+          ...(shouldCalibrateText ? { streamingText: text } : {}),
           ...(incomingMeta ? { lastAgentMeta: incomingMeta } : {}),
-          ...(hasAssistantFields && state.streamingClientId
+          ...((hasAssistantFields || shouldCalibrateText) && state.streamingClientId
             ? {
                 messages: replaceMessage(
                   state.messages,
                   (m) => m.clientId === state.streamingClientId,
-                  (m) => ({ ...m, ...assistantMetaFields }),
+                  (m) => ({
+                    ...m,
+                    ...(shouldCalibrateText ? { content: text } : {}),
+                    ...assistantMetaFields,
+                  }),
                 ),
               }
             : {}),

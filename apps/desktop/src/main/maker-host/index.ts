@@ -14,6 +14,7 @@ import {
   Maker,
   ClaudeCodeAgent,
   CodexAgent,
+  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   configureDefaultImageResizer,
   type McpProvider,
 } from '@cindy/maker-core';
@@ -230,7 +231,7 @@ const reviewAutoPermissionAction = createAutoPermissionReviewer({
       agentKind: request.agentKind,
       model: request.model,
       maxTokens: 384,
-      timeoutMs: 8_000,
+      timeoutMs: DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs,
       reasoningEffort: 'low',
     });
     return result.ok ? result.text : null;

@@ -30,6 +30,7 @@ import {
   clearAllDeviceProviders,
   evictDeviceProviders,
   fetchDeviceProviders,
+  markDeviceFetchEpoch,
   type DeviceProvidersPayload,
 } from '@/device-link/deviceProvidersCache';
 import {
@@ -807,6 +808,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 同时驱逐并后台重拉；页面保留旧画面，当前代完整快照提交后由订阅一次性更新。
         evictDeviceProviders(deviceId);
         evictAgentCapabilitiesForDevice(deviceId);
+        const epochAtWrite = connectionEpoch;
         void fetchDeviceProviders(deviceId, () =>
           sendInvokeWithAccessHandling<DeviceProvidersPayload>(
             client,
@@ -814,7 +816,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             'maker:provider:list',
             [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
           )
-        ).catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
+        )
+          .then(() => {
+            // 无挂载 hook 的后台缓存写入也要标记所属连接代际(codex review P1):
+            // 不 mark 则 deviceFetchEpoch 保持 undefined,断线前旧目录在重连后被
+            // 当「首次挂载缓存命中」采信、永不刷新——选择器无限期展示已删供应商。
+            // fetch 期间重连(epoch 变化)则 mark 的是捕获时的旧代际 → 下次 effect
+            // 判 reconnected → 强制 fresh(保守正确)。失败不 mark(evict 已清缓存,
+            // 无旧目录可被误采信)。
+            markDeviceFetchEpoch(deviceId, epochAtWrite);
+          })
+          .catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
         void refreshDeviceCapabilities(client, deviceId);
       },
     }));
@@ -1141,6 +1153,8 @@ async function rebuildSessionSnapshot(
     responsivenessCohort:
       opts?.responsivenessCohort ?? createDeviceSendCohort(deviceId),
   };
+  const projectionEpochAtRequestStart =
+    remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
   // 四路快照独立拉取、独立落库:断连补齐窗口本就脆弱,一个子请求失败不应拖垮
   // 其余(旧实现共用一个 catch,任一失败三份快照全丢)。goal 覆盖断连窗口内
   // 丢失的 maker:goal:status-changed push;model-pref / turn-cost 无对应查询通道,
@@ -1184,7 +1198,11 @@ async function rebuildSessionSnapshot(
     remoteSessionStore.setPendingInteractions(sessionId, pending.value, { finalizeStreaming: true });
   }
   if (projection.status === 'fulfilled' && projection.value) {
-    remoteSessionStore.setInputProjection(sessionId, projection.value);
+    remoteSessionStore.setInputProjectionIfCurrent(
+      sessionId,
+      projection.value,
+      projectionEpochAtRequestStart,
+    );
   }
   // undefined = 未拿到/未知(兼容形态的空返回),不能当作权威「无 goal」落库——
   // 那会把在世的 goal 卡清掉直到下一条 push;只有显式 null 才代表确认无 goal。

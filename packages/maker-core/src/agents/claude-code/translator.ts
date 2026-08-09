@@ -1632,7 +1632,9 @@ function handleResult(
   if (fallbackTail.length > 0) {
     queue.push({
       type: 'text',
-      data: { text: fallbackTail, isFinal: true },
+      // fallbackTail 是「UI 尚未收到的追加段」，不是整条 assistant 全文。
+      // 按 delta 发出才能在已有气泡中正确追加，随后的 done 负责收口。
+      data: { text: fallbackTail, isFinal: false },
       source: 'claude-code',
     });
   }

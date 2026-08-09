@@ -76,9 +76,11 @@ import {
   markAssistantTurnFailed,
   noteSessionClearBoundary,
   noteSessionAgentKind,
+  noteAgentMeta,
   enqueueDurableWrite,
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
+  preserveTurnPersistStateForBackground,
 } from '../messagePersistBroadcaster.js';
 
 const SESSION = 'sess-tr';
@@ -375,6 +377,281 @@ describe('tool_result 顺序:先 tool_result(摘要)后 tool_result_full(全文)
       broadcastGuard(),
     );
     expect(updateMessageContent).toHaveBeenCalledWith(SESSION, r1!.persistId, r2!.content);
+  });
+});
+
+describe('background tool_result persistence', () => {
+  it('reconstructs a completed-only background collab tool context', async () => {
+    const lateMeta = { uuid: 'late-completed-only-turn' };
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      lateMeta,
+      'background',
+    );
+
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-child'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: toolUsePersistId,
+        role: 'tool_use',
+        toolUseId: 'late-completed-only-child',
+        agentMeta: lateMeta,
+      }),
+      broadcastGuard(),
+    );
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: FULL,
+        toolUseId: 'late-completed-only-child',
+        agentMeta: lateMeta,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('drops a completed-only background collab context owned by a pre-clear turn', async () => {
+    const turnStartedAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const clearAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateItemAt = Date.parse('2026-06-20T10:05:10.000Z');
+    noteSessionClearBoundary(SESSION, clearAt);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(lateItemAt);
+
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-cleared-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      null,
+      'background',
+      turnStartedAt,
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-cleared-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-cleared-child'] },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(toolUsePersistId).toBeUndefined();
+    expect(fullResult).toBeNull();
+    expect(result).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a completed-only background collab context owned by a post-clear turn', async () => {
+    const clearAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const turnStartedAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateItemAt = Date.parse('2026-06-20T10:05:10.000Z');
+    noteSessionClearBoundary(SESSION, clearAt);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(lateItemAt);
+
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-post-clear-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      null,
+      'background',
+      turnStartedAt,
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-post-clear-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-post-clear-child'] },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(toolUsePersistId).toEqual(expect.any(String));
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: toolUsePersistId,
+        role: 'tool_use',
+        toolUseId: 'late-completed-only-post-clear-child',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('keeps the completed turn context after the next turn resets live state', async () => {
+    const oldMeta = { uuid: 'old-turn' };
+    const nextMeta = { uuid: 'new-turn' };
+    noteAgentMeta(SESSION, oldMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-child', toolName: 'collab:spawnAgent', input: {} },
+      oldMeta,
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+    // Simulate the next turn repopulating the live fallback before the old
+    // child result arrives.
+    noteAgentMeta(SESSION, nextMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'next-turn-tool', toolName: 'Read', input: {} },
+      nextMeta,
+    );
+
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-child'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: FULL,
+        agentMeta: oldMeta,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('retains an in-flight background context beyond four later turns', async () => {
+    const oldMeta = { uuid: 'old-in-flight-turn' };
+    noteAgentMeta(SESSION, oldMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-child-long', toolName: 'collab:spawnAgent', input: {} },
+      oldMeta,
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+
+    for (let i = 0; i < 5; i += 1) {
+      const meta = { uuid: `later-turn-${i}` };
+      noteAgentMeta(SESSION, meta);
+      onToolUseEvent(
+        SESSION,
+        { toolUseId: `later-child-${i}`, toolName: 'collab:spawnAgent', input: {} },
+        meta,
+      );
+      preserveTurnPersistStateForBackground(SESSION);
+      resetTurnPersistState(SESSION);
+    }
+
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-child-long'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(result).toEqual({ persistId: expect.any(String), content: SUMMARY });
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'tool_result', agentMeta: oldMeta }),
+      broadcastGuard(),
+    );
+  });
+
+  it('drops a late background result whose parent tool_use predates session clear', async () => {
+    const toolUseAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const clearAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateResultAt = Date.parse('2026-06-20T10:05:10.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(toolUseAt);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-cleared-child', toolName: 'collab:spawnAgent', input: {} },
+      { uuid: 'old-turn' },
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+    await flushWrites();
+    vi.clearAllMocks();
+    noteSessionClearBoundary(SESSION, clearAt);
+    nowSpy.mockReturnValue(lateResultAt);
+
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-cleared-child'] },
+      null,
+      'background',
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-cleared-child', fullText: FULL },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(result).toBeNull();
+    expect(fullResult).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -962,6 +1239,114 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
       .filter((c) => (c[1] as { role?: string }).role === 'assistant');
     expect(assistantCreates).toHaveLength(2);
+  });
+});
+
+describe('streamed assistant final calibration', () => {
+  it('persists the authoritative final text even when it is shorter than accumulated deltas', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello worxderful', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello wonderful', isFinal: true, isFullText: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'assistant',
+        content: 'Hello wonderful',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('drops stale streamed deltas when the authoritative final text is empty', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: '撤回前的流式内容', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: '', isFinal: true, isFullText: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a shorter unmarked isFinal tail as a complete replacement', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello ', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'world', isFinal: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ content: 'Hello ' }),
+      broadcastGuard(),
+    );
+  });
+
+  it('accepts a longer unmarked final prefix when Claude deltas missed the tail', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello ', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello world', isFinal: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ clientId: persistId, content: 'Hello world' }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not replace a streamed block with a longer unrelated local text block', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'first', isFinal: false },
+      null,
+    );
+    onAssistantTextEvent(SESSION, { text: 'second block', isFinal: true }, null);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ clientId: persistId, content: 'first' }),
+      broadcastGuard(),
+    );
   });
 });
 

@@ -140,6 +140,12 @@ import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton
 import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
+import {
+  addPlanModeComposerCommand,
+  consumePlanModeComposerCommand,
+  isPlanModeComposerCommandText,
+  shouldPreservePlanModeComposerDraft,
+} from './planModeComposerCommand';
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
@@ -200,7 +206,16 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
-import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
+import {
+  beginSlashCommandRosterLoad,
+  EMPTY_SLASH_COMMANDS,
+  failSlashCommandRosterLoad,
+  filterSlashCommands,
+  isSlashCommandRosterReady,
+  loadAllCommands,
+  type SlashCommandRosterState,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 import {
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   getAtDirectoryCompletionQuery,
@@ -3396,11 +3411,38 @@ export function ChatInput({
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
-  const [mergedCommands, setMergedCommands] = useState<UnifiedCommand[]>([]);
   const paletteAgentKind = agentKind ?? 'claude-code';
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
+  const slashCommandContextKey = JSON.stringify([
+    workingDir ?? null,
+    paletteAgentKind,
+    isRemoteSession,
+    deviceLinkDeviceId ?? null,
+  ]);
+  const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
+    contextKey: '',
+    status: 'loading',
+    commands: EMPTY_SLASH_COMMANDS,
+  });
+  const slashCommandsReady = isSlashCommandRosterReady(
+    slashCommandLoadState,
+    slashCommandContextKey,
+  );
+  const mergedCommands =
+    slashCommandLoadState.contextKey === slashCommandContextKey
+      ? slashCommandLoadState.commands
+      : EMPTY_SLASH_COMMANDS;
+  const planModeCommandAvailable = planModeEntry !== undefined;
+  const composerSlashCommands = useMemo(
+    () =>
+      addPlanModeComposerCommand(
+        mergedCommands,
+        planModeCommandAvailable && slashCommandsReady ? t('planMode.menuItem') : null,
+      ),
+    [mergedCommands, planModeCommandAvailable, slashCommandsReady, t],
+  );
   const slashCommandLoadSeqRef = useRef(0);
   useEffect(
     () => () => {
@@ -3411,6 +3453,9 @@ export function ChatInput({
   const reloadSlashCommands = useCallback(
     (opts?: { forceReload?: boolean }) => {
       const seq = ++slashCommandLoadSeqRef.current;
+      setSlashCommandLoadState((current) =>
+        beginSlashCommandRosterLoad(current, slashCommandContextKey),
+      );
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
@@ -3420,29 +3465,38 @@ export function ChatInput({
         deviceLinkDeviceId,
       )
         .then((cmds) => {
-          if (slashCommandLoadSeqRef.current === seq) setMergedCommands(cmds);
+          if (slashCommandLoadSeqRef.current === seq) {
+            setSlashCommandLoadState({
+              contextKey: slashCommandContextKey,
+              status: 'ready',
+              commands: cmds,
+            });
+          }
         })
         .catch(() => {
-          if (slashCommandLoadSeqRef.current === seq) setMergedCommands([]);
+          if (slashCommandLoadSeqRef.current === seq) {
+            setSlashCommandLoadState((current) =>
+              failSlashCommandRosterLoad(current, slashCommandContextKey),
+            );
+          }
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId],
+    [
+      workingDir,
+      paletteAgentKind,
+      isRemoteSession,
+      deviceLinkDeviceId,
+      slashCommandContextKey,
+    ],
   );
-  // context(workingDir / agentKind / remote)变化时先同步清空命令缓存:切换会话(尤其
-  // local→remote)那一瞬,reloadSlashCommands 是异步的,清空可避免 palette 在刷新完成前
-  // 残留上一个项目的本地 skills。下面的 reload effect 紧接着用新 context 重填。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 这里用依赖数组表达上下文切换触发清空，effect 内不直接读取这些值。
-  useEffect(() => {
-    setMergedCommands([]);
-  }, [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId]);
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
   // Slash 指令与 $意识一致:doc 保持可逐字编辑的普通文本,完整命中当前 roster
   // 时才由 decoration 显示确认胶囊。异步 roster 刷新不进入 keystroke 热路径。
   useEffect(() => {
-    setSlashCommandRoster(editor, mergedCommands);
-  }, [editor, mergedCommands]);
+    setSlashCommandRoster(editor, composerSlashCommands);
+  }, [editor, composerSlashCommands]);
   // 意识指令源($ 触发):复用窗口级已装意识快照,避免输入触发符时同步扫盘。
   // 目录级禁用同判:被禁用的意识不进 $ 菜单(与胶囊 / 发送期展开同源)。
   const isGhostSigil = trigger.kind === 'slash' && trigger.sigil === '$';
@@ -3460,7 +3514,7 @@ export function ChatInput({
       );
   }, [ghostsForCommand, isGhostSigil, t]);
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
-  const paletteCommands = isGhostSigil ? ghostCommandItems : mergedCommands;
+  const paletteCommands = isGhostSigil ? ghostCommandItems : composerSlashCommands;
   const filteredCommands = useMemo(
     () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
     [paletteCommands, trigger],
@@ -3815,6 +3869,7 @@ export function ChatInput({
   useEffect(() => {
     panelBridgeRef.current = {
       captureKey: (e) => {
+        if (e.isComposing) return false;
         if (!slashOpen && !atOpen) return false;
         switch (e.key) {
           case 'ArrowDown':
@@ -3880,7 +3935,14 @@ export function ChatInput({
   // ── Palette insertions ─────────────────────────────────────────────
   const insertSlashCommand = useCallback(
     (cmd: UnifiedCommand) => {
-      if (!editor || trigger.kind !== 'slash') return;
+      if (
+        !editor ||
+        editor.isDestroyed ||
+        trigger.kind !== 'slash' || composerMutationLockedRef.current ||
+        editor.view.composing
+      ) {
+        return;
+      }
       const { from } = trigger;
       // Replace the WHOLE slash-run, not just up-to-caret: the user may
       // have moved the caret back inside the run (e.g. `/compa|ct`) and
@@ -3907,10 +3969,19 @@ export function ChatInput({
         }
         runEnd = parentStart + childOffset + text.length;
       });
-      editor
+      let planModeCommandConsumed = false;
+      const applied = editor
         .chain()
         .focus()
         .command(({ tr }) => {
+          planModeCommandConsumed = consumePlanModeComposerCommand(
+            tr,
+            from,
+            runEnd,
+            cmd,
+            planModeCommandAvailable && trigger.sigil === '/',
+          );
+          if (planModeCommandConsumed) return true;
           if (trigger.sigil === '$') {
             // 意识指令:纯文本 `$命令 `(不建 chip)——发送期由 expandGhostCommand
             // 识别并追加机器指令,序列化零特判。
@@ -3923,8 +3994,11 @@ export function ChatInput({
           return true;
         })
         .run();
+      if (applied && planModeCommandConsumed) {
+        planModeEntry?.onToggle(!planModeEntry.enabled);
+      }
     },
-    [editor, trigger],
+    [editor, planModeCommandAvailable, planModeEntry, trigger],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -4193,6 +4267,47 @@ export function ChatInput({
         const commentsForSend = optimisticallyClearRemoteComposer
           ? commentsBeforeOptimisticClear
           : [...browserCommentsRef.current];
+        if (
+          isPlanModeComposerCommandText(
+            editorText,
+            planModeEntry !== undefined,
+            slashCommandsReady ? mergedCommands : null,
+          )
+        ) {
+          planModeEntry?.onToggle(!planModeEntry.enabled);
+          isRestoringRef.current = true;
+          try {
+            editor.commands.clearContent(true);
+          } finally {
+            isRestoringRef.current = false;
+          }
+          historyIndexRef.current = -1;
+          hydratedHistoryDocumentRef.current = null;
+          draftRef.current = null;
+          if (sourceStorageKey) {
+            if (
+              shouldPreservePlanModeComposerDraft(
+                attachmentsForSend.length,
+                commentsForSend.length,
+              )
+            ) {
+              const existingDraft = getComposerDraft(sourceStorageKey);
+              saveComposerDraft(
+                sourceStorageKey,
+                {
+                  text: editor.getJSON(),
+                  attachments: attachmentsForSend,
+                  quotes: existingDraft?.quotes ?? [],
+                  browserComments: commentsForSend,
+                },
+                { silent: true },
+              );
+            } else {
+              clearComposerDraft(sourceStorageKey);
+            }
+          }
+          return;
+        }
         // composerQuote 在其正文位置序列化成 markdown blockquote,支持引用与回复交错。
         // browser-comment-chip:页面评论序列化为 `# Browser comments:` 段拼在正文后
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
@@ -4693,6 +4808,7 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
+      planModeEntry,
     ],
   );
   useEffect(() => {
