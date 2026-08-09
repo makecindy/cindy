@@ -568,12 +568,12 @@ const actions = {
    *    为用户尚未查看的历史记录额外取数。
    */
   applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
-    const terminal = patch.status === 'deleted' || patch.status === 'archived';
-    // 终态清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
+    const deleted = patch.status === 'deleted';
+    // 删除清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
     // 还没有分片,但它完全可能有一份上次打开时留下的消息缓存文件 —— 那时早退就等于把
     // 「别的控制端刚删掉的会话」的正文一直留在盘上,直到 LRU 逐出 / 设备移除 / 登出
-    // (review: codex P1)。缓存是纯优化,多清一次无害。
-    if (terminal) clearCachedMessages(deviceId, sessionId);
+    // (review: codex P1)。归档仍可从 Archived / All 打开，必须保留缓存供离线查看。
+    if (deleted) clearCachedMessages(deviceId, sessionId);
     const shard = shards.get(deviceId);
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);

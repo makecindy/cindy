@@ -136,6 +136,7 @@ import {
   selectProjectBulkArchiveCandidates,
 } from './lib/projectBulkArchiveAction';
 import { sessionActivityMs } from './lib/dateSessionGrouping';
+import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
@@ -404,12 +405,7 @@ export function CCAgentSidebarUpper() {
   const projectAliases = useProjectAliases();
   const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
   const visibleSearchProjects = useMemo(
-    () =>
-      visibleSidebarProjects(
-        searchProjectGroups.projects,
-        hiddenProjectKeys,
-        localPlatform,
-      ),
+    () => visibleSidebarProjects(searchProjectGroups.projects, hiddenProjectKeys, localPlatform),
     [searchProjectGroups.projects, hiddenProjectKeys, localPlatform],
   );
   const visibleSearchSessionIds = useMemo(
@@ -522,11 +518,7 @@ export function CCAgentSidebarUpper() {
     const switchableSessions = allSessionsForAttention.filter((s) => !isOrcaWorkerSession(s));
     return buildDocModeSwitchProjects(switchableSessions).filter(
       (project) =>
-        !projectKeyComparisonSetHas(
-          hiddenProjectComparisonKeys,
-          project.projectKey,
-          localPlatform,
-        ),
+        !projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform),
     );
   }, [allSessionsForAttention, hiddenProjectComparisonKeys, localPlatform]);
   const filesProjectKey = filesSession ? projectIdentityKeyForSession(filesSession) : null;
@@ -570,14 +562,13 @@ export function CCAgentSidebarUpper() {
     () => selectVisibleSessions(sessionsHook.sessions, remoteProjectSessions, selectedMachineId),
     [sessionsHook.sessions, remoteProjectSessions, selectedMachineId],
   );
-  const statusFilteredSessionsWithRemote = useMemo(() => {
-    const effectiveStatus = sessionsHook.effectiveIncludeArchived;
-    return sessionsWithRemote.filter((session) =>
-      effectiveStatus === 'all'
-        ? filter.status === 'all' || session.status === filter.status
-        : session.status === effectiveStatus,
-    );
-  }, [filter.status, sessionsHook.effectiveIncludeArchived, sessionsWithRemote]);
+  const statusFilteredSessionsWithRemote = useMemo(
+    () =>
+      sessionsWithRemote.filter((session) =>
+        matchesSidebarSessionStatus(session, filter.status, sessionsHook.effectiveIncludeArchived),
+      ),
+    [filter.status, sessionsHook.effectiveIncludeArchived, sessionsWithRemote],
+  );
   const visibleSessionsWithRemote = useMemo(
     () =>
       sidebarSessionsWithHiddenProjectsAsDialogues(
@@ -1115,15 +1106,9 @@ function ExpandedView({
     return next;
   }, [effectiveRunningSessionIds, backgroundActivitySessionIds, orcaLeadWorkerMap]);
 
-  // 关键：用 effectiveIncludeArchived（snapshot 实际所属桶）而非 filter.status
-  // 决定是否做客户端过滤——
-  //   · effectiveIncludeArchived === 'all'  → 桶含所有 status,
-  //                                            按 user 选中的 filter.status 收窄
-  //   · 其它(active/archived 单 status 桶) → 桶内本应全是同一 status,
-  //                                            按桶 status 收窄即可
-  // 这样 user 点 status chip 后, sidebar 列表跟着 snapshot 一起切，
-  // 不会出现「user filter 立刻变 → 旧桶按新 filter 过滤后全空 → 新桶到才回填」
-  // 的空白帧。filter.status 仍只用于 chip 高亮和 IPC 桶决策。
+  // 本地会话用 effectiveIncludeArchived（snapshot 实际所属桶）避免切桶时先闪空；
+  // device-link 远程镜像同时持有 active / archived 两桶，必须独立按 filter.status 筛选，
+  // 否则本地 archived/all 请求慢或失败时会把已加载的远程归档行持续隐藏。
   //
   // 单 status 桶为何要按桶 status 显式过滤(而不是直接信任桶内全是同 status):
   // patchLocal 是跨桶 in-place mutation —— doc 模式归档(WorkdirBrowseRoute)
@@ -1150,7 +1135,6 @@ function ExpandedView({
   const activeRemoteSessionBootstrapLoadingDevices =
     useRemoteSessionBootstrapLoadingDevices(selectedMachineId);
   const activeRemoteSessionBootstrapFailures = useRemoteSessionBootstrapFailures(selectedMachineId);
-  const switcherDevices = useSwitcherDevices();
   const archivedLoadingDeviceIds = useRemoteArchivedLoadingDeviceIds();
   const archivedFailedDeviceIds = useRemoteArchivedFailedDeviceIds();
   const archivedLoadedDeviceIds = useRemoteArchivedLoadedDeviceIds();
@@ -1191,10 +1175,9 @@ function ExpandedView({
     if (filter.status === 'archived') {
       return [
         ...new Map(
-          [
-            ...activeArchivedPrerequisiteLoadingDevices,
-            ...archivedRemoteSessionLoadingDevices,
-          ].map((device) => [device.deviceId, device]),
+          [...activeArchivedPrerequisiteLoadingDevices, ...archivedRemoteSessionLoadingDevices].map(
+            (device) => [device.deviceId, device],
+          ),
         ).values(),
       ];
     }
@@ -1272,12 +1255,7 @@ function ExpandedView({
   const passesOrcaAndStatus = useCallback(
     (s: Session) => {
       if (isOrcaWorkerSession(s)) return false;
-      if (effectiveIncludeArchived === 'all') {
-        if (filter.status !== 'all' && s.status !== filter.status) return false;
-      } else if (s.status !== effectiveIncludeArchived) {
-        return false;
-      }
-      return true;
+      return matchesSidebarSessionStatus(s, filter.status, effectiveIncludeArchived);
     },
     [filter.status, effectiveIncludeArchived],
   );
@@ -1336,8 +1314,7 @@ function ExpandedView({
   // Visibility is a negative overlay only. Keep the raw universe above for
   // filter/manual-order GC, and expose a separate catalogue to sidebar UI.
   const visibleProjectUniverse = useMemo(
-    () =>
-      visibleSidebarProjects(projectUniverse.projects, hiddenProjectKeys, localPlatform),
+    () => visibleSidebarProjects(projectUniverse.projects, hiddenProjectKeys, localPlatform),
     [projectUniverse.projects, hiddenProjectKeys, localPlatform],
   );
 
@@ -1496,7 +1473,9 @@ function ExpandedView({
   const visiblePinnedProjects = useMemo(() => {
     const allowedProjects = filter.projectsAsSet;
     return allProjectGroups.projects.flatMap((project) => {
-      if (projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform)) {
+      if (
+        projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform)
+      ) {
         return [];
       }
       if (!pinnedProjectKeys.has(project.projectKey)) return [];

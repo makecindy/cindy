@@ -95,7 +95,7 @@ describe('Dialogue sidebar section', () => {
     expect(sidebarSource).toContain('selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)');
     // 折叠 rail 与展开态必须共用同一状态过滤结果，不能在「已归档」下继续露出 active。
     expect(sidebarSource).toContain('statusFilteredSessionsWithRemote');
-    expect(sidebarSource).toContain('session.status === effectiveStatus');
+    expect(sidebarSource).toContain('matchesSidebarSessionStatus');
   });
 
   it('shows remote directory/task loading and failures before connecting or authoritative empty states', () => {
@@ -133,9 +133,7 @@ describe('Dialogue sidebar section', () => {
   it('keeps remote background loading from changing the sidebar layout', () => {
     // Existing local/cached rows must stay in place while remote bootstrap runs in the background.
     // A partial loading notice in the scroll flow makes every row jump when it mounts/unmounts.
-    expect(sidebarSource).toContain(
-      '远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示',
-    );
+    expect(sidebarSource).toContain('远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示');
     expect(sidebarSource).not.toMatch(
       /remoteDeviceDirectoryStatus === 'loading'\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\/\>\s*\)/,
     );
