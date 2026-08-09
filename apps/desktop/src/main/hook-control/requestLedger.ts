@@ -282,10 +282,22 @@ export function createHookRequestLedger(deps: {
       // past the delivery horizon. Only a burst of live undelivered answers can
       // still fail this write, and the horizon keeps that bounded instead of
       // letting unsettleable entries accumulate forever.
-      const removable = next.findIndex(
-        (entry) =>
-          reclaimable(entry, nowMs) && !sameRequest(entry, record.connectionId, record.requestId),
-      );
+      //
+      // "Oldest" means oldest `completedAt`, not lowest index: an updated record
+      // is re-appended (see the filter + push above, and `markSent`), so array
+      // order tracks the last write rather than age. Picking by index would evict
+      // fresher tombstones while keeping stale ones — the retained tombstone is
+      // the one a redelivery is *least* likely to need.
+      let removable = -1;
+      let oldest = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < next.length; index += 1) {
+        const entry = next[index];
+        if (!reclaimable(entry, nowMs)) continue;
+        if (sameRequest(entry, record.connectionId, record.requestId)) continue;
+        if (entry.completedAt >= oldest) continue;
+        oldest = entry.completedAt;
+        removable = index;
+      }
       if (removable < 0) {
         deps.log.warn('write hook request ledger skipped (pending-outbox-limit)');
         return false;

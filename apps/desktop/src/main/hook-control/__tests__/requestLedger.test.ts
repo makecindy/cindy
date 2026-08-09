@@ -183,22 +183,26 @@ describe('hook request ledger', () => {
       pendingTtlMs: ttl,
       now: () => clock,
     });
-    const first = record('zombie-1');
-    first.delivery = 'pending';
-    first.completedAt = 0;
-    const second = record('zombie-2');
-    second.delivery = 'pending';
-    second.completedAt = 0;
-    expect(ledger.set(first)).toBe(true);
-    expect(ledger.set(second)).toBe(true);
+    // 刻意让**写入顺序与年龄顺序相反**: 先写新的、后写老的。淘汰必须按 completedAt
+    // 选最老的一条, 而不是按数组下标 —— 更新过的记录会被重新追加到末尾(见
+    // writeRecord 的 filter + push 与 markSent), 所以数组顺序反映的是最后一次写入,
+    // 不是年龄。
+    const newer = record('zombie-newer');
+    newer.delivery = 'pending';
+    newer.completedAt = 500;
+    const older = record('zombie-older');
+    older.delivery = 'pending';
+    older.completedAt = 100;
+    expect(ledger.set(newer)).toBe(true);
+    expect(ledger.set(older)).toBe(true);
 
     // 两条永不结算的 pending 已占满上限。越线后它们只剩去重价值, 可被回收。
-    clock = ttl + 1;
+    clock = ttl + 501;
     expect(ledger.set(record('req-new'))).toBe(true);
     expect(warnings).not.toContain('write hook request ledger skipped (pending-outbox-limit)');
     expect(ledger.get('conn-1', 'req-new')).not.toBeNull();
-    expect(ledger.get('conn-1', 'zombie-1')).toBeNull(); // 最老的先被回收
-    expect(ledger.get('conn-1', 'zombie-2')).not.toBeNull();
+    expect(ledger.get('conn-1', 'zombie-older')).toBeNull(); // 按年龄最老的先被回收
+    expect(ledger.get('conn-1', 'zombie-newer')).not.toBeNull();
   });
 
   it('时效内的 pending 仍受保护, 宁可写入失败也不丢未送出的答案', () => {
