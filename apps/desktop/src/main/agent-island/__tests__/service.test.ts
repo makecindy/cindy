@@ -4508,9 +4508,9 @@ describe('AgentIslandService native publishing', () => {
         compactContentWidth: 500,
         centerXRatio: 0.25,
         displayName: 'Mi Monitor',
-        displayIndex: 2,
+        displayIndex: 3,
         displayInternal: false,
-        displayBounds: externalDisplay.bounds,
+        displayBounds: { x: 1000, y: 0, width: 1512, height: 982 },
       },
     ]);
     mocks.displays.splice(0, mocks.displays.length, mocks.primaryDisplay, externalDisplay);
@@ -4538,6 +4538,8 @@ describe('AgentIslandService native publishing', () => {
     expect(persisted.get(2)).toEqual(
       expect.objectContaining({
         compactContentWidth: 500,
+        displayBounds: externalDisplay.bounds,
+        displayIndex: 2,
         displayName: 'Mi Monitor',
       }),
     );
@@ -4749,7 +4751,7 @@ describe('AgentIslandService native publishing', () => {
     expect(persistedCall?.[1]).toEqual([]);
   });
 
-  it('rekeys a debounced layout write when display runtime ids change', async () => {
+  it('persists a pending layout write in the migrated snapshot without a stale single write', async () => {
     vi.useFakeTimers();
     try {
       const externalDisplay = {
@@ -4804,20 +4806,14 @@ describe('AgentIslandService native publishing', () => {
       expect(migrated.get(1)).toEqual(
         expect.objectContaining({
           compactContentWidth: 500,
+          displayIndex: 1,
           displayName: 'Mi Monitor',
         }),
       );
       expect(migrated.has(2)).toBe(false);
 
       await vi.advanceTimersByTimeAsync(150);
-      expect(mocks.writeLayoutPreference).toHaveBeenCalledTimes(1);
-      expect(mocks.writeLayoutPreference).toHaveBeenCalledWith(
-        1,
-        expect.objectContaining({
-          compactContentWidth: 500,
-          displayName: 'Mi Monitor',
-        }),
-      );
+      expect(mocks.writeLayoutPreference).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

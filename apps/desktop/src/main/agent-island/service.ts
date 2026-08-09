@@ -1872,7 +1872,10 @@ export class AgentIslandService {
       const direct = this.displayById(displays, storedDisplayId);
       const resolved = findDisplayByIdentity(displays, preference);
       if (!direct || !resolved || resolved.id !== direct.id) continue;
-      next.set(direct.id, preference);
+      next.set(direct.id, {
+        ...preference,
+        ...this.displayIdentityForDisplay(direct, displays),
+      });
       claimedDisplayIds.add(direct.id);
       assignedPreferences.add(preference);
     }
@@ -1884,7 +1887,10 @@ export class AgentIslandService {
       if (assignedPreferences.has(preference)) continue;
       const resolved = findDisplayByIdentity(displays, preference);
       if (!resolved || claimedDisplayIds.has(resolved.id)) continue;
-      next.set(resolved.id, preference);
+      next.set(resolved.id, {
+        ...preference,
+        ...this.displayIdentityForDisplay(resolved, displays),
+      });
       claimedDisplayIds.add(resolved.id);
       assignedPreferences.add(preference);
     }
@@ -1923,7 +1929,7 @@ export class AgentIslandService {
     ) {
       return;
     }
-    this.rekeyPendingLayoutPreferenceWrites(next);
+    this.clearPendingLayoutPreferenceWrites();
     this.layoutPreferencesByDisplayId.clear();
     for (const [displayId, preference] of next) {
       this.layoutPreferencesByDisplayId.set(displayId, preference);
@@ -1936,24 +1942,9 @@ export class AgentIslandService {
     this.writeLayoutPreferencesSafely(next, nextDetached);
   }
 
-  private rekeyPendingLayoutPreferenceWrites(
-    preferences: Map<number, AgentIslandLayoutPreference>,
-  ): void {
-    if (this.pendingLayoutPreferenceWrites.size === 0) return;
-    const pending = Array.from(this.pendingLayoutPreferenceWrites.values());
+  private clearPendingLayoutPreferenceWrites(): void {
     this.pendingLayoutPreferenceWrites.clear();
-    const claimedPreferenceIds = new Set<number>();
-    for (const preference of pending) {
-      const migrated = Array.from(preferences.entries()).find(
-        ([displayId, candidate]) =>
-          !claimedPreferenceIds.has(displayId) && sameLayoutPreference(candidate, preference),
-      );
-      if (!migrated) continue;
-      const [displayId] = migrated;
-      this.pendingLayoutPreferenceWrites.set(displayId, { ...preference });
-      claimedPreferenceIds.add(displayId);
-    }
-    if (this.pendingLayoutPreferenceWrites.size === 0 && this.layoutPreferenceWriteTimer) {
+    if (this.layoutPreferenceWriteTimer) {
       clearTimeout(this.layoutPreferenceWriteTimer);
       this.layoutPreferenceWriteTimer = null;
     }
