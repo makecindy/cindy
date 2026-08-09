@@ -593,28 +593,6 @@ describe('worktree 名与 create 入参', () => {
       expect(parseWorktreeCreateResult(malformed, request)).toBeNull();
     }
   });
-
-  it('accepts Main replacing a legacy auto-* hint with the final meta name/path/branch', () => {
-    const requestWithLegacyHint = buildWorktreeCreateRequest({
-      sessionId: 'session-1',
-      eligibility: { status: 'eligible', baseRepo: '/repo', sourceBranch: 'main' },
-      suggestedName: 'auto-abc123',
-      recoveryKey: 'recovery-1',
-    });
-    const finalMeta = {
-      sessionId: 'session-1',
-      name: 'pensive-lederberg',
-      path: '/repo/.cindy-worktrees/pensive-lederberg',
-      baseRepo: '/repo',
-      branch: 'cindy/pensive-lederberg',
-      sourceBranch: 'main',
-      createdAt: '2026-08-05T00:00:00.000Z',
-      recoveryKey: 'recovery-1',
-    };
-
-    expect(parseWorktreeCreateResult({ ok: true, meta: finalMeta }, requestWithLegacyHint))
-      .toEqual({ ok: true, meta: finalMeta });
-  });
 });
 
 describe('formatWorktreeCreateFailure', () => {

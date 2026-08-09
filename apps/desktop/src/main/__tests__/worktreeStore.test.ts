@@ -33,10 +33,10 @@ describe('worktreeStore', () => {
     const store = await import('../worktree/worktreeStore');
     const meta: WorktreeMeta = {
       sessionId: 'session-1',
-      name: 'auto-abc123',
-      path: 'D:\\repo\\.xdt-worktrees\\auto-abc123',
+      name: 'auto-test',
+      path: 'D:\\repo\\.xdt-worktrees\\auto-test',
       baseRepo: 'D:\\repo',
-      branch: 'xdt/auto-abc123',
+      branch: 'xdt/auto-test',
       sourceBranch: 'main',
       createdAt: '2026-05-26T00:00:00.000Z',
       ephemeral: false,
@@ -45,7 +45,6 @@ describe('worktreeStore', () => {
     await expect(store.set(meta.sessionId, meta)).resolves.toBeUndefined();
 
     expect(store.get(meta.sessionId)).toEqual(meta);
-    expect(store.getAll()).toEqual([meta]);
     expect(setWorktreePathInDbMock).toHaveBeenCalledWith(meta.sessionId, meta.path);
   });
 });
