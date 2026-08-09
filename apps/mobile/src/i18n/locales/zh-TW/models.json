@@ -1,7 +1,7 @@
 {
   "picker": {
     "title": "模型",
-    "permissionTitle": "許可權",
+    "permissionTitle": "權限",
     "searchAccessibility": "搜尋模型",
     "searchPlaceholder": "搜尋模型…",
     "noResults": "沒有匹配的模型",
@@ -11,7 +11,7 @@
     "backToModels": "返回模型列表",
     "agentSwitchHint": "選擇模型後，下一條訊息將切換到 {{agent}}",
     "crossAgentEmptyHint": "請先在被控裝置連線 {{agent}} 的模型來源",
-    "permissionModeAccessibility": "許可權模式：{{mode}}",
+    "permissionModeAccessibility": "權限模式：{{mode}}",
     "selectProviderModelAccessibility": "選擇來源 {{provider}} 的模型 {{model}}",
     "selectModelAccessibility": "選擇模型 {{model}}",
     "configureAccessibility": "配置 {{model}}",

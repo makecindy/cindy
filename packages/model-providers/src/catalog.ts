@@ -495,6 +495,11 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
       const { nameEn: _drop, ...rest } = preset as ProviderPreset & { nameEn: unknown };
       preset = rest as ProviderPreset;
     }
+    // 繁中展示名非法时只剥掉该字段，保留预设本体并回落到 name。
+    if (preset.nameZhTW !== undefined && (typeof preset.nameZhTW !== 'string' || preset.nameZhTW.trim().length === 0)) {
+      const { nameZhTW: _drop, ...rest } = preset as ProviderPreset & { nameZhTW: unknown };
+      preset = rest as ProviderPreset;
+    }
     out.push(normalizePresetRuntimeOptions(preset));
   }
   return out;
@@ -505,10 +510,14 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
  * (缺省回落 `name`)。纯呈现选择,不影响预设 id / 创建后的供应商命名语义。
  */
 export function presetDisplayName(
-  preset: Pick<ProviderPreset, 'name' | 'nameEn'>,
+  preset: Pick<ProviderPreset, 'name' | 'nameEn' | 'nameZhTW'>,
   locale: string,
 ): string {
-  return locale.toLowerCase().startsWith('zh') ? preset.name : (preset.nameEn ?? preset.name);
+  const normalizedLocale = locale.toLowerCase().replaceAll('_', '-');
+  if (normalizedLocale === 'zh-tw' || normalizedLocale.startsWith('zh-hant')) {
+    return preset.nameZhTW ?? preset.name;
+  }
+  return normalizedLocale.startsWith('zh') ? preset.name : (preset.nameEn ?? preset.name);
 }
 
 /** 预设的厂商分组键：id 去掉区域后缀（`zhipu-glm-cn`/`zhipu-glm-global` → `zhipu-glm`）。 */

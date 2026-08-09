@@ -66,8 +66,8 @@
       "saveA11y": "儲存任務標題"
     },
     "revoked": {
-      "title": "已撤銷訪問許可權",
-      "body": "「{{deviceName}}」撤銷了本機的遠端訪問許可權。請在該電腦的 {{appName}} 設定裡重新授權本裝置，然後點「重試訪問」。",
+      "title": "已撤銷訪問權限",
+      "body": "「{{deviceName}}」撤銷了本機的遠端訪問權限。請在該電腦的 {{appName}} 設定裡重新授權本裝置，然後點「重試訪問」。",
       "retry": "重試訪問"
     },
     "viewAllConversations": "檢視全部 {{count}} 條任務",

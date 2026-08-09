@@ -67,8 +67,8 @@
     "clipboardReadFailed": "剪貼簿圖片讀取失敗，請重新複製後再貼上。",
     "maxAttachments": "最多新增 {{count}} 個附件。",
     "simulatorNoCamera": "模擬器沒有相機，請用「照片」從相簿選擇。",
-    "cameraPermission": "相機許可權未開啟，請在系統設定裡允許 {{appName}} 使用相機。",
-    "photoPermission": "照片許可權未開啟，請在系統設定裡允許 {{appName}} 訪問照片。",
+    "cameraPermission": "相機權限未開啟，請在系統設定裡允許 {{appName}} 使用相機。",
+    "photoPermission": "照片權限未開啟，請在系統設定裡允許 {{appName}} 訪問照片。",
     "noFileRead": "沒有讀取到可上傳的檔案。"
   },
   "voice": {
@@ -93,14 +93,14 @@
     "realtimeAsrFailed": "即時語音識別失敗。",
     "volcengineAuthUnsupported": "手機版 Volcengine 語音暫不支援 {{auth}} 鑑權。",
     "volcengineMissingResourceId": "Volcengine ASR 配置缺少 resourceId。",
-    "sessionExpiredOrForbidden": "{{appName}} 語音會話已失效或沒有許可權（WebSocket {{status}}）。請確認登入狀態後重試。",
+    "sessionExpiredOrForbidden": "{{appName}} 語音會話已失效或沒有權限（WebSocket {{status}}）。請確認登入狀態後重試。",
     "incomplete": "語音輸入未完成，請重試。",
     "missingRefinerTargetProvider": "手機版語音潤色需要 {{appName}} 語音會話(缺少 refinerTargetProvider)。",
-    "emptyTranscript": "檢測到語音但未識別出文本，請重試。",
+    "emptyTranscript": "檢測到語音但未識別出文字，請重試。",
     "connectionInterrupted": "語音連線中斷了，請檢查網路後重試。",
     "recognitionStalled": "語音識別沒有繼續返回結果，請重試。",
     "transcriptKept": "{{message}}（識別出的文字已經保留，可以直接編輯）",
-    "micPermission": "麥克風許可權未開啟，請在系統設定裡允許 {{appName}} 使用麥克風。",
+    "micPermission": "麥克風權限未開啟，請在系統設定裡允許 {{appName}} 使用麥克風。",
     "realtimeAudioUnavailable": "當前安裝包不支援即時語音輸入，請安裝包含原生錄音模組的測試版。"
   }
 }

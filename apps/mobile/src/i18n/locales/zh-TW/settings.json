@@ -41,7 +41,7 @@
     "sectionTitle": "通知",
     "taskDone": "任務完成通知",
     "taskDoneHint": "電腦上的任務完成、出錯或需要你回覆時，推送到這臺手機；完成或需要回復時附帶最新回覆內容。",
-    "permissionDenied": "系統通知許可權未開啟。請到 iOS「設定 → 通知 → {{appName}}」允許通知後重試。",
+    "permissionDenied": "系統通知權限未開啟。請到 iOS「設定 → 通知 → {{appName}}」允許通知後重試。",
     "unregisterQueued": "已關閉。當前網路下注銷未完成，將在下次聯網時自動補上。"
   },
   "about": {
@@ -49,9 +49,9 @@
     "deviceName": "裝置名稱",
     "deviceNameDetail": "電腦端授權列表會顯示這個名稱。",
     "platform": "平臺",
-    "remoteControl": "被控許可權",
+    "remoteControl": "被控權限",
     "remoteControlValue": "電腦端管理",
-    "remoteControlDetail": "手機只作為控制端。允許被控、撤銷和恢復許可權仍在電腦端設定裡完成。",
+    "remoteControlDetail": "手機只作為控制端。允許被控、撤銷和恢復權限仍在電腦端設定裡完成。",
     "editAccessibility": "修改{{label}}"
   },
   "relay": {
@@ -101,7 +101,7 @@
     "openUserAgreement": "開啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "幫助我們瞭解 Cindy 的啟動與留存情況。上報裝置型號、系統版本、應用版本、裝置識別符號等裝置與使用環境資訊，登入後還包含你的賬號 ID；不包含任何對話內容、檔案或提示詞。",
+    "analyticsHint": "幫助我們瞭解 Cindy 的啟動與留存情況。上報裝置型號、系統版本、應用版本、裝置識別符號等裝置與使用環境資訊，登入後還包含你的帳號 ID；不包含任何對話內容、檔案或提示詞。",
     "analyticsSaveFailed": "設定未能儲存，重啟後可能恢復原值。",
     "analyticsReset": "恢復預設",
     "analyticsResetAction": "恢復"
@@ -131,7 +131,7 @@
     "refreshAccessibility": "重新整理詞典",
     "readOnlyHint": "手機只能檢視，新增和刪除請回電腦操作。",
     "offlineHint": "電腦當前都不線上，顯示的是上次同步到手機的內容。",
-    "noDesktops": "還沒有可同步的電腦。在電腦上登入同一賬號後，詞典會自動出現在這裡。"
+    "noDesktops": "還沒有可同步的電腦。在電腦上登入同一帳號後，詞典會自動出現在這裡。"
   },
   "deviceNameEditor": {
     "screenTitle": "裝置名稱",

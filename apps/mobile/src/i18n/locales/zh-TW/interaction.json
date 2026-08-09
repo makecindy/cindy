@@ -1,23 +1,23 @@
 {
   "permission": {
     "mode": {
-      "default": "預設許可權",
+      "default": "預設權限",
       "acceptEdits": "允許編輯",
       "plan": "計劃模式",
       "auto": "自動審批",
       "bypass": "完全訪問"
     },
-    "pickerSelect": "選擇許可權模式 {{mode}}",
+    "pickerSelect": "選擇權限模式 {{mode}}",
     "armedRiskWarning": "確認允許後才會把決定回傳到電腦端。",
     "armedHighRiskTitle": "確認高風險操作",
-    "kind": "許可權確認",
+    "kind": "權限確認",
     "deny": "拒絕",
-    "denyAccessibility": "拒絕許可權請求",
+    "denyAccessibility": "拒絕權限請求",
     "alwaysAllow": "本任務總是允許",
-    "alwaysAllowAccessibility": "本任務總是允許許可權請求",
+    "alwaysAllowAccessibility": "本任務總是允許權限請求",
     "alwaysAllowConfirm": "確認本任務允許",
     "allowOnce": "允許一次",
-    "allowOnceAccessibility": "允許一次許可權請求",
+    "allowOnceAccessibility": "允許一次權限請求",
     "allowOnceConfirm": "確認允許一次",
     "highRisk": "高風險"
   },
@@ -177,8 +177,8 @@
     "mediaRemove": "移除照片附件 {{name}}",
     "mediaDeselect": "取消選擇照片 {{name}}",
     "mediaSelect": "選擇照片 {{name}}",
-    "photoPermissionHint": "照片許可權未開啟，開啟後可快速新增最近照片。",
-    "enablePhotoPermission": "開啟照片許可權",
+    "photoPermissionHint": "照片權限未開啟，開啟後可快速新增最近照片。",
+    "enablePhotoPermission": "開啟照片權限",
     "enable": "去開啟",
     "icloudTimeout": "照片還在從 iCloud 下載，等待超時了。請檢查網路，稍後重試。",
     "photoNotReadable": "這張照片暫時無法讀取(可能還沒從 iCloud 下載完成)，請稍後重試。"

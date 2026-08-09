@@ -62,7 +62,7 @@
     "unsupportedType": "此型別暫不支援在手機上預覽",
     "oversize": "檔案超過預覽上限({{size}})，可下載原檔案檢視",
     "oversizeUnknown": "過大",
-    "binaryFile": "二進位制檔案，無法以文本預覽",
+    "binaryFile": "二進位制檔案，無法以文字預覽",
     "readFailed": "讀取失敗",
     "truncated2mb": "檔案超過 2 MB，僅顯示前 2 MB 內容",
     "truncatedLines": "僅顯示前 {{lines}} 行",

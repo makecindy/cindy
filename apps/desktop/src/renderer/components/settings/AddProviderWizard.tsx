@@ -365,7 +365,10 @@ export function AddProviderWizard({
     : oauthChoices;
   const filteredPresets = q
     ? sortedPresets.filter(
-        (p) => p.name.toLowerCase().includes(q) || (p.nameEn?.toLowerCase().includes(q) ?? false),
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.nameEn?.toLowerCase().includes(q) ?? false) ||
+          (p.nameZhTW?.toLowerCase().includes(q) ?? false),
       )
     : sortedPresets;
 

@@ -531,6 +531,8 @@ export interface ProviderPreset {
    * 在非中文 UI 用它展示，缺省回落 `name`。展示选择见 `presetDisplayName`。
    */
   nameEn?: string;
+  /** 繁体中文展示名（可选）：仅 `zh-TW` UI 使用，缺省回落 `name`。 */
+  nameZhTW?: string;
   /** 官方接入文档链接（表单里展示可点）。 */
   docsUrl?: string;
   /**
