@@ -1012,6 +1012,8 @@ export class GoalController {
     answers: Record<string, string>,
     questions?: readonly GoalClarifyQuestion[],
   ): Promise<void> {
+    // dispose 后丢弃(登出/切账号:不得改写旧账号目标 / 写旧账号 marker——Codex P1)。
+    if (this.disposed) return;
     if (this.clarificationApplied.has(sessionId)) return; // 每目标只澄清改写一次
     const next = deriveObjectiveFromAnswers(answers);
     if (!next) return;
@@ -1034,9 +1036,9 @@ export class GoalController {
     let objectiveCommitted = false;
     try {
       await this.awaitPendingLifecycle(operationBoundary);
-      if (!isCurrentOperation()) return;
+      if (this.disposed || !isCurrentOperation()) return;
       const state = await this.deps.storage.get(sessionId);
-      if (!isCurrentOperation()) return;
+      if (this.disposed || !isCurrentOperation()) return;
       if (!state || state.status !== 'active') return;
       if (state.turnsUsed !== 0) return;
       // 确定性标记:只认 directive 约定形状的"目标澄清问题",否则不改写(见函数注释)。
@@ -1054,6 +1056,9 @@ export class GoalController {
         async (persisted) => {
           if (!persisted) return;
           objectiveCommitted = true;
+          // dispose 后不得写旧账号 marker(DB client 在调用时解析,登出后解析到
+          // 新账号/已关库——Codex P1)。
+          if (this.disposed) return;
           await this.deps.persistUserMessage?.(sessionId, next, {
             goalObjective: { updated: true },
           });
@@ -1063,7 +1068,7 @@ export class GoalController {
         releaseClarificationClaim();
         return;
       }
-      if (!isCurrentOperation()) return;
+      if (this.disposed || !isCurrentOperation()) return;
       if (updated) this.emit(updated);
     } catch (error) {
       if (!objectiveCommitted) releaseClarificationClaim();
@@ -2527,22 +2532,13 @@ export class GoalController {
         // 读 generation,快终态时 boundary 已被 stopSession 清掉会写成 0,与
         // finalize/terminal 脱节)。resumed 用 onDispatching 固化的恢复原因
         // (pendingResume 可能已被清理);at 用派发时刻保证重放顺序在 finalize 前。
-        // 发送条件:当前仍是本派发的 owner;或 finalizeTurn 已启动(finalized 在
-        // storage await 前置位)且未被登出放弃(!disposed)。
-        // 孤儿防护:finalizeTurn 启动但收口事件尚未提交(auditFinalized 未置)时
-        // 挂 pendingDispatch,由 finalizeTurn 在收口事件写入后补发——clear/pause/
+        // 发送条件:onDispatching 已发生且 send 返回 accepted:true——派发是真实
+        // 发生的(跨过 handle.send 的归属登记边界),无论 lifecycle 后续是否被
+        // clear/pause/替换,都用捕获值补发派发事件(Copilot;仅 accepted:false 的
+        // cancelled-before-dispatch 不产生)。快终态收口未提交(auditFinalized 未置)
+        // 时挂 pendingDispatch,由 finalizeTurn 在收口事件写入后补发——clear/pause/
         // 替换使 finalizeTurn 提前 return(current-turn 检查,收口事件不写)时
         // 不补发,杜绝"有派发无收口"的孤儿(Greptile P1 / Codex P2)。
-        const boundaryStillLive =
-          this.turns.get(sessionId) === dispatchBoundary ||
-          (dispatchBoundary?.finalized === true && !this.disposed);
-
-        if (!boundaryStillLive) {
-          this.deps.logger.info('[goal] dispatch audit skipped — lifecycle replaced before accepted', {
-            sessionId,
-          });
-          return;
-        }
         if (dispatchBoundary?.finalized === true && dispatchBoundary?.auditFinalized !== true) {
           // 收口提交中(accepted 早于 storage settle):延迟到 finalizeTurn 写收口后
           // 再补发,保证 dispatch 与收口配对;收口被放弃时(clear/替换)不补发。
