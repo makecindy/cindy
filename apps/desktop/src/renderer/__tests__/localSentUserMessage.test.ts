@@ -390,4 +390,82 @@ describe('isLocalSentUserMessage (#2194)', () => {
     // 外部注入的 clientId 不受影响。
     expect(makerChatStore.isLocalSentUserMessage(sid, 'injected-from-im')).toBe(false);
   });
+
+  // Codex review P2（第九轮）: queue-head（派发前失败）的人工 Retry 由 main
+  // 原样重发既有队首项——无新 clientId、无 supersedesUserClientId。renderer
+  // 以点击时刻镜像的 inputRecovery（projection 线上自带字段）取权威 clientId，
+  // 回执确认生效（error / recovery 清空）后登记；重载后内存标记丢失时续跑
+  // 落库的新行仍能识别为本端意图。
+  it('queue-head 人工 Retry 在回执确认生效后登记队首为本端意图', async () => {
+    const sid = `retry-qh-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    // 建立 queue-head 失败镜像：队首项 + error + recovery。
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [queuedItem('head-1', 'stuck head')],
+        error: 'dispatch failed',
+        recovery: { kind: 'queue-head', clientId: 'head-1' },
+      }),
+    );
+    // 人工 Retry 生效：error / recovery 清空，队首原样保留（无克隆项）。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('head-1', 'stuck head')] }),
+    );
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'head-1')).toBe(true);
+  });
+
+  it('queue-head Retry 被 superseded（回执 recovery 未清）时不登记队首', async () => {
+    const sid = `retry-qh-super-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [queuedItem('head-2', 'stuck head')],
+        error: 'dispatch failed',
+        recovery: { kind: 'queue-head', clientId: 'head-2' },
+      }),
+    );
+    // superseded：main 未处理本次 retry，error / recovery 原样保留。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, {
+        pendingQueue: [queuedItem('head-2', 'stuck head')],
+        error: 'dispatch failed',
+        recovery: { kind: 'queue-head', clientId: 'head-2' },
+      }),
+    );
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'head-2')).toBe(false);
+  });
+
+  it('active-turn 失败时不误标无关队首', async () => {
+    const sid = `retry-at-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    // active-turn 失败 + 队首是无关的外部入队消息。
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [queuedItem('head-ext', 'from im')],
+        error: 'turn failed',
+        recovery: { kind: 'active-turn', item: queuedItem('failed-turn', 'original') },
+      }),
+    );
+    // 有产出续跑分支：回执 error / recovery 清空，队首换成隐藏续跑指令。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('continue-item', 'continue')] }),
+    );
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'head-ext')).toBe(false);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-item')).toBe(false);
+  });
 });

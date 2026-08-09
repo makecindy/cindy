@@ -56,6 +56,7 @@ import type {
   AgentInputCreateOpts,
   AgentInputProjection,
   AgentInputQueuedMessage,
+  AgentInputRecovery,
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
@@ -2270,6 +2271,13 @@ export interface SessionChatState {
   errorReason?: string | null;
   recoverableError: string | null;
   /**
+   * 输入投影自带的 recovery 镜像（main 的 retry 权威状态）。renderer 侧人工
+   * Retry 登记本端意图时用它区分 queue-head（原样重发既有队首项）与
+   * active-turn（克隆 / 续跑指令）——projection 线上本就有该字段，仅镜像，
+   * 不改协议。
+   */
+  inputRecovery: AgentInputRecovery;
+  /**
    * 当前已派发 turn 的 retry 候选文本。
    *
    * 这个字段在 dispatchToSdk 那一刻从 QueuedMessage snapshot 写入，done/error/stop
@@ -2560,6 +2568,7 @@ function createInitialState(): SessionChatState {
     usageLimitRecovery: null,
     errorReason: null,
     recoverableError: null,
+    inputRecovery: null,
     activeTurnRetryText: null,
     errorRetryText: null,
     credentialSwitchWait: null,
@@ -2627,6 +2636,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   usageLimitRecovery: null,
   errorReason: null,
   recoverableError: null,
+  inputRecovery: null,
   activeTurnRetryText: null,
   errorRetryText: null,
   credentialSwitchWait: null,
@@ -2686,9 +2696,10 @@ const lightSnapshotCache = new Map<string, SessionChatLightState>();
  * desktop) passes through, so those local user messages are recorded there.
  * Two paths register separately: local UI triggers (silent-stop Continue /
  * app-exit Continue / Mivo) are marked in sendUiTriggerCore, and a manual
- * Retry's visible clone is minted by main with a fresh clientId, so
- * retryLastError registers it from the invoke receipt's projection (items
- * carrying supersedesUserClientId).
+ * Retry is registered in retryLastError — the active-turn clone via the
+ * invoke receipt's projection (items carrying supersedesUserClientId), the
+ * queue-head redispatch (same clientId, no clone) via the mirrored
+ * inputRecovery captured at click time.
  * MessageStream uses this to tell an explicit local send — which force-pins
  * the viewport to the tail — apart from user messages injected by other
  * entries (IM channels, a mobile client driving the session remotely,
@@ -3734,6 +3745,9 @@ function applyInputProjection(
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
       continuationTurnClientId: projectedContinuationTurnClientId,
       continuationInFlightProjectionCapability,
+      // 线上字段镜像（旧被控端缺省回落 null），供人工 Retry 区分 queue-head /
+      // active-turn 归属（#2194 本端意图登记）。
+      inputRecovery: projection.recovery ?? null,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
@@ -12189,6 +12203,13 @@ function retryLastError(sessionId: string): Promise<void> {
   // 路径设置，见 agent-input-coordinator.ts），直接按字段辨认——不猜队首差分
   // （异步窗口内可能混入外部入队）、不做文本猜测（维护者口径，#2222）。
   // 有产出分支的隐藏续跑指令不带该字段也不产生可见气泡，无需标记。
+  // queue-head（派发前失败）分支 main 原样重发**既有队首项**——没有新
+  // clientId、没有 supersedesUserClientId。以点击时刻镜像的 inputRecovery
+  // （projection 线上自带字段）取权威 clientId；重载后内存标记丢失时，续跑
+  // 落库的新行仍能识别为本端意图（Codex review P2）。
+  const preRetryRecovery = sessions.get(sessionId)?.inputRecovery ?? null;
+  const preRetryQueueHeadClientId =
+    preRetryRecovery?.kind === 'queue-head' ? preRetryRecovery.clientId : null;
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
@@ -12203,6 +12224,16 @@ function retryLastError(sessionId: string): Promise<void> {
     if (!sessions.has(sessionId)) return;
     for (const item of projection.pendingQueue) {
       if (item.supersedesUserClientId) markLocalSentUserMessage(sessionId, item.clientId);
+    }
+    // queue-head 重试：仅当回执确认本次重试生效（error 清空且 recovery 已清 /
+    // 易主）才登记；superseded（recovery 原样保留）时不标记，避免把无关队首
+    // 误记为本端。
+    if (
+      preRetryQueueHeadClientId &&
+      projection.error === null &&
+      projection.recovery === null
+    ) {
+      markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
     }
   });
 }
