@@ -265,6 +265,13 @@ function markdownImageDestination(raw: string): string {
     // `![alt](</private/file.png> "title")`. Extract only the destination.
     // A malformed missing `>` remains fail-closed for local-path detection.
     if (closingBracket < 0) return '';
+    const tail = target.slice(closingBracket + 1).trim();
+    if (
+      tail &&
+      !/^(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))$/.test(tail)
+    ) {
+      return '';
+    }
     target = target.slice(1, closingBracket).trim();
   } else {
     // A plain destination may be followed by a quoted/parenthesized title:
@@ -443,10 +450,10 @@ function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
   const trimmedTarget = rawTarget.trim();
   // A malformed angle destination is never eligible for materialization, but
   // its local path still must not cross the IM boundary in plain text.
-  const target =
-    trimmedTarget.startsWith('<') && !trimmedTarget.includes('>')
-      ? trimmedTarget.slice(1).trim()
-      : markdownImageDestination(rawTarget) || trimmedTarget;
+  const closingAngle = trimmedTarget.startsWith('<') ? trimmedTarget.indexOf('>') : -1;
+  const target = trimmedTarget.startsWith('<')
+    ? trimmedTarget.slice(1, closingAngle < 0 ? undefined : closingAngle).trim()
+    : markdownImageDestination(rawTarget) || trimmedTarget;
   const targetLower = target.toLowerCase();
   return (
     targetLower.startsWith('file://') ||

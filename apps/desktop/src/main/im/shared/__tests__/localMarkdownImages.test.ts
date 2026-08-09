@@ -133,6 +133,23 @@ describe('materializeLocalMarkdownImages', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe('private');
   });
 
+  it('redacts but does not materialize an angle destination with an invalid tail', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    const text = `![示例](<${sourcePath}> garbage)`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-invalid-angle-tail' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(deps.ingest).not.toHaveBeenCalled();
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('示例');
+  });
+
   it('materializes an angle destination containing a closing parenthesis', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'private)image.png');
