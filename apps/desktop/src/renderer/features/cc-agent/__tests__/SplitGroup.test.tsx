@@ -10,6 +10,7 @@ import { SplitGroup } from '../SplitGroup';
 import { getSplitPanes, splitGroupStore } from '../splitGroupStore';
 
 const {
+  composerDropMock,
   deferredRouteActionMock,
   navigateMock,
   resolveSessionRouteMock,
@@ -18,6 +19,7 @@ const {
   sessionViewRenderMock,
   useCCSessionsMock,
 } = vi.hoisted(() => ({
+  composerDropMock: vi.fn(),
   deferredRouteActionMock: vi.fn(),
   navigateMock: vi.fn(),
   resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
@@ -122,6 +124,7 @@ vi.mock('../CCAgentSessionView', () => ({
         <div
           data-testid={`composer-drop-target-${sessionIdProp}`}
           data-split-group-composer-drop-target=""
+          onDrop={composerDropMock}
         >
           <span data-testid={`composer-drop-child-${sessionIdProp}`}>Composer drop</span>
         </div>
@@ -143,6 +146,7 @@ function renderSplitGroup(activeSessionId: string) {
 describe('SplitGroup', () => {
   beforeEach(() => {
     localStorage.clear();
+    composerDropMock.mockClear();
     deferredRouteActionMock.mockClear();
     navigateMock.mockClear();
     resolveSessionRouteMock.mockClear();
@@ -1494,6 +1498,47 @@ describe('SplitGroup', () => {
 
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(2);
     expect(sessionViewRenderMock).not.toHaveBeenCalledWith('session-c');
+  });
+
+  it('pane 拖到输入框时交给 composer 清理拖拽状态且不重排', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const composerDropChild = screen.getByTestId('composer-drop-child-session-a');
+    const dropTarget = composerDropChild.closest('[data-split-drop-target="pane"]');
+    if (!(dropTarget instanceof HTMLElement)) throw new Error('pane drop target missing');
+    vi.spyOn(dropTarget, 'getBoundingClientRect').mockReturnValue({
+      left: 100,
+      right: 500,
+      top: 50,
+      bottom: 350,
+      width: 400,
+      height: 300,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    });
+    const dataTransfer = {
+      types: ['application/x-cindy-split-pane'],
+      dropEffect: 'none',
+      getData: (format: string) =>
+        format === 'application/x-cindy-split-pane' ? 'session-b' : '',
+    };
+
+    await act(async () => {
+      fireEvent.dragOver(composerDropChild, { clientX: 300, clientY: 340, dataTransfer });
+      fireEvent.drop(composerDropChild, { clientX: 300, clientY: 340, dataTransfer });
+      await Promise.resolve();
+    });
+
+    expect(composerDropMock).toHaveBeenCalledTimes(1);
+    expect(view.container.querySelectorAll('[data-split-direction="row"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-split-direction="column"]')).toHaveLength(0);
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual([
+      'session-a',
+      'session-b',
+    ]);
   });
 
   it('达到窗格上限时拒绝拖入且不切换路由', async () => {

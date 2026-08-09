@@ -990,7 +990,7 @@ function SplitDropTarget({
       setDropSide(null);
       return;
     }
-    if (isSessionDrag && isSplitGroupComposerDropTarget(event.target)) {
+    if (isSplitGroupComposerDropTarget(event.target)) {
       setDropSide(null);
       return;
     }
@@ -1019,7 +1019,7 @@ function SplitDropTarget({
         setDropSide(null);
         return;
       }
-      if (isSessionDrag && isSplitGroupComposerDropTarget(event.target)) {
+      if (isSplitGroupComposerDropTarget(event.target)) {
         setDropSide(null);
         return;
       }
