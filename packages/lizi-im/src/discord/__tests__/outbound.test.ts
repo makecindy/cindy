@@ -149,6 +149,42 @@ describe('DiscordIM outbound', () => {
     expect(fileAttachments(channel.send.mock.calls[2]?.[0])).toEqual(files.slice(3));
   });
 
+  it('marks a Discord image batch with an uncertain send result as non-retryable', async () => {
+    const files = Array.from({ length: 11 }, () => tempFile(1));
+    const channel = makeChannel('dm-1');
+    const networkError = new TypeError('network disconnected after upload');
+    channel.send
+      .mockResolvedValueOnce({ id: 'm1' })
+      .mockResolvedValueOnce({ id: 'm2' })
+      .mockRejectedValueOnce(networkError);
+    const im = makeIm(channel);
+    const handle = await im.startStreamingText('user-1');
+    for (const file of files) handle.addExtraImageAbsPath?.(file);
+
+    await expect(handle.finalize('done')).rejects.toBe(networkError);
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(files.slice(0, 10));
+    expect(handle.getNonRetryableExtraImageAbsPaths?.()).toEqual(files.slice(10));
+  });
+
+  it('keeps a Discord image batch with an explicit 400 rejection retryable', async () => {
+    const files = Array.from({ length: 11 }, () => tempFile(1));
+    const channel = makeChannel('dm-1');
+    const rejected = Object.assign(new Error('Bad Request'), { status: 400 });
+    channel.send
+      .mockResolvedValueOnce({ id: 'm1' })
+      .mockResolvedValueOnce({ id: 'm2' })
+      .mockRejectedValueOnce(rejected);
+    const im = makeIm(channel);
+    const handle = await im.startStreamingText('user-1');
+    for (const file of files) handle.addExtraImageAbsPath?.(file);
+
+    await expect(handle.finalize('done')).rejects.toBe(rejected);
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(files.slice(0, 10));
+    expect(handle.getNonRetryableExtraImageAbsPaths?.()).toEqual([]);
+  });
+
   it('reactToMessage returns null on reaction failure', async () => {
     const channel = makeChannel('dm-1');
     channel.messages.fetch.mockResolvedValueOnce({

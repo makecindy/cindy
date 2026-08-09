@@ -8,6 +8,7 @@ const IMAGE_ONLY_PLACEHOLDER = '🖼️';
 
 export interface DiscordImageUploadResult {
   deliveredAbsPaths: string[];
+  nonRetryableAbsPaths?: string[];
   error?: unknown;
 }
 
@@ -35,6 +36,7 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
   private done = false;
   private extraImageAbsPaths: string[] = [];
   private deliveredExtraImageAbsPaths: string[] = [];
+  private nonRetryableExtraImageAbsPaths: string[] = [];
 
   private constructor(
     messageId: string,
@@ -70,6 +72,10 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
 
   getDeliveredExtraImageAbsPaths(): readonly string[] {
     return [...this.deliveredExtraImageAbsPaths];
+  }
+
+  getNonRetryableExtraImageAbsPaths(): readonly string[] {
+    return [...this.nonRetryableExtraImageAbsPaths];
   }
 
   close(): void {
@@ -122,6 +128,10 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
       const delivered = new Set(uploadResult.deliveredAbsPaths);
       this.deliveredExtraImageAbsPaths = this.extraImageAbsPaths.filter((absPath) =>
         delivered.has(absPath),
+      );
+      const nonRetryable = new Set(uploadResult.nonRetryableAbsPaths ?? []);
+      this.nonRetryableExtraImageAbsPaths = this.extraImageAbsPaths.filter((absPath) =>
+        nonRetryable.has(absPath),
       );
       if (uploadResult.error !== undefined) throw uploadResult.error;
     }

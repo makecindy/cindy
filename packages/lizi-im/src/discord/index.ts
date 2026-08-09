@@ -986,7 +986,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         await send.call(channel, { files: batch });
         deliveredAbsPaths.push(...batch.map((file) => file.attachment));
       } catch (error) {
-        return { deliveredAbsPaths, error };
+        return {
+          deliveredAbsPaths,
+          nonRetryableAbsPaths: isDiscordUploadOutcomeUncertain(error)
+            ? batch.map((file) => file.attachment)
+            : [],
+          error,
+        };
       }
     }
     return { deliveredAbsPaths };
@@ -1121,4 +1127,15 @@ function isPayloadTooLarge(error: unknown): boolean {
     if (status === 413 || code === 413 || code === 'RequestEntityTooLarge') return true;
   }
   return error instanceof Error && /413|payload too large/i.test(error.message);
+}
+
+function isDiscordUploadOutcomeUncertain(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return true;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === 'number') {
+    return status === 429 || status < 400 || status >= 500;
+  }
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'number' && code >= 400 && code < 500) return code === 429;
+  return true;
 }
