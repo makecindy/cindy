@@ -324,7 +324,7 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({
           error: {
-            message: "Missing required parameter: 'input[1].content[1].encrypted_content'.",
+            message: "Missing required parameter: 'input[2].content[1].encrypted_content'.",
             code: 'missing_required_parameter',
           },
         }));
