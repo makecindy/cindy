@@ -108,7 +108,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
     expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
-    expect(source).toContain('queueDrawerNavigation(() => {\n      switchDrawerSessionInPlace(navigation, {');
+    expect(source).toContain('queueDrawerNavigation(() => {\n      // 必须早于 replaceParams');
     expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
     expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
@@ -136,6 +136,57 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('width={sessionListDrawerWidthRef.current}');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
     expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
+  });
+
+  it('clears the complete composer attachment scope before switching session params', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const boundaryStart = source.indexOf('discardSessionComposerAttachmentStateRef.current = () => {');
+    const boundaryEnd = source.indexOf('// 抽屉入口会在 replaceParams 前同步调用', boundaryStart);
+    expect(boundaryStart).toBeGreaterThan(-1);
+    expect(boundaryEnd).toBeGreaterThan(boundaryStart);
+    const boundary = source.slice(boundaryStart, boundaryEnd);
+
+    // 一处完整封口：上传控制器 / 已完成附件 / 预览 / 相册映射 / 未提交选择 / lightbox
+    // 与标注本地文件一起退场；排队编辑 stash 也属于旧任务，不能恢复进新任务。
+    expect(boundary).toContain('const currentAttachments = [...attachmentsRef.current];');
+    expect(boundary).toContain('for (const attachment of currentAttachments)');
+    expect(boundary).toContain('for (const attachment of editing?.stashedAttachments ?? [])');
+    expect(boundary).toContain('attachmentsRef.current = [];');
+    expect(boundary).toContain('setAttachments([]);');
+    expect(boundary).toContain('setAttachmentPreviews({});');
+    expect(boundary).toContain('setMediaAssetAttachments({});');
+    expect(boundary).toContain('setPendingMediaAssets([]);');
+    expect(boundary).toContain('setComposerPreviewAttachmentId(null);');
+    expect(boundary).toContain('composerAnnotationsRef.current?.forgetAllAttachments();');
+    expect(boundary).toContain('discardMobileUploadedAttachment(attachment');
+    // 排队编辑保存中的附件不能和 update-content 抢跑回收：界面同步清空，
+    // A 的附件快照交给 A cleanup 等保存落定后再判断。
+    expect(boundary).toContain('const deferQueueEditAttachments = !!editing && !!queueEditSaveInFlightRef.current;');
+    expect(boundary).toContain('queueEditScopeExitAttachmentsRef.current = {');
+    expect(boundary).toContain('if (!deferQueueEditAttachments) {');
+
+    // 抽屉动作必须先封住 A 的迟到上传回调，再让 route params 变成 B。
+    const drawerSelectionStart = source.indexOf('const handleDrawerSelectSession = useCallback');
+    const drawerSelectionEnd = source.indexOf('// 前进导航防连点', drawerSelectionStart);
+    const drawerSelection = source.slice(drawerSelectionStart, drawerSelectionEnd);
+    const invalidateAt = drawerSelection.indexOf('discardAllPendingUploadsForScopeChange();');
+    const discardAt = drawerSelection.indexOf('discardSessionComposerAttachmentStateRef.current();');
+    const switchAt = drawerSelection.indexOf('switchDrawerSessionInPlace(navigation, {');
+    expect(invalidateAt).toBeGreaterThan(-1);
+    expect(discardAt).toBeGreaterThan(invalidateAt);
+    expect(switchAt).toBeGreaterThan(discardAt);
+    expect(source).toContain('discardAllPendingUploadsForScopeChange();\n    discardSessionComposerAttachmentStateRef.current();');
+
+    // 复用页面实例时输入原生子树也按 sessionId 换代，旧粘贴异步事件没有新任务入口。
+    expect(source).toContain('<MobileComposerInputRow\n                    key={sessionId}');
+    const queueCleanupStart = source.indexOf('// 切会话 / 卸载时收尾上一个会话的排队编辑态');
+    const queueCleanupEnd = source.indexOf('useEffect(() => {\n    if (canUseComposer)', queueCleanupStart);
+    const queueCleanup = source.slice(queueCleanupStart, queueCleanupEnd);
+    expect(queueCleanup).toContain('attachmentsRef.current = [];\n      setAttachments([]);');
+    expect(queueCleanup).not.toContain('setAttachments([...editing.stashedAttachments])');
+    expect(queueCleanup).toContain('const scopeExitSnapshot = queueEditScopeExitAttachmentsRef.current;');
+    expect(queueCleanup).toContain('const discardQueueEditTransientAttachments = discardQueueEditTransientAttachmentsRef.current;');
+    expect(queueCleanup).toContain('discardQueueEditTransientAttachments?.(editing, attachmentsSnapshot);');
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {

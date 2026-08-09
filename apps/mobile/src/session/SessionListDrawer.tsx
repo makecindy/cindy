@@ -8,7 +8,7 @@
  * - **树内 overlay 而非 RN Modal**:会话页已有多个 sheet Modal,iOS 同级双 Modal
  *   有 present/dismiss 竞态(见 SheetSurface 头注释);树内层叠没有这些约束。新建 / 回主页
  *   仍必须等 overlay 退场并真正卸载后执行；任务切换则在当前原生 Screen 内只替换 route
- *   params，完全避开 Android NativeStack replace。代价是盖不住原生弹层,但抽屉打开前
+ *   params，完全绕开 Android NativeStack replace。代价是盖不住原生弹层,但抽屉打开前
  *   页面会先收键盘,且其它 sheet 与抽屉互斥(都由页面状态驱动)。
  * - **数据直读全局 remoteSessionStore**:与首页同一份 store(进会话页前已水合,
  *   设备订阅继续推增量),经共享层 buildMobileHomePresentation 复用首页的排序 /
