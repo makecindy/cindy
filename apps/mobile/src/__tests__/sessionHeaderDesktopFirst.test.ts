@@ -185,8 +185,30 @@ describe('mobile session header desktop-first surface', () => {
     expect(queueCleanup).toContain('attachmentsRef.current = [];\n      setAttachments([]);');
     expect(queueCleanup).not.toContain('setAttachments([...editing.stashedAttachments])');
     expect(queueCleanup).toContain('const scopeExitSnapshot = queueEditScopeExitAttachmentsRef.current;');
-    expect(queueCleanup).toContain('const discardQueueEditTransientAttachments = discardQueueEditTransientAttachmentsRef.current;');
-    expect(queueCleanup).toContain('discardQueueEditTransientAttachments?.(editing, attachmentsSnapshot);');
+    expect(queueCleanup).toContain('const discardQueueEditTransientAttachmentResources =\n        discardQueueEditTransientAttachmentResourcesRef.current;');
+    expect(queueCleanup).toContain('discardQueueEditTransientAttachmentResources?.(editing, attachmentsSnapshot);');
+
+    // A 保存落定后的迟到 finalize 只能回收 A 的附件快照，不得触碰复用 controller
+    // 或组件级映射；否则 B 在切换后新开的上传会被 A 的 removeAll 一并取消。
+    const scopedCleanupStart = source.indexOf('const discardQueueEditTransientAttachmentResources = useCallback');
+    const scopedCleanupEnd = source.indexOf('const discardQueueEditTransientAttachments = useCallback', scopedCleanupStart);
+    const scopedCleanup = source.slice(scopedCleanupStart, scopedCleanupEnd);
+    expect(scopedCleanupStart).toBeGreaterThan(-1);
+    expect(scopedCleanupEnd).toBeGreaterThan(scopedCleanupStart);
+    expect(scopedCleanup).toContain('remoteSessionStore.getInputProjection(sessionId)');
+    expect(scopedCleanup).toContain('discardMobileUploadedAttachment(attachment');
+    expect(scopedCleanup).not.toContain('discardAllPendingUploads');
+    expect(scopedCleanup).not.toContain('setAttachmentPreviews');
+    expect(scopedCleanup).not.toContain('setMediaAssetAttachments');
+
+    // 同任务内放弃 / 切换编辑目标仍需完整清理自己的在途上传与附件映射。
+    const localCleanupStart = scopedCleanupEnd;
+    const localCleanupEnd = source.indexOf('useEffect(() => {\n    discardQueueEditTransientAttachmentResourcesRef.current', localCleanupStart);
+    const localCleanup = source.slice(localCleanupStart, localCleanupEnd);
+    expect(localCleanup).toContain('discardAllPendingUploads();');
+    expect(localCleanup).toContain('discardQueueEditTransientAttachmentResources(editing, attachmentsAtExit);');
+    expect(localCleanup).toContain('setAttachmentPreviews');
+    expect(localCleanup).toContain('setMediaAssetAttachments');
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {

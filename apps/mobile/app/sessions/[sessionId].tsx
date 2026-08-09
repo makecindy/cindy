@@ -1009,8 +1009,8 @@ export default function SessionScreen() {
   const [queueEditing, setQueueEditing] = useState<QueueEditingState | null>(null);
   const queueEditingRef = useRef<QueueEditingState | null>(null);
   // 会话切换 cleanup(声明在前)引用组件后段的回收函数,经 ref 断开声明顺序依赖。
-  const discardQueueEditTransientAttachmentsRef = useRef<
-    ((editing: QueueEditingState, attachmentsAtExit?: readonly RemoteSerializedAttachment[]) => void) | null
+  const discardQueueEditTransientAttachmentResourcesRef = useRef<
+    ((editing: QueueEditingState, attachmentsAtExit: readonly RemoteSerializedAttachment[]) => void) | null
   >(null);
   // 排队编辑保存(update-content RPC)在途 promise:会话切换 cleanup 据此把解锁
   // 排到保存落定之后,防止 device-link 并发下解锁超车、桌面端用旧内容抢先派发。
@@ -2669,10 +2669,13 @@ export default function SessionScreen() {
         ? scopeExitSnapshot.attachments
         : [...attachmentsRef.current];
       // ref 会在 B 的 effect 中更新成 B session 的实现；延迟回调必须捕获 A 的
-      // 函数值，否则保存落定后会拿 B 的 pendingQueue 判断 A 的附件归属。
-      const discardQueueEditTransientAttachments = discardQueueEditTransientAttachmentsRef.current;
+      // 资源回收函数值，否则保存落定后会拿 B 的 pendingQueue 判断 A 的附件归属。
+      // 这里只回收 A 的附件快照：A 的 pending uploads 已由 replaceParams 前的
+      // scope-change 封口清掉，迟到 finalize 绝不能再碰组件级 controller 或 B state。
+      const discardQueueEditTransientAttachmentResources =
+        discardQueueEditTransientAttachmentResourcesRef.current;
       const finalize = () => {
-        discardQueueEditTransientAttachments?.(editing, attachmentsSnapshot);
+        discardQueueEditTransientAttachmentResources?.(editing, attachmentsSnapshot);
       };
       if (lockOwner) void releaseQueueEditLockAfter(lockOwner, inFlightSave).catch(() => undefined);
       if (inFlightSave) void inFlightSave.then(finalize, finalize);
@@ -6302,17 +6305,10 @@ export default function SessionScreen() {
    * 队列条目自身 files 不回收——仍被条目引用,且 enqueue 时已物化为被控端本地
    * 路径,discard 对非 OSS 引用本就是 no-op,双保险。
    */
-  const discardQueueEditTransientAttachments = useCallback((
+  const discardQueueEditTransientAttachmentResources = useCallback((
     editing: QueueEditingState,
-    // 会话切换 cleanup 传当时的托盘快照(落定回调执行时 attachmentsRef 可能已属于
-    // 新会话);常规退出路径省略,取当前托盘。
-    attachmentsAtExit: readonly RemoteSerializedAttachment[] = attachmentsRef.current,
+    attachmentsAtExit: readonly RemoteSerializedAttachment[],
   ) => {
-    // 编辑期间发起、此刻仍在途的上传一并丢弃:进入编辑有 pendingUploads 为空的门槛,
-    // 因此退出时的在途任务必然是编辑期新增——不丢弃的话,任务完成后 onUploaded 会把
-    // 已被放弃的附件追加进恢复后的原草稿托盘(review P1)。removeAll 语义:不再回调、
-    // 完成后回收 OSS。保存路径在 waitForPendingUploads 落定后才走到这里,天然 no-op。
-    discardAllPendingUploads();
     const stashedIds = new Set(editing.stashedAttachments.map((item) => item.id));
     const entryFileIds = new Set(
       (remoteSessionStore.getInputProjection(sessionId).pendingQueue
@@ -6325,6 +6321,18 @@ export default function SessionScreen() {
       discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
       discardedIds.add(attachment.id);
     }
+    return discardedIds;
+  }, [auth, sessionId]);
+
+  const discardQueueEditTransientAttachments = useCallback((
+    editing: QueueEditingState,
+    attachmentsAtExit: readonly RemoteSerializedAttachment[] = attachmentsRef.current,
+  ) => {
+    // 同 session 的正常退出要同步丢弃编辑期在途上传：进入编辑有 pendingUploads
+    // 为空的门槛，因此此刻的任务必然是编辑期新增。会话切换的迟到 finalize 不走
+    // 这里，避免旧 A 回调清掉复用 controller 上 B 刚开始的上传。
+    discardAllPendingUploads();
+    const discardedIds = discardQueueEditTransientAttachmentResources(editing, attachmentsAtExit);
     if (discardedIds.size > 0) {
       setAttachmentPreviews((current) => Object.fromEntries(
         Object.entries(current).filter(([attachmentId]) => !discardedIds.has(attachmentId)),
@@ -6333,10 +6341,11 @@ export default function SessionScreen() {
         Object.entries(current).filter(([, attachmentId]) => !discardedIds.has(attachmentId)),
       ));
     }
-  }, [auth, discardAllPendingUploads, sessionId]);
+  }, [discardAllPendingUploads, discardQueueEditTransientAttachmentResources]);
   useEffect(() => {
-    discardQueueEditTransientAttachmentsRef.current = discardQueueEditTransientAttachments;
-  }, [discardQueueEditTransientAttachments]);
+    discardQueueEditTransientAttachmentResourcesRef.current =
+      discardQueueEditTransientAttachmentResources;
+  }, [discardQueueEditTransientAttachmentResources]);
 
   /**
    * 进入排队消息编辑:把条目的文本/附件载入底部 composer(复用其全部编辑能力),
