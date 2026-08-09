@@ -171,6 +171,18 @@ test("developer documentation links resolve", () => {
 	}
 });
 
+test("login-all-hifi embeds generated truth as a script-safe static literal", () => {
+	const html = readText("docs/design-previews/login-all-hifi/index.html");
+	const match = html.match(/<script id="qa-truth">const RAW = ([\s\S]*?)<\/script>/);
+	assert.ok(match, "login-all-hifi must define RAW directly from its generated truth literal");
+	assert.doesNotMatch(
+		html,
+		/document\.getElementById\(["']qa-truth["']\)\.textContent/,
+		"generated truth must not re-enter HTML rendering through DOM text",
+	);
+	assert.deepEqual(JSON.parse(match[1]), readJson("docs/design-previews/login-all-hifi/truth.json"));
+});
+
 test("runtime versions and the docs contract are code-owned", () => {
 	const rootPackage = readJson("package.json");
 	assert.equal(rootPackage.engines.node, ">=22.12");

@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -55,6 +55,7 @@ import {
 import {
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
+  presetDisplayName,
   sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
@@ -205,12 +206,14 @@ function PresetDropdown({
   onApply,
   label,
   placeholder,
+  locale,
 }: {
   presets: ProviderPreset[];
   appliedPreset: string | null;
   onApply: (p: ProviderPreset) => void;
   label: string;
   placeholder: string;
+  locale: string;
 }) {
   const [open, setOpen] = useState(false);
   const selected = presets.find((p) => p.id === appliedPreset) ?? null;
@@ -233,7 +236,7 @@ function PresetDropdown({
                 : 'text-[var(--settings-input-placeholder)]',
             )}
           >
-            {selected ? selected.name : placeholder}
+            {selected ? presetDisplayName(selected, locale) : placeholder}
           </span>
           <ChevronDown size={16} className="shrink-0 text-[var(--settings-eye-icon)]" />
         </button>
@@ -273,7 +276,7 @@ function PresetDropdown({
                 )}
               >
                 <span className="truncate text-13 font-medium text-[var(--settings-input-text)]">
-                  {p.name}
+                  {presetDisplayName(p, locale)}
                 </span>
                 {isSelected ? (
                   <Check size={16} className="shrink-0 text-[var(--settings-theme-icon-active)]" />
@@ -295,7 +298,7 @@ export function CustomProviderDialog({
   onSaved,
   onClose,
 }: CustomProviderDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const editing = !!initial;
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
 
@@ -364,6 +367,18 @@ export function CustomProviderDialog({
     selected: Set<string>;
     query: string;
   } | null>(null);
+
+  // Dismissible form contract:Esc closes the topmost layer first. The footer
+  // Cancel button and scrim clicks are the other two exits; no duplicate ×.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (picker) setPicker(null);
+      else onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose, picker]);
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
   // （见 setRtSynced），不用被动 useEffect——effect 在 commit 后才跑，IPC 响应若落在
@@ -441,7 +456,7 @@ export function CustomProviderDialog({
   const applyPreset = useCallback(
     (p: ProviderPreset) => {
       setAppliedPreset(p.id);
-      setName(p.name);
+      setName(presetDisplayName(p, i18n.language));
       setAuthMode(p.authMethod ?? 'apiKey');
       setRtSynced((prev) => {
         const next = { ...prev };
@@ -475,7 +490,7 @@ export function CustomProviderDialog({
       const first = AGENTS.find((a) => p.runtimes[a]);
       if (first) setActiveTab(first);
     },
-    [setRtSynced],
+    [i18n.language, setRtSynced],
   );
 
   // 编辑态：回填各已配置 runtime 的已存明文密钥（用户本机自己的 key）——
@@ -1027,8 +1042,15 @@ export function CustomProviderDialog({
     : t('settings.providers.custom.fields.apiKeyPlaceholder');
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]">
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div
+        role="dialog"
+        aria-modal="true"
         className={cn(
           'flex max-h-[88vh] w-[600px] flex-col rounded-[16px]',
           'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
@@ -1036,7 +1058,7 @@ export function CustomProviderDialog({
         )}
       >
         {/* Header bar */}
-        <div className="flex items-center justify-between px-3 py-3">
+        <div className="flex items-center px-3 py-3">
           <div className="flex items-center gap-2.5 pl-2">
             <Sparkles size={20} className="text-[var(--settings-section-title)]" />
             <h2 className="text-18 font-semibold text-[var(--settings-section-title)]">
@@ -1045,14 +1067,6 @@ export function CustomProviderDialog({
                 : t('settings.providers.custom.dialog.createTitle')}
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('settings.providers.custom.cancel')}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-          >
-            <X size={18} />
-          </button>
         </div>
 
         {/* Body (scrollable) */}
@@ -1072,6 +1086,7 @@ export function CustomProviderDialog({
                 onApply={applyPreset}
                 label={t('settings.providers.custom.presets.label')}
                 placeholder={t('settings.providers.custom.presets.placeholder')}
+                locale={i18n.language}
               />
             </div>
           )}
@@ -1805,8 +1820,15 @@ function ModelPickerOverlay({
     onChange({ ...picker, selected: next });
   };
   return (
-    <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-[var(--overlay-modal)]">
+    <div
+      className="fixed inset-0 z-[10001] flex items-center justify-center bg-[var(--overlay-modal)]"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div
+        role="dialog"
+        aria-modal="true"
         className={cn(
           'flex max-h-[72vh] w-[460px] flex-col rounded-[16px]',
           'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
@@ -1814,7 +1836,7 @@ function ModelPickerOverlay({
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 pb-1 pt-4">
+        <div className="flex items-center px-5 pb-1 pt-4">
           <div className="flex min-w-0 flex-col gap-0.5">
             <h3 className="text-15 font-semibold text-[var(--settings-section-title)]">
               {t('settings.providers.custom.fetch.pickerTitle', {
@@ -1828,14 +1850,6 @@ function ModelPickerOverlay({
               })}
             </span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('settings.providers.custom.cancel')}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-          >
-            <X size={16} />
-          </button>
         </div>
         {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
         <div className="flex flex-col gap-2 px-5 pt-2">

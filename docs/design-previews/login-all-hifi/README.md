@@ -54,12 +54,16 @@ S=~/.claude/skills/qa-hifi-demo/scripts
 D=docs/design-previews/login-all-hifi
 node $S/truth.mjs  --demo $D --check    # 漂移检查:产品动了但 demo 没跟 → exit 2 + 差异清单
 node $S/truth.mjs  --demo $D            # 重新提取 truth.json
-node $S/truth.mjs  --demo $D --embed    # 写回 index.html 的 qa-truth 内嵌块(禁手抄)
+node $S/truth.mjs  --demo $D --embed    # 写回 index.html 的 qa-truth 内嵌块(禁手抄；须保留 const RAW 静态字面量包装)
 node $S/states.mjs --demo $D            # 静态:状态声明完备性
 node $S/verify.mjs --demo $D            # 动态:门 A/B/C/D/F(约 9 分钟)
 ```
 
 产品登录相关常量 / 文案 / 组件变更后跑 `--check`；漂移就重走上面五步，别手改 `truth.json` 或内嵌块。
+
+`index.html` 把生成后的 truth 作为 `const RAW = {...}` 静态字面量直接执行，而不是先从 DOM
+`textContent` 读回再交给 HTML 渲染器。这个包装是预览页的安全边界；`pnpm test:runner` 会同时
+校验包装形态与 `truth.json` 的结构等价，更新嵌入工具时不得退回 DOM 文本数据源。
 
 > ⚠️ **`report.json` 当前已过期（2026-08-09）**：它是 2026-07-29 的四语快照，`inputHashes` 与
 > `coverage.cases` 都早于本次繁中登录覆盖，其 `ok: true` 不代表当前五语工件已通过门 A–F。
