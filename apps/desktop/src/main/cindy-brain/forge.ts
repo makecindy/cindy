@@ -1038,7 +1038,6 @@ my-ghost/
 ├── locales/      ← 可选:宿主驱动的清单文案翻译(声明 locales 时英文必须存在)
 │   ├── en.json
 │   ├── zh-CN.json
-│   ├── zh-TW.json
 │   ├── ja.json
 │   └── ko.json
 ├── node/
@@ -1062,7 +1061,6 @@ my-ghost/
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
-    "zh-TW": "locales/zh-TW.json",
     "ja": "locales/ja.json",
     "ko": "locales/ko.json"
   },
@@ -1133,7 +1131,7 @@ my-ghost/
 
 插件语言**只跟随 Cindy 宿主当前语言**。不要读取 \`navigator.language\`、操作系统语言或
 浏览器偏好，也不要在插件内保存另一份语言选择。宿主当前支持
-\`zh-CN / zh-TW / en / ja / ko\`；插件没提供宿主当前语言时固定使用英文，因此只要声明
+\`zh-CN / en / ja / ko\`；插件没提供宿主当前语言时固定使用英文，因此只要声明
 \`locales\` 就必须提供 \`en\`。
 
 locale JSON 覆盖清单中已有的可本地化字段。**翻译是可选项**：提供的条目必须合法，
