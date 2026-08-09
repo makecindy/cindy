@@ -110,6 +110,7 @@ import {
 } from './MacAgentIslandNativeHost.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from './displayConfig.js';
 import {
+  readAgentIslandDetachedLayoutPreferences,
   readAgentIslandLayoutPreferences,
   writeAgentIslandLayoutPreference,
   writeAgentIslandLayoutPreferences,
@@ -233,6 +234,7 @@ export class AgentIslandService {
   }>();
   private readonly metadataLoading = new Set<string>();
   private readonly layoutPreferencesByDisplayId: Map<number, AgentIslandLayoutPreference>;
+  private readonly detachedLayoutPreferences: AgentIslandLayoutPreference[];
   private nativeFailureLogged = false;
   private enabled = false;
   private enabledSynced = false;
@@ -288,6 +290,7 @@ export class AgentIslandService {
     // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
+    this.detachedLayoutPreferences = readAgentIslandDetachedLayoutPreferences();
     this.nativeHost = deps.nativeHost ?? new MacAgentIslandNativeHost({
       onPointerZones: (zones) => this.handleNativePointerZones(zones),
       onExpand: (displayId) => this.handleNativeExpand(displayId),
@@ -1687,8 +1690,9 @@ export class AgentIslandService {
     frames: AgentIslandNativeFrame[];
     statesByDisplayId?: Record<string, AgentIslandDisplayState>;
   } {
-    const displays = this.getTargetDisplays();
-    this.reconcileLayoutPreferencesForDisplays(displays);
+    const availableDisplays = this.getAvailableDisplays();
+    this.reconcileLayoutPreferencesForDisplays(availableDisplays);
+    const displays = this.getTargetDisplays(availableDisplays);
     const statesByDisplayId = this.computeDisplayStatesByDisplayId(displayState, displays);
     const frames = displays.map((display) => {
       const stateForDisplay = statesByDisplayId?.[String(display.id)] ?? displayState;
@@ -1799,8 +1803,7 @@ export class AgentIslandService {
     };
   }
 
-  private getTargetDisplays(): Display[] {
-    const displays = this.getAvailableDisplays();
+  private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {
     if (this.displayTarget.mode === 'display') {
       const selectedDisplay = this.resolveSelectedDisplay(displays);
       if (!selectedDisplay) {
@@ -1824,9 +1827,9 @@ export class AgentIslandService {
 
     // 0.1.31 and earlier stored only the runtime display id. On a multi-display
     // setup that id can be reused by another monitor, so an old wide compact
-    // width is unsafe to apply to a centered hardware-notch display. Preserve
-    // center/expanded preferences, but let compact layout derive its current
-    // notch-safe default until the next native drag records display identity.
+    // width and center are unsafe to apply to a centered hardware-notch
+    // display. Preserve the expanded preference, but let compact layout derive
+    // its current notch-safe defaults until the next native drag records identity.
     const displays = this.getAvailableDisplays();
     const metrics = this.getScreenLayoutMetrics(display);
     if (displays.length > 1 && metrics?.hasNotch) {
@@ -1841,56 +1844,69 @@ export class AgentIslandService {
 
   private reconcileLayoutPreferencesForDisplays(displays: Display[]): void {
     const entries = Array.from(this.layoutPreferencesByDisplayId.entries());
-    if (entries.length === 0 || displays.length === 0) return;
+    if (
+      (entries.length === 0 && this.detachedLayoutPreferences.length === 0) ||
+      displays.length === 0
+    )
+      return;
 
     const next = new Map<number, AgentIslandLayoutPreference>();
+    const nextDetached: AgentIslandLayoutPreference[] = [];
     const claimedDisplayIds = new Set<number>();
-    const assignedEntryIds = new Set<number>();
+    const assignedPreferences = new Set<AgentIslandLayoutPreference>();
+    const identityEntries = [
+      ...entries
+        .filter(([, preference]) => hasPersistedLayoutIdentity(preference))
+        .map(([storedDisplayId, preference]) => ({ storedDisplayId, preference })),
+      ...this.detachedLayoutPreferences.map((preference) => ({
+        storedDisplayId: null,
+        preference,
+      })),
+    ];
 
     // Keep an identity-bearing preference on its current id when the identity
     // still resolves there. This is the common case and also makes collisions
     // deterministic before looking for migrated ids.
-    for (const [storedDisplayId, preference] of entries) {
-      if (!hasPersistedLayoutIdentity(preference)) continue;
+    for (const { storedDisplayId, preference } of identityEntries) {
+      if (storedDisplayId === null) continue;
       const direct = this.displayById(displays, storedDisplayId);
       const resolved = findDisplayByIdentity(displays, preference);
       if (!direct || !resolved || resolved.id !== direct.id) continue;
       next.set(direct.id, preference);
       claimedDisplayIds.add(direct.id);
-      assignedEntryIds.add(storedDisplayId);
+      assignedPreferences.add(preference);
     }
 
     // Resolve the remaining identity-bearing entries as a one-to-one batch.
     // Do not mutate the live map while iterating: two exchanged runtime ids
     // must be able to swap without one migration overwriting the other.
-    for (const [storedDisplayId, preference] of entries) {
-      if (assignedEntryIds.has(storedDisplayId) || !hasPersistedLayoutIdentity(preference)) continue;
+    for (const { preference } of identityEntries) {
+      if (assignedPreferences.has(preference)) continue;
       const resolved = findDisplayByIdentity(displays, preference);
       if (!resolved || claimedDisplayIds.has(resolved.id)) continue;
       next.set(resolved.id, preference);
       claimedDisplayIds.add(resolved.id);
-      assignedEntryIds.add(storedDisplayId);
+      assignedPreferences.add(preference);
+    }
+
+    // Identity-bearing preferences that cannot currently resolve remain
+    // detached from runtime ids. This preserves a disconnected display even
+    // when another online display reuses its previous id.
+    for (const { preference } of identityEntries) {
+      if (!assignedPreferences.has(preference)) {
+        nextDetached.push(preference);
+      }
     }
 
     // Keep old id-only entries for backwards compatibility when their id still
     // names an unclaimed display. If an identity-bearing entry already claims
     // that id, the ambiguous legacy value must not overwrite the safer match.
     for (const [storedDisplayId, preference] of entries) {
-      if (assignedEntryIds.has(storedDisplayId)) continue;
-      if (hasPersistedLayoutIdentity(preference)) {
-        // An identity-bearing preference that could not resolve uniquely must
-        // never fall back to its stale runtime id. Keep it only while the old
-        // id is absent, so a later reconnect can try the identity again.
-        if (!this.displayById(displays, storedDisplayId) && !next.has(storedDisplayId)) {
-          next.set(storedDisplayId, preference);
-        }
-        continue;
-      }
+      if (hasPersistedLayoutIdentity(preference)) continue;
       const direct = this.displayById(displays, storedDisplayId);
       if (direct && !claimedDisplayIds.has(direct.id)) {
         next.set(direct.id, preference);
         claimedDisplayIds.add(direct.id);
-        assignedEntryIds.add(storedDisplayId);
         continue;
       }
       // Keep disconnected legacy entries so a future display with the same id
@@ -1901,17 +1917,54 @@ export class AgentIslandService {
       }
     }
 
-    if (sameLayoutPreferenceMap(this.layoutPreferencesByDisplayId, next)) return;
+    if (
+      sameLayoutPreferenceMap(this.layoutPreferencesByDisplayId, next) &&
+      sameLayoutPreferenceList(this.detachedLayoutPreferences, nextDetached)
+    ) {
+      return;
+    }
+    this.rekeyPendingLayoutPreferenceWrites(next);
     this.layoutPreferencesByDisplayId.clear();
     for (const [displayId, preference] of next) {
       this.layoutPreferencesByDisplayId.set(displayId, preference);
     }
-    this.writeLayoutPreferencesSafely(next);
+    this.detachedLayoutPreferences.splice(
+      0,
+      this.detachedLayoutPreferences.length,
+      ...nextDetached,
+    );
+    this.writeLayoutPreferencesSafely(next, nextDetached);
   }
 
-  private writeLayoutPreferencesSafely(preferences: Map<number, AgentIslandLayoutPreference>): void {
+  private rekeyPendingLayoutPreferenceWrites(
+    preferences: Map<number, AgentIslandLayoutPreference>,
+  ): void {
+    if (this.pendingLayoutPreferenceWrites.size === 0) return;
+    const pending = Array.from(this.pendingLayoutPreferenceWrites.values());
+    this.pendingLayoutPreferenceWrites.clear();
+    const claimedPreferenceIds = new Set<number>();
+    for (const preference of pending) {
+      const migrated = Array.from(preferences.entries()).find(
+        ([displayId, candidate]) =>
+          !claimedPreferenceIds.has(displayId) && sameLayoutPreference(candidate, preference),
+      );
+      if (!migrated) continue;
+      const [displayId] = migrated;
+      this.pendingLayoutPreferenceWrites.set(displayId, { ...preference });
+      claimedPreferenceIds.add(displayId);
+    }
+    if (this.pendingLayoutPreferenceWrites.size === 0 && this.layoutPreferenceWriteTimer) {
+      clearTimeout(this.layoutPreferenceWriteTimer);
+      this.layoutPreferenceWriteTimer = null;
+    }
+  }
+
+  private writeLayoutPreferencesSafely(
+    preferences: Map<number, AgentIslandLayoutPreference>,
+    detachedPreferences: readonly AgentIslandLayoutPreference[],
+  ): void {
     try {
-      writeAgentIslandLayoutPreferences(preferences);
+      writeAgentIslandLayoutPreferences(preferences, detachedPreferences);
     } catch (error) {
       log.warn('agent island layout preferences migration write failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -2346,6 +2399,16 @@ function sameLayoutPreferenceMap(
     if (!other || !sameLayoutPreference(preference, other)) return false;
   }
   return true;
+}
+
+function sameLayoutPreferenceList(
+  a: readonly AgentIslandLayoutPreference[],
+  b: readonly AgentIslandLayoutPreference[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every((preference, index) => sameLayoutPreference(preference, b[index] ?? {}))
+  );
 }
 
 function sameLayoutPreference(

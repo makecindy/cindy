@@ -15,10 +15,12 @@ interface StoredLayoutPreference extends AgentIslandDisplayIdentity {
 
 interface AgentIslandLayoutSettings {
   displays: Record<string, StoredLayoutPreference>;
+  detachedDisplays: StoredLayoutPreference[];
 }
 
 const DEFAULTS: AgentIslandLayoutSettings = {
   displays: {},
+  detachedDisplays: [],
 };
 
 let cached: AgentIslandLayoutSettings | null = null;
@@ -35,13 +37,22 @@ function normalize(raw: unknown): AgentIslandLayoutSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const record = raw as Record<string, unknown>;
   const rawDisplays = record.displays;
-  if (!rawDisplays || typeof rawDisplays !== 'object') return { ...DEFAULTS };
   const displays: Record<string, StoredLayoutPreference> = {};
-  for (const [displayId, value] of Object.entries(rawDisplays as Record<string, unknown>)) {
-    const normalized = normalizePreference(value);
-    if (normalized) displays[displayId] = normalized;
+  if (rawDisplays && typeof rawDisplays === 'object' && !Array.isArray(rawDisplays)) {
+    for (const [displayId, value] of Object.entries(rawDisplays as Record<string, unknown>)) {
+      const normalized = normalizePreference(value);
+      if (normalized) displays[displayId] = normalized;
+    }
   }
-  return { displays };
+  const detachedDisplays = Array.isArray(record.detachedDisplays)
+    ? record.detachedDisplays
+        .map(normalizePreference)
+        .filter(
+          (preference): preference is StoredLayoutPreference =>
+            preference !== null && hasStoredDisplayIdentity(preference),
+        )
+    : [];
+  return { displays, detachedDisplays };
 }
 
 function normalizePreference(raw: unknown): StoredLayoutPreference | null {
@@ -86,6 +97,22 @@ function normalizePreference(raw: unknown): StoredLayoutPreference | null {
   return Object.keys(preference).length > 0 ? preference : null;
 }
 
+function hasStoredDisplayIdentity(preference: StoredLayoutPreference): boolean {
+  return (
+    Boolean(preference.displayName?.trim()) ||
+    typeof preference.displayIndex === 'number' ||
+    typeof preference.displayInternal === 'boolean' ||
+    preference.displayBounds !== undefined
+  );
+}
+
+function clonePreference(preference: StoredLayoutPreference): AgentIslandLayoutPreference {
+  return {
+    ...preference,
+    displayBounds: preference.displayBounds ? { ...preference.displayBounds } : undefined,
+  };
+}
+
 function readSettings(): AgentIslandLayoutSettings {
   if (cached) return cached;
   const file = settingsFilePath();
@@ -124,9 +151,13 @@ export function readAgentIslandLayoutPreferences(): Map<number, AgentIslandLayou
   for (const [displayIdText, preference] of Object.entries(settings.displays)) {
     const displayId = Number(displayIdText);
     if (!Number.isFinite(displayId)) continue;
-    preferences.set(displayId, { ...preference });
+    preferences.set(displayId, clonePreference(preference));
   }
   return preferences;
+}
+
+export function readAgentIslandDetachedLayoutPreferences(): AgentIslandLayoutPreference[] {
+  return readSettings().detachedDisplays.map(clonePreference);
 }
 
 export function writeAgentIslandLayoutPreference(
@@ -134,6 +165,7 @@ export function writeAgentIslandLayoutPreference(
   preference: AgentIslandLayoutPreference,
 ): void {
   if (!Number.isFinite(displayId)) return;
+  const detachedPreferences = readAgentIslandDetachedLayoutPreferences();
   const next = readAgentIslandLayoutPreferences();
   const normalized = normalizePreference(preference);
   if (normalized) {
@@ -141,7 +173,7 @@ export function writeAgentIslandLayoutPreference(
   } else {
     next.delete(displayId);
   }
-  writeAgentIslandLayoutPreferences(next);
+  writeAgentIslandLayoutPreferences(next, detachedPreferences);
 }
 
 /**
@@ -154,6 +186,7 @@ export function writeAgentIslandLayoutPreference(
  */
 export function writeAgentIslandLayoutPreferences(
   preferences: Map<number, AgentIslandLayoutPreference>,
+  detachedPreferences: readonly AgentIslandLayoutPreference[] = readAgentIslandDetachedLayoutPreferences(),
 ): void {
   const displays: Record<string, StoredLayoutPreference> = {};
   for (const [displayId, preference] of preferences) {
@@ -161,5 +194,11 @@ export function writeAgentIslandLayoutPreferences(
     const normalized = normalizePreference(preference);
     if (normalized) displays[String(displayId)] = normalized;
   }
-  writeSettings({ displays });
+  const detachedDisplays = detachedPreferences
+    .map(normalizePreference)
+    .filter(
+      (preference): preference is StoredLayoutPreference =>
+        preference !== null && hasStoredDisplayIdentity(preference),
+    );
+  writeSettings({ displays, detachedDisplays });
 }
