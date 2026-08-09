@@ -296,4 +296,42 @@ describe('isLocalSentUserMessage (#2194)', () => {
 
     expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone')).toBe(true);
   });
+
+  // Copilot review nit：重复登记同一 clientId 时，旧实现会先无谓逐出最旧 id，
+  // 容量掉到 CAP-1、误丢更早的本端发送记录。已存在应直接返回。
+  it('重复登记同一 clientId 不会逐出最旧记录（容量守卫）', async () => {
+    const sid = `retry-cap-${Math.random().toString(36).slice(2, 8)}`;
+    // LOCAL_SENT_IDS_CAP = 200（makerChatStore.ts），借 retry 回执填满。
+    for (let i = 0; i < 200; i++) {
+      retryLastError.mockResolvedValueOnce(
+        projection(sid, {
+          pendingQueue: [queuedItem(`clone-${i}`, 't', { supersedesUserClientId: 'orig' })],
+        }),
+      );
+      await makerChatStore.retryLastError(sid);
+    }
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'clone-0')).toBe(true);
+
+    // 重复登记 clone-5：不应逐出 clone-0。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, {
+        pendingQueue: [queuedItem('clone-5', 't', { supersedesUserClientId: 'orig' })],
+      }),
+    );
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'clone-0')).toBe(true);
+
+    // 真正的新 id 仍按 LRU 逐出最旧记录。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, {
+        pendingQueue: [queuedItem('clone-new', 't', { supersedesUserClientId: 'orig' })],
+      }),
+    );
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'clone-0')).toBe(false);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'clone-new')).toBe(true);
+  });
 });

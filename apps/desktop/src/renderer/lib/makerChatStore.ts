@@ -2701,6 +2701,9 @@ function markLocalSentUserMessage(sessionId: string, clientId: string): void {
     ids = new Set();
     localSentUserMessageIds.set(sessionId, ids);
   }
+  // 已存在时直接返回：重复登记不该无谓逐出最旧 id（容量会掉到 CAP-1，
+  //  Copilot review nit）。
+  if (ids.has(clientId)) return;
   if (ids.size >= LOCAL_SENT_IDS_CAP) {
     const oldest = ids.values().next().value;
     if (oldest !== undefined) ids.delete(oldest);
