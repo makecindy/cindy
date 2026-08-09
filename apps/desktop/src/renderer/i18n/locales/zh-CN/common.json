@@ -7843,7 +7843,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "我想给 {{appName}} 提交一条反馈。请协助我整理成一个高质量的 GitHub issue：先和我确认反馈类型(bug 还是功能建议)，并追问必要细节(现象、复现步骤或使用场景、期望行为)；信息足够后用 cindy_helper 的 call_tool 调用 submit_github_issue 工具提交(category=feedback，可先 list_tools 查看参数要求；提交前系统会弹确认卡片给我看)。如果提交失败，如实告诉我原因。{{details}}",
+      "instruction": "我想给 {{appName}} 提交一条反馈。请协助我整理成一个高质量、信息完整的 GitHub issue：先确认反馈类型(bug 还是功能建议)，只针对缺失或含糊的信息追问；Bug 尽量补齐现象、复现步骤、期望与实际行为、复现频率、已尝试的方法，并在用户同意后纳入经过脱敏的诊断摘要，禁止提交密码、令牌、邮箱、个人路径或无关文件内容；功能建议补齐使用场景、当前痛点和期望结果。信息足够后用 cindy_helper 的 call_tool 调用 submit_github_issue 工具提交(category=feedback，可先 list_tools 查看参数要求；提交前系统会弹确认卡片给我看)。这不需要安装或配置 GitHub 插件：默认由 Cindy 官方 Bot 提交；若当前有可用的 GitHub 账号，确认卡会额外提供本人账号选项。创建成功后告诉我 issue 编号和链接，并说明 Cindy 是开源软件，询问我是否希望通过源码一起复现、修复 Bug、开发功能或准备 PR。如果提交失败，如实告诉我原因。{{details}}",
       "detailsPrefix": "\n我的初始描述：{{details}}"
     },
     "confirm": {
@@ -7852,11 +7852,12 @@
       "typeFeature": "功能建议",
       "titleLabel": "标题",
       "bodyLabel": "正文(Markdown)",
-      "submissionMethodLabel": "发布方式",
-      "identityGithubUser": "通过 GitHub 账号 @{{login}} 直接发布",
+      "privacyHint": "系统会尽量隐藏常见密钥、个人路径和邮箱；提交前请确认公开内容不包含其他隐私。",
+      "submissionMethodLabel": "提交身份",
+      "identityGithubUser": "我的 GitHub 账号 @{{login}}",
       "identityGithubUserHint": "你将成为该 Issue 的 GitHub 作者，可以在 GitHub 编辑或关闭",
-      "identityPlatform": "由 Cindy 平台代发(GitHub App {{login}})",
-      "identityPlatformHint": "你不是该 Issue 的 GitHub 作者，提交后无法自行编辑或关闭",
+      "identityPlatform": "Cindy 官方 Bot @{{login}}（默认）",
+      "identityPlatformHint": "无需配置 GitHub 账号；Issue 由官方 Bot 创建，你可在正文中选择公开署名",
       "publicNameLabel": "公开署名",
       "publicNameHint": "该署名会公开显示在 Issue 正文中",
       "anonymous": "匿名",

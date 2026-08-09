@@ -28,7 +28,7 @@ import { invalidateMyIssuesCache } from './myIssuesRuntime.js';
 import { recordSubmittedIssue } from './submittedIssueLedger.js';
 import {
   postGithubIssueAsUser,
-  resolveGithubIssueSubmissionIdentity,
+  resolveGithubIssueSubmissionChoices,
   type GithubUserIssueSubmitterDeps,
 } from './githubUserIssueSubmitter';
 
@@ -67,10 +67,10 @@ export async function submitGithubIssueForSession(
   const submitScope = activeOwnerScopeKey();
   return submitGithubIssueWithConfirm(
     {
-      confirm: (sessionId, draft, env, submissionIdentity, suggestedPublicName) =>
-        bridge.request(sessionId, draft, env, submissionIdentity, suggestedPublicName),
-      resolveSubmissionIdentity: (workdir) =>
-        resolveGithubIssueSubmissionIdentity(githubUserSubmitterDeps, workdir),
+      confirm: (sessionId, draft, env, submissionChoices, suggestedPublicName) =>
+        bridge.request(sessionId, draft, env, submissionChoices, suggestedPublicName),
+      resolveSubmissionChoices: (workdir) =>
+        resolveGithubIssueSubmissionChoices(githubUserSubmitterDeps, workdir),
       postIssue: (submissionIdentity, bodyFactory) => {
         if (submissionIdentity.kind === 'github-user') {
           return postGithubIssueAsUser(githubUserSubmitterDeps, submissionIdentity, bodyFactory());

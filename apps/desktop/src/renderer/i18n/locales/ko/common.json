@@ -7843,7 +7843,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "{{appName}}에 피드백을 제출하고 싶습니다. 높은 품질의 GitHub issue로 정리하도록 도와주세요: 먼저 피드백 유형(버그 또는 기능 제안)을 확인하고 필요한 세부 정보(증상, 재현 단계 또는 사용 시나리오, 기대 동작)를 질문해 주세요. 정보가 충분해지면 cindy_helper의 call_tool로 submit_github_issue 도구를 호출해 제출해 주세요(category=feedback, 먼저 list_tools로 매개변수를 확인할 수 있습니다. 제출 전에 확인 카드가 표시됩니다). 제출에 실패하면 이유를 그대로 알려주세요.{{details}}",
+      "instruction": "{{appName}}에 피드백을 제출하고 싶습니다. 정보가 충분하고 명확한 GitHub issue로 정리하도록 도와주세요: 버그인지 기능 제안인지 확인하고, 빠진 정보나 모호한 부분만 질문해 주세요. 버그라면 증상, 재현 단계, 기대 동작과 실제 동작, 재현 빈도, 시도한 해결 방법을 최대한 확인하고, 사용자가 동의한 경우에만 민감 정보를 제거한 진단 요약을 포함해 주세요. 비밀번호, 토큰, 이메일 주소, 개인 경로, 관련 없는 파일 내용은 포함하지 마세요. 기능 제안이라면 사용 시나리오, 현재 문제와 원하는 결과를 확인해 주세요. 정보가 충분해지면 cindy_helper의 call_tool로 submit_github_issue 도구를 호출해 제출해 주세요(category=feedback, 먼저 list_tools로 매개변수를 확인할 수 있습니다. 제출 전에 확인 카드가 표시됩니다). GitHub 플러그인이나 계정 설정은 필요하지 않습니다. 기본적으로 Cindy 공식 봇이 제출하며, 사용 가능한 GitHub 계정이 있을 때만 확인 카드에 추가 제출 계정으로 표시됩니다. 생성 후 issue 번호와 링크를 알려 주고, Cindy가 오픈 소스이며 소스에서 재현·수정·테스트·기능 개발을 함께 진행할 수 있다고 안내해 주세요. 제출에 실패하면 이유를 그대로 알려주세요.{{details}}",
       "detailsPrefix": "\n초기 설명: {{details}}"
     },
     "confirm": {
@@ -7852,11 +7852,12 @@
       "typeFeature": "기능 제안",
       "titleLabel": "제목",
       "bodyLabel": "본문(Markdown)",
-      "submissionMethodLabel": "게시 방식",
-      "identityGithubUser": "GitHub 계정 @{{login}}에서 직접 게시",
+      "privacyHint": "감지된 일반적인 비밀 정보, 개인 경로, 이메일 주소는 가능한 범위에서 자동으로 가립니다. 제출 전에 공개 내용을 확인하세요.",
+      "submissionMethodLabel": "제출 계정",
+      "identityGithubUser": "내 GitHub 계정 @{{login}}",
       "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
-      "identityPlatform": "Cindy에서 대신 게시(GitHub App {{login}})",
-      "identityPlatformHint": "GitHub의 Issue 작성자가 아니므로 직접 수정하거나 닫을 수 없습니다",
+      "identityPlatform": "Cindy 공식 봇 @{{login}} (기본값)",
+      "identityPlatformHint": "GitHub 계정 설정 없이 사용할 수 있습니다. Issue는 공식 봇이 만들며 본문에 공개 서명을 표시할 수 있습니다",
       "publicNameLabel": "공개 서명",
       "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
       "anonymous": "익명",
