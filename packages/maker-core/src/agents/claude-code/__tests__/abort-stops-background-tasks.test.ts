@@ -1607,8 +1607,8 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
-  it('successful wake Stop preserves a sibling local_bash Query and reuses it', async () => {
-    const { handle, stream, events, fakeQuery, fakeQueries } = await startSessionWithStream();
+  it('successful wake Stop closes a mixed wake + local_bash Query before rebuild', async () => {
+    const { handle, stream, streams, events, fakeQuery, fakeQueries } = await startSessionWithStream();
 
     await handle.send({ type: 'user', content: 'foreground with wake and dev server' });
     stream.emit(taskStarted('task-agent', 'local_agent'));
@@ -1619,35 +1619,29 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
 
     expect(fakeQuery.stopTask).toHaveBeenCalledWith('task-agent');
     expect(fakeQuery.stopTask).not.toHaveBeenCalledWith('task-bash');
-    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(fakeQuery.close).toHaveBeenCalledTimes(1);
     expect(fakeQueries).toHaveLength(1);
-    expect(handle.listBackgroundTasks?.()).toEqual([
-      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
-    ]);
     await waitFor(() => events.filter(isProductTerminal).length === 1, 'single Stop terminal observed');
     expect(events.filter(isProductTerminal)).toHaveLength(1);
     expect(handle.isTurnRunning?.()).toBe(false);
 
-    await handle.send({ type: 'user', content: 'reuse the dev server Query' });
-    expect(fakeQueries).toHaveLength(1);
+    await handle.send({ type: 'user', content: 'rebuild after mixed Stop' });
+    expect(fakeQueries).toHaveLength(2);
 
-    // A late interrupted result from the stopped generation must not become
-    // the replacement turn's terminal or clear the bash task.
-    stream.emit(interruptedTurnResult());
+    // A late tail from the stopped generation must not become the replacement
+    // turn's terminal or leak the local_bash row into the rebuilt Query.
+    streams[0]?.emit(interruptedTurnResult());
+    streams[0]?.emit(taskNotification('task-bash', 'completed'));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(events.filter(isProductTerminal)).toHaveLength(1);
-    expect(handle.listBackgroundTasks?.()).toEqual([
-      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
-    ]);
+    expect(handle.listBackgroundTasks?.()).toEqual([]);
 
-    stream.emit(turnResult('reused Query turn complete'));
-    await waitFor(() => events.filter(isProductTerminal).length === 2, 'reused Query terminal observed');
-    await waitFor(() => handle.isTurnRunning?.() === false, 'reused Query turn settled');
-    expect(fakeQueries).toHaveLength(1);
-    expect(fakeQuery.close).not.toHaveBeenCalled();
-    expect(handle.listBackgroundTasks?.()).toEqual([
-      expect.objectContaining({ taskId: 'task-bash', taskType: 'local_bash' }),
-    ]);
+    stream.emit(turnResult('rebuilt Query turn complete'));
+    await waitFor(() => events.filter(isProductTerminal).length === 2, 'rebuilt Query terminal observed');
+    await waitFor(() => handle.isTurnRunning?.() === false, 'rebuilt Query turn settled');
+    expect(fakeQueries).toHaveLength(2);
+    expect(fakeQuery.close).toHaveBeenCalledTimes(1);
+    expect(handle.listBackgroundTasks?.()).toEqual([]);
 
     stream.end();
     await handle.close().catch(() => undefined);
