@@ -153,8 +153,9 @@ describe('materializeLocalMarkdownImages', () => {
   it('redacts but does not materialize an angle destination with an unescaped opening angle', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'secret<draft.png');
-    await fs.writeFile(sourcePath, PNG_BYTES);
     const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    deps.realpath = vi.fn(async (value: string) => value);
+    deps.readBoundedFile = vi.fn(async () => PNG_BYTES);
     const text = `![示例](<${sourcePath}>)`;
 
     await expect(
