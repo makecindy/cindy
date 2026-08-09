@@ -110,6 +110,8 @@ describe('approvalSignature — 可记忆判据', () => {
       'curl -u account:REDACTED_VALUE https://example.com',
       'curl --proxy-user=account:REDACTED_VALUE https://example.com',
       'curl --oauth2-bearer REDACTED_VALUE https://example.com',
+      'curl --httpsig-key REDACTED_VALUE https://example.com',
+      'curl --variable key=REDACTED_VALUE --expand-httpsig-key "{{key}}" https://example.com',
       'curl --cookie session=REDACTED_VALUE https://example.com',
       'curl https://account:REDACTED_VALUE@example.com/private',
       'openai_api_key=REDACTED_VALUE node run.js',
@@ -396,6 +398,57 @@ describe('approvalSignature — 可记忆判据', () => {
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
+    }
+  });
+
+  it('curl 消费本地文件或可变文件状态时不可记忆', () => {
+    for (const command of [
+      'curl -q -T ./payload.json https://api.example.com/jobs',
+      'curl -q -T./payload.json https://api.example.com/jobs',
+      'curl -q -sT./payload.json https://api.example.com/jobs',
+      'curl -q --upload-file ./payload.json https://api.example.com/jobs',
+      'curl -q --upload-file=./payload.json https://api.example.com/jobs',
+      'curl -q --expand-upload-file "{{payload}}" --variable payload=./payload.json'
+        + ' https://api.example.com/jobs',
+      'curl -q -d@payload.json https://api.example.com/jobs',
+      'curl -q --data-urlencode name@payload.txt https://api.example.com/jobs',
+      'curl -q --url-query name@query.txt https://api.example.com/jobs',
+      'curl -q --variable payload@payload.json --expand-data "{{payload}}"'
+        + ' https://api.example.com/jobs',
+      'curl -q --variable %PAYLOAD --expand-data "{{PAYLOAD}}"'
+        + ' https://api.example.com/jobs',
+      'curl -q --url @urls.txt',
+      'curl -q -H@headers.txt https://api.example.com/jobs',
+      'curl -q -Fpayload=@payload.json https://api.example.com/jobs',
+      'curl -q -w@format.txt https://api.example.com/jobs',
+      'curl -q --alt-svc alt-svc.txt https://api.example.com/jobs',
+      'curl -q --ca-embed ca.pem https://api.example.com/jobs',
+      'curl -q --etag-compare etag.txt https://api.example.com/jobs',
+      'curl -q -z reference.txt https://api.example.com/jobs',
+      'curl -q --ssl-sessions sessions.txt https://api.example.com/jobs',
+      'curl -q --knownhosts known_hosts sftp://files.example.com/archive.tgz',
+      'curl -q --httpsig-key @key.hex https://api.example.com/jobs',
+      'curl -q --tls-earlydata early-data.bin https://api.example.com/jobs',
+      'curl -q -C - -o archive.tgz https://api.example.com/archive.tgz',
+      'curl -q https://api.example.com/status'
+        + ' && curl --disable --upload-file ./payload.json https://api.example.com/jobs',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'curl -q -dname=value https://api.example.com/jobs',
+      'curl -q --data-urlencode name=value https://api.example.com/jobs',
+      'curl -q --url-query name=value https://api.example.com/jobs',
+      'curl -q --variable payload=value --expand-data "{{payload}}"'
+        + ' https://api.example.com/jobs',
+      'curl -q --url https://api.example.com/status',
+      'curl -q --write-out "%{http_code}" https://api.example.com/status',
+      'curl -q -- https://api.example.com/-T',
+      'echo curl -T ./payload.json https://api.example.com/jobs',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
     }
   });
 

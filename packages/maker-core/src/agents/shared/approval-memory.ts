@@ -120,11 +120,112 @@ const SECRET_CONFIG_KEY_SOURCE = String.raw`\S*(?:TOKEN|SECRET|API[_-]?KEY|APIKE
 const CURL_EXPLICIT_CONFIG_PATTERN =
   /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:-K(?:\s*=?\s*)\S|--config(?:\s+|=)\S)/i;
 
-function curlMayLoadMutableConfig(args: readonly string[]): boolean {
+const CURL_DIRECT_MUTABLE_FILE_OPTIONS: ReadonlySet<string> = new Set([
+  '--alt-svc',
+  '--ca-embed',
+  '--cacert',
+  '--capath',
+  '--config',
+  '--crlfile',
+  '--egd-file',
+  '--etag-compare',
+  '--hsts',
+  '--knownhosts',
+  '--pinnedpubkey',
+  '--proxy-cacert',
+  '--proxy-capath',
+  '--proxy-crlfile',
+  '--proxy-pinnedpubkey',
+  '--pubkey',
+  '--random-file',
+  '--ssl-sessions',
+  '--time-cond',
+  '--tls-earlydata',
+  '--upload-file',
+]);
+
+const CURL_AT_FILE_OPTIONS: ReadonlySet<string> = new Set([
+  '--data',
+  '--data-ascii',
+  '--data-binary',
+  '--header',
+  '--httpsig-key',
+  '--json',
+  '--proxy-header',
+  '--url',
+  '--write-out',
+]);
+
+const CURL_NAMED_AT_FILE_OPTIONS: ReadonlySet<string> = new Set([
+  '--data-urlencode',
+  '--url-query',
+  '--variable',
+]);
+
+// 与 auto-review.ts 的 curl 短选项 arity 保持一致：遇到首个带值字母后，余下簇内容就是值。
+const CURL_SHORT_VALUE_OPTIONS: ReadonlySet<string> = new Set(
+  'odFHuAebcCDEKTUwxyYzmMQ',
+);
+
+function curlShortOptionWithValue(
+  arg: string,
+  nextArg: string | undefined,
+): { letter: string; value: string | undefined } | null {
+  if (!/^-[^-]/.test(arg)) return null;
+  const cluster = arg.slice(1);
+  for (let i = 0; i < cluster.length; i++) {
+    const letter = cluster[i];
+    if (!CURL_SHORT_VALUE_OPTIONS.has(letter)) continue;
+    return { letter, value: cluster.slice(i + 1) || nextArg };
+  }
+  return null;
+}
+
+function curlFormValueReferencesFile(value: string): boolean {
+  return /(?:^|[=;,])[@<]/.test(value);
+}
+
+function curlOptionValueReferencesFile(option: string, value: string | undefined): boolean {
+  if (CURL_DIRECT_MUTABLE_FILE_OPTIONS.has(option)) return true;
+  if (!value) return false;
+  if (CURL_AT_FILE_OPTIONS.has(option)) return value.startsWith('@');
+  if (CURL_NAMED_AT_FILE_OPTIONS.has(option)) {
+    // `%name` 从环境变量取值；`name@file` / `%name@file` 从本地文件取值。
+    return value.startsWith('%') || /^(?:%?[^=@]+)?@/.test(value);
+  }
+  return option === '--form' && curlFormValueReferencesFile(value);
+}
+
+function curlMayLoadMutableFileState(args: readonly string[]): boolean {
   // curl 只有**首参数**精确为小写 -q / --disable 时才禁用默认 curlrc。
   if (args[0] !== '-q' && args[0] !== '--disable') return true;
-  // 显式配置即使出现在禁用默认 curlrc 之后，仍会重新引入可变文件内容。
-  return args.some((arg) => /^-K/.test(arg) || /^--conf/.test(arg));
+  const optionTerminator = args.indexOf('--');
+  const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
+  for (let i = 0; i < options.length; i++) {
+    const arg = options[i];
+    if (arg.startsWith('--')) {
+      const equals = arg.indexOf('=');
+      const rawOption = equals === -1 ? arg : arg.slice(0, equals);
+      const option = rawOption.startsWith('--expand-')
+        ? `--${rawOption.slice('--expand-'.length)}`
+        : rawOption;
+      const value = equals === -1 ? options[i + 1] : arg.slice(equals + 1);
+      // 显式 config 或其它文件输入会让相同 argv 对应不同请求、凭证或上传内容。
+      if (/^--conf/.test(option) || curlOptionValueReferencesFile(option, value)) return true;
+      continue;
+    }
+    const short = curlShortOptionWithValue(arg, options[i + 1]);
+    if (!short) continue;
+    if (short.letter === 'K' || short.letter === 'T' || short.letter === 'z') return true;
+    if ((short.letter === 'd' || short.letter === 'H' || short.letter === 'w')
+      && short.value?.startsWith('@')) return true;
+    if (short.letter === 'F' && short.value && curlFormValueReferencesFile(short.value)) {
+      return true;
+    }
+    // `-C -` 依据当前落地文件大小自动决定续传 offset，同一命令的真实请求并不稳定。
+    if (short.letter === 'C' && short.value === '-') return true;
+  }
+  return false;
 }
 
 const WGET_EXPLICIT_CONFIG_PATTERN =
@@ -185,7 +286,7 @@ const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   /(?:^|\s)(?:-b\s*=?\s*|--cookie(?:\s+|=))\S/i,
   // 客户端证书 / 私钥 / identity file 同样是凭证消费。短选项与 `--key` 必须限定工具，
   // 避免误伤 sort --key、通用 -i 输入等无关参数；CA / 公钥证书也不在这里泛化拦截。
-  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:--(?:cert|key|proxy-cert|proxy-key|pass|proxy-pass|netrc-file)(?:\s+|=)\S|-E(?:\s*=?\s*)\S)/i,
+  /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:--(?:expand-)?(?:cert|key|httpsig-key|proxy-cert|proxy-key|pass|proxy-pass|netrc-file)(?:\s+|=)\S|-E(?:\s*=?\s*)\S)/i,
   /(?:^|[\s;&|('"`])(?:\S*[\\/])?curl(?:\.exe)?\b[^;&|\r\n]*(?:--netrc(?:-optional)?|--ssl-auto-client-cert|-n)(?=\s|$)/i,
   /(?:^|[\s;&|('"`])(?:\S*[\\/])?(?:ssh|scp|sftp|ssh-copy-id|plink|pscp|psftp)(?:\.exe)?(?=\s|$)[^;&|\r\n]*(?:-i(?:\s*=?\s*)\S|-o\s*(?:IdentityFile|CertificateFile|PKCS11Provider|SecurityKeyProvider)\s*=\s*\S|-o\s*ForwardAgent\s*=\s*(?:yes|true|on)\b)/i,
   /(?:^|[\s;&|('"`])(?:\S*[\\/])?(?:ssh-add|sshpass)(?:\.exe)?(?=\s|$)/i,
@@ -333,7 +434,7 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
   const invocations = commandExecutableInvocations(command);
   if (invocations.some(({ name, args }) =>
-    name === 'curl' && curlMayLoadMutableConfig(args))) return true;
+    name === 'curl' && curlMayLoadMutableFileState(args))) return true;
   if (invocations.some(({ name, args }) =>
     name === 'wget' && wgetMayLoadMutableUserState(args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
