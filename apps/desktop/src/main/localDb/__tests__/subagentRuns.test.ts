@@ -473,6 +473,81 @@ describe('durable Subagent runs', () => {
     expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
   });
 
+  it('keeps a parentless Claude run terminal across duplicate and late lifecycle updates', async () => {
+    const spawned = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'claude-code',
+          taskId: 'parentless-claude-lifecycle',
+          taskType: 'local_agent',
+          status: 'running',
+          title: 'Inspect the lifecycle',
+        },
+        { kind: 'spawn' },
+      ),
+      'claude-code',
+      1000,
+    );
+    const terminal = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'claude-code',
+          taskId: 'parentless-claude-lifecycle',
+          status: 'completed',
+          summary: 'Lifecycle captured',
+          usage: { totalTokens: 700, toolUses: 4, durationMs: 1200 },
+        },
+        { kind: 'terminal' },
+      ),
+      'claude-code',
+      2000,
+    );
+    const lateProgress = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'claude-code',
+          taskId: 'parentless-claude-lifecycle',
+          status: 'running',
+          summary: 'Late progress must not reopen the run',
+        },
+        { kind: 'progress' },
+      ),
+      'claude-code',
+      3000,
+    );
+    const duplicateTerminal = await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'claude-code',
+          taskId: 'parentless-claude-lifecycle',
+          status: 'completed',
+          summary: 'Lifecycle captured',
+          usage: { totalTokens: 700, toolUses: 4, durationMs: 1200 },
+        },
+        { kind: 'terminal' },
+      ),
+      'claude-code',
+      4000,
+    );
+
+    expect(terminal).toMatchObject({ runId: spawned!.runId, created: false });
+    expect(lateProgress).toMatchObject({ runId: spawned!.runId, created: false });
+    expect(duplicateTerminal).toMatchObject({ runId: spawned!.runId, created: false });
+    expect((await listSubagentRuns('session-1'))?.runs).toHaveLength(1);
+    expect(
+      await getSubagentRunDetail('session-1', 'claude-code', spawned!.runId),
+    ).toMatchObject({
+      status: 'completed',
+      title: 'Inspect the lifecycle',
+      summary: 'Lifecycle captured',
+      usage: { totalTokens: 700, toolUses: 4, durationMs: 1200 },
+    });
+  });
+
   it('excludes background Bash and Workflow aggregation from the Subagent workspace', async () => {
     expect(
       await persistSubagentTaskUpdate('session-1', observed({
