@@ -996,7 +996,9 @@ function SplitDropTarget({
     }
     event.preventDefault();
     event.stopPropagation();
-    event.dataTransfer.dropEffect = 'move';
+    // A pane drag removes the pane from its source layout, while a session drag
+    // creates an additional pane and leaves the source session untouched.
+    event.dataTransfer.dropEffect = isPaneDrag ? 'move' : 'copy';
     const nextSide = resolveSplitDropSide(
       event.currentTarget.getBoundingClientRect(),
       event.clientX,

@@ -1204,6 +1204,7 @@ describe('SplitGroup', () => {
       'application/x-cindy-split-pane',
       'session-c',
     );
+    expect(dropDataTransfer.dropEffect).toBe('move');
     expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
       ['session-a', 'session-c', 'session-b'],
     );
@@ -1473,6 +1474,7 @@ describe('SplitGroup', () => {
       await Promise.resolve();
     });
 
+    expect(dataTransfer.dropEffect).toBe('copy');
     expect(view.container.querySelectorAll('[data-split-direction="column"]')).toHaveLength(1);
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
   });
