@@ -116,6 +116,24 @@ describe('materializeLocalMarkdownImages', () => {
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe('private');
   });
 
+  it('materializes an angle destination containing a closing parenthesis', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private)image.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const mediaAbsPath = path.join(workingDir, 'media-store.png');
+    const deps = makeDeps(mediaAbsPath);
+    const text = `![private](<${sourcePath}> "preview")`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-angle-parenthesis' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'private' });
+    expect(deps.ingest).toHaveBeenCalledTimes(1);
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('private');
+  });
+
   it('parses an escaped closing bracket in a local image label', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'generated.png');
@@ -227,6 +245,23 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [], text });
     expect(sanitizeLocalMarkdownImageRefs(text)).toBe(text);
     expect(deps.ingest).not.toHaveBeenCalled();
+  });
+
+  it('leaves local image examples inside blockquote indented code untouched and unsent', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'private.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    const text = `>     ![private](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-quoted-indented-code' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(deps.ingest).not.toHaveBeenCalled();
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe(text);
   });
 
   it('materializes a local image in a four-space list continuation', async () => {

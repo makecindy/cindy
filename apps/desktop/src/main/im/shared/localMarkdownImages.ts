@@ -82,11 +82,17 @@ function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
     );
     let targetEnd = targetStart;
     let depth = 1;
+    let insideAngleDestination = text[targetStart] === '<';
     while (targetEnd < targetLimit) {
       const char = text[targetEnd];
       if (char === '\r' || char === '\n') break;
       if (char === '\\') {
         targetEnd += 2;
+        continue;
+      }
+      if (insideAngleDestination) {
+        if (char === '>') insideAngleDestination = false;
+        targetEnd += 1;
         continue;
       }
       if (char === '(') depth += 1;
@@ -96,7 +102,7 @@ function localMarkdownImageMatches(text: string): LocalMarkdownImageMatch[] {
       }
       targetEnd += 1;
     }
-    if (depth !== 0 || targetEnd === targetStart) continue;
+    if (insideAngleDestination || depth !== 0 || targetEnd === targetStart) continue;
 
     matches.push({
       start,
@@ -144,11 +150,17 @@ function localMarkdownImageSanitizationMatches(text: string): LocalMarkdownImage
     let targetEnd = targetStart;
     let depth = 1;
     let nestedImageStart = -1;
+    let insideAngleDestination = text[targetStart] === '<';
     while (targetEnd < lineEnd) {
       const char = text[targetEnd];
       if (char === '\r') break;
       if (char === '\\') {
         targetEnd = Math.min(targetEnd + 2, lineEnd);
+        continue;
+      }
+      if (insideAngleDestination) {
+        if (char === '>') insideAngleDestination = false;
+        targetEnd += 1;
         continue;
       }
       if (char === '!' && text[targetEnd + 1] === '[') {

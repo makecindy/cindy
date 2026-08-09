@@ -50,16 +50,6 @@ function lineEndAfterNewline(text: string, start: number): number {
   return newline === -1 ? text.length : newline + 1;
 }
 
-function lineIndentColumns(text: string, start: number, end: number): number {
-  let columns = 0;
-  for (let cursor = start; cursor < end; cursor += 1) {
-    if (text[cursor] === ' ') columns += 1;
-    else if (text[cursor] === '\t') columns += 4 - (columns % 4);
-    else break;
-  }
-  return columns;
-}
-
 function isBlankLine(text: string, start: number, end: number): boolean {
   return text.slice(start, end).trim() === '';
 }
@@ -80,17 +70,24 @@ function indentedCodeStartLines(text: string): Set<number> {
   let lineStart = 0;
   let previousBlank = true;
   let activeListIndent: number | null = null;
+  let activeQuoteDepth = 0;
   while (lineStart < text.length) {
     const lineEnd = lineEndAfterNewline(text, lineStart);
-    const blank = isBlankLine(text, lineStart, lineEnd);
-    const indent = lineIndentColumns(text, lineStart, lineEnd);
+    const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+    if (prefix.quoteDepth !== activeQuoteDepth) {
+      previousBlank = true;
+      activeListIndent = null;
+      activeQuoteDepth = prefix.quoteDepth;
+    }
+    const blank = text.slice(prefix.cursor, lineEnd).trim() === '';
+    const indent = prefix.indent;
     const containedByList =
       activeListIndent !== null && indent >= activeListIndent && indent < activeListIndent + 4;
     if (indent >= 4 && previousBlank && !containedByList) starts.add(lineStart);
 
     if (!blank) {
-      const listIndent = listItemContentIndent(text, lineStart, lineEnd);
-      if (listIndent !== null) activeListIndent = listIndent;
+      const relativeListIndent = listItemContentIndent(text, prefix.cursor, lineEnd);
+      if (relativeListIndent !== null) activeListIndent = indent + relativeListIndent;
       else if (indent === 0) activeListIndent = null;
     }
     previousBlank = blank;
@@ -100,7 +97,8 @@ function indentedCodeStartLines(text: string): Set<number> {
 }
 
 function isIndentedCodeContinuation(text: string, start: number, end: number): boolean {
-  return lineIndentColumns(text, start, end) >= 4 || isBlankLine(text, start, end);
+  const prefix = lineContainerPrefix(text, start, end);
+  return prefix.indent >= 4 || text.slice(prefix.cursor, end).trim() === '';
 }
 
 interface LineContainerPrefix {

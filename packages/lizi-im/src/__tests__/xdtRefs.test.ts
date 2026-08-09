@@ -322,6 +322,13 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
   });
 
+  it('ignores file references inside blockquote indented code', () => {
+    const text = '>     [报告](xdt-file:///tmp/private.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => 'sent' })).toBe(text);
+  });
+
   it('keeps a four-space list continuation eligible for attachment delivery', () => {
     const text = '- 输出：\n    [报告](xdt-file:///tmp/list-report.pdf)';
     const afterBlank = '- 输出：\n\n    [报告](xdt-file:///tmp/list-report.pdf)';
