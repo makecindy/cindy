@@ -218,7 +218,7 @@ export function SlashCommandPalette({
           <div
             className={cn(
               'flex items-center justify-center',
-              'h-[40px] text-[13px]',
+              'h-[40px] text-13',
               'text-[var(--cmd-palette-empty)]',
             )}
           >
@@ -242,7 +242,7 @@ export function SlashCommandPalette({
                 className={cn(
                   'flex w-full items-center justify-between',
                   'h-[36px] px-[10px] rounded-[6px]',
-                  'text-left text-[14px] font-medium',
+                  'text-left text-14 font-medium',
                   'text-[var(--cmd-palette-item-text)]',
                   'outline-none transition-colors',
                   focused && 'bg-[var(--cmd-palette-item-hover)]',
@@ -250,7 +250,7 @@ export function SlashCommandPalette({
               >
                 <span className="truncate">{cmd.name}</span>
                 {metaLabel(cmd) && (
-                  <span className="shrink-0 text-[12px] font-normal text-[var(--cmd-palette-item-meta)]">
+                  <span className="shrink-0 text-12 font-normal text-[var(--cmd-palette-item-meta)]">
                     {metaLabel(cmd)}
                   </span>
                 )}
@@ -281,10 +281,10 @@ export function SlashCommandPalette({
             maxHeight: tooltipPos.maxHeight,
           }}
         >
-          <div className="text-[14px] font-medium text-[var(--cmd-palette-item-text)]">
+          <div className="text-14 font-medium text-[var(--cmd-palette-item-text)]">
             {focusedCmd.name}
           </div>
-          <div className="mt-[8px] text-[13px] leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
+          <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
             {focusedCmd.description}
           </div>
         </div>,

@@ -1516,7 +1516,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
       </span>
       {/* 徽标不大写不加字距:224px 窄栏里 en「RECOMMENDED」会把行名挤成「Cin…」。 */}
       <span
-        className="shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium"
+        className="shrink-0 rounded-full border px-1.5 py-px text-10 font-medium"
         style={{ borderColor: 'var(--border-default)', color: 'var(--text-tertiary)' }}
       >
         {t('settings.providers.xdSignin.badge')}

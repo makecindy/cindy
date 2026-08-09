@@ -14,6 +14,7 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import {
   buildMobileModelSections,
   flattenProviderSections,
+  isFastRestorable,
   isSelectedSourceDisconnected,
   reconcileEffortForModel,
   resolveRowSelection,
@@ -356,6 +357,34 @@ describe('resolveRowSelection —— 选行落点(effort 优先级与桌面共�
       hasFastModeCap: false,
     });
     expect(next.effort).toBe('');
+  });
+});
+
+describe('isFastRestorable —— 记忆 fast 恢复前的重验门控(codex P2)', () => {
+  const fastRow = (supports: boolean): ProviderModelRow => {
+    const p = provider('openai', { codex: [model('gpt-5.5')] });
+    (p.models.codex![0] as { supportsFastMode?: boolean }).supportsFastMode = supports;
+    return {
+      provider: p,
+      model: { id: 'gpt-5.5', displayName: 'GPT-5.5', efforts: [] as never, defaultEffort: null, supportsFastMode: supports, contextWindow: 1 },
+    };
+  };
+
+  it('行在目录中且支持 Fast 且 agent 有能力 → 可恢复', () => {
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], true)).toBe(true);
+  });
+
+  it('目录不再标记 Fast-capable → 不可恢复(防 UI 关 / 实发 true 矛盾态)', () => {
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(false)], true)).toBe(false);
+  });
+
+  it('agent 无 Fast 能力(hasFastModeCap=false)→ 不可恢复', () => {
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], false)).toBe(false);
+  });
+
+  it('(provider, model) 不在目录中 → 不可恢复', () => {
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [], true)).toBe(false);
+    expect(isFastRestorable('codex', 'other', 'gpt-5.5', [fastRow(true)], true)).toBe(false);
   });
 });
 

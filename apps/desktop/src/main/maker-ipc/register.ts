@@ -300,6 +300,7 @@ import {
 import {
   ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage,
+  getRecoveryContextSnapshot,
   markSessionTurnEnded,
   markSessionTurnEndedAfterBarrier,
   markSessionTurnStarted,
@@ -316,6 +317,7 @@ import {
   readSessionWorkingDirFromDb,
 } from '../maker-host/session-storage.js';
 import {
+  backgroundTurnPredatesSessionClear,
   clearSessionPersistState,
   consumeLastAssistantPersistId,
   consumeLastTopLevelAssistantPersistId,
@@ -340,6 +342,7 @@ import {
   onToolResultEvent,
   onToolResultFullEvent,
   onToolUseEvent,
+  preserveTurnPersistStateForBackground,
   markAutoResumeOutcome,
   onTurnErrorEvent,
   prepareSyntheticToolEventForBroadcast,
@@ -395,8 +398,8 @@ import {
   setModelPriceOverride,
 } from '../usage/modelPriceOverrideStore.js';
 import {
+  ClaudeOutputLagTimingGuard,
   computeModelUsageDeltas,
-  detectOutputLag,
   type ModelUsageCumulative,
   type ModelUsageDeltaEntry,
 } from '../usage/modelUsageDelta.js';
@@ -693,6 +696,10 @@ import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
 } from './sessionTurnActivityTracker.js';
+import {
+  ProductTurnUsageTargetTracker,
+  ProductTurnWallClockTracker,
+} from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
@@ -771,6 +778,11 @@ import {
   writeGhostErrandSessionId,
 } from '../cindy-brain/errandPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
+import {
+  resolveGhostUserHookModel,
+  withGhostAssistantHookModel,
+  withGhostUserHookModel,
+} from '../cindy-brain/subscriptionGateway.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
   createGhostErrandSession,
@@ -2380,6 +2392,9 @@ let pendingAgentSwitchApplyHolder:
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
+const productTurnWallClockTracker = new ProductTurnWallClockTracker();
+const productTurnUsageTargetTracker = new ProductTurnUsageTargetTracker();
+const claudeOutputLagTimingGuard = new ClaudeOutputLagTimingGuard();
 
 /**
  * Own the session input boundary while rewind stops an active turn and changes
@@ -3161,6 +3176,8 @@ function settleSilentStopDone(
   reason: 'exhausted' | 'skip' | 'send-failed',
 ): void {
   void finalizeTurnChangeSet(sessionId, null, 'complete');
+  productTurnWallClockTracker.clear(sessionId);
+  productTurnUsageTargetTracker.clear(sessionId);
   sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
   noteClaudeSessionTurnState(sessionId, false);
   agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
@@ -3220,6 +3237,9 @@ async function handleSilentStopTurnEnd(
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
   if (decision.action === 'resume') {
     try {
+      // The next Claude running boundary belongs to the same user-visible turn.
+      // Mark it before send(), which may synchronously emit status events.
+      productTurnWallClockTracker.preserveForContinuation(session.id);
       const clientId = randomUUID();
       const sendResult = await session.send(
         { type: 'user', content: SILENT_STOP_RESUME_PROMPT },
@@ -3340,6 +3360,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
       // potentially multi-megabyte payload to every renderer and device-link controller.
       if (event.type === 'turn_diff') return;
+      if (
+        event.turnScope === 'background'
+        && Object.prototype.hasOwnProperty.call(event, 'backgroundTurnStartedAt')
+        && backgroundTurnPredatesSessionClear(session.id, event.backgroundTurnStartedAt)
+      ) {
+        return;
+      }
       // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
       // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
       // 盖到事件上，首个匹配 token 的事件即视为 provider accepted。
@@ -3418,6 +3445,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let pendingCodexAccountUsageSnapshot: unknown | null = null;
       let shouldMarkTurnStatusIdleAfterBroadcast = false;
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
+      let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
       // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
       // 若 claim 悬挂会导致 UI 永久「正在生成」。区分「claim 悬挂」与「done 未到达」。
@@ -3454,6 +3482,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             clearPending: typeof event.turnAttemptToken === 'number',
           });
           const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
+          if (!wasInTurn && event.source === 'claude-code') {
+            const startedProductTurn = productTurnWallClockTracker.start(session.id);
+            if (startedProductTurn) productTurnUsageTargetTracker.clear(session.id);
+          }
           sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
           if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);
           // 后台活动检测:turn 开始 → 该会话的 API 流量回归主线,后台横幅熄灭。
@@ -3500,6 +3532,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const rawTurn = (event.data as { raw?: { id?: unknown; status?: unknown } } | null)?.raw;
         const isSilentStopDone =
           (event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true;
+        if (
+          event.source === 'claude-code' &&
+          !isContinuationBoundary &&
+          !isSilentStopDone
+        ) {
+          completedTurnWallClockMs = productTurnWallClockTracker.finish(session.id);
+        }
         if (!isContinuationBoundary && !isSilentStopDone) {
           shouldMarkTurnTerminalIdleAfterBroadcast = true;
         }
@@ -3612,7 +3651,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       const eventAgentMeta = (event as { agentMeta?: AgentMeta | null }).agentMeta ?? null;
       // 跟踪会话最近一次非空 agentMeta(镜像 renderer state.lastAgentMeta),给 interaction
       // 边界 flush 当兜底锚点,保 agent_meta 不丢(rewind/fork)。
-      if (eventAgentMeta) noteAgentMeta(session.id, eventAgentMeta);
+      if (eventAgentMeta && event.turnScope !== 'background') noteAgentMeta(session.id, eventAgentMeta);
       let persistId: string | undefined;
       // tool_result 家族:main 解析出的权威内容,盖进 payload 让 renderer 即时显示
       // (Option C:内容重排状态机只在 main 一份,与落库同源同值)。
@@ -3621,7 +3660,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 连续失败计数归零；人工介入周期的硬总上限不归零，保证始终有限。
       // 刻意只认这两类事件:thinking / status / 空消息都不算产出;guard 侧是 O(1)、
       // 无 IO、无日志,放在热路径安全。
-      if (isSubstantiveProgressEvent(event)) {
+      // 晚到 background 事件仍需广播和持久化,但不能给当前中断回合充值。
+      if (event.turnScope !== 'background' && isSubstantiveProgressEvent(event)) {
         const progressAttemptToken = event.turnAttemptToken;
         const accepted = interruptedTurnAutoResumeGuard.noteProgress(
           session.id,
@@ -3648,17 +3688,20 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       } else if (event.type === 'tool_use') {
         // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
         // 落库),再落 tool_use 本身,拿回 persistId 盖进 payload。两者都只入队、不阻塞。
-        flushAssistantBlock(session.id, eventAgentMeta);
+        if (event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
         persistId = onToolUseEvent(
           session.id,
           event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown },
           eventAgentMeta,
+          event.turnScope === 'background' ? 'background' : 'turn',
+          event.backgroundTurnStartedAt,
         );
       } else if (event.type === 'tool_result') {
         const r = onToolResultEvent(
           session.id,
           event.data as { summary?: unknown; toolUseIds?: unknown },
           eventAgentMeta,
+          event.turnScope === 'background' ? 'background' : 'turn',
         );
         persistId = r?.persistId;
         resolvedContent = r?.content;
@@ -3667,6 +3710,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           event.data as { toolUseId?: unknown; fullText?: unknown },
           eventAgentMeta,
+          event.turnScope === 'background' ? 'background' : 'turn',
         );
         persistId = r?.persistId;
         resolvedContent = r?.content;
@@ -3757,6 +3801,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             isPairedFailedTurnDone = true;
           }
           pendingFailedTurnAssistantPersistId.delete(session.id);
+        }
+        if (event.type === 'done' && event.source === 'claude-code') {
+          if (isContinuationBoundary) {
+            productTurnUsageTargetTracker.remember(session.id, turnAssistantPersistId);
+          } else {
+            turnAssistantPersistId = productTurnUsageTargetTracker.finish(
+              session.id,
+              turnAssistantPersistId,
+            );
+          }
         }
         flushOrphanToolResults(session.id, eventAgentMeta);
         if (turnBoundaryAssistantPersistId) {
@@ -3854,6 +3908,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (!isContinuationBoundary) {
           markTurnEndedAfterPersistDrain(session.id);
         }
+        preserveTurnPersistStateForBackground(session.id);
         resetTurnPersistState(session.id);
         // sidebar-card-mode: 摘要触发挪到本轮 assistant 块 flush 入队之后(原先在
         // done 早段、flush 之前触发,流式轮次会读到上一轮文本)。只在正常 done 触发。
@@ -3878,7 +3933,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           const doneResult = (event.data as { result?: unknown } | null)?.result;
           const replyText = typeof doneResult === 'string' ? doneResult : '';
           if (replyText.length > 0 && hasEnabledGhostAssistantHook()) {
-            runGhostAssistantReplyHook(session.id, turnAssistantPersistId, replyText);
+            const turnModel =
+              turnModelPromiseBySession.get(session.id) ?? Promise.resolve(session.model || 'unknown');
+            const assistantPersistId = turnAssistantPersistId;
+            withGhostAssistantHookModel(turnModel, () => {
+              runGhostAssistantReplyHook(session.id, assistantPersistId, replyText);
+            });
           }
         }
         // Worker turn 结束后交给 OrcaTeamService 处理 DB status、广播与 auto-bridge。
@@ -3928,6 +3988,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const doneData = event.data as
           | {
               total_cost_usd?: unknown;
+              duration_ms?: unknown;
+              duration_api_ms?: unknown;
               usage?: {
                 input_tokens?: number;
                 output_tokens?: number;
@@ -3935,10 +3997,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 cache_creation_input_tokens?: number;
               };
               modelUsage?: Record<string, unknown>;
+              assistant_message_id?: unknown;
+              is_error?: unknown;
             }
           | undefined;
         const cumulative = doneData?.total_cost_usd;
         const modelUsage = doneData?.modelUsage;
+        const claudeTurnDurationMs =
+          completedTurnWallClockMs ??
+          (typeof doneData?.duration_ms === 'number' ? doneData.duration_ms : undefined);
         let modelUsageDeltas: ModelUsageDeltaEntry[] | undefined;
         if (modelUsage && typeof modelUsage === 'object') {
           const { next, deltas } = computeModelUsageDeltas(
@@ -3948,6 +4015,20 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedModelUsageBySession.set(session.id, next);
           modelUsageDeltas = deltas;
         }
+        const outputLagTiming = claudeOutputLagTimingGuard.evaluate(
+          session.id,
+          modelUsageDeltas ?? [],
+          !isContinuationBoundary,
+          typeof doneData?.assistant_message_id === 'string'
+            ? doneData.assistant_message_id
+            : undefined,
+          doneData?.is_error !== true,
+        );
+        const claudeGenerationDurationMs = outputLagTiming.suppressTiming
+          ? undefined
+          : typeof doneData?.duration_api_ms === 'number'
+            ? doneData.duration_api_ms
+            : undefined;
         // total_cost_usd 累计基线: 主路径不靠它算钱, 但仍跟住, 以便万一某轮缺 modelUsage
         // 走兜底时累计差才准。先取"更新前"基线给兜底用, 再写入本轮累计。
         const prevReportedCost = lastReportedCostUsdBySession.get(session.id) ?? 0;
@@ -3958,7 +4039,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 判定主线被上游静默替换(如 fable-5 高负载被路由到 opus-4-8),把标记挂到本轮
         // 收尾 assistant 的 agent_meta 上(AssistantMessage 渲染降级提示行)。
         // fire-and-forget,与记账 sink 互不阻塞;判定纯函数见 shared/modelMismatch.ts。
-        if (modelUsageDeltas && detectOutputLag(modelUsageDeltas)) {
+        if (modelUsageDeltas && outputLagTiming.detected) {
           // 上游在 done 时点还没结算本轮输出(实测 Vertex),这一轮的费用会偏低、下一轮偏高。
           // 总量不丢,只是归属错位;不做纠正的理由见 usage/modelUsageDelta 文件头。
           log.warn(
@@ -4079,6 +4160,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 deltas,
                 'unknown',
                 perModel,
+                claudeGenerationDurationMs,
+                claudeTurnDurationMs,
               );
               recordTurnSpend(turnMoney);
               recordSessionTurnSpend(session.id, turnMoney);
@@ -4130,6 +4213,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 deltas,
                 'unknown',
                 perModel,
+                claudeGenerationDurationMs,
+                claudeTurnDurationMs,
               );
               if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
                 const changedScheduleId = await recordSchedulerTurnCost({
@@ -4167,6 +4252,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               doneData?.usage,
               undefined,
               resolvedModel,
+              undefined,
+              claudeGenerationDurationMs,
+              claudeTurnDurationMs,
             );
             // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
             // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
@@ -4269,6 +4357,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             completionTokens?: number;
             reasoningTokens?: number;
             cachedTokens?: number;
+            durationMs?: number;
+            turnDurationMs?: number;
           };
           const promptTokens = Number(u.promptTokens) || 0;
           const completionTokens = Number(u.completionTokens) || 0;
@@ -4355,6 +4445,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               cacheReadTokens: cachedTokens,
               cacheCreateTokens: 0,
               model: turnModel,
+              durationMs: u.durationMs,
+              turnDurationMs: u.turnDurationMs,
             });
             const recordCodexUsageOnly = async () => {
               if (!turnAssistantPersistId) return;
@@ -4507,6 +4599,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             const turnUsageDetails = buildTurnUsageDetails({
               ...tokens,
               model: turnModel,
+              durationMs:
+                typeof (rawUsage as { durationMs?: unknown }).durationMs === 'number'
+                  ? (rawUsage as { durationMs: number }).durationMs
+                  : undefined,
+              turnDurationMs:
+                typeof (rawUsage as { turnDurationMs?: unknown }).turnDurationMs === 'number'
+                  ? (rawUsage as { turnDurationMs: number }).turnDurationMs
+                  : undefined,
             });
 
             // Pi 也必须进 daily_model_usage，否则首页仪表盘会把 Pi 的
@@ -4653,6 +4753,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedCostUsdBySession.delete(session.id);
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
+          productTurnWallClockTracker.clear(session.id);
+          productTurnUsageTargetTracker.clear(session.id);
+          claudeOutputLagTimingGuard.clear(session.id);
           // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
           clearClaudeSessionBackgroundActivity(session.id);
           clearSessionPersistState(session.id);
@@ -9759,6 +9862,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await drainPersistQueue();
       return hasAssistantProgressAfterMessage(sessionId, userClientId);
     },
+    getRecoveryContextSnapshot: async (sessionId, userClientId) => {
+      await drainPersistQueue();
+      return getRecoveryContextSnapshot(sessionId, userClientId);
+    },
     // retry-supersede:零产出重试的克隆行落库并派发成功后,软删被取代的旧 user 行
     // 与其后的 error 行(实现与守卫见 localDb/ipc/messages.supersedeRetriedUserTurn)。
     // 只发 messages:deleted、不额外发 sessions:patched:软删既不改变会话列表的
@@ -9916,8 +10023,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 意识拦截钩(订阅槽①):派发/落库前问已装钩子意识;fail-open 由
     // screenGhostUserMessage 内部收敛,快路径(无钩子意识)零开销。
-    screenUserMessage: (sessionId, agentFacingText) =>
-      screenGhostUserMessage(sessionId, agentFacingText),
+    screenUserMessage: (sessionId, agentFacingText, item) => {
+      const session = getStableSessionForTurnBoundary(sessionId);
+      const model = resolveGhostUserHookModel(
+        session?.isTurnRunning() === true,
+        session?.model,
+        item.createOpts.model,
+      );
+      return withGhostUserHookModel(model, () =>
+        screenGhostUserMessage(sessionId, agentFacingText),
+      );
+    },
     onUserMessageBlocked: (sessionId, item, verdict) =>
       broadcastGhostMessageBlocked({
         sessionId,
@@ -12724,6 +12840,7 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   // event used for bookkeeping but never expose them through the raw renderer channel.
   const rendererEvent = { ...event };
   delete rendererEvent.turnAttemptToken;
+  delete rendererEvent.backgroundTurnStartedAt;
   if (!event.data || typeof event.data !== 'object') return rendererEvent;
 
   const data = event.data as Record<string, unknown>;

@@ -263,7 +263,7 @@ export function BrowserCommentPopover({
 
   const inputCls = cn(
     'w-full rounded-md border border-[var(--border-default)] bg-transparent',
-    'px-2 py-1 text-[12px] leading-[1.4] text-[var(--text-primary)]',
+    'px-2 py-1 text-12 leading-[1.4] text-[var(--text-primary)]',
     'placeholder:text-[var(--text-tertiary)] outline-none',
     'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
   );
@@ -287,7 +287,7 @@ export function BrowserCommentPopover({
         placeholder={t('rightSidebar.browser.commentPlaceholder')}
         className={cn(
           'w-full resize-none rounded-md border border-[var(--border-default)] bg-transparent',
-          'px-2 py-1.5 text-[12px] leading-[1.5] text-[var(--text-primary)]',
+          'px-2 py-1.5 text-12 leading-[1.5] text-[var(--text-primary)]',
           'placeholder:text-[var(--text-tertiary)] outline-none',
           'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
         )}
@@ -297,7 +297,7 @@ export function BrowserCommentPopover({
       {designBaseline && showStyles && (
         <div className="flex flex-col gap-1.5 rounded-md border border-[var(--border-default)] p-2">
           {designBaseline.editableText !== null && (
-            <label className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+            <label className="flex items-center gap-2 text-11 text-[var(--text-secondary)]">
               <span className="w-[88px] shrink-0 truncate">
                 {t('rightSidebar.browser.styleTextLabel')}
               </span>
@@ -317,7 +317,7 @@ export function BrowserCommentPopover({
             return (
               <label
                 key={property}
-                className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]"
+                className="flex items-center gap-2 text-11 text-[var(--text-secondary)]"
               >
                 {/* CSS 属性名是技术标识,保持原文不 i18n。 */}
                 <span className="w-[88px] shrink-0 truncate font-mono">{property}</span>
@@ -347,7 +347,7 @@ export function BrowserCommentPopover({
               onClick={handleResetStyles}
               disabled={submitting}
               className={cn(
-                'flex h-5 items-center rounded px-1.5 text-[11px]',
+                'flex h-5 items-center rounded px-1.5 text-11',
                 'text-[var(--text-tertiary)] hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
               )}
             >
@@ -384,7 +384,7 @@ export function BrowserCommentPopover({
             onClick={onCancel}
             disabled={submitting}
             className={cn(
-              'flex h-6 items-center rounded-md px-2 text-[12px]',
+              'flex h-6 items-center rounded-md px-2 text-12',
               'text-[var(--text-secondary)] hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
               submitting && 'opacity-40',
             )}
@@ -396,7 +396,7 @@ export function BrowserCommentPopover({
             onClick={handleSubmit}
             disabled={!canSubmit}
             className={cn(
-              'flex h-6 items-center rounded-md px-2.5 text-[12px] font-medium',
+              'flex h-6 items-center rounded-md px-2.5 text-12 font-medium',
               'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
               'hover:bg-[var(--accent-hover)]',
               !canSubmit && 'cursor-not-allowed opacity-40',

@@ -109,7 +109,9 @@ import {
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
+  buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
+  buildClaudeRemoteOrcaCallerGuards,
   buildClaudeRemoteToolGuards,
   mergeClaudeHookSets,
 } from './capability-routing.js';
@@ -1172,6 +1174,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 到对应 session 的业务函数。host 直接调 startSession 而没透 sessionId
         // 时此处为 undefined, 工具按"无 session 绑定"语义处理。
         sessionId: opts.sessionId,
+        mcpCallerKind: 'root',
+        mcpCallerAttested: true,
         ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
         getSessionContext: () => context,
       };
@@ -1299,6 +1303,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
         PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
       },
+      // Keep the existing local routing/capture hooks first: callers and tests
+      // rely on their observable order. The exact-match Orca provenance guard
+      // still runs for send_to_lead after those hooks and denies descendants.
+      buildClaudeOrcaCallerProvenanceHooks(),
       this.deps.claudeHooks,
     );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -1941,7 +1949,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const runtimeState: RuntimeState = newRuntimeState();
     const beginNewTurn = (): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
-      // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮 API call 计数。
+      // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
       turnState.text = '';
       turnState.toolUses = 0;
@@ -1950,6 +1958,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
       turnState.pendingApiError = null;
+      turnState.lastAssistantRequestId = undefined;
+      turnState.lastAssistantMsgHadSubstance = true;
       // 代际前进: 迟到的被打断 result 据此被 translator 识别为已被本 send 接管。
       turnState.generation += 1;
       // interruptRequested **刻意不在这里清**: watchdog / tool-loop guard 先置
@@ -2420,9 +2430,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? 'auto'
             : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
-        const remoteToolGuards = buildClaudeRemoteToolGuards(
-          this.deps.capabilityRouting,
-        );
+        const remoteToolGuards = [
+          ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
+        ];
 
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
@@ -3433,7 +3444,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         // Install the cancelled-tail fence at the same enqueue boundary as
         // the synthetic product terminal. stopTask can win before interrupt
         // resolves, so waiting for the interrupt ACK leaves a double-terminal
-        // window for a late provider result.
+        // window for a late provider result. A live Query that owns local_bash
+        // is always retired by global Stop; the fence remains as a defensive
+        // guard until the replacement Query is installed.
         continuationCancellationGeneration = turnState.generation;
         continuationCancellationRequiresQueryRebuild = true;
       }
@@ -5089,7 +5102,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           // interrupt ACK guarantees these earlier stop requests have settled,
           // so allSettled intentionally has no extra timeout here.
           const settledStops = await Promise.allSettled(stopRequests.map(({ promise }) => promise));
-          const hasRejectedStops = settledStops.some((stop) => stop.status === 'rejected');
           const fulfilledWakeIds = stopRequests
             .filter((_, index) => settledStops[index]?.status === 'fulfilled')
             .map(({ taskId }) => taskId);
@@ -5107,7 +5119,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           // to prevent a queued automatic continuation from escaping Stop.
           const cancelledContinuation = stoppedClaim ?? cancelActiveContinuation('user_stop');
           const hasUnconfirmedWakeTasks = [...runningBackgroundTasks.values()].some((info) => info.wake);
-          if (cancelledContinuation || hasUnconfirmedWakeTasks || hasRejectedStops) {
+          // Once Stop has dispatched stopTask for any wake task, the provider
+          // Query must be retired regardless of RPC outcome. A fulfilled RPC
+          // only acknowledges the cancellation request; it cannot prove that
+          // an automatic continuation was not already queued in the provider.
+          // Closing the Query is therefore the only boundary that guarantees
+          // no later model call. Mixed local_bash tasks intentionally die with
+          // this Query; preserving them would reopen the unsafe same-Query path.
+          const shouldRetireQuery =
+            stopRequests.length > 0 ||
+            cancelledContinuation ||
+            hasUnconfirmedWakeTasks;
+          if (shouldRetireQuery) {
             // All cancellation sources share one terminal state: a cancelled
             // continuation claim, an unconfirmed wake task, or a rejected stop
             // means this Query must be retired. The provider tail is fenced by

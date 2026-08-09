@@ -191,7 +191,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
         onClick={toggleAll}
         disabled={busy !== null || shareableMessageIds.length === 0}
         className={cn(
-          'inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-colors',
+          'inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-13 font-medium transition-colors',
           'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
           'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-primary)]',
           'hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-50',
@@ -211,10 +211,10 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
       </button>
 
       <div className="min-w-0 flex-1">
-        <div className="text-[14px] font-medium leading-tight text-[var(--text-primary)]">
+        <div className="text-14 font-medium leading-tight text-[var(--text-primary)]">
           {t('chat.shareImage.title')}
         </div>
-        <div className="mt-0.5 truncate text-[12px] leading-tight text-[var(--text-secondary)]">
+        <div className="mt-0.5 truncate text-12 leading-tight text-[var(--text-secondary)]">
           {t('chat.shareImage.subtitle', { count })}
         </div>
       </div>
@@ -230,7 +230,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
           onClick={() => shareSelectionStore.exit()}
           disabled={busy !== null}
           className={cn(
-            'rounded-full px-6 py-2.5 text-[13px] font-medium transition-colors',
+            'rounded-full px-6 py-2.5 text-13 font-medium transition-colors',
             'bg-[var(--surface-chip)] text-[var(--text-primary)]',
             'hover:bg-[var(--surface-hover)]',
             'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -244,7 +244,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
           onClick={() => void run('download')}
           disabled={disabled}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-6 py-2.5 text-[13px] font-medium transition-colors',
+            'inline-flex items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-colors',
             'bg-[var(--surface-chip)] text-[var(--text-primary)]',
             'hover:bg-[var(--surface-hover)]',
             'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -265,7 +265,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
           onClick={() => void run('copy')}
           disabled={disabled}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-6 py-2.5 text-[13px] font-medium transition-opacity',
+            'inline-flex items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-opacity',
             'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]',
             'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             disabled ? 'cursor-default opacity-50' : 'hover:opacity-90',

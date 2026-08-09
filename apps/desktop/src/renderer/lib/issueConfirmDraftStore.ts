@@ -12,6 +12,8 @@ export interface IssueConfirmDraft {
   title: string;
   body: string;
   type: 'bug' | 'feature';
+  /** 平台为默认；只有 Main 提供了可用账号时才允许保存 github-user。 */
+  submissionIdentityKind?: 'platform' | 'github-user';
   /** 平台代发时用户在确认卡片里编辑的公开署名。 */
   publicName?: string;
 }

@@ -41,6 +41,10 @@ describe('Plugin Market IPC error boundary', () => {
     expect(registerSource).toContain(
       "import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';",
     );
+    expect(body).toContain('localIconRequestGate.tryRun');
+    expect(body).toContain(
+      "throwIpcError('PRECONDITION_FAILED', 'Too many local Plugin icon requests');",
+    );
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {

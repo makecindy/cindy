@@ -24,6 +24,50 @@ const log = createLogger('SlashCommands');
 
 export type { UnifiedCommand } from '@cindy/maker-core';
 
+export type SlashCommandRosterStatus = 'loading' | 'refreshing' | 'ready' | 'error';
+
+export interface SlashCommandRosterState {
+  contextKey: string;
+  status: SlashCommandRosterStatus;
+  commands: UnifiedCommand[];
+}
+
+/** Stable empty roster for initial and cross-context renders. */
+export const EMPTY_SLASH_COMMANDS: UnifiedCommand[] = [];
+
+export function beginSlashCommandRosterLoad(
+  current: SlashCommandRosterState,
+  contextKey: string,
+): SlashCommandRosterState {
+  if (
+    current.contextKey === contextKey &&
+    (current.status === 'ready' || current.status === 'refreshing')
+  ) {
+    return { ...current, status: 'refreshing' };
+  }
+  return { contextKey, status: 'loading', commands: EMPTY_SLASH_COMMANDS };
+}
+
+export function failSlashCommandRosterLoad(
+  current: SlashCommandRosterState,
+  contextKey: string,
+): SlashCommandRosterState {
+  if (current.contextKey === contextKey && current.status === 'refreshing') {
+    return { ...current, status: 'ready' };
+  }
+  return { contextKey, status: 'error', commands: EMPTY_SLASH_COMMANDS };
+}
+
+export function isSlashCommandRosterReady(
+  state: SlashCommandRosterState,
+  contextKey: string,
+): boolean {
+  return (
+    state.contextKey === contextKey &&
+    (state.status === 'ready' || state.status === 'refreshing')
+  );
+}
+
 // device-link 远程会话下 desktop 命令**全量可用**:业务语义在「会话归属设备」的命令
 // (/goal /learn /cmd)由控制端 main(commands/builtins.ts)按 ctx.deviceId 经隧道路由
 // 到被控端对应 channel(maker:goal:* / learn:* / desktop-cmd:run,均在 REMOTE_INVOKE_ALLOWLIST);

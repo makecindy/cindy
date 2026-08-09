@@ -13,6 +13,7 @@ import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { parseMarketSource } from './sources/parse.js';
+import { LocalIconRequestGate } from './localIconRequestGate.js';
 import { PluginMarketPackagePermissionReviewBridge } from './packagePermissionReviewBridge.js';
 import { PluginMarketService } from './service.js';
 
@@ -24,6 +25,7 @@ const UPGRADE_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:upgrade-notice-available
 const PACKAGE_PERMISSION_REVIEW_CHANNEL = 'plugin-market:package-permission-review';
 const trackedReviewRequesters = new WeakSet<WebContents>();
 const packagePermissionReviewBridge = new PluginMarketPackagePermissionReviewBridge();
+const localIconRequestGate = new LocalIconRequestGate();
 
 function service(): PluginMarketService {
   serviceSingleton ??= new PluginMarketService();
@@ -137,7 +139,13 @@ export function registerPluginMarketIpc(): void {
       }
       return { pluginId, expectedIconKey };
     });
-    return invokePluginMarket(() => service().localIcons(requests));
+    return invokePluginMarket(() => {
+      const request = localIconRequestGate.tryRun(() => service().localIcons(requests));
+      if (!request) {
+        throwIpcError('PRECONDITION_FAILED', 'Too many local Plugin icon requests');
+      }
+      return request;
+    });
   });
   ipcMain.handle(
     'plugin-market:install',

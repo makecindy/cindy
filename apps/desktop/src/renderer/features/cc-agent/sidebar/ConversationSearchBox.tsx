@@ -456,14 +456,14 @@ export function SearchResultsBody({
   const { t } = useTranslation();
   if (!trimmed) {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-[var(--cmd-palette-empty)]">
+      <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
         {t('ccAgent.search.empty')}
       </div>
     );
   }
   if (status === 'searching') {
     return (
-      <div className="flex items-center justify-center gap-2 px-3 py-6 text-[12px] text-[var(--cmd-palette-item-meta)]">
+      <div className="flex items-center justify-center gap-2 px-3 py-6 text-12 text-[var(--cmd-palette-item-meta)]">
         <Spinner size={14} />
         {t('ccAgent.search.searching')}
       </div>
@@ -471,14 +471,14 @@ export function SearchResultsBody({
   }
   if (status === 'error') {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-[var(--error-fg)]">
+      <div className="px-3 py-6 text-center text-12 text-[var(--error-fg)]">
         {t('ccAgent.search.failed')}
       </div>
     );
   }
   if (results.length === 0) {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-[var(--cmd-palette-empty)]">
+      <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
         {t('ccAgent.search.noResults')}
       </div>
     );
@@ -639,7 +639,7 @@ export function ConversationSearchBox({
               onChange={(event) => search.setQuery(event.target.value)}
               placeholder={t('ccAgent.search.placeholder')}
               aria-label={t('ccAgent.search.placeholder')}
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+              className="min-w-0 flex-1 bg-transparent text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
             />
             {search.query && (
               <Tip text={t('ccAgent.search.clear')} side="bottom">
@@ -1034,7 +1034,7 @@ function SearchResultRow({
     <div className="space-y-2">
       <div className="font-medium leading-snug">{displayTitle}</div>
       {primaryHit?.preview && (
-        <div className="border-t border-[var(--cmd-palette-border)] pt-2 text-[12px] leading-snug text-[var(--tooltip-text)]">
+        <div className="border-t border-[var(--cmd-palette-border)] pt-2 text-12 leading-snug text-[var(--tooltip-text)]">
           {renderSnippet(primaryHit.snippet, query) ?? renderKeywordHighlights(primaryHit.preview, query)}
         </div>
       )}
@@ -1058,22 +1058,22 @@ function SearchResultRow({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text-primary)]">
+              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
                 {highlightSegments(displayTitle, item.titleMatchIndices)}
               </span>
               <Tip text={sourceText} side="top" delay={150}>
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--text-tertiary)]">
+                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
                   {t(`ccAgent.search.kind.${item.matchKind}`)}
                 </span>
               </Tip>
             </div>
             {meta && (
-              <div className="mt-1 truncate text-[11px] leading-none text-[var(--text-tertiary)]">
+              <div className="mt-1 truncate text-11 leading-none text-[var(--text-tertiary)]">
                 {meta}
               </div>
             )}
             {visibleHits.length === 0 && subtitle && (
-              <div className="mt-1.5 line-clamp-4 text-[12px] leading-snug text-[var(--text-secondary)]">
+              <div className="mt-1.5 line-clamp-4 text-12 leading-snug text-[var(--text-secondary)]">
                 {subtitle}
               </div>
             )}
@@ -1099,7 +1099,7 @@ function SearchResultRow({
               }}
               className={cn(
                 'flex w-full items-center rounded-md border border-transparent px-2 py-1.5 text-left',
-                'text-[10px] leading-none text-[var(--text-tertiary)]',
+                'text-10 leading-none text-[var(--text-tertiary)]',
                 'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)] hover:text-[var(--text-primary)]',
               )}
             >
@@ -1139,10 +1139,10 @@ function SearchHitRow({
       )}
     >
       <span className="min-w-0 flex-1">
-        <span className="block line-clamp-2 text-[12px] leading-snug text-[var(--text-secondary)]">
+        <span className="block line-clamp-2 text-12 leading-snug text-[var(--text-secondary)]">
           {content}
         </span>
-        <span className="mt-0.5 block truncate text-[10px] leading-none text-[var(--text-tertiary)]">
+        <span className="mt-0.5 block truncate text-10 leading-none text-[var(--text-tertiary)]">
           {hitTime} · {sourceText}
         </span>
       </span>
@@ -1244,7 +1244,7 @@ const SEARCH_MARK_CLASS =
 
 const SEARCH_TOOL_BUTTON_CLASS = cn(
   'flex h-7 min-w-0 items-center gap-1.5 rounded-full border border-[var(--border-default)]',
-  'bg-[var(--surface-elevated)] px-2.5 text-[12px] text-[var(--text-secondary)]',
+  'bg-[var(--surface-elevated)] px-2.5 text-12 text-[var(--text-secondary)]',
   'transition-colors hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--text-primary)]',
 );
 

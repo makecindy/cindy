@@ -42,7 +42,7 @@ function LimitItem({ value, label }: { value: string; label: string }): React.Re
   return (
     <Select.Item
       value={value}
-      className="flex cursor-pointer items-center justify-between gap-3 rounded-[8px] px-2.5 py-1.5 text-[12px] outline-none data-[highlighted]:bg-[var(--model-item-hover)]"
+      className="flex cursor-pointer items-center justify-between gap-3 rounded-[8px] px-2.5 py-1.5 text-12 outline-none data-[highlighted]:bg-[var(--model-item-hover)]"
       style={{ color: 'var(--model-item-text)' }}
     >
       <Select.ItemText>{label}</Select.ItemText>
@@ -72,7 +72,7 @@ function LimitSelect({
   return (
     <Select.Root value={current} onValueChange={(s) => onChange(s === UNLIMITED ? null : Number(s))}>
       <Select.Trigger
-        className="flex h-8 w-[140px] items-center justify-between gap-1 rounded-full border px-3 text-[12px] outline-none"
+        className="flex h-8 w-[140px] items-center justify-between gap-1 rounded-full border px-3 text-12 outline-none"
         style={{
           backgroundColor: 'var(--settings-input-bg)',
           borderColor: 'var(--settings-input-border)',
@@ -111,7 +111,7 @@ function LimitSelect({
 function Row({ label, children }: { label: string; children: React.ReactNode }): React.ReactElement {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-[12px] font-medium" style={{ color: 'var(--text-primary)' }}>
+      <span className="text-12 font-medium" style={{ color: 'var(--text-primary)' }}>
         {label}
       </span>
       {children}
@@ -136,7 +136,7 @@ export function GoalAdvancedLimits({
     <div className="flex flex-col gap-3">
       <button
         type="button"
-        className="flex items-center gap-1 text-left text-[12px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+        className="flex items-center gap-1 text-left text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
         onClick={() => setOpen((v) => !v)}
       >
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -144,7 +144,7 @@ export function GoalAdvancedLimits({
       </button>
       {open && (
         <div className="flex flex-col gap-3">
-          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          <div className="text-11" style={{ color: 'var(--text-tertiary)' }}>
             {t('goal.editGoal.advancedHint')}
           </div>
           <Row label={t('goal.editGoal.maxTurns')}>

@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { isTerminalAgentErrorEvent, toSessionDispatchOutcome } from '@cindy/maker-core';
+import {
+  isTerminalAgentErrorEvent,
+  ORCA_NESTED_REPORT_ERROR_CODE,
+  ORCA_NESTED_REPORT_ERROR_MESSAGE,
+  toSessionDispatchOutcome,
+} from '@cindy/maker-core';
 import type { AgentEvent, AgentKind, Logger, Maker, McpProvider, McpProviderContext, Session } from '@cindy/maker-core';
 import {
   isProductTurnDoneEvent,
@@ -175,6 +180,37 @@ interface SanitizedOrcaSendError {
 const ORCA_SEND_OWNER = 'orca-workflow';
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const SAFE_SEND_ERROR_CODES = new Set(['SESSION_RUNNING']);
+
+export const SEND_TO_LEAD_TOOL_DESCRIPTION = [
+  'Pass the worker_id from the latest Lead message.',
+  'This tool is the assigned Orca Worker\'s direct reporting channel to the Lead.',
+  'Native subagents are internal helpers, so they return findings to the Worker instead of calling this tool.',
+  'Call once per turn, only with the final report or one blocking question.',
+  'After a question, stop and wait for send_to_worker.',
+  'Combine all results; do not send progress, partial findings, or same-turn corrections.',
+].join(' ');
+
+export function authorizeSendToLeadCaller(ctx: McpProviderContext):
+  | { ok: true }
+  | { ok: false; error: { error: string; code: 'NESTED_AGENT_NOT_ALLOWED' | 'CALLER_PROVENANCE_REQUIRED' } } {
+  if (ctx.mcpCallerAttested === true && ctx.mcpCallerKind === 'root') return { ok: true };
+  if (ctx.mcpCallerAttested === true && ctx.mcpCallerKind === 'descendant') {
+    return {
+      ok: false,
+      error: {
+        error: ORCA_NESTED_REPORT_ERROR_MESSAGE,
+        code: ORCA_NESTED_REPORT_ERROR_CODE,
+      },
+    };
+  }
+  return {
+    ok: false,
+    error: {
+      error: 'caller provenance is required to report directly to the lead',
+      code: 'CALLER_PROVENANCE_REQUIRED',
+    },
+  };
+}
 
 function makeOrcaSendContext(entrypoint: string, sessionId: string, action: string): string {
   return `${entrypoint}/${sessionId}/${action}`;
@@ -418,6 +454,7 @@ export const __testing = {
   autoBridgeStateCount: () => workerAutoBridgePending.size,
   clearAutoBridgeState: clearAutoBridgePending,
   hasAutoBridgePending,
+  setAutoBridgePending,
 };
 
 function attachSessionCapture(entry: CapturedSessionEntry): void {
@@ -664,12 +701,14 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
 
       server.tool(
         'send_to_lead',
-        'You MUST pass your worker_id (see the Bridge note at the end of the most recent lead message). Report results or ask a question to the lead session.',
+        SEND_TO_LEAD_TOOL_DESCRIPTION,
         {
           message: z.string().min(1),
           worker_id: z.string().min(1).describe('Required. Your assigned worker_id. Find it in the Bridge note at the end of the most recent lead message, or in the system prompt Identity line.'),
         },
         async ({ message, worker_id }) => {
+          const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
+          if (!authorization.ok) return text(authorization.error, true);
           const resolved = await resolveLead(worker_id);
           if (!resolved.ok) return text(resolved.error, true);
           const { link, entry } = resolved;

@@ -37,6 +37,9 @@ import {
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
+  MAKER_EVENT_BATCH_CHANNEL,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  byteLength,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
@@ -44,6 +47,7 @@ import {
   type InvokeResultPayload,
   type LinkClosePayload,
   type LinkOpenPayload,
+  type MakerEventBatchPayload,
   type PushOwnerStamp,
   type Topic,
 } from '@cindy/device-link';
@@ -77,6 +81,7 @@ import { createOfflinePushQueue } from './offlinePushQueue';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { RECOVERY_CHECKPOINT_MARKER } from '../maker-ipc/recoveryCoordinator.js';
 import { projectInteractionRequestForRemote } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import {
   remoteWorkingDirRejectionToIpcError,
@@ -391,6 +396,48 @@ function projectInvokeResultForTunnel(
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
 let activeClient: DeviceLinkClient | null = null;
 
+/**
+ * presence「显式离线」判据(index.ts 接线,那里持有权威 presence 视图):返回 true
+ * 仅当**当代** presence 明确宣告该设备离线;未知一律返回 false —— fail-open,不把
+ * 恢复窗口的首发拦死(判据刻意不跨连接代记忆,理由见 index.ts 的同名函数注释)。
+ *
+ * outbox **全量** flush 据此跳过注定 DEVICE_OFFLINE 的盲发:relay 在线时全量轮每
+ * REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS(500ms)跑一次,对 presence 已明说离线的
+ * 控制端就是 2 帧/秒的稳定无效出站,一直持续到 TTL 出清——只喂 relay 聚合背压
+ * (2026-08-08 事故的第四层失效面,见 docs/dev-rules/remote-and-mobile-adaptation.md)。
+ * 条目保留不丢,恢复由该控制端 link-open 触发的定向 flush
+ * (flushRemoteInvokeResultOutbox(src),不受本门禁约束)与 presence 翻回 online 后的
+ * 全量轮接棒。
+ */
+let presenceOfflineCheck: ((deviceId: string) => boolean) | null = null;
+
+export function setDispatchPresenceOfflineCheck(
+  check: ((deviceId: string) => boolean) | null,
+): void {
+  presenceOfflineCheck = check;
+}
+
+/**
+ * 门禁的唯一不变量:**只在 relay 确定路由不到时抑制发送**;同代内任何比 presence
+ * 更新的可达证据都必须让位给发送(fail-open),且该证据不得跨连接代存活。
+ *
+ * 这里的「更新的证据」就是 `acceptedLinkControllers`——它记录「link-accept 已成功、
+ * 尚未显式 close」的控制端,而它的增删边正好覆盖两侧:link-accept 成功即加入
+ * (那一刻 relay 确实路由到了它),link-close / 撤权 / presence 宣告离线
+ * (handleControllerOffline)/ teardown 立刻移除。于是「有 accepted link」天然表示
+ * 「已建链,且 presence 此后没有再说它离线」——不需要任何新状态或时间戳,证据由
+ * 权威源自己回收。
+ *
+ * 它关掉的具体缺口(codex review,同族第 3 次):presence 在同一代内滞后停留在
+ * false、控制端已 link-open 回归时,定向 flush 的首发若被 BACKPRESSURE 打回,末尾
+ * 排的重试是**无参全量轮**、丢掉 onlySrc 证据,于是这个已建链的 peer 会被持续跳过
+ * 到 presence 更新或 TTL 丢结果。判据里带上 accepted link 后,那一轮直接 fail-open。
+ */
+function isKnownUnroutable(deviceId: string): boolean {
+  if (!presenceOfflineCheck?.(deviceId)) return false;
+  return !acceptedLinkControllers.has(deviceId);
+}
+
 /** 订阅集合变化时一次性通知 host UI 控制态与更新重启安全态。 */
 type ControllersChangedListener = (
   controllers: ActiveController[],
@@ -575,6 +622,417 @@ const SESSION_ACTIVITY_DRAIN_RETRY_MS = 250;
 /** 可靠窗口软上限:活动镜像最多占半窗,剩余留给 invoke-result 与其它推送。 */
 const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
 
+/**
+ * `maker:event` 微批(per-(控制端, sessionId) 累积,与 activity staging 同骨架但
+ * 语义相反:activity 是状态镜像只留最新值,事件流是有序流,批内**全部保留**)。
+ *
+ * 为什么要它:activity 整流(#1401)、拥塞取舍(#2167)、重连冷却(#2185)都不减少
+ * **出站帧数**——agent 长思考期间 maker:event 仍是每事件一帧,2026-08-08 线上单
+ * 毫秒 119 帧、8-07 单小时 5168 次 BACKPRESSURE,聚合速率还招来 relay 1013 断连。
+ * 批把「每事件一帧」压成「每窗口一帧」,直接砍掉这条链路的源头流量。
+ *
+ * ── 顺序不变量与它的代价(review 四轮收敛的结论)────────────────────────────
+ *
+ * 批天然引入一条「延迟发送」旁路,而同会话的其它 session-scoped 推送走「立即
+ * 发送」主路。只要缓冲能跨越一次失败继续存在,两条路径的相对顺序就无法用局部
+ * 补丁保证——review 四轮从四个不同时序切入,全是这同一件事:交错 push 直发、
+ * activity 分支提前 continue、断线积压 drain 先于旧批、退避期大批被拒而小终态
+ * 帧通过。前三轮各补一处,第四轮证明补丁修不完。
+ *
+ * 所以这里**去掉了退避重试**,换成一条强不变量:
+ *
+ *   **缓冲的生命周期不跨越任何一次发送失败。** flush 返回时缓冲一定为空——整批
+ *   发出、逐帧降级发出、或(逐帧也注定失败时)直接丢弃,三条出路都不保留状态。
+ *
+ * 于是「同会话有待发批」这个状态只存在于「窗口内、且尚未尝试发送」的区间,
+ * 收口点(flushMakerEventBatchesForSessionPush)一次调用即可保证清空,顺序问题
+ * 整族消失,而不是每轮补一个新场景。
+ *
+ * 降级本身也要收敛,否则它就是本 PR 要消掉的那个洪峰的复刻(review P1):逐帧
+ * 只在**可能成功**时才做(判据见 shouldDegradeBatchToPerFrame——只有 relay 离线是
+ * 恒不可能),切片内每条都试但逐帧日志静默,成败聚合成一条(账本见
+ * MakerEventBatchFlushOutcome,那里记了这个洪峰判据三轮收敛的全过程)。
+ *
+ * 代价与为什么可接受:拥塞时不再保留事件等窗口恢复。但那本来不是本 PR 的目标
+ * (常态减帧才是),而拥塞时的取舍是 #2167 的职责——降级后的逐帧发送正好落回
+ * 它的可驱逐档语义。删掉退避同时也删掉了它带来的全部复杂性(段滞留、闸门、
+ * 重连清位),这是缩回原始范围,不是新增机制。
+ *
+ * **已知且刻意接受的代价:窗口正好跨在断线时刻上的那 ≤120ms 事件不进可靠 pending**
+ * (review 同族第 3 次点到,不要再改成"离线时保留批"):逐帧世界里它们在产生瞬间就
+ * 被 sendPush 收进 pending,而 pending 是跨连接世代保留的
+ * (client.resetLinkStateForReconnect),link 重建后按原 seq 重放;批世界里它们还在
+ * 窗口内,flush 撞上 NOT_CONNECTED 即丢。三条理由说明不值得为它引机制:
+ *  1. 那批 pending 也不一定活得下来 —— replayPending 前会先 dropDiscardablePendingPrefix
+ *     丢掉队头连续的可丢弃前缀,而长思考期间队头恰恰就是 push,常见形态下逐帧世界
+ *     同样一条不剩;活下来的场景是队头压着 live invoke/invoke-result 的那一种。
+ *  2. 净账反而是赚的:pending 窗口是 64 **条消息**(MAX_TRANSPORT_PENDING_MESSAGES)。
+ *     批把 64 条事件压进一条消息,同一个窗口能装的事件量提高到 64×64 —— 断线时可
+ *     恢复的历史深度是逐帧世界的几十倍,代价是尾部 ≤120ms。
+ *  3. 唯一的补法(离线时保留批到重连收口)会把"缓冲跨越发送失败继续存在"重新引进来,
+ *     那是上面四轮顺序 bug 的同一个根因;而且离线可能持续几分钟,保留就必须配上限与
+ *     淘汰策略——那是新机制,不是本 PR 的范围。push 的恢复语义一直是重连后 resync
+ *     补偿(#1375),不是逐帧重放。
+ */
+const MAKER_EVENT_BATCH_WINDOW_MS = 120;
+/** 单批事件数上限:到量立即 flush(不等窗口),避免长思考把一帧撑得过大。 */
+const MAKER_EVENT_BATCH_MAX_EVENTS = 64;
+/**
+ * 单批字节上限(估算值,到量立即 flush)。刻意远小于可靠传输单消息上限
+ * (MAX_TRANSPORT_MESSAGE_BYTES 4MB / 64 片 × 128KB):批的目的是减少帧数,
+ * 不是制造需要分片的大帧——分片会把一帧放大成多帧,反噬本次优化。
+ */
+const MAKER_EVENT_BATCH_MAX_BYTES = 256 * 1024;
+
+/**
+ * 一个待发批段。按 ownerStamp 分段:ownerStamp 是数据归属水印、批内必须一致,
+ * 同一窗口内发生归属切换时新事件进新段,段间 FIFO——保证切换前后顺序不变。
+ * (缓冲不跨失败存在,所以段最多因窗口内切换而出现,不会因滞留而堆积。)
+ */
+interface MakerEventBatchSegment {
+  events: unknown[];
+  bytes: number;
+  ownerStamp?: PushOwnerStamp;
+}
+
+interface MakerEventBatchStage {
+  /** sessionId → 该会话的待发段序列(FIFO);Map 插入序即会话首次入批顺序。 */
+  batches: Map<string, MakerEventBatchSegment[]>;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const makerEventBatchStages = new Map<string, MakerEventBatchStage>();
+
+function makerEventBatchOwnerStampEquals(
+  a: PushOwnerStamp | undefined,
+  b: PushOwnerStamp | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.dataOwnerId === b.dataOwnerId && a.ownerGeneration === b.ownerGeneration;
+}
+
+/**
+ * 把一条 maker:event 收进目标控制端的批。到量(条数/字节)立即 flush,否则等
+ * 窗口定时器统一 flush。
+ */
+function stageMakerEventPush(
+  dst: string,
+  sessionId: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
+  const payloadBytes = estimateMakerEventBytes(payload);
+  // 越过字节阈值的事件**不挤进本批**:挤进去只会被 takeMakerEventBatchSlice 再切出来,
+  // 每次越界白送一个 1 条事件的小尾批(30KB 级事件流下 100 条会变成 ~23 帧而不是
+  // ~13 帧,直接削掉大半减帧收益,review P2)。改成先把已攒的这一批收口发出,新事件
+  // 成为下一批的开头 —— 强不变量不受影响:flush 仍然一次清空,新事件是 flush **之后**
+  // 才入缓冲的。单条即超阈值的事件在入批前就被 forwardPush 拦到逐帧路径,所以收口后
+  // 它一定装得进空批。
+  const stagedTail = makerEventBatchStages.get(dst)?.batches.get(sessionId)?.at(-1);
+  if (
+    stagedTail
+    && stagedTail.events.length > 0
+    && makerEventBatchOwnerStampEquals(stagedTail.ownerStamp, ownerStamp)
+    && stagedTail.bytes + payloadBytes > MAKER_EVENT_BATCH_MAX_BYTES
+  ) {
+    flushMakerEventBatchesForSession(dst, sessionId);
+  }
+  let stage = makerEventBatchStages.get(dst);
+  if (!stage) {
+    stage = { batches: new Map(), timer: null };
+    makerEventBatchStages.set(dst, stage);
+  }
+  let segments = stage.batches.get(sessionId);
+  if (!segments) {
+    segments = [];
+    stage.batches.set(sessionId, segments);
+  }
+  let tail = segments.at(-1);
+  if (!tail || !makerEventBatchOwnerStampEquals(tail.ownerStamp, ownerStamp)) {
+    tail = { events: [], bytes: 0, ...(ownerStamp ? { ownerStamp } : {}) };
+    segments.push(tail);
+  }
+  tail.events.push(payload);
+  tail.bytes += payloadBytes;
+  if (
+    tail.events.length >= MAKER_EVENT_BATCH_MAX_EVENTS
+    || tail.bytes >= MAKER_EVENT_BATCH_MAX_BYTES
+  ) {
+    flushMakerEventBatchesForSession(dst, sessionId);
+    return;
+  }
+  scheduleMakerEventBatchFlush(dst, stage);
+}
+
+/**
+ * 投递该控制端的离线积压,**对启用微批的控制端同样走批**(review P1:恢复动作不得
+ * 重造触发条件,见 docs/dev-rules/remote-and-mobile-adaptation.md 的故障半径三问)。
+ *
+ * 不这样做的后果是实测量级的:断线期间同会话事件逐条进 offlinePushQueue,重订阅时
+ * 一次 drain 可能有上百条,原本逐条 sendPush 就是同一 tick 内上百帧——正是 8/8 线上
+ * 单毫秒 119 帧、招来 relay 1013 的那个形状,而这一帧洪峰恰好发生在刚重连、最脆弱的
+ * 时刻。走批之后同量积压压成个位数帧。
+ *
+ * 顺序规则与在线主路完全一致:`maker:event` 入批,其它 channel 先收口该会话的批再发,
+ * 因此积压内的跨 channel 相对顺序不变。drain 完立即收口(恢复要快,不等 120ms 窗口)。
+ */
+function drainOfflinePushQueueTo(src: string, topics: readonly string[]): void {
+  const batchCapable = subscriptions.controllerSupports(
+    src,
+    CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  );
+  for (const queued of offlinePushQueue.drain(src, topics)) {
+    const sessionId = batchCapable && queued.channel === MAKER_PUSH.EVENT
+      ? readPushSessionId(queued.payload)
+      : null;
+    if (
+      sessionId !== null
+      && estimateMakerEventBytes(queued.payload) < MAKER_EVENT_BATCH_MAX_BYTES
+    ) {
+      stageMakerEventPush(src, sessionId, queued.payload, queued.ownerStamp);
+      continue;
+    }
+    flushMakerEventBatchesForSessionPush(src, queued.channel, queued.payload);
+    sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
+  }
+  flushMakerEventBatchesFor(src);
+}
+
+/** 收口单个会话的待发批(到量 / 越界 / 跨 channel 收口共用),含聚合日志。 */
+function flushMakerEventBatchesForSession(dst: string, sessionId: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage) return;
+  const outcome = createMakerEventBatchFlushOutcome();
+  flushMakerEventBatchSession(dst, stage, sessionId, outcome);
+  reportMakerEventBatchFlushOutcome(dst, outcome);
+}
+
+/** 读 push payload 顶层 sessionId(与 topicForPush 的 session-scoped 判据同一字段)。 */
+function readPushSessionId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const sessionId = (payload as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
+}
+
+function estimateMakerEventBytes(payload: unknown): number {
+  try {
+    const json = JSON.stringify(payload);
+    // 必须按 UTF-8 计:String.length 是 UTF-16 码元数,中文/emoji 会显著低估,
+    // 字节阈值随之形同虚设(单批可能被撑到需要分片或 PAYLOAD_TOO_LARGE)。
+    // byteLength 与可靠传输层计算分片大小用的是同一个函数,口径一致。
+    return json ? byteLength(json) : 0;
+  } catch {
+    // 不可序列化的 payload 交给 sendPush 报错处理;这里只保证估算不抛。
+    return 0;
+  }
+}
+
+function scheduleMakerEventBatchFlush(dst: string, stage: MakerEventBatchStage): void {
+  if (stage.timer) return;
+  stage.timer = setTimeout(() => {
+    stage.timer = null;
+    const current = makerEventBatchStages.get(dst);
+    if (current) flushMakerEventBatchStage(dst, current);
+  }, MAKER_EVENT_BATCH_WINDOW_MS);
+  (stage.timer as unknown as { unref?: () => void }).unref?.();
+}
+
+/**
+ * 一次 flush 的丢弃账本(聚合日志用)。
+ *
+ * 这里原本还有一条「批帧被拒 → 就地降级为逐帧 best-effort」的路径。它引出了 review
+ * 里最长的一族反馈,**五轮**都在同一段十几行代码上打转,而且 reviewer 的要求互相
+ * 抵触(同一位在第 1/4 轮与第 5 轮各站一边)——记下来,免得有人再把它加回来:
+ *
+ *  1. 无条件逐帧重放整个切片 → 队头不可驱逐时 ≤64 次失败、≤64 条 WARN,正是本 PR
+ *     要消灭的逐事件 admission 与告警洪峰(greptile P1)。
+ *  2. 改成「第一次失败就停」→ 把「这一帧自己不合格」当成「管子堵了」,误丢本可送达
+ *     的批尾(greptile P1 第二轮)。
+ *  3. 于是按错误码区分 → `BACKPRESSURE` 也尺寸相关(ws 容量判据含 additionalBytes、
+ *     pending 判据含字节维度),按码停手同样误丢(codex P1)。
+ *  4. 于是每条都试、只把日志聚合 → 又回到第 1 条:同步循环里没有 ACK 能释放窗口,
+ *     ≤64 次 admission + 驱逐判定 + throw/catch 依旧在洪峰时放大主进程压力,只是
+ *     WARN 被静默了(greptile P1 第三轮)。
+ *
+ *  5. 于是整片丢弃 → 又被要求恢复逐帧:小帧仍可进入剩余容量,最多 64 条流式增量
+ *     消失(greptile P1 第四轮,与它自己的第 1、4 轮相反)。
+ *
+ * 1/4 与 2/3/5 是同一命题的两个反向,这段代码只有「逐帧试」与「整片丢」两种可能行为,
+ * 每一轮都在要求上一轮的反面。**所以按数据定,一次定完 —— 结论是整片丢弃**,并把这
+ * 一族在本 PR 内关闭(再出现同族反馈请对照这里,不要再实现一遍)。
+ *
+ * 定这一侧的依据是 8/8 线上那次拥塞**是 count-bound 而不是 size-bound**:三个上限里
+ * pending 条数 64 是**尺寸无关**的,而 64 条 maker:event 撑不到 pending 的 16MB 字节上限
+ * (每条几 KB,满窗约 1–2MB),日志里的 `reliable transport buffer is full` 正来自条数这
+ * 一侧。条数满且队头不可驱逐时小帧与大帧一样进不去,逐帧就是 64 次零交付的纯浪费。
+ * 反向的 size-bound 窗口真实但很窄:要求 pending 条数有余量、同时 ws bufferedAmount 落在
+ * 距 8MB 上限不足 256KB 的那条带子里(≤3%)。而批本身还让 count-bound 更难触发——填满
+ * 64 槽从前需要 64 条事件,现在需要最多 4096 条。
+ *
+ * 为什么可以直接丢:`maker:event` 与批 channel 都在 #2167 的 COALESCIBLE_PUSH_CHANNELS
+ * 白名单里 —— 拥塞时丢弃最旧的镜像帧、由控制端 resync 补偿,这正是那个 PR 定下的取舍,
+ * 本 PR 的职责是常态减帧而不是重新裁决拥塞语义。另外两条兜底也不再需要:批帧上限
+ * 256KB 远小于 MAX_FRAME_BYTES(2MB),不会 PAYLOAD_TOO_LARGE,所以逐帧路径的
+ * compactOversizedPushPayload 裁剪在这里没有用武之地;单条 ≥256KB 的事件本来就在入批
+ * 前被 forwardPush 拦到逐帧路径。
+ */
+interface MakerEventBatchFlushOutcome {
+  /**
+   * relay 离线:本轮后续切片与会话只清空缓冲、不再尝试发送(sendPush 在非 online 时
+   * 第一行就静默早退,成功率恒为 0)。
+   *
+   * 这是常态且预期的一档(push 的恢复语义一直是重连后 resync 补偿、不是重放),断线
+   * 期间事件仍在产生,每 120ms 窗口一条 WARN 就是 8 条/秒的噪声 → 记 debug 而非 warn。
+   */
+  offline: boolean;
+  /** 本轮丢弃的事件数。 */
+  droppedEvents: number;
+}
+
+function createMakerEventBatchFlushOutcome(): MakerEventBatchFlushOutcome {
+  return { offline: false, droppedEvents: 0 };
+}
+
+function reportMakerEventBatchFlushOutcome(
+  dst: string,
+  outcome: MakerEventBatchFlushOutcome,
+): void {
+  if (outcome.droppedEvents === 0) return;
+  const line = `maker:event batch flush to ${shortId(dst)}: `
+    + `${outcome.offline ? 'relay offline' : 'send rejected'}, `
+    + `dropped ${outcome.droppedEvents} event(s)`;
+  // 离线丢弃是预期常态(理由见 outcome.offline);relay 在线却被拒才是异常信号。
+  if (outcome.offline) log.debug(line);
+  else log.warn(line);
+}
+
+/** flush 该控制端的全部会话批(窗口到点 / 显式收口)。 */
+function flushMakerEventBatchStage(dst: string, stage: MakerEventBatchStage): void {
+  const outcome = createMakerEventBatchFlushOutcome();
+  for (const sessionId of [...stage.batches.keys()]) {
+    flushMakerEventBatchSession(dst, stage, sessionId, outcome);
+  }
+  reportMakerEventBatchFlushOutcome(dst, outcome);
+}
+
+/**
+ * 发送某会话的待发批,**返回时缓冲一定为空**(强不变量,见本段顶部注释):
+ * 按段 FIFO、段内按上限切片;切片发送失败时,若逐帧还有机会就就地降级为逐帧
+ * best-effort 发送(与本 PR 之前的旧语义一致,含 compactOversizedPushPayload
+ * 兜底),不保留、不重试。降级本身的洪峰由 outcome 账本收敛(见其定义)。
+ */
+function flushMakerEventBatchSession(
+  dst: string,
+  stage: MakerEventBatchStage,
+  sessionId: string,
+  outcome: MakerEventBatchFlushOutcome,
+): void {
+  const segments = stage.batches.get(sessionId);
+  stage.batches.delete(sessionId);
+  if (stage.batches.size === 0 && stage.timer) {
+    clearTimeout(stage.timer);
+    stage.timer = null;
+  }
+  if (!segments) return;
+  for (const segment of segments) {
+    while (segment.events.length > 0) {
+      const slice = takeMakerEventBatchSlice(segment);
+      if (slice.length === 0) break;
+      // relay 已确认离线:只把缓冲取空(维持强不变量),不再制造成功率恒为 0 的帧。
+      if (outcome.offline) {
+        outcome.droppedEvents += slice.length;
+        continue;
+      }
+      const payload: MakerEventBatchPayload = { sessionId, events: slice };
+      try {
+        if (!activeClient || activeClient.getStatus() !== 'online') {
+          throw new DeviceLinkError('NOT_CONNECTED', 'relay offline');
+        }
+        if (segment.ownerStamp === undefined) {
+          activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload);
+        } else {
+          activeClient.sendPush(dst, MAKER_EVENT_BATCH_CHANNEL, payload, segment.ownerStamp);
+        }
+      } catch (err) {
+        // 发不出去就丢这一片(不降级、不重试、不滞留):理由与四轮 review 的推导见
+        // MakerEventBatchFlushOutcome 注释。relay 离线时后续切片连尝试都省掉。
+        if (err instanceof DeviceLinkError && err.code === 'NOT_CONNECTED') {
+          outcome.offline = true;
+        }
+        outcome.droppedEvents += slice.length;
+      }
+    }
+  }
+}
+
+/**
+ * 从段头取一片:条数 ≤ MAX_EVENTS 且累计字节 ≤ MAX_BYTES,但**至少一条**
+ * (单条即超阈值的事件已在入批前被拦到逐帧路径,这里的至少一条只是防死循环)。
+ * 取出的事件同步从段里移除。
+ */
+function takeMakerEventBatchSlice(segment: MakerEventBatchSegment): unknown[] {
+  const slice: unknown[] = [];
+  let bytes = 0;
+  while (segment.events.length > 0 && slice.length < MAKER_EVENT_BATCH_MAX_EVENTS) {
+    const next = segment.events[0];
+    const nextBytes = estimateMakerEventBytes(next);
+    if (slice.length > 0 && bytes + nextBytes > MAKER_EVENT_BATCH_MAX_BYTES) break;
+    segment.events.shift();
+    slice.push(next);
+    bytes += nextBytes;
+  }
+  segment.bytes = Math.max(0, segment.bytes - bytes);
+  return slice;
+}
+
+/**
+ * 收口某控制端的全部待发批。用在「即将投递更晚产生的积压」的时点:离线积压
+ * drain 之前、relay 重连之后——批在时间上早于它们,晚发就会让控制端在终态之后
+ * 又收到旧文本(review 第三轮)。flush 返回时缓冲必为空(成功或降级)。
+ */
+function flushMakerEventBatchesFor(dst: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage || stage.batches.size === 0) return;
+  flushMakerEventBatchStage(dst, stage);
+}
+
+/**
+ * 在转发同会话的**其它** channel 之前收口该会话的事件批,保住跨 channel 顺序。
+ * 因为 flush 返回时缓冲必为空(成功或降级),这一次调用就足以保证后续帧排在
+ * 全部已暂存事件之后——不需要再考虑退避、断线等中间状态(review 四轮的结论)。
+ */
+function flushMakerEventBatchesForSessionPush(
+  dst: string,
+  channel: string,
+  payload: unknown,
+): void {
+  if (channel === MAKER_EVENT_BATCH_CHANNEL) return;
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage || stage.batches.size === 0) return;
+  const sessionId = readPushSessionId(payload);
+  if (!sessionId || !stage.batches.has(sessionId)) return;
+  flushMakerEventBatchesForSession(dst, sessionId);
+}
+
+/** 丢弃单个会话的待发批(退订该会话流时调用);stage 空则一并回收定时器。 */
+function dropMakerEventBatch(dst: string, sessionId: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage) return;
+  if (!stage.batches.delete(sessionId)) return;
+  if (stage.batches.size === 0) clearMakerEventBatchStage(dst);
+}
+
+function clearMakerEventBatchStage(dst: string): void {
+  const stage = makerEventBatchStages.get(dst);
+  if (!stage) return;
+  if (stage.timer) clearTimeout(stage.timer);
+  makerEventBatchStages.delete(dst);
+}
+
+function clearAllMakerEventBatchStages(): void {
+  for (const dst of [...makerEventBatchStages.keys()]) clearMakerEventBatchStage(dst);
+}
 interface SessionActivityStage {
   /** sessionId → 最新 payload + source owner;Map 插入序即更新序。 */
   queue: Map<string, { payload: unknown; ownerStamp?: PushOwnerStamp }>;
@@ -702,6 +1160,20 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   if (!topic) return;
   let remotePayload = payload;
   if (
+    channel === 'local-db:messages:created' &&
+    payload &&
+    typeof payload === 'object' &&
+    'message' in payload
+  ) {
+    const msg = (payload as { message: unknown }).message;
+    if (msg && typeof msg === 'object' && !Array.isArray(msg)) {
+      const sanitized = stripRecoveryCheckpointFromMessage(msg as Record<string, unknown>);
+      if (sanitized !== msg) {
+        remotePayload = { ...payload, message: sanitized };
+      }
+    }
+  }
+  if (
     channel === MAKER_PUSH.INTERACTION_REQUEST &&
     payload &&
     typeof payload === 'object' &&
@@ -719,6 +1191,26 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // silent no-op, so route queueable pushes through the offline backlog instead.
   const relayOnline = activeClient.getStatus() === 'online';
   const liveTargets = relayOnline ? dsts : [];
+  // 微批只对声明了能力的控制端启用;只在 maker:event 这一条 channel 上查询,
+  // 不给其它 channel 增加每帧 capability 查询开销。
+  const batchTargets = channel === MAKER_PUSH.EVENT && liveTargets.length > 0
+    ? new Set(
+      liveTargets.filter(
+        (dst) => subscriptions.controllerSupports(
+          dst,
+          CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+        ),
+      ),
+    )
+    : null;
+  // 本帧是否具备入批资格(与 dst 无关的部分,循环外算一次):
+  // 必须是 maker:event、能算出 sessionId、且单条不超批字节上限——单条超限的事件
+  // 入批会撑爆逻辑消息上限,且失去逐帧路径的 compactOversizedPushPayload 兜底。
+  const batchEligibleSessionId = batchTargets
+    ? readPushSessionId(remotePayload)
+    : null;
+  const batchEligible = batchEligibleSessionId !== null
+    && estimateMakerEventBytes(remotePayload) < MAKER_EVENT_BATCH_MAX_BYTES;
   const offlineTargets = subscriptions
     .getKnownControllersForTopic(topic)
     .filter((dst) => !liveTargets.includes(dst));
@@ -733,11 +1225,31 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     }
   }
   for (const dst of liveTargets) {
+    const willBatch = batchEligible && batchTargets!.has(dst);
+    // 跨 channel 保序(review 两轮):**不入批**的帧必须排在该会话已暂存的事件
+    // 之后——否则 interaction-request / status-changed / activity 终态会插到攒批
+    // 的文本 delta 前面,控制端先收「已完成/确认卡」(结束流式消息)、120ms 后
+    // 才收到前面的文本,表现为「终态之后又冒出流式内容」。
+    // 位置要求两条,都由 review 实测推出:
+    //  - 必须在 activity 分支**之前**(它自带 continue,放后面对 activity 永不生效);
+    //  - 必须只对 !willBatch 的帧做,否则每条 maker:event 都会先收口上一批,
+    //    批被拆回逐帧、优化完全失效。
+    if (!willBatch && makerEventBatchStages.size > 0) {
+      flushMakerEventBatchesForSessionPush(dst, channel, remotePayload);
+    }
+    if (willBatch) {
+      stageMakerEventPush(dst, batchEligibleSessionId!, remotePayload, ownerStamp);
+      continue;
+    }
     // 会话活动是高频状态镜像:走 latest-wins 暂存整流,不直接冲可靠传输窗口。
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       stageSessionActivityPush(dst, remotePayload, ownerStamp);
       continue;
     }
+    // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
+    // 「每窗口一帧」(见 stageMakerEventPush)。未声明能力的控制端照旧逐帧,
+    // 因此旧控制端零感知。sessionId 取自 topic 路由所用的同一字段,取不到时
+    // 不入批(topicForPush 已保证 session-scoped 帧必有它,这里只是防御)。
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
@@ -910,6 +1422,7 @@ export function dropAllControllers(
   acceptedLinkControllers.clear();
   offlinePushQueue.clear();
   clearAllSessionActivityStages();
+  clearAllMakerEventBatchStages();
   cancelAllLinkAcceptRetries();
   syncForwarding();
 }
@@ -923,6 +1436,7 @@ export function dropAllControllers(
 export function handleControllerOffline(deviceId: string): void {
   acceptedLinkControllers.delete(deviceId);
   clearSessionActivityStage(deviceId);
+  clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
@@ -938,6 +1452,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 export function purgeRevokedController(deviceId: string): void {
   offlinePushQueue.clear(deviceId);
   clearSessionActivityStage(deviceId);
+  clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId);
   subscriptions.forgetKnownController(deviceId);
   topicSubscriptionControllers.delete(deviceId);
@@ -984,6 +1499,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       clearRemoteInvokeStateFor(src);
       offlinePushQueue.clear(src);
       clearSessionActivityStage(src);
+      clearMakerEventBatchStage(src);
       cancelLinkAcceptRetry(src);
       acceptedLinkControllers.delete(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
@@ -1118,9 +1634,9 @@ function handleLinkOpen(
   syncForwarding();
   flushRemoteInvokeResultOutbox(src);
   if (!knownModernController) {
-    for (const queued of offlinePushQueue.drain(src, [LEGACY_TOPIC])) {
-      sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
-    }
+    // 同上:投递离线积压前先排空该控制端的事件批,保住跨积压的顺序。
+    flushMakerEventBatchesFor(src);
+    drainOfflinePushQueueTo(src, [LEGACY_TOPIC]);
   }
   log.info(`control link opened by ${shortId(src)} (${name})`);
 }
@@ -1475,6 +1991,22 @@ function normalizeInvokeResultForWire(result: InvokeResultPayload): InvokeResult
   };
 }
 
+function sanitizeMessageInvokeResult(
+  result: InvokeResultPayload,
+  channel: string | undefined,
+): InvokeResultPayload {
+  if (!channel || !REMOTE_MESSAGE_CHANNELS.has(channel)) return result;
+  if (!result.ok || !Array.isArray(result.result)) return result;
+  let changed = false;
+  const sanitized = result.result.map((msg: unknown) => {
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return msg;
+    const out = stripRecoveryCheckpointFromMessage(msg as Record<string, unknown>);
+    if (out !== msg) changed = true;
+    return out;
+  });
+  return changed ? { ok: true, result: sanitized } : result;
+}
+
 /**
  * 发送 invoke-result,并对「结果帧超 MAX_FRAME_BYTES」和本地发送背压兜底。
  * sendInvokeResult → sendEnvelope 在结果超限时抛 PAYLOAD_TOO_LARGE;若不接住,异常会冒泡到
@@ -1494,7 +2026,7 @@ function sendInvokeResultSafe(
   fingerprint?: string,
 ): boolean {
   const key = `${src}\u0000${requestId}`;
-  const normalized = normalizeInvokeResultForWire(result);
+  const normalized = sanitizeMessageInvokeResult(normalizeInvokeResultForWire(result), channel);
   const attempt = trySendInvokeResult(client, src, requestId, normalized, channel, args);
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
@@ -1659,6 +2191,17 @@ export function flushRemoteInvokeResultOutboxOnReconnect(): void {
   flushRemoteInvokeResultOutbox();
 }
 
+/**
+ * ws-online 的事件批收口入口(index.ts 接线,与 outbox 的重连 flush 并列)。
+ * 断线前攒的批必须最先出去:它在时间上早于离线积压与重连后的一切新推送,
+ * 晚发就会让控制端在终态之后又收到旧文本(review 第三轮)。
+ */
+export function flushMakerEventBatchesOnReconnect(): void {
+  for (const dst of [...makerEventBatchStages.keys()]) {
+    flushMakerEventBatchesFor(dst);
+  }
+}
+
 function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
   const client = activeClient;
   if (!client) {
@@ -1681,6 +2224,15 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     // 离线轮只做上面的 TTL 出清:trySend 必然 NOT_CONNECTED,不空转、不刷日志。
     if (!relayOnline) continue;
     if (blockedPeers.has(queued.src)) continue;
+    // presence 已明确宣告该控制端离线、且它当下也没有 accepted link:全量轮跳过盲发
+    // (每 500ms 一帧必弹 DEVICE_OFFLINE,只喂 relay 聚合背压),条目保留、TTL 照常。
+    // 判据与 fail-open 边界见 isKnownUnroutable。门禁只作用于全量轮(onlySrc 为空):
+    // 定向轮由 link-open 触发,「对端刚主动建链」是比 presence 更强、更新的在线证据,
+    // presence 短暂滞后/误报不得把这条恢复事件一并拦死(review P2)。
+    if (!onlySrc && isKnownUnroutable(queued.src)) {
+      blockedPeers.add(queued.src);
+      continue;
+    }
     const attempt = trySendInvokeResult(
       client,
       queued.src,
@@ -1807,7 +2359,9 @@ function compactRemoteMessageForDeviceLink(message: unknown): unknown {
   const record = message as Record<string, unknown>;
   if (record.role === 'tool_use') {
     const compactContent = compactRemoteToolUseContent(record.content, false);
-    if (compactContent === record.content) return message;
+    if (compactContent === record.content) {
+      return stripRecoveryCheckpointFromMessage(record);
+    }
     return {
       ...record,
       agentMeta: markRemoteContentTruncated(record.agentMeta),
@@ -1818,7 +2372,9 @@ function compactRemoteMessageForDeviceLink(message: unknown): unknown {
     ? REMOTE_TOOL_RESULT_CONTENT_LIMIT
     : REMOTE_MESSAGE_CONTENT_LIMIT;
   const compactContent = compactRemoteMessageContent(record.content, contentLimit);
-  if (compactContent === record.content) return message;
+  if (compactContent === record.content) {
+    return stripRecoveryCheckpointFromMessage(record);
+  }
   return {
     ...record,
     agentMeta: markRemoteContentTruncated(record.agentMeta),
@@ -1846,9 +2402,32 @@ function markRemoteRowsTrimmed(messages: unknown[], originalCount: number): unkn
 }
 
 function mergeRemoteAgentMeta(agentMeta: unknown, patch: Record<string, unknown>): Record<string, unknown> {
-  return agentMeta && typeof agentMeta === 'object' && !Array.isArray(agentMeta)
-    ? { ...(agentMeta as Record<string, unknown>), ...patch }
-    : { ...patch };
+  if (!agentMeta || typeof agentMeta !== 'object' || Array.isArray(agentMeta)) {
+    return { ...patch };
+  }
+  const { recoveryCheckpoint: _, ...safe } = agentMeta as Record<string, unknown>;
+  return { ...safe, ...patch };
+}
+
+function stripRecoveryCheckpointFromMessage(record: Record<string, unknown>): Record<string, unknown> {
+  const agentMeta = record.agentMeta;
+  const hasCheckpointInMeta = agentMeta && typeof agentMeta === 'object' && !Array.isArray(agentMeta) &&
+    'recoveryCheckpoint' in (agentMeta as Record<string, unknown>);
+  const content = record.content;
+  const checkpointIdx = typeof content === 'string'
+    ? (content as string).indexOf(RECOVERY_CHECKPOINT_MARKER)
+    : -1;
+  const hasCheckpointInContent = checkpointIdx >= 0;
+  if (!hasCheckpointInMeta && !hasCheckpointInContent) return record;
+  const result: Record<string, unknown> = { ...record };
+  if (hasCheckpointInMeta) {
+    const { recoveryCheckpoint: _, ...safeMeta } = agentMeta as Record<string, unknown>;
+    result.agentMeta = safeMeta;
+  }
+  if (hasCheckpointInContent) {
+    result.content = (content as string).slice(0, checkpointIdx);
+  }
+  return result;
 }
 
 function compactRemoteMessageContent(content: unknown, limit: number): unknown {
@@ -1994,15 +2573,22 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     subscriptions.unsubscribe(src, topics);
     // 退订 sessions 后暂存里的活动快照不应再投递(含已排期的重试)。
     if (topics.includes('sessions')) clearSessionActivityStage(src);
+    // 退订 session:<id> 后该会话的待发事件批同样不应再投递(控制端已不要这条流)。
+    for (const topic of topics) {
+      const sessionId = topic.startsWith('session:') ? topic.slice('session:'.length) : null;
+      if (sessionId) dropMakerEventBatch(src, sessionId);
+    }
   }
   syncForwarding();
   if (isSub && topics.includes('sessions')) {
     notifySessionsSubscribed(src);
   }
   if (isSub && topics.length > 0) {
-    for (const queued of offlinePushQueue.drain(src, topics)) {
-      sendPushBestEffort(src, queued.channel, queued.payload, queued.ownerStamp);
-    }
+    // 先排空断线前的事件批,再投递离线积压(review 第三轮):断线期间同会话的
+    // 新事件与终态推送进的是 offlinePushQueue,而旧批留在内存等重试 timer;
+    // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
+    flushMakerEventBatchesFor(src);
+    drainOfflinePushQueueTo(src, topics);
   }
   return { ok: true, result: { ok: true } };
 }
@@ -2272,8 +2858,10 @@ export const __testing = {
     activeClient = null;
     offlinePushQueue.clear();
     clearAllSessionActivityStages();
+    clearAllMakerEventBatchStages();
     cancelAllLinkAcceptRetries();
     setBroadcastTapListener(null);
+    presenceOfflineCheck = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,

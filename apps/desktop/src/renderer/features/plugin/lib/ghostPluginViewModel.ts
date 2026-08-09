@@ -73,8 +73,8 @@ export interface GhostPluginDetail extends GhostPluginListItem {
 /**
  * 展示投影只覆盖用户能看到的四个字段；运行时仍完全来自本地安装包。
  *
- * `iconDataUrl` 是有意要求存在的字段：市场项的 `icon: null` 也必须覆盖本地
- * 包图标，而不是因为缺少 URL 又显示旧图标。
+ * `iconDataUrl` 是有意要求存在的字段：服务端市场项的 `icon: null` 仍覆盖本地
+ * 包图标。Git 市场是窄例外：精确匹配到已安装版本时，可复用安装包里已验证的图标。
  */
 export interface GhostPluginMarketPresentation {
   name: string;
@@ -117,10 +117,10 @@ export function marketPresentationForInstalledGhost(
     name: marketItem.name,
     description: marketItem.description ?? '',
     author: marketItem.author,
-    // Custom market has no signed server URL. Once the exact version is installed,
-    // the package's already verified icon is the source of truth. A server `icon:null`
-    // remains an explicit hide and must not reveal the package asset.
-    iconDataUrl: marketItem.sourceType === 'server' ? marketItem.icon?.url : ghost.iconDataUrl,
+    iconDataUrl:
+      marketItem.sourceType === 'git-market' && !marketItem.icon
+        ? ghost.iconDataUrl
+        : marketItem.icon?.url,
   };
 }
 

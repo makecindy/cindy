@@ -93,16 +93,16 @@ export function ImChannelSettingsCard({
           )}
         >
           <span className="min-w-0 flex-1">
-            <span className="block text-[14px] font-medium leading-[1.3] text-[var(--settings-section-title)]">
+            <span className="block text-14 font-medium leading-[1.3] text-[var(--settings-section-title)]">
               {title}
             </span>
-            <span className="mt-1 block text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
+            <span className="mt-1 block text-12 leading-[1.45] text-[var(--settings-section-desc)]">
               {description}
             </span>
           </span>
 
           <span className="flex min-w-0 shrink-0 items-center gap-3">
-            <span className="hidden w-[220px] truncate text-right text-[12px] text-[var(--text-secondary)] md:block">
+            <span className="hidden w-[220px] truncate text-right text-12 text-[var(--text-secondary)] md:block">
               {routeSummary}
             </span>
             {status}

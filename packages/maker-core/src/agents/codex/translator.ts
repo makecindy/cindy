@@ -55,6 +55,7 @@ import type {
   ItemCompletedNotification,
   ItemStartedNotification,
   ItemUpdatedNotification,
+  AgentMessageDeltaNotification,
   TurnPlanUpdatedNotification,
   ErrorNotification,
   ReasoningSummaryTextDeltaNotification,
@@ -75,6 +76,24 @@ export interface CodexRuntimeState {
   reasoningTextLen: Map<string, number>;
   /** item.id → agentMessage 已 emit 文本字符长度(citation 归一化后的空间,见 handleAgentMessage)。 */
   itemTextLen: Map<string, number>;
+  /** Current model-active interval start; null while tools/approvals own the turn. */
+  generationStartedAt: number | null;
+  /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
+  generationPendingToolIds: Set<string>;
+  /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
+  generationDurationMs: number;
+  generationTurnId: string | null;
+  /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
+  generationTimingReliable: boolean;
+  /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
+  generationHeartbeatAt: number | null;
+  generationHeartbeatTimer: ReturnType<typeof setInterval> | null;
+  /** item.id → 已接受且可安全追加到 UI 的原始全文。 */
+  itemRawText: Map<string, string>;
+  /** item.id → 专用 agentMessage delta 已对齐到的原始全文游标（可由快照补齐漏帧）。 */
+  itemDeltaText: Map<string, string>;
+  /** item.id → item/started 或 item/updated 最新原始全文快照。 */
+  itemSnapshotText: Map<string, string>;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
   /** 尚未 emit 的 Web Search 候选输入，供跨 started/updated/completed 快照补全。 */
@@ -105,12 +124,202 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
     itemTextLen: new Map(),
+    generationStartedAt: null,
+    generationPendingToolIds: new Set(),
+    generationDurationMs: 0,
+    generationTurnId: null,
+    generationTimingReliable: true,
+    generationHeartbeatAt: null,
+    generationHeartbeatTimer: null,
+    itemRawText: new Map(),
+    itemDeltaText: new Map(),
+    itemSnapshotText: new Map(),
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
     lastAuthErrorKey: null,
     networkRetryNotice: null,
   };
+}
+
+const CODEX_GENERATION_HEARTBEAT_MS = 5_000;
+const CODEX_GENERATION_SUSPEND_GAP_MS = 30_000;
+
+function stopCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  if (rt.generationHeartbeatTimer !== null) clearInterval(rt.generationHeartbeatTimer);
+  rt.generationHeartbeatTimer = null;
+  rt.generationHeartbeatAt = null;
+}
+
+function sampleCodexGenerationHeartbeat(rt: CodexRuntimeState, now = Date.now()): void {
+  const previous = rt.generationHeartbeatAt;
+  if (
+    previous !== null &&
+    now - previous > CODEX_GENERATION_HEARTBEAT_MS + CODEX_GENERATION_SUSPEND_GAP_MS
+  ) {
+    rt.generationTimingReliable = false;
+  }
+  rt.generationHeartbeatAt = now;
+}
+
+function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
+  rt.generationHeartbeatAt = Date.now();
+  const timer = setInterval(() => {
+    sampleCodexGenerationHeartbeat(rt);
+  }, CODEX_GENERATION_HEARTBEAT_MS);
+  timer.unref?.();
+  rt.generationHeartbeatTimer = timer;
+}
+
+/** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
+export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
+  rt.generationStartedAt = null;
+  rt.generationPendingToolIds.clear();
+  rt.generationDurationMs = 0;
+  rt.generationTurnId = null;
+  rt.generationTimingReliable = true;
+}
+
+function closeCodexGenerationInterval(rt: CodexRuntimeState, endedAt: number): void {
+  const startedAt = rt.generationStartedAt;
+  rt.generationStartedAt = null;
+  sampleCodexGenerationHeartbeat(rt);
+  stopCodexGenerationHeartbeat(rt);
+  if (startedAt === null) return;
+  if (endedAt < startedAt) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  rt.generationDurationMs += endedAt - startedAt;
+}
+
+export function beginCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  startedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) {
+    resetCodexGenerationTiming(rt);
+    rt.generationTurnId = turnId;
+  }
+  if (rt.generationStartedAt === null && rt.generationPendingToolIds.size === 0) {
+    rt.generationStartedAt = startedAt;
+    startCodexGenerationHeartbeat(rt);
+  }
+}
+
+export function finalizeCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  completedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) return;
+  if (rt.generationPendingToolIds.size > 0) {
+    rt.generationTimingReliable = false;
+    rt.generationStartedAt = null;
+    stopCodexGenerationHeartbeat(rt);
+    return;
+  }
+  closeCodexGenerationInterval(rt, completedAt);
+}
+
+export function codexGenerationDurationMs(rt: CodexRuntimeState): number | undefined {
+  return rt.generationTimingReliable && rt.generationDurationMs > 0
+    ? rt.generationDurationMs
+    : undefined;
+}
+
+export function pauseCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  pausedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) {
+    beginCodexGenerationTurn(rt, turnId, pausedAt);
+    // Keep the interaction pair consistent, but omit TPS because the missing
+    // turn-start boundary means TTFT/thinking before this pause is unknown.
+    rt.generationTimingReliable = false;
+  }
+  if (!pauseId) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.has(pauseId)) return;
+  if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, pausedAt);
+  rt.generationPendingToolIds.add(pauseId);
+}
+
+export function resumeCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  resumedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId || !rt.generationPendingToolIds.delete(pauseId)) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.size === 0) rt.generationStartedAt = resumedAt;
+  if (rt.generationPendingToolIds.size === 0) startCodexGenerationHeartbeat(rt);
+}
+
+const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'commandExecution',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageGeneration',
+  'imageView',
+  'contextCompaction',
+]);
+// App-server v2 reports fileChange only after the patch is complete. With no
+// matching start event it is an output notification, not a pairable timing
+// boundary; handleFileChange still publishes its tool events below.
+// contextCompaction may likewise arrive completion-only. Keeping it in the
+// paired pause set makes that shape fail closed, while still excluding the
+// compaction interval if a future app-server supplies both boundaries.
+
+function noteCodexGenerationBoundary(
+  rt: CodexRuntimeState,
+  phase: ItemPhase,
+  item: { id?: unknown; type?: unknown },
+  notification: { turnId?: unknown },
+): void {
+  const turnId = notification.turnId;
+  if (typeof turnId !== 'string') return;
+  // App-server timestamps may originate on a remote SSH host whose wall clock
+  // differs from the desktop. Keep every generation boundary in the local
+  // receipt-time domain so interval subtraction never mixes remote clocks.
+  // A separate event-loop heartbeat fails closed on suspend-sized local jumps.
+  const receivedAt = Date.now();
+  if (rt.generationTurnId !== turnId) {
+    beginCodexGenerationTurn(rt, turnId, receivedAt);
+    // The authoritative local turn-start boundary was not observed. Starting
+    // at this item receipt would drop TTFT/thinking, so keep the state usable
+    // for pause pairing but fail closed for TPS.
+    rt.generationTimingReliable = false;
+  }
+  if (
+    typeof item.type !== 'string' ||
+    !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)
+  ) {
+    return;
+  }
+  if (typeof item.id !== 'string' || item.id.length === 0) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  const pauseId = `item:${item.id}`;
+  if (phase === 'started') {
+    pauseCodexGeneration(rt, turnId, pauseId, receivedAt);
+    return;
+  }
+  if (phase !== 'completed') return;
+  resumeCodexGeneration(rt, turnId, pauseId, receivedAt);
 }
 
 // ── 上下文 ────────────────────────────────────────────────────────────────────
@@ -174,6 +383,12 @@ export function translateItemNotification(
     ctx.log.warn('item missing type field', { phase, itemKeys: Object.keys(item) });
     return;
   }
+  noteCodexGenerationBoundary(
+    ctx.rt,
+    phase,
+    item as { id?: unknown; type?: unknown },
+    notification as { turnId?: unknown },
+  );
 
   switch (itemType) {
     case 'agentMessage':
@@ -678,8 +893,8 @@ interface ContextCompactionItem {
 }
 
 // ── agentMessage → text {isFinal} ───────────────────────────────────────────
-// item.started / item.updated 出 delta (isFinal=false), item.completed 出 final 全文。
-// Phase 1 没订阅 item/agentMessage/delta, 增量靠 item.updated 的 text 全量字段算 diff。
+// 专用 item/agentMessage/delta 出增量(isFinal=false),item.started / item.updated 的全文
+// 快照作为兼容兜底并负责补齐漏帧,item.completed 出 final 全文校准。
 
 /**
  * Codex 正文里的内部文件引用标记 `:codex-file-citation{path="..." ...}`——对用户
@@ -815,6 +1030,94 @@ export function stableCitationBoundary(text: string): number {
   return stableInternalWebCitationBoundary(text);
 }
 
+function emitAgentMessageProgress(
+  itemId: string,
+  rawText: string,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  const previousRawText = ctx.rt.itemRawText.get(itemId) ?? '';
+  // AgentEvent.text 是只能追加的协议。快照和专用 delta 出现乱序或
+  // 分叉时不能把另一个版本的尾巴拼进已发正文；completed 的全文会做终态校准。
+  if (!rawText.startsWith(previousRawText)) return;
+
+  // itemTextLen 记录的是**归一化后已发出**的长度:citation 替换会改变文本长度,
+  // diff 必须在归一化空间里做,不能混用原文长度。
+  const prevLen = ctx.rt.itemTextLen.get(itemId) ?? 0;
+  const emitted = stripInternalWebCitations(
+    normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText))),
+  );
+  const delta = emitted.slice(prevLen);
+  ctx.rt.itemRawText.set(itemId, rawText);
+  ctx.rt.itemTextLen.set(itemId, emitted.length);
+  if (delta.length === 0) return;
+  queue.push({
+    type: 'text',
+    data: { text: delta, isFinal: false },
+    source: 'codex',
+  });
+}
+
+function reconcileAgentMessageProgress(
+  itemId: string,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  const deltaText = ctx.rt.itemDeltaText.get(itemId);
+  const snapshotText = ctx.rt.itemSnapshotText.get(itemId);
+  const currentText = ctx.rt.itemRawText.get(itemId) ?? '';
+
+  let candidate: string | undefined;
+  if (deltaText === undefined) {
+    candidate = snapshotText;
+  } else if (snapshotText === undefined) {
+    candidate = deltaText;
+  } else if (deltaText.startsWith(snapshotText)) {
+    candidate = deltaText;
+  } else if (snapshotText.startsWith(deltaText)) {
+    candidate = snapshotText;
+  } else if (deltaText.startsWith(currentText)) {
+    // 两个源分叉后锁定仍能延续已发前缀的专用 delta，不混拼快照尾巴。
+    candidate = deltaText;
+  } else if (snapshotText.startsWith(currentText)) {
+    // 快照先到时同理锁定快照流；delta 追平后会自动恢复共识。
+    candidate = snapshotText;
+  }
+
+  if (candidate !== undefined) emitAgentMessageProgress(itemId, candidate, queue, ctx);
+}
+
+/**
+ * Codex 专用正文 delta。专用流与 item/updated 快照共用同一份已发长度，二者同时
+ * 出现时不会重复；快照缺席时也能保持与 Claude Code / Pi 相同的实时正文契约。
+ */
+export function translateAgentMessageDelta(
+  params: AgentMessageDeltaNotification['params'],
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  if (!params.delta) return;
+  const currentText = ctx.rt.itemRawText.get(params.itemId) ?? '';
+  const previousDeltaText = ctx.rt.itemDeltaText.get(params.itemId) ?? '';
+  let rawText: string;
+  if (currentText.startsWith(previousDeltaText) && currentText.length > previousDeltaText.length) {
+    // 快照已经比 dedicated delta 游标超前：新 chunk 可能是延迟重放的补齐段，
+    // 也可能是漏帧之后的真新文本。先消费与快照 gap 的重叠，再把剩余部分追加。
+    const snapshotGap = currentText.slice(previousDeltaText.length);
+    if (snapshotGap.startsWith(params.delta)) {
+      rawText = previousDeltaText + params.delta;
+    } else if (params.delta.startsWith(snapshotGap)) {
+      rawText = currentText + params.delta.slice(snapshotGap.length);
+    } else {
+      rawText = currentText + params.delta;
+    }
+  } else {
+    rawText = previousDeltaText + params.delta;
+  }
+  ctx.rt.itemDeltaText.set(params.itemId, rawText);
+  reconcileAgentMessageProgress(params.itemId, queue, ctx);
+}
+
 function handleAgentMessage(
   phase: ItemPhase,
   item: AgentMessageItem,
@@ -822,12 +1125,12 @@ function handleAgentMessage(
   ctx: CodexTranslateContext,
 ): void {
   const rawText = item.text ?? '';
-  // itemTextLen 记录的是**归一化后已发出**的长度:citation 替换会改变文本长度,
-  // diff 必须在归一化空间里做,不能混用原文长度。
-  const prevLen = ctx.rt.itemTextLen.get(item.id) ?? 0;
 
   if (phase === 'completed') {
     ctx.rt.itemTextLen.delete(item.id);
+    ctx.rt.itemRawText.delete(item.id);
+    ctx.rt.itemDeltaText.delete(item.id);
+    ctx.rt.itemSnapshotText.delete(item.id);
     // 既有契约:completed 只出 final 全文、不补 delta(desktop codexTranslator.test
     // 钉死 3 事件形状)。boundary 按住的尾段与「completed 才首次出现的文本」同一待遇:
     // 不进 delta 流,由 final 全文兜底(main 落库层 onAssistantTextEvent 的 isFinal
@@ -838,23 +1141,14 @@ function handleAgentMessage(
     // finalizeCodexCitationText 是与历史导入共用的统一口径。
     queue.push({
       type: 'text',
-      data: { text: finalizeCodexCitationText(rawText), isFinal: true },
+      data: { text: finalizeCodexCitationText(rawText), isFinal: true, isFullText: true },
       source: 'codex',
     });
     return;
   }
 
-  const emitted = stripInternalWebCitations(
-    normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText))),
-  );
-  const delta = emitted.slice(prevLen);
-  ctx.rt.itemTextLen.set(item.id, emitted.length);
-  if (delta.length === 0) return;
-  queue.push({
-    type: 'text',
-    data: { text: delta, isFinal: false },
-    source: 'codex',
-  });
+  ctx.rt.itemSnapshotText.set(item.id, rawText);
+  reconcileAgentMessageProgress(item.id, queue, ctx);
 }
 
 // ── reasoning → thinking {stage} ─────────────────────────────────────────────
@@ -1544,6 +1838,18 @@ function handleCollabAgentToolCall(
   }
 
   // completed
+  // Some app-server versions omit item/started and send only the terminal
+  // collab snapshot. Reconstruct the tool-use boundary before the result so
+  // the late background item still has a renderer/persistence anchor.
+  const hadToolUse = ctx.rt.emittedToolUse.has(item.id);
+  if (!hadToolUse) {
+    ctx.rt.emittedToolUse.add(item.id);
+    queue.push({
+      type: 'tool_use',
+      data: { toolUseId: item.id, toolName, input },
+      source: 'codex',
+    });
+  }
   ctx.rt.emittedToolUse.delete(item.id);
   const isError = item.status === 'failed';
   const fullText = formatCodexAgentStatesSummary(item.agentsStates) ?? (isError ? 'failed' : item.status);

@@ -127,6 +127,8 @@ describe('renderOrcaLeadSystemPrompt', () => {
 describe('renderOrcaWorkerSystemPrompt', () => {
   const subagentHint =
     'If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). If you have no native subagent mechanism, tell the user so instead of substituting an Orca Worker or spawning processes yourself; an Orca Worker is never a substitute for a subagent.';
+  const workerSubagentReportingBoundary =
+    'If you use native subagents, have them return findings only to you. Never tell them to contact the Lead or call send_to_lead; aggregate their results and report to the Lead yourself.';
 
   const workerMeta = {
     workerId: 'worker-1',
@@ -139,6 +141,20 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
 
     expect(prompt).toContain(subagentHint);
+  });
+
+  it('keeps native subagent reporting with the Orca Worker', () => {
+    const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
+    expect(prompt).toContain(workerSubagentReportingBoundary);
+    expect(prompt).toContain('3. ALWAYS call send_to_lead when complete or blocked.');
+    expect(prompt).toContain('4. Report once; do not send progress updates.');
+    expect(prompt).toContain('10. If the user asks for a "subagent" / "子代理"');
+    expect(prompt.indexOf('3. ALWAYS call send_to_lead')).toBeLessThan(
+      prompt.indexOf(workerSubagentReportingBoundary),
+    );
+    expect(prompt.indexOf(workerSubagentReportingBoundary)).toBeLessThan(
+      prompt.indexOf('4. Report once; do not send progress updates.'),
+    );
   });
 
   it('keeps the subagent routing hint with worker identity metadata', () => {
