@@ -13,4 +13,25 @@ describe('CodexAutomationImportDialog spinner contract', () => {
     expect(source).toContain('<Spinner size={13} />');
     expect(source).not.toMatch(/<Loader2[^>]*animate-spin/);
   });
+
+  it('disables the footer close button while preview or import is busy', () => {
+    expect(source).toContain('disabled={loading || importing}');
+  });
+
+  it('uses a translated fallback for unknown RRULE values', () => {
+    expect(source).not.toContain("'RRULE ?'");
+    expect(source).toContain("t('scheduler.codexImport.unknownRrule')");
+  });
+
+  it('defines the unknown RRULE fallback in every supported locale', async () => {
+    const localeFiles = ['en', 'ja', 'ko', 'zh-CN'].map((locale) =>
+      resolve(__dirname, '../../../../i18n/locales', locale, 'common.json'),
+    );
+    for (const localeFile of localeFiles) {
+      const messages = JSON.parse(readFileSync(localeFile, 'utf8')) as {
+        scheduler?: { codexImport?: { unknownRrule?: unknown } };
+      };
+      expect(typeof messages.scheduler?.codexImport?.unknownRrule).toBe('string');
+    }
+  });
 });

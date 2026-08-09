@@ -7089,6 +7089,7 @@
       "title": "Codex の自動化をインポート",
       "description": "Codex の定期タスクを確認し、Cindy に作成するものを選択します。",
       "loading": "Codex の自動化を読み込み中…",
+      "unknownRrule": "RRULE 不明",
       "empty": "Codex の自動化が見つかりません。",
       "loadFailed": "Codex の自動化を読み込めませんでした：{{error}}",
       "available": "{{count}} 件をインポート可能",

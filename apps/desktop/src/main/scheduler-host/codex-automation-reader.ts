@@ -233,7 +233,18 @@ async function readAutomationFile(rootDir: string, id: string): Promise<CodexAut
       );
     }
     const rawText = await fs.readFile(sourcePath, 'utf8');
-    return parseAutomation(id, sourcePath, rawText);
+    const detail = parseAutomation(id, sourcePath, rawText);
+    try {
+      await fs.lstat(path.join(rootDir, id, 'memory.md'));
+      detail.diagnostics.push(
+        'memory.md is not supported for automatic import; manual migration required',
+      );
+    } catch (memoryError) {
+      if ((memoryError as NodeJS.ErrnoException).code !== 'ENOENT') {
+        detail.diagnostics.push(`cannot inspect memory.md: ${filesystemErrorCode(memoryError)}`);
+      }
+    }
+    return detail;
   } catch (error) {
     return fallbackItem(id, sourcePath, filesystemDiagnostic('read', error));
   }

@@ -7101,6 +7101,7 @@
       "title": "Import Codex automations",
       "description": "Review your Codex scheduled tasks and choose which ones to create in Cindy.",
       "loading": "Reading Codex automations…",
+      "unknownRrule": "RRULE unknown",
       "empty": "No Codex automations found.",
       "loadFailed": "Could not read Codex automations: {{error}}",
       "available": "{{count}} can be imported",

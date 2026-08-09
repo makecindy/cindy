@@ -148,6 +148,31 @@ describe('createCodexAutomationReader', () => {
     expect(item?.diagnostics).toContain('cwds entries exceed maximum length of 32000 characters');
   });
 
+  it('blocks automatic import when the automation has a sibling memory.md', async () => {
+    const root = await makeRoot();
+    await writeAutomation(
+      root,
+      'with-memory',
+      [
+        'version = 1',
+        'id = "with-memory"',
+        'kind = "cron"',
+        'name = "With memory"',
+        'prompt = "Use the automation memory"',
+        'status = "ACTIVE"',
+        'rrule = "FREQ=DAILY;BYHOUR=9;BYMINUTE=0"',
+        'cwds = ["C:\\\\newlife"]',
+      ].join('\n'),
+    );
+    await fs.writeFile(path.join(root, 'with-memory', 'memory.md'), '# Persistent context', 'utf8');
+
+    const item = await createCodexAutomationReader({ rootDir: root }).get('with-memory');
+
+    expect(item?.diagnostics).toContain(
+      'memory.md is not supported for automatic import; manual migration required',
+    );
+  });
+
   it('refuses non-regular automation.toml paths', async () => {
     const root = await makeRoot();
     await fs.mkdir(path.join(root, 'directory-file', 'automation.toml'), { recursive: true });

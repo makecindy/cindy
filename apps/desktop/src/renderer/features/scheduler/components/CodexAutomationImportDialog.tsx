@@ -244,6 +244,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                   <button
                     type="button"
                     className="mt-2 underline"
+                    disabled={loading || importing}
                     onClick={() => handleOpenChange(false)}
                   >
                     {t('scheduler.button.close')}
@@ -294,7 +295,7 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
                               {item.name}
                             </span>
                             <span className="rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 text-[var(--confirm-desc)]">
-                              {item.rrule || 'RRULE ?'}
+                              {item.rrule || t('scheduler.codexImport.unknownRrule')}
                             </span>
                             {item.duplicate && (
                               <span className="text-10 text-[var(--warning-fg)]">
@@ -385,8 +386,9 @@ export function CodexAutomationImportDialog({ open, onOpenChange, onImported }: 
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                disabled={loading || importing}
                 onClick={() => handleOpenChange(false)}
-                className="rounded-full border border-[var(--confirm-btn-secondary-border)] px-3 py-1.5 text-12 text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]"
+                className="rounded-full border border-[var(--confirm-btn-secondary-border)] px-3 py-1.5 text-12 text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {t('scheduler.button.close')}
               </button>
