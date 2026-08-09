@@ -300,6 +300,7 @@ import {
 import {
   ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage,
+  getRecoveryContextSnapshot,
   markSessionTurnEnded,
   markSessionTurnEndedAfterBarrier,
   markSessionTurnStarted,
@@ -9835,6 +9836,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasAssistantProgressAfter: async (sessionId, userClientId) => {
       await drainPersistQueue();
       return hasAssistantProgressAfterMessage(sessionId, userClientId);
+    },
+    getRecoveryContextSnapshot: async (sessionId, userClientId) => {
+      await drainPersistQueue();
+      return getRecoveryContextSnapshot(sessionId, userClientId);
     },
     // retry-supersede:零产出重试的克隆行落库并派发成功后,软删被取代的旧 user 行
     // 与其后的 error 行(实现与守卫见 localDb/ipc/messages.supersedeRetriedUserTurn)。

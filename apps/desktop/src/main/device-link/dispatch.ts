@@ -81,6 +81,7 @@ import { createOfflinePushQueue } from './offlinePushQueue';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { RECOVERY_CHECKPOINT_MARKER } from '../maker-ipc/recoveryCoordinator.js';
 import { projectInteractionRequestForRemote } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import {
   remoteWorkingDirRejectionToIpcError,
@@ -1159,6 +1160,20 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   if (!topic) return;
   let remotePayload = payload;
   if (
+    channel === 'local-db:messages:created' &&
+    payload &&
+    typeof payload === 'object' &&
+    'message' in payload
+  ) {
+    const msg = (payload as { message: unknown }).message;
+    if (msg && typeof msg === 'object' && !Array.isArray(msg)) {
+      const sanitized = stripRecoveryCheckpointFromMessage(msg as Record<string, unknown>);
+      if (sanitized !== msg) {
+        remotePayload = { ...payload, message: sanitized };
+      }
+    }
+  }
+  if (
     channel === MAKER_PUSH.INTERACTION_REQUEST &&
     payload &&
     typeof payload === 'object' &&
@@ -1976,6 +1991,22 @@ function normalizeInvokeResultForWire(result: InvokeResultPayload): InvokeResult
   };
 }
 
+function sanitizeMessageInvokeResult(
+  result: InvokeResultPayload,
+  channel: string | undefined,
+): InvokeResultPayload {
+  if (!channel || !REMOTE_MESSAGE_CHANNELS.has(channel)) return result;
+  if (!result.ok || !Array.isArray(result.result)) return result;
+  let changed = false;
+  const sanitized = result.result.map((msg: unknown) => {
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return msg;
+    const out = stripRecoveryCheckpointFromMessage(msg as Record<string, unknown>);
+    if (out !== msg) changed = true;
+    return out;
+  });
+  return changed ? { ok: true, result: sanitized } : result;
+}
+
 /**
  * 发送 invoke-result,并对「结果帧超 MAX_FRAME_BYTES」和本地发送背压兜底。
  * sendInvokeResult → sendEnvelope 在结果超限时抛 PAYLOAD_TOO_LARGE;若不接住,异常会冒泡到
@@ -1995,7 +2026,7 @@ function sendInvokeResultSafe(
   fingerprint?: string,
 ): boolean {
   const key = `${src}\u0000${requestId}`;
-  const normalized = normalizeInvokeResultForWire(result);
+  const normalized = sanitizeMessageInvokeResult(normalizeInvokeResultForWire(result), channel);
   const attempt = trySendInvokeResult(client, src, requestId, normalized, channel, args);
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
@@ -2328,7 +2359,9 @@ function compactRemoteMessageForDeviceLink(message: unknown): unknown {
   const record = message as Record<string, unknown>;
   if (record.role === 'tool_use') {
     const compactContent = compactRemoteToolUseContent(record.content, false);
-    if (compactContent === record.content) return message;
+    if (compactContent === record.content) {
+      return stripRecoveryCheckpointFromMessage(record);
+    }
     return {
       ...record,
       agentMeta: markRemoteContentTruncated(record.agentMeta),
@@ -2339,7 +2372,9 @@ function compactRemoteMessageForDeviceLink(message: unknown): unknown {
     ? REMOTE_TOOL_RESULT_CONTENT_LIMIT
     : REMOTE_MESSAGE_CONTENT_LIMIT;
   const compactContent = compactRemoteMessageContent(record.content, contentLimit);
-  if (compactContent === record.content) return message;
+  if (compactContent === record.content) {
+    return stripRecoveryCheckpointFromMessage(record);
+  }
   return {
     ...record,
     agentMeta: markRemoteContentTruncated(record.agentMeta),
@@ -2367,9 +2402,32 @@ function markRemoteRowsTrimmed(messages: unknown[], originalCount: number): unkn
 }
 
 function mergeRemoteAgentMeta(agentMeta: unknown, patch: Record<string, unknown>): Record<string, unknown> {
-  return agentMeta && typeof agentMeta === 'object' && !Array.isArray(agentMeta)
-    ? { ...(agentMeta as Record<string, unknown>), ...patch }
-    : { ...patch };
+  if (!agentMeta || typeof agentMeta !== 'object' || Array.isArray(agentMeta)) {
+    return { ...patch };
+  }
+  const { recoveryCheckpoint: _, ...safe } = agentMeta as Record<string, unknown>;
+  return { ...safe, ...patch };
+}
+
+function stripRecoveryCheckpointFromMessage(record: Record<string, unknown>): Record<string, unknown> {
+  const agentMeta = record.agentMeta;
+  const hasCheckpointInMeta = agentMeta && typeof agentMeta === 'object' && !Array.isArray(agentMeta) &&
+    'recoveryCheckpoint' in (agentMeta as Record<string, unknown>);
+  const content = record.content;
+  const checkpointIdx = typeof content === 'string'
+    ? (content as string).indexOf(RECOVERY_CHECKPOINT_MARKER)
+    : -1;
+  const hasCheckpointInContent = checkpointIdx >= 0;
+  if (!hasCheckpointInMeta && !hasCheckpointInContent) return record;
+  const result: Record<string, unknown> = { ...record };
+  if (hasCheckpointInMeta) {
+    const { recoveryCheckpoint: _, ...safeMeta } = agentMeta as Record<string, unknown>;
+    result.agentMeta = safeMeta;
+  }
+  if (hasCheckpointInContent) {
+    result.content = (content as string).slice(0, checkpointIdx);
+  }
+  return result;
 }
 
 function compactRemoteMessageContent(content: unknown, limit: number): unknown {
