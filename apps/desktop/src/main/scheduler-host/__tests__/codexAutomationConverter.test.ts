@@ -6,6 +6,7 @@ import { convertCodexAutomation, codexRruleToCron } from '../codex-automation-co
 function detail(overrides: Partial<CodexAutomationDetail> = {}): CodexAutomationDetail {
   return {
     id: 'ddl',
+    kind: 'cron',
     name: 'DDL patrol',
     prompt: 'Read AGENTS.md and report upcoming deadlines.',
     status: 'ACTIVE',
@@ -139,6 +140,25 @@ describe('convertCodexAutomation', () => {
 
     expect(result.canImport).toBe(false);
     expect(result.diagnostics.join(' ')).toContain('not recognized');
+  });
+
+  it('rejects thread-bound heartbeat automations instead of creating standalone cron schedules', () => {
+    const result = convertCodexAutomation(
+      detail({ kind: 'heartbeat', target: { type: 'thread' } }),
+      { timezone: 'UTC' },
+    );
+
+    expect(result.canImport).toBe(false);
+    expect(result.input).toBeUndefined();
+    expect(result.diagnostics.join(' ')).toContain('heartbeat');
+  });
+
+  it('rejects automations without an explicit cron kind', () => {
+    const result = convertCodexAutomation(detail({ kind: undefined }), { timezone: 'UTC' });
+
+    expect(result.canImport).toBe(false);
+    expect(result.input).toBeUndefined();
+    expect(result.diagnostics.join(' ')).toContain('only cron automations');
   });
 
   it('does not import a task with an unsupported environment or cwd', () => {

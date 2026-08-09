@@ -12,7 +12,8 @@ function run(db: Database.Database): void {
     db.exec(`
       UPDATE schedules
       SET origin_kind = NULL,
-          origin_id = NULL
+          origin_id = NULL,
+          status = CASE WHEN status = 'active' THEN 'paused' ELSE status END
       WHERE id IN (
         SELECT id
         FROM (

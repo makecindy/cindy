@@ -215,6 +215,13 @@ describe('createCodexAutomationReader', () => {
     await expect(reader.list()).resolves.toEqual([]);
   });
 
+  it('rejects the root directory alias instead of reading root automation.toml', async () => {
+    const root = await makeRoot();
+    await fs.writeFile(path.join(root, 'automation.toml'), 'name = "root file"', 'utf8');
+
+    await expect(createCodexAutomationReader({ rootDir: root }).get('.')).resolves.toBeNull();
+  });
+
   it('sanitizes root filesystem errors without exposing the root path', async () => {
     const root = await makeRoot();
     const sourcePath = path.join(root, 'automation.toml');

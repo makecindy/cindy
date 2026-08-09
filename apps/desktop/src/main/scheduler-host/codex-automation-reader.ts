@@ -270,7 +270,7 @@ export function createCodexAutomationReader(
       return items;
     },
     async get(id: string): Promise<CodexAutomationDetail | null> {
-      if (!id || id.includes('..') || path.basename(id) !== id) return null;
+      if (!id || id === '.' || id.includes('..') || path.basename(id) !== id) return null;
       const sourcePath = path.join(rootDir, id, 'automation.toml');
       try {
         await fs.access(sourcePath);

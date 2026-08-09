@@ -9,7 +9,7 @@ const migration0090 =
   };
 
 describe('0090 schedule origin uniqueness migration', () => {
-  it('clears duplicate legacy origins before creating the unique index', () => {
+  it('pauses duplicate active schedules before clearing their legacy origins', () => {
     const db = new Database(':memory:');
     try {
       db.exec(`
@@ -17,6 +17,7 @@ describe('0090 schedule origin uniqueness migration', () => {
           id TEXT PRIMARY KEY NOT NULL,
           origin_kind TEXT,
           origin_id TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         );
@@ -32,13 +33,13 @@ describe('0090 schedule origin uniqueness migration', () => {
       migration0090.run(db);
 
       expect(
-        db.prepare('SELECT id, origin_kind, origin_id FROM schedules ORDER BY id').all(),
+        db.prepare('SELECT id, origin_kind, origin_id, status FROM schedules ORDER BY id').all(),
       ).toEqual([
-        { id: 'local', origin_kind: null, origin_id: null },
-        { id: 'newer', origin_kind: 'codex-automation', origin_id: 'daily' },
-        { id: 'older', origin_kind: null, origin_id: null },
-        { id: 'other', origin_kind: 'codex-automation', origin_id: 'weekly' },
-        { id: 'partial', origin_kind: 'codex-automation', origin_id: null },
+        { id: 'local', origin_kind: null, origin_id: null, status: 'active' },
+        { id: 'newer', origin_kind: 'codex-automation', origin_id: 'daily', status: 'active' },
+        { id: 'older', origin_kind: null, origin_id: null, status: 'paused' },
+        { id: 'other', origin_kind: 'codex-automation', origin_id: 'weekly', status: 'active' },
+        { id: 'partial', origin_kind: 'codex-automation', origin_id: null, status: 'active' },
       ]);
       expect(
         db

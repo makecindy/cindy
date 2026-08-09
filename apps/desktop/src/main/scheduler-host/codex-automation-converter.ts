@@ -217,6 +217,12 @@ export function convertCodexAutomation(
   if (!['ACTIVE', 'PAUSED', 'DISABLED', 'INACTIVE'].includes(detail.status.toUpperCase())) {
     blockingDiagnostics.push(`Codex status ${detail.status || '(empty)'} is not recognized`);
   }
+  const automationKind = detail.kind?.trim().toLowerCase();
+  if (automationKind !== 'cron') {
+    const message = `Codex automation kind ${detail.kind?.trim() || '(missing)'} is not supported; only cron automations can be imported`;
+    diagnostics.push(message);
+    blockingDiagnostics.push(message);
+  }
   if (!detail.name.trim()) {
     const message = 'name must not be empty';
     diagnostics.push(message);
