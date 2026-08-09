@@ -402,6 +402,16 @@ describe('approvalSignature — 可记忆判据', () => {
       'cat deploy.sql |& psql -X prod',
       'true && cat deploy.sql | psql -X prod',
       'cat deploy.sql | { psql -X prod; }',
+      "psql -X prod -c '\\i deploy.sql'",
+      "psql --no-psqlrc prod --command '\\ir ./deploy.sql'",
+      "psql -X prod --command='\\include deploy.sql'",
+      "psql -X prod --command='\\include_relative ./deploy.sql'",
+      "psql -X prod -c'\\i deploy.sql'",
+      "psql.exe -X prod '\\i deploy.sql'",
+      "env psql -X prod '\\include_relative ./deploy.sql'",
+      "psql -X prod -c '  \\ir ./deploy.sql'",
+      "psql -X prod -c $'\\\\i deploy.sql'",
+      "psql -X prod -c 'select 1' && psql -X prod -c '\\i deploy.sql'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -419,6 +429,10 @@ describe('approvalSignature — 可记忆判据', () => {
       'echo ok # cat deploy.sql | psql -X prod',
       "cat deploy.sql | wc -l && psql -X prod -c 'select 1'",
       "false || psql -X prod -c 'select 1'",
+      "psql -X prod -c \"select '\\i deploy.sql'\"",
+      "psql -X prod -c '\\if :enabled'",
+      "psql -X prod -c '\\irregular'",
+      "echo psql -X prod -c '\\i deploy.sql'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
@@ -431,9 +445,10 @@ describe('approvalSignature — 可记忆判据', () => {
       exec("psql prod -c 'select 1'"),
       exec('psql -X -f ./deploy.sql prod'),
       exec('cat deploy.sql | psql -X prod'),
+      exec("psql -X prod -c '\\i deploy.sql'"),
     ]) {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
-      // psqlrc、deploy.sql 或管道输入被替换时，各入口都从未写入可复用摘要。
+      // psqlrc、deploy.sql、元命令文件或管道输入被替换时，各入口都不写入摘要。
       expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
     }
     expect(memory.size()).toBe(0);

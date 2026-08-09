@@ -284,6 +284,18 @@ function sqliteMayLoadMutableFileState(args: readonly string[]): boolean {
   return false;
 }
 
+const PSQL_MUTABLE_FILE_META_COMMAND_PATTERN =
+  /(?:^|[\r\n])\s*\\+(?:include_relative|include|ir|i)(?=\s|$)/;
+
+function psqlArgumentMayLoadMutableFile(arg: string): boolean {
+  let command = arg;
+  if (arg.startsWith('--command=')) command = arg.slice('--command='.length);
+  else if (arg.startsWith('-c') && arg.length > 2) command = arg.slice(2);
+  // tokenize 会为 ANSI-C quote 保留 `$'` 标记；去掉标记后仍按同一元命令入口判定。
+  if (command.startsWith("$'")) command = command.slice(2);
+  return PSQL_MUTABLE_FILE_META_COMMAND_PATTERN.test(command);
+}
+
 function psqlMayLoadMutableUserState(args: readonly string[]): boolean {
   const optionTerminator = args.indexOf('--');
   const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
@@ -292,6 +304,9 @@ function psqlMayLoadMutableUserState(args: readonly string[]): boolean {
     || (arg.startsWith('-f') && arg.length > 2)
     || arg === '--file'
     || arg.startsWith('--file='))) return true;
+  // -c / --command 的独立值、紧凑值，以及位置命令都可能执行 \i / \ir 的文件输入。
+  // 长别名 \include / \include_relative 走同一入口；文件内容变化后必须重新审核。
+  if (args.some(psqlArgumentMayLoadMutableFile)) return true;
   // psql 默认读取系统级与用户级 psqlrc（含 PSQLRC 指定的位置）。只信任 `--` 前
   // 大小写精确的禁用选项；缩写、紧凑簇或终止符后的位置参数保持逐次审核。
   return !options.includes('-X') && !options.includes('--no-psqlrc');
