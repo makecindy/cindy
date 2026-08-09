@@ -1,13 +1,18 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+type TestMode = 'signed-out' | 'local' | 'cloud';
 
 const harness = vi.hoisted(() => ({
-  settings: {
-    pinnedOrder: [] as string[],
-    hiddenProjectKeys: [] as string[],
+  root: '',
+  session: {
+    mode: 'cloud' as TestMode,
+    dataOwnerId: 'owner-a' as string | null,
+    generation: 1,
   },
-  storeOptions: undefined as unknown,
-  storeSet: vi.fn(),
-  loggerError: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => unknown>(),
   send: vi.fn(),
@@ -15,9 +20,12 @@ const harness = vi.hoisted(() => ({
   untrustedSend: vi.fn(),
   destroyedSend: vi.fn(),
   assertTrusted: vi.fn(),
+  loggerError: vi.fn(),
+  loggerWarn: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
+  app: { getPath: () => harness.root },
   BrowserWindow: {
     getAllWindows: () => [
       { appContent: true, isDestroyed: () => false, webContents: { send: harness.send } },
@@ -44,33 +52,37 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('electron-store', () => ({
-  default: class MockStore {
-    constructor(options: unknown) {
-      harness.storeOptions = options;
-    }
-
-    get(key: string, fallback: string[]) {
-      return (harness.settings as Record<string, string[]>)[key] ?? fallback;
-    }
-
-    set(key: string, value: string[]) {
-      const snapshot = Array.from(value);
-      harness.storeSet(key, snapshot);
-      (harness.settings as Record<string, string[]>)[key] = snapshot;
-    }
-  },
+vi.mock('../appSessionState.js', () => ({
+  activeOwnerScopeKey: () =>
+    `${harness.session.mode}:${harness.session.dataOwnerId ?? 'none'}:${harness.session.generation}`,
+  dataOwnerStorageKey: (ownerId: string) => `key-${ownerId}`,
+  getActiveAppSession: () => ({ ...harness.session }),
+  getActiveDataOwnerPushStamp: () => ({
+    dataOwnerId: harness.session.dataOwnerId,
+    ownerGeneration: harness.session.generation,
+  }),
+  isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: (...parts: string[]) =>
+    path.join(harness.root, 'owners', `key-${harness.session.dataOwnerId ?? 'none'}`, ...parts),
 }));
 
-vi.mock('../logger', () => ({
-  createLogger: () => ({ error: harness.loggerError }),
+vi.mock('../ownerNamespaceMigration.js', () => ({
+  hasLegacyOwnerNamespaceClaim: () => true,
 }));
 
-vi.mock('../security/trustedAppRenderer', () => ({
+vi.mock('../logger.js', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: harness.loggerWarn,
+    error: harness.loggerError,
+  }),
+}));
+
+vi.mock('../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: (...args: unknown[]) => harness.assertTrusted(...args),
 }));
 
-vi.mock('../windowFocusClassifier', () => ({
+vi.mock('../windowFocusClassifier.js', () => ({
   isAppContentWindow: (window: { appContent?: boolean; isDestroyed: () => boolean }) =>
     window.appContent === true && !window.isDestroyed(),
 }));
@@ -81,14 +93,55 @@ function setPlatform(value: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value, configurable: true });
 }
 
+function setSession(mode: TestMode, dataOwnerId: string | null): void {
+  harness.session = {
+    mode,
+    dataOwnerId,
+    generation: harness.session.generation + 1,
+  };
+}
+
+function ownerFile(ownerId = harness.session.dataOwnerId): string {
+  return path.join(harness.root, 'owners', `key-${ownerId}`, 'sidebar-settings.json');
+}
+
+function request<T extends object>(value: T) {
+  return {
+    dataOwnerId: harness.session.dataOwnerId,
+    ownerGeneration: harness.session.generation,
+    ...value,
+  };
+}
+
+async function pinnedHandler(payload: unknown): Promise<string[]> {
+  const handler = harness.handlers.get('sidebar-settings:save-pinned-order');
+  expect(handler).toBeDefined();
+  return (await handler?.({}, payload)) as string[];
+}
+
+async function hiddenHandler(payload: unknown): Promise<boolean> {
+  const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+  expect(handler).toBeDefined();
+  return (await handler?.({}, payload)) as boolean;
+}
+
+function loadSnapshot(): {
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+  pinnedOrder: string[];
+  hiddenProjectKeys: string[];
+} {
+  const listener = harness.listeners.get('sidebar-settings:load-snapshot-sync');
+  const event: { returnValue?: ReturnType<typeof loadSnapshot> } = {};
+  listener?.(event);
+  return event.returnValue as ReturnType<typeof loadSnapshot>;
+}
+
 describe('sidebarSettingsStore', () => {
   beforeEach(async () => {
     setPlatform('win32');
-    harness.settings.pinnedOrder = [];
-    harness.settings.hiddenProjectKeys = [];
-    harness.storeOptions = undefined;
-    harness.storeSet.mockReset();
-    harness.loggerError.mockReset();
+    harness.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-sidebar-owner-state-'));
+    harness.session = { mode: 'cloud', dataOwnerId: 'owner-a', generation: 1 };
     harness.handlers.clear();
     harness.listeners.clear();
     harness.send.mockReset();
@@ -96,6 +149,8 @@ describe('sidebarSettingsStore', () => {
     harness.untrustedSend.mockReset();
     harness.destroyedSend.mockReset();
     harness.assertTrusted.mockReset();
+    harness.loggerError.mockReset();
+    harness.loggerWarn.mockReset();
     vi.resetModules();
 
     const { registerSidebarSettingsIpc } = await import('../sidebarSettingsStore');
@@ -106,165 +161,194 @@ describe('sidebarSettingsStore', () => {
     setPlatform(originalPlatform);
   });
 
-  it('broadcasts a validated pinned-order snapshot to every live window', () => {
-    const handler = harness.handlers.get('sidebar-settings:save-pinned-order');
-    const event = {};
+  afterEach(() => {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  });
+
+  it('isolates pinned and hidden state by owner', async () => {
+    await pinnedHandler(
+      request({
+        mutation: {
+          kind: 'migrate-legacy',
+          order: ['project:local:/workspace/a', 'session-a'],
+        },
+      }),
+    );
+    await hiddenHandler(request({ projectKey: 'C:\\workspace\\alpha\\', hidden: true }));
+    expect(loadSnapshot()).toMatchObject({
+      dataOwnerId: 'owner-a',
+      pinnedOrder: ['project:local:/workspace/a', 'session-a'],
+      hiddenProjectKeys: ['local:C:/workspace/alpha'],
+    });
+
+    setSession('cloud', 'owner-b');
+    expect(loadSnapshot()).toMatchObject({
+      dataOwnerId: 'owner-b',
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+    });
+    await pinnedHandler(
+      request({ mutation: { kind: 'migrate-legacy', order: ['session-b'] } }),
+    );
+
+    setSession('cloud', 'owner-a');
+    expect(loadSnapshot()).toMatchObject({
+      dataOwnerId: 'owner-a',
+      pinnedOrder: ['project:local:/workspace/a', 'session-a'],
+      hiddenProjectKeys: ['local:C:/workspace/alpha'],
+    });
+    expect(JSON.parse(fs.readFileSync(ownerFile('owner-b'), 'utf-8'))).toMatchObject({
+      pinnedOrder: ['session-b'],
+    });
+  });
+
+  it('broadcasts only after a durable owner-stamped pinned write', async () => {
     const order = ['project:local:/workspace/a', 'session-b'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order } }));
 
-    expect(handler).toBeDefined();
-    handler?.(event, order);
-
-    expect(harness.assertTrusted).toHaveBeenCalledWith(event);
-    expect(harness.settings.pinnedOrder).toEqual(order);
-    expect(harness.send).toHaveBeenCalledWith('sidebar-settings:pinned-order-changed', order);
-    expect(harness.sendSecond).toHaveBeenCalledWith('sidebar-settings:pinned-order-changed', order);
-    expect(harness.untrustedSend).not.toHaveBeenCalled();
-    expect(harness.destroyedSend).not.toHaveBeenCalled();
-  });
-
-  it('rejects malformed pinned-order payloads without persisting or broadcasting', () => {
-    const handler = harness.handlers.get('sidebar-settings:save-pinned-order');
-
-    expect(() => handler?.({}, ['valid', 42])).toThrow(
-      '[INVALID_PARAMS] invalid sidebar pinned order',
+    const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+    expect(harness.send).toHaveBeenCalledWith(
+      'sidebar-settings:pinned-order-changed',
+      order,
+      stamp,
     );
-    expect(harness.settings.pinnedOrder).toEqual([]);
-    expect(harness.send).not.toHaveBeenCalled();
-  });
-
-  it('guards and returns the persisted order for the synchronous initial read', () => {
-    harness.settings.pinnedOrder = ['project:local:/workspace/a'];
-    const listener = harness.listeners.get('sidebar-settings:load-pinned-order-sync');
-    const event: { returnValue?: string[] } = {};
-
-    listener?.(event);
-
-    expect(harness.assertTrusted).toHaveBeenCalledWith(event);
-    expect(event.returnValue).toEqual(harness.settings.pinnedOrder);
-  });
-
-  it('persists a normalized hidden-project intent and broadcasts only to app content windows', () => {
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
-    const event = {};
-
-    expect(handler?.(event, 'C:\\workspace\\alpha\\', true)).toBe(true);
-
-    expect(harness.assertTrusted).toHaveBeenCalledWith(event);
-    expect(harness.settings.hiddenProjectKeys).toEqual(['local:C:/workspace/alpha']);
-    expect(harness.storeSet).toHaveBeenCalledWith('hiddenProjectKeys', [
-      'local:C:/workspace/alpha',
-    ]);
-    expect(harness.send).toHaveBeenCalledWith('sidebar-settings:hidden-project-keys-changed', [
-      'local:C:/workspace/alpha',
-    ]);
     expect(harness.sendSecond).toHaveBeenCalledWith(
-      'sidebar-settings:hidden-project-keys-changed',
-      ['local:C:/workspace/alpha'],
+      'sidebar-settings:pinned-order-changed',
+      order,
+      stamp,
     );
     expect(harness.untrustedSend).not.toHaveBeenCalled();
     expect(harness.destroyedSend).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [42, true],
-    ['', true],
-    ['x'.repeat(4_097), true],
-    ['device:missing-working-dir', true],
-    ['local:/workspace/alpha', 'true'],
-  ])('rejects an invalid project-hidden intent (%j, %j)', (projectKey, hidden) => {
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+  it('rejects stale owner and generation stamps without touching either owner', async () => {
+    const staleOwner = request({ mutation: { kind: 'promote', entryId: 'session-a' } });
+    setSession('cloud', 'owner-b');
 
-    expect(() => handler?.({}, projectKey, hidden)).toThrow('[INVALID_PARAMS]');
-    expect(harness.settings.hiddenProjectKeys).toEqual([]);
-    expect(harness.storeSet).not.toHaveBeenCalled();
+    await expect(pinnedHandler(staleOwner)).rejects.toThrow(
+      '[PRECONDITION_FAILED] active account changed during sidebar mutation',
+    );
+    await expect(
+      pinnedHandler({
+        dataOwnerId: 'owner-b',
+        ownerGeneration: harness.session.generation - 1,
+        mutation: { kind: 'promote', entryId: 'session-b' },
+      }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(fs.existsSync(ownerFile('owner-a'))).toBe(false);
+    expect(fs.existsSync(ownerFile('owner-b'))).toBe(false);
     expect(harness.send).not.toHaveBeenCalled();
   });
 
-  it('treats repeated intents as no-ops and preserves pinned settings', () => {
-    harness.settings.pinnedOrder = ['project:local:/workspace/alpha', 'session-b'];
-    harness.settings.hiddenProjectKeys = ['local:/workspace/alpha'];
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+  it('drops a queued write when the owner changes while it waits for the file lock', async () => {
+    const file = ownerFile('owner-a');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      `${file}.lock`,
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
+      'utf-8',
+    );
 
-    expect(handler?.({}, 'local:/workspace/alpha/', true)).toBe(false);
+    const writing = pinnedHandler(
+      request({ mutation: { kind: 'promote', entryId: 'session-a' } }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    setSession('cloud', 'owner-b');
+    fs.unlinkSync(`${file}.lock`);
 
-    expect(harness.storeSet).not.toHaveBeenCalled();
+    await expect(writing).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(ownerFile('owner-b'))).toBe(false);
     expect(harness.send).not.toHaveBeenCalled();
-    expect(harness.settings.pinnedOrder).toEqual(['project:local:/workspace/alpha', 'session-b']);
-
-    expect(handler?.({}, 'local:/workspace/alpha', false)).toBe(true);
-
-    expect(harness.settings.hiddenProjectKeys).toEqual([]);
-    expect(harness.storeSet).toHaveBeenCalledTimes(1);
-    expect(harness.storeSet).toHaveBeenCalledWith('hiddenProjectKeys', []);
-    expect(harness.settings.pinnedOrder).toEqual(['project:local:/workspace/alpha', 'session-b']);
   });
 
-  it('restores a hidden Windows project across path casing differences', () => {
-    harness.settings.hiddenProjectKeys = ['local:C:/Workspace/Alpha'];
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+  it('merges sequential hidden intents against the latest main snapshot', async () => {
+    await hiddenHandler(request({ projectKey: 'local:/workspace/alpha', hidden: true }));
+    await hiddenHandler(request({ projectKey: 'local:/workspace/beta', hidden: true }));
 
-    expect(handler?.({}, 'local:c:/workspace/alpha', false)).toBe(true);
-
-    expect(harness.settings.hiddenProjectKeys).toEqual([]);
-    expect(harness.storeSet).toHaveBeenCalledWith('hiddenProjectKeys', []);
-    expect(harness.send).toHaveBeenCalledWith('sidebar-settings:hidden-project-keys-changed', []);
-    expect(harness.sendSecond).toHaveBeenCalledWith(
-      'sidebar-settings:hidden-project-keys-changed',
-      [],
-    );
-  });
-
-  it('keeps POSIX double-slash project keys case-sensitive', () => {
-    setPlatform('linux');
-    harness.settings.hiddenProjectKeys = ['local://mnt/Repo'];
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
-
-    expect(handler?.({}, 'local://mnt/repo', true)).toBe(true);
-    expect(harness.settings.hiddenProjectKeys).toEqual([
-      'local://mnt/Repo',
-      'local://mnt/repo',
-    ]);
-
-    expect(handler?.({}, 'local://mnt/Repo', false)).toBe(true);
-    expect(harness.settings.hiddenProjectKeys).toEqual(['local://mnt/repo']);
-    expect(harness.storeSet).toHaveBeenLastCalledWith(
-      'hiddenProjectKeys',
-      ['local://mnt/repo'],
-    );
-    expect(harness.send).toHaveBeenLastCalledWith(
-      'sidebar-settings:hidden-project-keys-changed',
-      ['local://mnt/repo'],
-    );
-  });
-
-  it('merges sequential window intents against the latest main-process snapshot', () => {
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
-
-    handler?.({ sender: 'window-a' }, 'local:/workspace/alpha', true);
-    handler?.({ sender: 'window-b' }, 'local:/workspace/beta', true);
-
-    expect(harness.settings.hiddenProjectKeys).toEqual([
+    expect(loadSnapshot().hiddenProjectKeys).toEqual([
       'local:/workspace/alpha',
       'local:/workspace/beta',
     ]);
-    expect(harness.send).toHaveBeenNthCalledWith(
-      2,
+    expect(harness.send).toHaveBeenLastCalledWith(
       'sidebar-settings:hidden-project-keys-changed',
       ['local:/workspace/alpha', 'local:/workspace/beta'],
+      { dataOwnerId: 'owner-a', ownerGeneration: 1 },
     );
   });
 
-  it('logs hidden-project persistence failures without exposing userData paths over IPC', () => {
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
-    const sensitivePath = 'C:\\Users\\person\\AppData\\Roaming\\Cindy\\sidebar-settings.json';
-    const originalError = new Error(`EPERM: cannot write '${sensitivePath}'`);
-    harness.storeSet.mockImplementationOnce(() => {
-      throw originalError;
-    });
+  it('merges concurrent promote intents against the latest pinned order', async () => {
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'project:a' } })),
+    ).resolves.toEqual(['project:a']);
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'project:b' } })),
+    ).resolves.toEqual(['project:b', 'project:a']);
+
+    expect(loadSnapshot().pinnedOrder).toEqual(['project:b', 'project:a']);
+  });
+
+  it('does not let a delayed legacy migration overwrite newer pinned state', async () => {
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } }));
+
+    await expect(
+      pinnedHandler(
+        request({ mutation: { kind: 'migrate-legacy', order: ['legacy-session'] } }),
+      ),
+    ).resolves.toEqual(['new-session']);
+    expect(loadSnapshot().pinnedOrder).toEqual(['new-session']);
+  });
+
+  it('rebases a stale drag without losing a pin from another window', async () => {
+    await pinnedHandler(
+      request({ mutation: { kind: 'migrate-legacy', order: ['session-a', 'session-b'] } }),
+    );
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-c' } }));
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: {
+            kind: 'reorder',
+            baseOrder: ['session-a', 'session-b'],
+            order: ['session-b', 'session-a'],
+          },
+        }),
+      ),
+    ).resolves.toEqual(['session-c', 'session-b', 'session-a']);
+  });
+
+  it('treats repeated hidden intents as no-ops without broadcasting', async () => {
+    await hiddenHandler(request({ projectKey: 'local:/workspace/alpha', hidden: true }));
+    harness.send.mockClear();
+
+    await expect(
+      hiddenHandler(request({ projectKey: 'local:/workspace/alpha/', hidden: true })),
+    ).resolves.toBe(false);
+    expect(harness.send).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed writes before persistence', async () => {
+    await expect(
+      pinnedHandler(
+        request({ mutation: { kind: 'migrate-legacy', order: ['valid', 42] } }),
+      ),
+    ).rejects.toThrow(
+      '[INVALID_PARAMS] invalid sidebar pinned order',
+    );
+    await expect(
+      hiddenHandler(request({ projectKey: 'device:missing-working-dir', hidden: true })),
+    ).rejects.toThrow('[INVALID_PARAMS]');
+    expect(fs.existsSync(ownerFile())).toBe(false);
+  });
+
+  it('logs pinned persistence failures, exposes a stable error, and does not broadcast', async () => {
+    fs.mkdirSync(ownerFile(), { recursive: true });
+    const sensitivePath = ownerFile();
 
     let thrown: unknown;
     try {
-      handler?.({}, 'local:/workspace/alpha', true);
+      await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } }));
     } catch (err) {
       thrown = err;
     }
@@ -273,88 +357,58 @@ describe('sidebarSettingsStore', () => {
     expect((thrown as Error).message).toBe('[INTERNAL] failed to persist sidebar settings');
     expect((thrown as Error).message).not.toContain(sensitivePath);
     expect(harness.loggerError).toHaveBeenCalledWith(
-      'failed to persist hidden sidebar projects',
-      originalError,
+      'failed to persist sidebar pinned order',
+      expect.any(Error),
     );
-    expect(harness.settings.hiddenProjectKeys).toEqual([]);
-    expect(harness.send).not.toHaveBeenCalled();
-    expect(harness.sendSecond).not.toHaveBeenCalled();
-  });
-
-  it('rejects hiding another project after the persisted limit is reached', () => {
-    harness.settings.hiddenProjectKeys = Array.from(
-      { length: 10_000 },
-      (_, index) => `local:/workspace/${index}`,
-    );
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
-
-    expect(() => handler?.({}, 'local:/workspace/overflow', true)).toThrow(
-      '[INVALID_PARAMS] too many hidden sidebar projects',
-    );
-    expect(harness.storeSet).not.toHaveBeenCalled();
     expect(harness.send).not.toHaveBeenCalled();
   });
 
-  it('guards and returns a normalized hidden-project snapshot for the synchronous initial read', () => {
-    harness.settings.hiddenProjectKeys = [
-      'local:/workspace/alpha/',
-      'local:/workspace/alpha',
-      'remote:host-a:/workspace/beta/',
-    ];
-    const listener = harness.listeners.get('sidebar-settings:load-hidden-project-keys-sync');
-    const event: { returnValue?: string[] } = {};
+  it('moves the shared legacy file only into the first verified cloud owner', () => {
+    const legacy = path.join(harness.root, 'sidebar-settings.json');
+    fs.writeFileSync(
+      legacy,
+      JSON.stringify({ pinnedOrder: ['legacy-session'], hiddenProjectKeys: [] }),
+      'utf-8',
+    );
 
-    listener?.(event);
+    setSession('local', 'local-v1');
+    expect(loadSnapshot().pinnedOrder).toEqual([]);
+    expect(fs.existsSync(legacy)).toBe(true);
 
-    expect(harness.assertTrusted).toHaveBeenCalledWith(event);
-    expect(event.returnValue).toEqual(['local:/workspace/alpha', 'remote:host-a:/workspace/beta']);
-    expect(harness.storeOptions).toMatchObject({
-      defaults: { pinnedOrder: [], hiddenProjectKeys: [] },
-      schema: {
-        hiddenProjectKeys: {
-          type: 'array',
-          maxItems: 10_000,
-          uniqueItems: true,
-          items: { type: 'string', minLength: 1, maxLength: 4_096 },
-        },
-      },
-    });
+    setSession('cloud', 'owner-a');
+    expect(loadSnapshot().pinnedOrder).toEqual(['legacy-session']);
+    expect(fs.existsSync(legacy)).toBe(false);
+
+    setSession('cloud', 'owner-b');
+    expect(loadSnapshot().pinnedOrder).toEqual([]);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'), 'utf-8'),
+      ),
+    ).toEqual({ version: 1, ownerKey: 'key-owner-a' });
   });
 
-  it('deduplicates Windows hidden-project keys without changing the first normalized spelling', () => {
-    harness.settings.hiddenProjectKeys = [
-      'local:C:\\Workspace\\Alpha\\',
-      'local:c:/workspace/alpha',
-    ];
-    const listener = harness.listeners.get('sidebar-settings:load-hidden-project-keys-sync');
-    const event: { returnValue?: string[] } = {};
+  it('fails closed when the sidebar legacy owner marker is malformed', () => {
+    fs.writeFileSync(
+      path.join(harness.root, 'sidebar-settings.json'),
+      '{"pinnedOrder":["legacy"]}',
+    );
+    fs.writeFileSync(path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json'), 'broken');
 
-    listener?.(event);
-
-    expect(event.returnValue).toEqual(['local:C:/Workspace/Alpha']);
+    expect(loadSnapshot().pinnedOrder).toEqual([]);
+    expect(fs.existsSync(path.join(harness.root, 'sidebar-settings.json'))).toBe(true);
   });
 
-  it('deduplicates Windows UNC hidden-project keys across casing and separators', () => {
-    harness.settings.hiddenProjectKeys = [
-      'local:\\\\Server\\Share\\Repo\\',
-      'local://server/share/repo',
-    ];
-    const listener = harness.listeners.get('sidebar-settings:load-hidden-project-keys-sync');
-    const event: { returnValue?: string[] } = {};
-
-    listener?.(event);
-
-    expect(event.returnValue).toEqual(['local://Server/Share/Repo']);
-  });
-
-  it('checks the trusted sender before accepting a project-hidden intent', () => {
-    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+  it('checks the trusted sender before accepting a mutation', async () => {
     harness.assertTrusted.mockImplementationOnce(() => {
       throw new Error('untrusted renderer');
     });
 
-    expect(() => handler?.({}, 'local:/workspace/alpha', true)).toThrow('untrusted renderer');
-    expect(harness.storeSet).not.toHaveBeenCalled();
-    expect(harness.send).not.toHaveBeenCalled();
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } })),
+    ).rejects.toThrow(
+      'untrusted renderer',
+    );
+    expect(fs.existsSync(ownerFile())).toBe(false);
   });
 });

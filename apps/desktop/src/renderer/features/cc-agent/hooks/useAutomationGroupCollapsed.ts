@@ -5,7 +5,7 @@
  * 它和组内「轴 2 = 前 5 条 / 显示全部」是两个完全独立的东西 —— 这里只管 disclosure。
  *
  * 折叠状态是**用户的明确选择,永久持久化、不按时间过期**:
- * - localStorage key: `cc-agent.sidebar.collapsedAutomationGroups`
+ * - owner-scoped localStorage key derived from `cc-agent.sidebar.collapsedAutomationGroups`
  * - 默认展开(storage 里没有该组 = 展开);仅持久化"已收起"的组
  * - **不做定时 GC** —— 收起就一直收起,直到用户再展开,绝不"用了一阵自己弹开"。
  *   删掉的定时任务会在本地留一条极小的孤儿记录(几十字节),量可忽略,不值得为清它引入
@@ -17,7 +17,9 @@
  */
 
 import { useCallback, useState } from 'react';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 
 const log = createLogger('UseAutomationGroupCollapsed');
 
@@ -32,9 +34,9 @@ interface StoredEntry {
 
 type Stored = Record<string, StoredEntry>;
 
-function loadStored(): Stored {
+function loadStored(ownerId: string | null): Stored {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readSidebarOwnerStorage(STORAGE_KEY, ownerId);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -57,23 +59,24 @@ function loadStored(): Stored {
   }
 }
 
-function writeStored(next: Stored): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  } catch (err) {
-    // quota exceeded / private mode / 无 localStorage → 当前会话仍生效,告警一次
-    log.warn('failed to write stored state:', err);
+function writeStored(next: Stored, ownerId: string | null): void {
+  if (!writeSidebarOwnerStorage(STORAGE_KEY, ownerId, JSON.stringify(next))) {
+    log.warn('failed to write stored state');
   }
 }
 
 /** 读取某个分组当前是否收起(默认 false = 展开)。 */
-export function isAutomationGroupCollapsed(groupKey: string): boolean {
-  return Boolean(loadStored()[groupKey]);
+export function isAutomationGroupCollapsed(groupKey: string, ownerId: string | null): boolean {
+  return Boolean(loadStored(ownerId)[groupKey]);
 }
 
 /** 写入某个分组的收起态:收起则记一条条目,展开则删除该 key(默认值跟随版本)。 */
-export function setAutomationGroupCollapsed(groupKey: string, collapsed: boolean): void {
-  const stored = loadStored();
+export function setAutomationGroupCollapsed(
+  groupKey: string,
+  collapsed: boolean,
+  ownerId: string | null,
+): void {
+  const stored = loadStored(ownerId);
   const wasCollapsed = Boolean(stored[groupKey]);
   if (wasCollapsed === collapsed) return;
   if (collapsed) {
@@ -81,7 +84,7 @@ export function setAutomationGroupCollapsed(groupKey: string, collapsed: boolean
   } else {
     delete stored[groupKey];
   }
-  writeStored(stored);
+  writeStored(stored, ownerId);
 }
 
 /**
@@ -89,13 +92,16 @@ export function setAutomationGroupCollapsed(groupKey: string, collapsed: boolean
  * toggle 翻转并持久化。组件以 group.id 作为 key 渲染,故 groupKey 在实例生命周期内稳定。
  */
 export function useAutomationGroupCollapsed(groupKey: string): readonly [boolean, () => void] {
-  const [collapsed, setCollapsedState] = useState(() => isAutomationGroupCollapsed(groupKey));
+  const ownerId = getDataOwnerGeneration().dataOwnerId;
+  const [collapsed, setCollapsedState] = useState(() =>
+    isAutomationGroupCollapsed(groupKey, ownerId),
+  );
   const toggle = useCallback(() => {
     setCollapsedState((prev) => {
       const next = !prev;
-      setAutomationGroupCollapsed(groupKey, next);
+      setAutomationGroupCollapsed(groupKey, next, ownerId);
       return next;
     });
-  }, [groupKey]);
+  }, [groupKey, ownerId]);
   return [collapsed, toggle] as const;
 }

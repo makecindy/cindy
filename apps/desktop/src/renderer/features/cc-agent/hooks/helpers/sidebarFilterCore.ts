@@ -1,4 +1,15 @@
 import { createLogger } from '@/lib/logger';
+import {
+  clearClaimedLegacySidebarStorage,
+  readClaimedLegacySidebarStorage,
+  readSidebarOwnerStorage,
+  writeSidebarOwnerStorage,
+} from '@/lib/sidebarOwnerStorage';
+import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
+import type {
+  SidebarPinnedOrderMutation,
+  SidebarSettingsSnapshot,
+} from '../../../../../shared/sidebarSettings';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
 const log = createLogger('SidebarFilterCore');
@@ -82,16 +93,8 @@ export function loadStatus(): FilterStatus {
  *   - JSON.parse 后 === 'all' 字符串
  *   - JSON.parse 后是非空字符串数组（每项均为非空 string）；空数组 → 'all'
  */
-export function loadProjects(): FilterProjects {
-  const storage = safeStorage();
-  if (!storage) return 'all';
-  let raw: string | null = null;
-  try {
-    raw = storage.getItem(PROJECTS_KEY);
-  } catch (err) {
-    log.warn('[useSidebarFilter] failed to read projects:', err);
-    return 'all';
-  }
+export function loadProjects(ownerId: string | null): FilterProjects {
+  const raw = readSidebarOwnerStorage(PROJECTS_KEY, ownerId);
   if (raw == null) return 'all';
   let parsed: unknown;
   try {
@@ -121,13 +124,9 @@ export function persistStatus(s: FilterStatus): void {
   }
 }
 
-export function persistProjects(p: FilterProjects): void {
-  const storage = safeStorage();
-  if (!storage) return;
-  try {
-    storage.setItem(PROJECTS_KEY, JSON.stringify(p));
-  } catch (err) {
-    log.warn('[useSidebarFilter] failed to persist projects:', err);
+export function persistProjects(p: FilterProjects, ownerId: string | null): void {
+  if (!writeSidebarOwnerStorage(PROJECTS_KEY, ownerId, JSON.stringify(p))) {
+    log.warn('[useSidebarFilter] failed to persist projects');
   }
 }
 
@@ -144,10 +143,7 @@ export function persistProjects(p: FilterProjects): void {
  * 返回值如果与 prev 引用相同（语义上无变化），调用方可短路不写 storage。
  * 实际上本函数总是返回新对象（除非语义无变化才返回 prev）。
  */
-export function nextProjectsAfterToggle(
-  prev: FilterProjects,
-  workingDir: string,
-): FilterProjects {
+export function nextProjectsAfterToggle(prev: FilterProjects, workingDir: string): FilterProjects {
   const projectKey = normalizeProjectKey(workingDir);
   if (!projectKey) return prev;
   if (prev === 'all') {
@@ -275,7 +271,13 @@ export function persistGroupBy(groupBy: FilterGroupBy): void {
 
 /* ============================== lastActivity load/persist ============================== */
 
-const LAST_ACTIVITY_VALUES: ReadonlySet<string> = new Set<FilterLastActivity>(['all', '1d', '3d', '7d', '30d']);
+const LAST_ACTIVITY_VALUES: ReadonlySet<string> = new Set<FilterLastActivity>([
+  'all',
+  '1d',
+  '3d',
+  '7d',
+  '30d',
+]);
 
 export function loadLastActivity(): FilterLastActivity {
   const storage = safeStorage();
@@ -336,16 +338,8 @@ export function persistSortBy(sortBy: FilterSortBy): void {
 
 /* ============================== manual project order load/persist ============================== */
 
-export function loadManualProjectOrder(): string[] {
-  const storage = safeStorage();
-  if (!storage) return [];
-  let raw: string | null = null;
-  try {
-    raw = storage.getItem(MANUAL_PROJECT_ORDER_KEY);
-  } catch (err) {
-    log.warn('[useSidebarFilter] failed to read manualProjectOrder:', err);
-    return [];
-  }
+export function loadManualProjectOrder(ownerId: string | null): string[] {
+  const raw = readSidebarOwnerStorage(MANUAL_PROJECT_ORDER_KEY, ownerId);
   if (raw == null) return [];
   let parsed: unknown;
   try {
@@ -366,13 +360,9 @@ export function loadManualProjectOrder(): string[] {
   return cleaned;
 }
 
-export function persistManualProjectOrder(order: readonly string[]): void {
-  const storage = safeStorage();
-  if (!storage) return;
-  try {
-    storage.setItem(MANUAL_PROJECT_ORDER_KEY, JSON.stringify(order));
-  } catch (err) {
-    log.warn('[useSidebarFilter] failed to persist manualProjectOrder:', err);
+export function persistManualProjectOrder(order: readonly string[], ownerId: string | null): void {
+  if (!writeSidebarOwnerStorage(MANUAL_PROJECT_ORDER_KEY, ownerId, JSON.stringify(order))) {
+    log.warn('[useSidebarFilter] failed to persist manualProjectOrder');
   }
 }
 
@@ -428,38 +418,57 @@ export function moveManualProjectOrder(
 /* ============================== manual pinned sidebar order load/persist ============================== */
 
 /**
- * 数据落在 main 进程 electron-store(userData/sidebar-settings.json),通过 IPC 同步读 / 异步写,
- * 跨 dev (http://localhost) / installed (file://) 共享(localStorage 按 origin 隔离不通)。
+ * 数据落在 main 进程 owner namespace，通过 IPC 同步读 / 异步写。
  *
  * 一次性 migration:老版本数据在 renderer 的 localStorage 里,首次 load 发现新存储为空
- * 时把 localStorage 内容搬过去 + 清掉老 key。
+ * 时把 localStorage 内容搬过去；main 确认落盘之后才清掉老 key。
  */
-export function loadManualPinnedOrder(): string[] {
-  if (typeof window?.electronAPI === 'undefined') return [];
-  const stored = window.electronAPI.sidebarSettingsLoadPinnedOrderSync();
-  if (stored.length > 0) return stored;
-  // 一次性 migration
-  const storage = safeStorage();
-  if (!storage) return [];
-  const raw = storage.getItem(MANUAL_PINNED_ORDER_KEY);
-  storage.removeItem(MANUAL_PINNED_ORDER_KEY);
-  if (!raw) return [];
+export interface LoadedManualPinnedOrder {
+  order: string[];
+  needsLegacyMigration: boolean;
+}
+
+export function loadManualPinnedOrder(snapshot: SidebarSettingsSnapshot): LoadedManualPinnedOrder {
+  if (snapshot.pinnedOrder.length > 0) {
+    // The main-process snapshot is authoritative. Leaving a claimed legacy
+    // copy behind would resurrect stale pins after the user later clears all.
+    clearClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, snapshot.dataOwnerId);
+    return { order: Array.from(snapshot.pinnedOrder), needsLegacyMigration: false };
+  }
+  const raw = readClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, snapshot.dataOwnerId);
+  if (!raw) return { order: [], needsLegacyMigration: false };
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const legacy = parsed.filter((v): v is string => typeof v === 'string' && v.length > 0);
-    if (legacy.length > 0) {
-      void window.electronAPI.sidebarSettingsSavePinnedOrder(legacy);
-    }
-    return legacy;
+    if (!Array.isArray(parsed)) return { order: [], needsLegacyMigration: false };
+    const legacy = normalizePinnedOrderForStorage(parsed);
+    return { order: legacy, needsLegacyMigration: legacy.length > 0 };
   } catch {
-    return [];
+    return { order: [], needsLegacyMigration: false };
   }
 }
 
-export function persistManualPinnedOrder(order: readonly string[]): void {
-  if (typeof window?.electronAPI === 'undefined') return;
-  void window.electronAPI.sidebarSettingsSavePinnedOrder(order);
+export function persistManualPinnedOrder(
+  mutation: SidebarPinnedOrderMutation,
+  ownerStamp: DataOwnerPushStamp,
+): Promise<string[]> {
+  if (typeof window?.electronAPI === 'undefined') return Promise.resolve([]);
+  return window.electronAPI.sidebarSettings.mutatePinnedOrder(mutation, ownerStamp);
+}
+
+export function finishManualPinnedOrderLegacyMigration(ownerId: string | null): void {
+  clearClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, ownerId);
+}
+
+function normalizePinnedOrderForStorage(values: readonly unknown[]): string[] {
+  const seen = new Set<string>();
+  const order: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string' || value.length === 0 || seen.has(value)) continue;
+    seen.add(value);
+    order.push(value);
+    if (order.length >= 10_000) break;
+  }
+  return order;
 }
 
 /**

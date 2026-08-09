@@ -40,6 +40,7 @@ const LEGACY_PATHS = [
   'maker-contacts',
   'compaction-settings.json',
   'subagent-model-settings.json',
+  'sidebar-settings.json',
 ] as const;
 
 interface MigrationSessionState {
