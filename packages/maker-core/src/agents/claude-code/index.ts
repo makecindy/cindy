@@ -109,7 +109,9 @@ import {
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
+  buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
+  buildClaudeRemoteOrcaCallerGuards,
   buildClaudeRemoteToolGuards,
   mergeClaudeHookSets,
 } from './capability-routing.js';
@@ -1172,6 +1174,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 到对应 session 的业务函数。host 直接调 startSession 而没透 sessionId
         // 时此处为 undefined, 工具按"无 session 绑定"语义处理。
         sessionId: opts.sessionId,
+        mcpCallerKind: 'root',
+        mcpCallerAttested: true,
         ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
         getSessionContext: () => context,
       };
@@ -1299,6 +1303,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
         PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
       },
+      // Keep the existing local routing/capture hooks first: callers and tests
+      // rely on their observable order. The exact-match Orca provenance guard
+      // still runs for send_to_lead after those hooks and denies descendants.
+      buildClaudeOrcaCallerProvenanceHooks(),
       this.deps.claudeHooks,
     );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -1941,7 +1949,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const runtimeState: RuntimeState = newRuntimeState();
     const beginNewTurn = (): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
-      // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮 API call 计数。
+      // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
       turnState.text = '';
       turnState.toolUses = 0;
@@ -1950,6 +1958,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
       turnState.pendingApiError = null;
+      turnState.lastAssistantRequestId = undefined;
+      turnState.lastAssistantMsgHadSubstance = true;
       // 代际前进: 迟到的被打断 result 据此被 translator 识别为已被本 send 接管。
       turnState.generation += 1;
       // interruptRequested **刻意不在这里清**: watchdog / tool-loop guard 先置
@@ -2420,9 +2430,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? 'auto'
             : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
-        const remoteToolGuards = buildClaudeRemoteToolGuards(
-          this.deps.capabilityRouting,
-        );
+        const remoteToolGuards = [
+          ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
+        ];
 
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
@@ -3145,6 +3156,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // still has buffered activity. Suppress that cancelled tail until its
     // Query is replaced before the next explicit user turn.
     let continuationCancellationGeneration: number | null = null;
+    /**
+     * 本次 Stop 已经发过终态 boundary 的那一代。
+     *
+     * accept 阶段的 foreground 终态归 send 的 finishSendBeforeUserInput 发, 但
+     * abort 若同时取消了一个 awaiting continuation, 它已经先发过
+     * turn_continuation_cancelled —— 同一次 Stop 再补一个 done 就是双终态,
+     * Session 不按 generation 去重, 所有监听方都会收到两条。
+     *
+     * 单独记一个代次而不是复用 continuationCancellationGeneration: 后者在关
+     * query 分支里**无条件**设置(哪怕那一轮根本没发 boundary), 拿它当去重依据
+     * 会把 send 该发的那个终态一起吞掉。
+     */
+    let stopTerminalEmittedGeneration: number | null = null;
     let continuationCancellationRequiresQueryRebuild = false;
     const continuationClaims = new Map<number, ContinuationClaim>();
     const continuationListeners = new Set<(
@@ -3415,6 +3439,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         continuationId: claim.id,
       });
       if (emitTurnBoundary('turn_continuation_cancelled', undefined, true)) {
+        // 这一代的终态已经出去了 —— accept 阶段的 send 醒来后不要再补一个。
+        stopTerminalEmittedGeneration = turnState.generation;
         // Install the cancelled-tail fence at the same enqueue boundary as
         // the synthetic product terminal. stopTask can win before interrupt
         // resolves, so waiting for the interrupt ACK leaves a double-terminal
@@ -4702,7 +4728,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           pendingToolIds.clear();
           acceptingRebuiltSend = false;
           clearUpstreamResponseIdle();
-          emitTurnBoundary(reason);
+          // 同一次 Stop 只发一个终态: abort 若已为被取消的 continuation 发过
+          // turn_continuation_cancelled(同一代), 这里只清状态、不再补 done。
+          if (stopTerminalEmittedGeneration !== turnState.generation) {
+            emitTurnBoundary(reason);
+          }
         };
         if (pendingRewindTo || activeBridgeRewindResumeAt) {
           const resumeAt = pendingRewindTo ?? activeBridgeRewindResumeAt;
@@ -5012,6 +5042,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           runningBackgroundTasks.clear();
           terminalBackgroundTaskIds.clear();
           turnInFlight = false;
+          // 本分支自己发 bridge_aborted 终态, send 的收尾责任就此交接完毕 ——
+          // 一并清 sendInAcceptPhase。不清的话: send 醒来走进
+          // finishSendBeforeUserInput, 入口守卫见 turnInFlight=false 直接返回,
+          // sendInAcceptPhase 悬置 true, 后续每次 abort 都被 accept 让位守卫
+          // 错误短路。boundary 只从这里发一次, send 那侧早退不再补发。
+          sendInAcceptPhase = false;
           turnState.interruptRequested = false;
           preserveBridgeRetryTarget(abortedBridgeKind, abortedRewindResumeAt);
           emitTurnBoundary(
@@ -5111,7 +5147,12 @@ export class ClaudeCodeAgent extends BaseAgent {
               // foreground turn has not already produced a terminal, replace
               // it with one synthetic boundary; a raced natural result leaves
               // foregroundWasInFlight=false and therefore does not get a duplicate.
-              if (foregroundWasInFlight) emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              // accept 阶段的 foreground 终态归 send 的 finishSendBeforeUserInput:
+              // 它醒来后按 signal.aborted / push 失败走到自己的 boundary。这里
+              // 抢发会重复——一次 Stop 冒出两个终态。
+              if (foregroundWasInFlight && !sendInAcceptPhase) {
+                emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              }
             }
             inputQueue.clear();
             try {
@@ -5122,13 +5163,20 @@ export class ClaudeCodeAgent extends BaseAgent {
             recordCanceledQueryClose(cancelledQuery, 'user_stop cancellation');
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
-            turnInFlight = false;
+            // main 上 #2151 已给 interrupt 成功分支挂了同一守卫; 本 PR 的差异是
+            // close-query / 超时 / 抛错 / bridge 分支也一并纳入同一契约。
+            if (!sendInAcceptPhase) turnInFlight = false;
           } else {
             // interrupt 成功且无后台任务需要清：被中断的 turn 会收到
             // error_during_execution result → translator 在 onTurnEnd 清
             // turnInFlight。这里显式补清以防 SDK 未 drain result 的极端
             // 情况(确保不会 SESSION_RUNNING 永拒)。
-            turnInFlight = false;
+            //
+            // accept 阶段除外——finishSendBeforeUserInput 的入口守卫是
+            // `if (!turnInFlight) return`,abort 抢清会让它以为已被收口而直接
+            // 返回,send_cancelled_before_acceptance 的终态 boundary 从此丢失,
+            // isTurnRunning 悬置(review 3541310178 的反馈原型用例钉的就是它)。
+            if (!sendInAcceptPhase) turnInFlight = false;
           }
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);
@@ -5155,11 +5203,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             recordCanceledQueryClose(q, 'user_stop interrupt timeout');
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
-            turnInFlight = false;
+            // accept 阶段同上——终态与清理归 send 自己(query 已被关闭, send 的
+            // push 会失败并走 finishSendBeforeUserInput)。
+            if (!sendInAcceptPhase) turnInFlight = false;
           } else {
             // interrupt 真正抛错(非超时)，回收标记防误抑制(同 watchdog)。
             turnState.interruptRequested = false;
-            turnInFlight = false;
+            if (!sendInAcceptPhase) turnInFlight = false;
             log.warn('abort threw', { error: String(e) });
           }
         }

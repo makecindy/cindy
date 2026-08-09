@@ -310,7 +310,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         >
           <Minus className="h-4 w-4" />
         </ToolbarButton>
-        <span className="px-2 text-[12px] tabular-nums text-[var(--lightbox-toolbar-fg)] select-none">
+        <span className="px-2 text-12 tabular-nums text-[var(--lightbox-toolbar-fg)] select-none">
           {Math.round(scale * 100)}%
         </span>
         <ToolbarButton

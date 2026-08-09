@@ -283,7 +283,7 @@ export function AgentSelect({
               'min-w-0 truncate text-left font-medium leading-none',
               // 字段形态跟随设置页字号(13px, 同 ModelSelector field trigger);
               // flex-1 把 chevron 顶到右缘 —— 字段是定宽控件, 不是 hug。
-              isField ? 'flex-1 text-[13px]' : 'text-[12px]',
+              isField ? 'flex-1 text-13' : 'text-12',
             )}
             style={maxLabelWidth ? { maxWidth: maxLabelWidth } : undefined}
           >
@@ -337,7 +337,7 @@ export function AgentSelect({
               )}
             >
               <opt.Mark size={14} className="shrink-0 text-[var(--text-secondary)]" />
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--model-item-text)]">
+              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--model-item-text)]">
                 {opt.label}
               </span>
               {selected && (

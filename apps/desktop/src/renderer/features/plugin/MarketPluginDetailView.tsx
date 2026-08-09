@@ -69,7 +69,7 @@ export function MarketPluginDetailView({
               size="detail"
             />
             <div className="min-w-0">
-              <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">
+              <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
@@ -103,7 +103,7 @@ export function MarketPluginDetailView({
           </div>
           <p
             id={conflictDescription ? conflictDescriptionId : undefined}
-            className="mt-5 text-14 leading-[22px] text-[var(--text-secondary)]"
+            className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]"
           >
             {conflictDescription ?? (detail.description || detail.ghostId)}
           </p>
@@ -112,7 +112,7 @@ export function MarketPluginDetailView({
         <section className="mt-10" aria-labelledby="market-security-title">
           <h2
             id="market-security-title"
-            className="text-18 font-medium leading-[26px] text-[var(--text-primary)]"
+            className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
           >
             {t('settings.ghosts.market.securityTitle')}
           </h2>
@@ -136,7 +136,7 @@ export function MarketPluginDetailView({
             <div className="flex items-baseline gap-2">
               <h2
                 id="market-permissions-title"
-                className="text-18 font-medium leading-[26px] text-[var(--text-primary)]"
+                className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
               >
                 {t('settings.ghosts.perm.grantsTitle')}
               </h2>

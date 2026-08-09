@@ -74,6 +74,11 @@ export {
   type AutoReviewRequest,
 } from './shared/auto-review-decision.js';
 export type { ReviewableAction } from './shared/auto-review.js';
+export {
+  ORCA_NESTED_REPORT_DENIAL_REASON,
+  ORCA_NESTED_REPORT_ERROR_CODE,
+  ORCA_NESTED_REPORT_ERROR_MESSAGE,
+} from './shared/orca-report-policy.js';
 // host 侧会话分享(导出/导入 .xdtshare)需要按 cwd 复算 CLI 转录目录、
 // 定位/落位 jsonl。规则单点维护在 claude-projects-fs.ts,这里仅 re-export。
 export {

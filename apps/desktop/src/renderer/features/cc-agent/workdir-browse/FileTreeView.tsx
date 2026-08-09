@@ -289,7 +289,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
         {showInitialSpinner && (
           <>
             <Spinner size={16} className="text-[var(--cmd-palette-item-meta)]" />
-            <span className="text-[12px] text-[var(--cmd-palette-item-meta)]">
+            <span className="text-12 text-[var(--cmd-palette-item-meta)]">
               {t('ccAgent.workdirBrowse.treeLoading')}
             </span>
           </>
@@ -300,7 +300,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
 
   if (rows.length === 0) {
     return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-[12px] text-[var(--cmd-palette-item-meta)]">
+      <div className="flex h-full w-full items-center justify-center px-4 text-12 text-[var(--cmd-palette-item-meta)]">
         {t('ccAgent.workdirBrowse.treeEmpty')}
       </div>
     );
@@ -399,7 +399,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onNewFile(parent);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FilePlus className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.newFile')}</span>
@@ -412,7 +412,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onNewFolder(parent);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderPlus className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.newFolder')}</span>
@@ -425,7 +425,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRename(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Pencil className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.rename')}</span>
@@ -440,7 +440,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRevealInFolder(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderOpen className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.showInFolder')}</span>
@@ -456,7 +456,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onOpenInFileBrowser(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderTree className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.openInFileBrowser')}</span>
@@ -469,7 +469,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onOpenInSidebarBrowser?.(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <PanelRight className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('chat.markdownRenderer.openInSidebarBrowser')}</span>
@@ -482,7 +482,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onCopyFilePath(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Clipboard className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.copyFilePath')}</span>
@@ -495,7 +495,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRename(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Pencil className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.rename')}</span>
@@ -510,7 +510,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onRevealInFolder(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <FolderOpen className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.showInFolder')}</span>
@@ -523,7 +523,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onOpenInBrowser?.(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Globe className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('chat.markdownRenderer.openInBrowser')}</span>
@@ -536,7 +536,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onDeleteFile(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-[13px] leading-none text-red-500 dark:text-red-400 focus:bg-red-50 dark:focus:bg-red-500/10"
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-red-500 dark:text-red-400 focus:bg-red-50 dark:focus:bg-red-500/10"
                 >
                   <Trash2 className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.deleteFile')}</span>
@@ -624,7 +624,7 @@ function FileTreeRow({
       data-relpath={entry.relPath}
       className={cn(
         'group/file-row flex h-7 w-full shrink-0 items-center rounded-md pr-2',
-        'cursor-pointer text-[13px] transition-colors',
+        'cursor-pointer text-13 transition-colors',
         selected
           ? 'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground'
           : 'text-foreground hover:bg-sidebar-item-hover',
@@ -804,7 +804,7 @@ function RenamingInputRow({ entry, depth, onSubmit, onCancel }: RenamingInputRow
         onKeyDown={handleKey}
         onBlur={commit}
         className={cn(
-          'min-w-0 flex-1 bg-transparent text-[13px] leading-none outline-none',
+          'min-w-0 flex-1 bg-transparent text-13 leading-none outline-none',
           'border border-[var(--cmd-palette-item-meta)] rounded-sm px-1 py-0.5',
           'text-sidebar-item-active-foreground placeholder:text-[var(--cmd-palette-item-meta)]',
         )}
@@ -875,7 +875,7 @@ function PendingInputRow({ pending, depth, onSubmit, onCancel }: PendingInputRow
         onBlur={commit}
         placeholder={pending.kind === 'folder' ? 'new-folder' : 'untitled'}
         className={cn(
-          'min-w-0 flex-1 bg-transparent text-[13px] leading-none outline-none',
+          'min-w-0 flex-1 bg-transparent text-13 leading-none outline-none',
           'border border-[var(--cmd-palette-item-meta)] rounded-sm px-1 py-0.5',
           'text-sidebar-item-active-foreground placeholder:text-[var(--cmd-palette-item-meta)]',
         )}

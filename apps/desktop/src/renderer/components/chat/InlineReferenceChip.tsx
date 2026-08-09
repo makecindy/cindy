@@ -64,7 +64,7 @@ export function InlineReferenceChip({
   const sharedClassName = cn(
     'inline-flex min-w-0 max-w-full items-center',
     !textSelectable && 'select-none',
-    'gap-1.5 rounded-full border px-2 py-0.5 text-[12px] font-normal leading-5',
+    'gap-1.5 rounded-full border px-2 py-0.5 text-12 font-normal leading-5',
     'bg-[var(--surface-chip)] text-[var(--text-primary)]',
     // 下划线跟着 `interactive` 一起给:DESIGN.md §14.5 要求「下划线 ⇔ 可点」双向成立,
     // 而本组件同时服务可点的会话 / 项目深链 chip 与不可点的静态 chip(sidebar-embedded

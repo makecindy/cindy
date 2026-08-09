@@ -186,6 +186,16 @@ export interface IMMessageEvent {
    * 模型可用 NO_REPLY 哨兵选择沉默; transport 抑制该消息的表情回应。
    */
   ambient?: boolean;
+  /**
+   * 这条消息来自「禁止保存内容」的群(Telegram `has_protected_content`)。
+   *
+   * 它照常起 turn —— 用户 @ 机器人说的话是他此刻要说给 bot 的。但**不得写入
+   * 任何长期存档**: 群历史池已在渠道侧拦下, 这个标记是给业务层的第二道 ——
+   * 会话消息存档同样不能成为绕过保护边界的旁路。
+   *
+   * 缺省 / false = 未受保护(只有 Telegram 会置它, 其它渠道不设置, 行为不变)。
+   */
+  protectedContent?: boolean;
   /** Pre-downloaded attachments. */
   attachments: IMAttachment[];
   /**

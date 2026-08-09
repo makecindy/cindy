@@ -127,6 +127,7 @@ import {
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
   parseIssueEnvRegion,
+  parseOptionalGithubUserIdentity,
   parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
   type IssueSubmissionIdentity,
@@ -745,8 +746,13 @@ export interface PendingIssueConfirm {
     osVersion: string;
     region?: CindyRegion;
   };
-  /** main 已经选定、确认后不会自动切换的实际 GitHub 作者身份。 */
+  /**
+   * Main 提供的默认身份。新版 Main 始终传平台 Bot；旧版 Main 可能已经固定为
+   * GitHub 用户，Renderer 必须保留该形状，不能让升级中的确认卡静默消失。
+   */
   submissionIdentity: IssueSubmissionIdentity;
+  /** 当前验证可用时才提供的 GitHub 用户本人身份。 */
+  githubUserIdentity?: Extract<IssueSubmissionIdentity, { kind: 'github-user' }>;
   /** 平台代发的建议公开署名；缺失时卡片使用本地化“匿名”。 */
   suggestedPublicName?: string;
 }
@@ -6550,6 +6556,12 @@ function initGlobalListeners(): void {
         (Omit<PendingIssueConfirm['env'], 'region'> & { region?: unknown }) | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
       if (!draft || !rawEnv || !submissionIdentity) return;
+      // 新版 Main:平台默认 + 可选 GitHub 身份。旧版 Main:只传已经固定的单一
+      // 身份；若它固定为 GitHub，不能凭新版字段再虚构平台切换入口。
+      const githubUserIdentity =
+        submissionIdentity.kind === 'platform'
+          ? parseOptionalGithubUserIdentity(request.githubUserIdentity)
+          : undefined;
       const suggestedPublicName =
         submissionIdentity.kind === 'platform'
           ? parseIssueSuggestedPublicName(request.suggestedPublicName)
@@ -6563,6 +6575,7 @@ function initGlobalListeners(): void {
           draft,
           env,
           submissionIdentity,
+          githubUserIdentity,
           suggestedPublicName,
         },
       }));
@@ -12696,7 +12709,7 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
 /**
  * issue_confirm: 把确认卡片结果回给 main(IssueConfirmBridge)并清 pendingIssueConfirm。
  * confirmed=true 时携带卡片当前的 title/body/type(用户编辑版,main 以此为准)、
- * 平台代发公开署名(publicName)和 renderer 界面语言(uiLanguage)。
+ * 用户选择的提交身份、平台代发公开署名(publicName)和 renderer 界面语言(uiLanguage)。
  */
 function respondToIssueConfirm(
   sessionId: string,
@@ -12706,6 +12719,7 @@ function respondToIssueConfirm(
         title: string;
         body: string;
         type: 'bug' | 'feature';
+        submissionIdentity: IssueSubmissionIdentity;
         publicName?: string;
         uiLanguage: string;
       }

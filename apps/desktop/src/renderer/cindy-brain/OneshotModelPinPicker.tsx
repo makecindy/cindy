@@ -214,7 +214,7 @@ export function OneshotModelPinPicker({
                           </span>
                           <span className="ml-auto flex shrink-0 items-center gap-1.5">
                             {o.subscription && (
-                              <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
+                              <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]">
                                 {t('settings.providers.models.subscription')}
                               </span>
                             )}

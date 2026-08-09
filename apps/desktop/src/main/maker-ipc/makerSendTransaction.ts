@@ -78,6 +78,8 @@ type MakerSendOptions = {
     autoResume?: unknown;
     /** 本次自动续跑的展示信息(合进 agentMeta.autoResumeInfo,供活动行 param 位与展开详情)。 */
     autoResumeInfo?: unknown;
+    /** Manual and automatic retries share the same durable recovery handoff. */
+    recoveryCheckpoint?: unknown;
     /** 队列自动来源(只写入 agentMeta,不传给 maker-core 的 turn origin)。 */
     origin?: unknown;
   };
@@ -250,6 +252,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
   autoResumeInfo?: Record<string, unknown>;
+  recoveryCheckpoint?: Record<string, unknown>;
   origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
@@ -267,6 +270,9 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
     ...(persist.autoResume === true ? { autoResume: true as const } : {}),
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
       ? { autoResumeInfo: persist.autoResumeInfo as Record<string, unknown> }
+      : {}),
+    ...(persist.recoveryCheckpoint && typeof persist.recoveryCheckpoint === 'object'
+      ? { recoveryCheckpoint: persist.recoveryCheckpoint as Record<string, unknown> }
       : {}),
     ...(persist.origin && typeof persist.origin === 'object' && !Array.isArray(persist.origin)
       ? { origin: persist.origin as Record<string, unknown> }
@@ -910,6 +916,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         ...(persistUserMessage.autoResume ? { autoResume: true } : {}),
                         ...(persistUserMessage.autoResumeInfo
                           ? { autoResumeInfo: persistUserMessage.autoResumeInfo }
+                          : {}),
+                        ...(persistUserMessage.recoveryCheckpoint
+                          ? { recoveryCheckpoint: persistUserMessage.recoveryCheckpoint }
                           : {}),
                         ...(persistUserMessage.origin ? { origin: persistUserMessage.origin } : {}),
                         // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin

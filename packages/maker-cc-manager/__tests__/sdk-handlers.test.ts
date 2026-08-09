@@ -394,6 +394,22 @@ describe('sdk-handlers end-to-end', () => {
     });
   });
 
+  it('query/start accepts an exact root-only Orca tool guard', async () => {
+    await ctx!.client.request('query/start', {
+      sessionId: 's-root-only',
+      cwd: '/a',
+      model: 'm',
+      env: {},
+      toolGuards: [{
+        toolNamePrefix: 'mcp__orca_worker_bridge__send_to_lead',
+        sourceServerId: 'orca_worker_bridge',
+        invocation: 'root-only',
+      }],
+    });
+    await waitFor(() => ctx!.notifications.length >= 1);
+    expect(latestFactoryOptions?.hooks?.PreToolUse?.[0]?.hooks[0]).toBeDefined();
+  });
+
   it('query/close ends consume loop → session.alive=false + closed notification', async () => {
     await ctx!.client.request('query/start', { sessionId: 's1', cwd: '/a', model: 'm', env: {} });
     await waitFor(() => ctx!.notifications.length >= 1);

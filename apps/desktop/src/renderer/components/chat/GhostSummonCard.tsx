@@ -285,7 +285,7 @@ export function GhostSummonCard({
           onClick={() => setExpanded((v) => !v)}
           className={cn(
             'inline-flex max-w-full cursor-pointer items-center gap-1.5',
-            'rounded-full border px-2.5 py-1 text-[11px]',
+            'rounded-full border px-2.5 py-1 text-11',
             'transition-colors hover:text-foreground focus-visible:outline-none',
             'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           )}
@@ -426,7 +426,7 @@ export function GhostSummonCard({
             <div className="mb-2 flex items-center gap-2">
               {badgeCommand && (
                 <span
-                  className="shrink-0 rounded-full px-2 py-[2px] font-mono text-[11px] leading-none"
+                  className="shrink-0 rounded-full px-2 py-[2px] font-mono text-11 leading-none"
                   style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
                 >
                   ${badgeCommand}
@@ -434,7 +434,7 @@ export function GhostSummonCard({
               )}
               {versionLabel && (
                 <span
-                  className="shrink-0 font-mono text-[11px] leading-none"
+                  className="shrink-0 font-mono text-11 leading-none"
                   style={{ color: 'var(--text-tertiary)' }}
                 >
                   {versionLabel}

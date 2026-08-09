@@ -58,7 +58,7 @@ function GroupTip({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-2 rounded-xl bg-[var(--surface-chip)] px-3.5 py-2.5">
       <Lightbulb size={14} className="mt-[2px] shrink-0 text-[var(--text-tertiary)]" />
-      <p className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">{message}</p>
+      <p className="text-12 leading-[1.6] text-[var(--text-secondary)]">{message}</p>
     </div>
   );
 }
