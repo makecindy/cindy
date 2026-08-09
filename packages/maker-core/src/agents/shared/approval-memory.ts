@@ -266,6 +266,24 @@ function wgetMayLoadMutableUserState(args: readonly string[]): boolean {
   return WGET_REQUIRED_USER_STATE_DISABLE_FLAGS.some((flag) => !options.includes(flag));
 }
 
+const SQLITE_MUTABLE_DOT_COMMAND_PATTERN =
+  /(?:^|[\r\n])\s*\.(?:archive|import|load|read|restore|shell|system)\b/i;
+
+function sqliteMayLoadMutableFileState(args: readonly string[]): boolean {
+  for (const arg of args) {
+    // `-init FILE` 在打开数据库前执行可替换脚本；长选项和 `=` 形态也按 fail-closed 处理。
+    if (/^--?init(?:=|$)/i.test(arg)) return true;
+    // `-A ARGS` 等价于执行 `.archive ARGS`，归入同一个可变文件入口。
+    if (/^-A(?:=|$)/.test(arg)) return true;
+
+    // `.read` 等命令既可作为位置命令，也可由 `-cmd` 传入；两种形态最终都会消费
+    // 可替换脚本、数据、扩展或 shell 程序。保留普通固定 SQL 与 `.open` 的精确摘要。
+    const command = /^--?cmd=/i.test(arg) ? arg.slice(arg.indexOf('=') + 1) : arg;
+    if (SQLITE_MUTABLE_DOT_COMMAND_PATTERN.test(command)) return true;
+  }
+  return false;
+}
+
 const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   // HTTP 鉴权头：curl/wget 的 -H、--header、--proxy-header，含空格/等号/紧凑短选项。
   /(?:^|\s)(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?\s*(?:authorization|proxy-authorization|cookie|x-api-key|x-auth)/i,
@@ -336,6 +354,8 @@ const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   /(?:^|[\s;&|])(?:\S*[\\/])?aws(?:\.exe)?\s+(?:sso\s+login|ecr(?:-public)?\s+get-login-password)\b/i,
   // 工具专用的短凭证选项。限定可执行文件/子命令，避免把 docker -p 端口等误判。
   /(?:^|[\s;&|])(?:\S*[\\/])?(?:mysql|mysqladmin|mariadb|mariadb-admin|mongo|mongosh|sqlcmd|sshpass)(?:\.exe)?\b[^;&|\r\n]*\s-p\s*=?\s*\S/i,
+  // SQLite 加密构建的 CLI key 参数直接携带凭证；限定 sqlite3，避免误伤通用 `-key`。
+  /(?:^|[\s;&|])(?:\S*[\\/])?sqlite3(?:\.exe)?\b[^;&|\r\n]*\s-(?:hexkey|key|textkey)(?:\s+|=)\S/i,
   // MySQL/MariaDB option files 与 login paths 可在命令不变时换入新凭证；只限定数据库
   // 客户端工具，避免误伤其它程序的通用 --defaults-file / --login-path 参数。
   /(?:^|[\s;&|])(?:\S*[\\/])?(?:mysql|mysqladmin|mysqlcheck|mysqldump|mysqlimport|mysqlshow|mysqlslap|mysqlpump|mariadb|mariadb-admin|mariadb-check|mariadb-dump|mariadb-import|mariadb-show|mariadb-slap)(?:\.exe)?\b[^;&|\r\n]*(?:--defaults-(?:(?:extra-)?file|group-suffix)|--login-path)(?:\s+|=)\S/i,
@@ -437,6 +457,8 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
     name === 'curl' && curlMayLoadMutableFileState(args))) return true;
   if (invocations.some(({ name, args }) =>
     name === 'wget' && wgetMayLoadMutableUserState(args))) return true;
+  if (invocations.some(({ name, args }) =>
+    name === 'sqlite3' && sqliteMayLoadMutableFileState(args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。

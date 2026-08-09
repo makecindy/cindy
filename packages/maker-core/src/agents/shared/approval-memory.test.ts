@@ -161,6 +161,9 @@ describe('approvalSignature — 可记忆判据', () => {
       'redis-cli -a REDACTED_VALUE ping',
       'sshpass -p REDACTED_VALUE ssh host.example.com',
       'sqlcmd -P REDACTED_VALUE -S db.example.com',
+      'sqlite3 -key REDACTED_VALUE prod.db',
+      'sqlite3 -hexkey=REDACTED_VALUE prod.db',
+      'sqlite3.exe -textkey REDACTED_VALUE prod.db',
       'docker login -p REDACTED_VALUE registry.example.com',
       'podman login -p=REDACTED_VALUE registry.example.com',
       'deploy --password REDACTED_VALUE',
@@ -486,6 +489,46 @@ describe('approvalSignature — 可记忆判据', () => {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
     }
+  });
+
+  it('sqlite3 初始化脚本与同族可变文件入口不可记忆', () => {
+    for (const command of [
+      'sqlite3 -init ./deploy.sql prod.db',
+      'sqlite3 --init ./deploy.sql prod.db',
+      'sqlite3 -init=./deploy.sql prod.db',
+      'sqlite3.exe --init=./deploy.sql prod.db',
+      "sqlite3 -cmd '.read ./deploy.sql' prod.db",
+      "sqlite3 -cmd='.read ./deploy.sql' prod.db",
+      "sqlite3 prod.db '.read ./deploy.sql'",
+      "sqlite3 prod.db '.import ./users.csv users'",
+      "sqlite3 prod.db '.restore ./backup.db'",
+      "sqlite3 prod.db '.load ./extension.so'",
+      "sqlite3 prod.db '.shell ./deploy.sh'",
+      "sqlite3 prod.db '.system ./deploy.sh'",
+      "sqlite3 prod.db '.archive -i ./backup.sqlar'",
+      'sqlite3 -A -i ./backup.sqlar prod.db',
+      'true && sqlite3 -init ./deploy.sql prod.db',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      "sqlite3 prod.db 'select 1'",
+      'echo sqlite3 -init ./deploy.sql prod.db',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    const action = exec('sqlite3 -init ./deploy.sql prod.db');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    // deploy.sql 即使在两次调用之间被替换，初始化命令也从未写入可复用摘要。
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
   });
 
   it('非 exec 动作不进记忆', () => {
