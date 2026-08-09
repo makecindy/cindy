@@ -619,6 +619,29 @@ function markdownParenPairs(text: string): {
   return { closeByOpen, openByClose };
 }
 
+function markdownWhitespacePositions(text: string): number[] {
+  const positions: number[] = [];
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
+    if (text[cursor] === '\\') {
+      cursor += 1;
+      continue;
+    }
+    if (/\s/.test(text[cursor])) positions.push(cursor);
+  }
+  return positions;
+}
+
+function hasWhitespaceBetween(positions: readonly number[], start: number, end: number): boolean {
+  let low = 0;
+  let high = positions.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (positions[mid] < start) low = mid + 1;
+    else high = mid;
+  }
+  return low < positions.length && positions[low] < end;
+}
+
 function angleReferenceEnd(text: string, closingAngle: number): number {
   let cursor = closingAngle + 1;
   while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
@@ -647,7 +670,14 @@ function plainReferenceBounds(
   schemeStart: number,
   endParen: number,
   openByClose: Int32Array,
+  whitespacePositions: readonly number[],
 ): { endParen: number; urlEnd: number } {
+  const fallback = (): { endParen: number; urlEnd: number } => ({
+    endParen,
+    urlEnd: hasWhitespaceBetween(whitespacePositions, schemeStart, endParen)
+      ? schemeStart
+      : endParen,
+  });
   let titleEnd = endParen - 1;
   while (text[titleEnd] === ' ' || text[titleEnd] === '\t') titleEnd -= 1;
 
@@ -657,13 +687,13 @@ function plainReferenceBounds(
     openingTitle = closingTitle;
   } else if (closingTitle === ')') {
     const titleStart = openByClose[titleEnd];
-    if (titleStart <= schemeStart) return { endParen, urlEnd: endParen };
+    if (titleStart <= schemeStart) return fallback();
     let urlEnd = titleStart;
     while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
-    if (urlEnd === titleStart || urlEnd <= schemeStart) return { endParen, urlEnd: endParen };
+    if (urlEnd === titleStart || urlEnd <= schemeStart) return fallback();
     return { endParen, urlEnd };
   } else {
-    return { endParen, urlEnd: endParen };
+    return fallback();
   }
 
   let titleStart = titleEnd - 1;
@@ -674,17 +704,17 @@ function plainReferenceBounds(
       if (slashes % 2 === 0) break;
     }
     if (text[titleStart] === '\n' || text[titleStart] === '\r') {
-      return { endParen, urlEnd: endParen };
+      return fallback();
     }
     titleStart -= 1;
   }
   if (text[titleStart] !== openingTitle) {
-    return { endParen, urlEnd: endParen };
+    return fallback();
   }
   let urlEnd = titleStart;
   while (text[urlEnd - 1] === ' ' || text[urlEnd - 1] === '\t') urlEnd -= 1;
   if (urlEnd === titleStart || urlEnd <= schemeStart) {
-    return { endParen, urlEnd: endParen };
+    return fallback();
   }
   return { endParen, urlEnd };
 }
@@ -725,6 +755,7 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
   const codeRanges = markdownCodeRanges(text);
   const bracketCloseByOpen = markdownBracketPairs(text);
   const parenPairs = markdownParenPairs(text);
+  const whitespacePositions = markdownWhitespacePositions(text);
   let cursor = 0;
   let cachedAngle = -2;
   const nextAngle = (from: number): number => {
@@ -792,7 +823,13 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     }
     const bounds = angleWrapped
       ? { endParen: initialEndParen, urlEnd: closingAngle }
-      : plainReferenceBounds(text, schemeStart, initialEndParen, parenPairs.openByClose);
+      : plainReferenceBounds(
+          text,
+          schemeStart,
+          initialEndParen,
+          parenPairs.openByClose,
+          whitespacePositions,
+        );
     const { endParen, urlEnd } = bounds;
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会

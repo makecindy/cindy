@@ -254,6 +254,14 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告 [最终版]');
   });
 
+  it('rejects a plain file destination with unescaped whitespace', () => {
+    const text = '[示例](xdt-file:///work/secret report.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtFileLinks(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+  });
+
   it('ignores file references inside inline code and fenced code blocks', () => {
     const inline = '`[报告](xdt-file:///tmp/inline.pdf)`';
     const fenced = '```md\n[报告](xdt-file:///tmp/fenced.pdf)\n```';

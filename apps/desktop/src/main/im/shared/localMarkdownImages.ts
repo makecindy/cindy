@@ -246,6 +246,17 @@ function isPathInside(parentAbs: string, childAbs: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function hasUnescapedMarkdownWhitespace(value: string): boolean {
+  for (let cursor = 0; cursor < value.length; cursor += 1) {
+    if (value[cursor] === '\\') {
+      cursor += 1;
+      continue;
+    }
+    if (/\s/.test(value[cursor])) return true;
+  }
+  return false;
+}
+
 function markdownImageDestination(raw: string): string {
   let target = raw.trim();
   if (target.startsWith('<')) {
@@ -263,6 +274,7 @@ function markdownImageDestination(raw: string): string {
       /^(\S+)[ \t]+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^)\\]|\\.)*\))[ \t]*$/,
     );
     if (titled) target = titled[1];
+    else if (hasUnescapedMarkdownWhitespace(target)) return '';
   }
   return target;
 }
@@ -434,7 +446,7 @@ function isSensitiveLocalMarkdownImageTarget(rawTarget: string): boolean {
   const target =
     trimmedTarget.startsWith('<') && !trimmedTarget.includes('>')
       ? trimmedTarget.slice(1).trim()
-      : markdownImageDestination(rawTarget);
+      : markdownImageDestination(rawTarget) || trimmedTarget;
   const targetLower = target.toLowerCase();
   return (
     targetLower.startsWith('file://') ||

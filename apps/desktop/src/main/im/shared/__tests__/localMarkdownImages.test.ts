@@ -99,6 +99,23 @@ describe('materializeLocalMarkdownImages', () => {
     ).resolves.toEqual({ absPaths: [mediaAbsPath], text: 'preview' });
   });
 
+  it('does not materialize a plain image destination with unescaped whitespace', async () => {
+    const workingDir = await makeTempRoot();
+    const sourcePath = path.join(workingDir, 'secret image.png');
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const deps = makeDeps(path.join(workingDir, 'media-store.png'));
+    const text = `![示例](${sourcePath})`;
+
+    await expect(
+      materializeLocalMarkdownImages(
+        { text, workingDir, sessionId: 'session-unescaped-whitespace' },
+        deps,
+      ),
+    ).resolves.toEqual({ absPaths: [], text });
+    expect(deps.ingest).not.toHaveBeenCalled();
+    expect(sanitizeLocalMarkdownImageRefs(text)).toBe('示例');
+  });
+
   it('redacts but does not materialize an angle destination missing its closing bracket', async () => {
     const workingDir = await makeTempRoot();
     const sourcePath = path.join(workingDir, 'private.png');
@@ -521,6 +538,22 @@ describe('materializeLocalMarkdownFiles', () => {
 
     expect(result.files).toHaveLength(1);
     await expect(fs.readFile(result.files[0].absPath, 'utf8')).resolves.toBe('approved content');
+  });
+
+  it('does not materialize an xdt-file destination with unescaped whitespace', async () => {
+    const workingDir = await makeTempRoot();
+    const reportPath = path.join(workingDir, 'secret report.pdf');
+    await fs.writeFile(reportPath, '%PDF-1.4');
+
+    const result = await materializeLocalMarkdownFiles({
+      text: `[示例](xdt-file://${reportPath})`,
+      workingDir,
+    });
+
+    expect(result.files).toEqual([]);
+    expect(result.tempDirs).toEqual([]);
+    expect(result.text).not.toContain('xdt-file://');
+    expect(result.text).not.toContain(reportPath);
   });
 
   it('sanitizes control characters, path separators, and oversized attachment names', async () => {
