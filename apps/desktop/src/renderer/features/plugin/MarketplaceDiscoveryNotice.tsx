@@ -3,9 +3,8 @@
  *
  * 三类信息刻意分行、语义分开(与 discover.ts 的注释要求一致):
  * - skippedCount:内容**永久**非法,跳过即结论;
- * - 可用 0 且存在被跳过条目:典型成因是市场仓库把插件目录做成了 Git submodule
- *   (clone 有意不递归,见 sources/git.ts),目录存在但内容为空——清单完全合法,
- *   不触发任何错误码,不专门点明的话用户与市场作者完全无从排查;
+ * - 可用 0 且存在被跳过条目:只报告“所有条目均被跳过”。跳过原因包含永久非法
+ *   形态和当前版本尚不支持的合法 source,不能仅凭总数判断有效性或具体根因;
  * - unreadableCount:**事实不明**(权限 / 文件锁 / 瞬时 I/O),刷新可解,
  *   不得与 skipped 混同展示。
  */
@@ -22,11 +21,10 @@ export interface MarketplaceDiscoveryNoticeProps {
 
 export function MarketplaceDiscoveryNotice({ summary, action }: MarketplaceDiscoveryNoticeProps) {
   const { t } = useTranslation();
-  // "清单有条目但可用 0"由既有字段推导,不在 IPC 上加冗余布尔。推导依据的不变量:
-  // discover.ts 对每个清单条目恰好计入 plugins/skipped/unreadable 三者之一,即
-  // declared = accepted + skipped + unreadable 恒成立——改 summary 字段语义时必须
-  // 同步审视这里。unreadable-only 的 0 可用不算:那是瞬时问题,刷新提示已覆盖。
-  const emptyWithSkips = summary.pluginCount === 0 && summary.skippedCount > 0;
+  // skippedCount 汇总永久非法原因和当前版本尚不支持的合法 source，不能从中推断
+  // 条目有效性或具体根因。unreadable-only 的 0 可用由重试提示单独覆盖。
+  const emptyWithSkippedEntries =
+    summary.pluginCount === 0 && summary.skippedCount > 0 && summary.unreadableCount === 0;
   return (
     <div
       role="status"
@@ -45,9 +43,9 @@ export function MarketplaceDiscoveryNotice({ summary, action }: MarketplaceDisco
           {t('settings.ghosts.market.sources.skippedEntries', { count: summary.skippedCount })}
         </p>
       ) : null}
-      {emptyWithSkips ? (
+      {emptyWithSkippedEntries ? (
         <p className="mt-1 text-11 leading-4 text-[var(--warning-fg)]">
-          {t('settings.ghosts.market.sources.emptyWithEntries')}
+          {t('settings.ghosts.market.sources.emptyWithSkippedEntries')}
         </p>
       ) : null}
       {summary.unreadableCount > 0 ? (

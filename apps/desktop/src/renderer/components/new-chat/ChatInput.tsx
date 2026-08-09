@@ -47,6 +47,10 @@ import {
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import {
+  hasFocusMovedToInteractiveElement,
+  useComposerSendFocusRestore,
+} from './useComposerSendFocusRestore';
+import {
   setVoiceInputDraftDecoration,
   VoiceInputDraftDecoration,
   type VoiceInputCaretState,
@@ -191,7 +195,6 @@ import { composerDocIsEmpty } from './composerDocState';
 import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
 import {
   isComposerBlankPointerTarget,
-  isInteractiveFocusedElement,
   resolveComposerBlankFocusIntent,
 } from './composerBlankPointerFocus';
 import {
@@ -742,20 +745,6 @@ function scrollVoiceInputDraftEndIntoView(editor: Editor): void {
   } else if (draftBox.bottom < scrollerBox.top + PAD) {
     scroller.scrollTop -= scrollerBox.top + PAD - draftBox.bottom;
   }
-}
-
-function hasFocusMovedToInteractiveElement(focusAnchor: Element | null, editor: Editor): boolean {
-  const activeElement = document.activeElement;
-  if (
-    !activeElement ||
-    activeElement === document.body ||
-    activeElement === document.documentElement
-  ) {
-    return false;
-  }
-  if (activeElement === focusAnchor) return false;
-  if (editor.view.dom.contains(activeElement)) return false;
-  return isInteractiveFocusedElement(activeElement);
 }
 
 /**
@@ -2580,6 +2569,11 @@ export function ChatInput({
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
   }, [composerMutationLocked, editor]);
+  const captureSendFocusForRestore = useComposerSendFocusRestore(
+    editor,
+    composerMutationLocked,
+    sendDispatchInFlight,
+  );
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -3095,7 +3089,7 @@ export function ChatInput({
         window.requestAnimationFrame(() => {
           if (editor.isDestroyed || !editor.isEditable) return;
           if (latestStorageKeyRef.current !== storageKey) return;
-          if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;
+          if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;
           editor.commands.focus('end');
         });
       }
@@ -3162,7 +3156,7 @@ export function ChatInput({
         if (!focusOnStorageKeyChangeRef.current) return;
         if (disableAutofocusRef.current || disabledRef.current) return;
         if (editor.isDestroyed || !editor.isEditable) return;
-        if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;
+        if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;
         editor.commands.focus('end');
       });
     };
@@ -4234,7 +4228,10 @@ export function ChatInput({
       // Local/SSH sends keep the live composer while references and runtime
       // settings settle; remote sends must stay editable after their
       // click-time snapshot is cleared.
-      if (!optimisticallyClearRemoteComposer) setSendDispatchInFlight(true);
+      if (!optimisticallyClearRemoteComposer) {
+        captureSendFocusForRestore();
+        setSendDispatchInFlight(true);
+      }
       try {
         let serializedContent = serializedAtClick;
         if (!serializedContent) {
@@ -4809,6 +4806,7 @@ export function ChatInput({
       confirmDialog,
       navigate,
       planModeEntry,
+      captureSendFocusForRestore,
     ],
   );
   useEffect(() => {

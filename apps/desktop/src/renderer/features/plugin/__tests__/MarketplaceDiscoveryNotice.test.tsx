@@ -1,5 +1,5 @@
 /**
- * 市场发现回执:插件数回执、skipped 与 unreadable 分开、submodule 空目录专门提示。
+ * 市场发现回执:插件数回执、skipped 与 unreadable 分开、零可用且所有条目被跳过时给出通用提示。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -56,14 +56,24 @@ describe('MarketplaceDiscoveryNotice', () => {
     expect(screen.queryByText(/emptyWithEntries/)).toBeNull();
   });
 
-  it('calls out the submodule-shaped empty market when entries exist but none are usable', () => {
+  it('reports that all entries were skipped without judging validity or root cause', () => {
     render(
       <MarketplaceDiscoveryNotice
         summary={{ ...base, pluginCount: 0, skippedCount: 2 }}
         action="added"
       />,
     );
-    expect(screen.getByText('settings.ghosts.market.sources.emptyWithEntries')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.market.sources.emptyWithSkippedEntries')).toBeTruthy();
+  });
+
+  it('does not show the all-skipped notice when unreadable entries are mixed in', () => {
+    render(
+      <MarketplaceDiscoveryNotice
+        summary={{ ...base, pluginCount: 0, skippedCount: 2, unreadableCount: 1 }}
+        action="refreshed"
+      />,
+    );
+    expect(screen.queryByText(/emptyWithSkippedEntries/)).toBeNull();
   });
 
   it('does not blame submodules for an unreadable-only zero result', () => {

@@ -3319,7 +3319,7 @@
           "unreadableEntries": "{{count}} 個插件條目暫時無法讀取，請重新整理重試",
           "addedReceipt": "已新增「{{name}}」，找到 {{count}} 個插件",
           "refreshedReceipt": "已重新整理「{{name}}」，找到 {{count}} 個插件",
-          "emptyWithEntries": "清單中有條目，但找不到可用的插件。常見原因是插件目錄使用 git submodule（內容不會被抓取）——請市場作者將插件目錄直接放入儲存庫。",
+          "emptyWithSkippedEntries": "找不到可用的插件：清單中的條目均已跳過。請檢查來源類型、插件目錄和清單設定。",
           "localBadge": "本地",
           "defaultRef": "預設分支",
           "neverSynced": "尚未同步",
