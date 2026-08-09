@@ -383,15 +383,10 @@ export function worktreeEligibilityCaptionKey(
   }
 }
 
-/** suggest-name 失败时的兜底名(对齐桌面 `auto-` + 时间戳 base36 后 6 位;过工作端 [a-z0-9-] 白名单)。 */
-export function fallbackWorktreeName(now = Date.now()): string {
-  return `auto-${now.toString(36).slice(-6)}`;
-}
-
-/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余走兜底名。 */
-export function normalizeSuggestedWorktreeName(value: unknown, now?: number): string {
+/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余交给 Main 生成最终名。 */
+export function normalizeSuggestedWorktreeName(value: unknown): string {
   if (typeof value === 'string' && value.trim().length > 0) return value.trim();
-  return fallbackWorktreeName(now);
+  return '';
 }
 
 export interface WorktreeCreateRequest {
@@ -458,12 +453,11 @@ export function buildWorktreeCreateRequest(input: {
   sourceBranch?: string | null;
   suggestedName: string | null | undefined;
   recoveryKey: string;
-  now?: number;
 }): WorktreeCreateRequest {
   return {
     sessionId: input.sessionId,
     baseRepo: input.eligibility.baseRepo,
-    name: normalizeSuggestedWorktreeName(input.suggestedName, input.now),
+    name: normalizeSuggestedWorktreeName(input.suggestedName),
     sourceBranch: input.sourceBranch?.trim() || input.eligibility.sourceBranch,
     recoveryKey: input.recoveryKey,
   };

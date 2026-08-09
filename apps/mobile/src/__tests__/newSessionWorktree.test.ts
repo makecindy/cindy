@@ -5,7 +5,7 @@
  *  - 探测与显式分支选择都绑定 device/cwd,切目标后的同步 render 不暴露旧仓库状态;
  *  - 探测抛错归并:CHANNEL_NOT_ALLOWED→ unsupported，瞬时断连→ recovering，其余 detect-failed;
  *  - 播种归并:只接受工作端明确 boolean,缺字段/异常形状保留当前镜像;
- *  - 两步流第一步入参:suggest-name 结果归一(空/非法走 auto- 兜底,过工作端名字白名单);
+ *  - 两步流第一步入参:suggest-name 结果归一(空/非法交给工作端生成最终名);
  *  - 失败展示:message + hint 拼装。
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,6 @@ import {
   applyWorktreePreferenceOnHost,
   buildWorktreeCreateRequest,
   classifyWorktreePreferenceSeed,
-  fallbackWorktreeName,
   formatWorktreeCreateFailure,
   isExactRemoteSessionClaimed,
   isValidWorktreeBranchPreferenceSnapshot,
@@ -504,18 +503,12 @@ describe('shouldBlockNewSessionCreateForWorktree', () => {
 });
 
 describe('worktree 名与 create 入参', () => {
-  it('suggest-name 非空取 trim;空/非字符串走 auto- 兜底(过工作端 [a-z0-9-]、≤20 白名单)', () => {
+  it('suggest-name 非空取 trim;空/非字符串交给工作端生成最终名', () => {
     expect(normalizeSuggestedWorktreeName('  fix-login  ')).toBe('fix-login');
     for (const value of ['', '   ', null, undefined, 42]) {
-      const name = normalizeSuggestedWorktreeName(value, 1_750_000_000_000);
-      expect(name).toMatch(/^auto-[a-z0-9]{1,6}$/);
-      expect(name.length).toBeLessThanOrEqual(20);
+      const name = normalizeSuggestedWorktreeName(value);
+      expect(name).toBe('');
     }
-  });
-
-  it('fallbackWorktreeName 稳定可复现(时间戳 base36 后 6 位)', () => {
-    const now = 1_750_000_000_000;
-    expect(fallbackWorktreeName(now)).toBe(`auto-${now.toString(36).slice(-6)}`);
   });
 
   it('buildWorktreeCreateRequest 组装 sessionId + baseRepo + name + sourceBranch + recoveryKey', () => {
@@ -543,15 +536,14 @@ describe('worktree 名与 create 入参', () => {
     }).sourceBranch).toBe('feature/mobile');
   });
 
-  it('suggest-name 失败(null)时 create 入参用 auto- 兜底名', () => {
+  it('suggest-name 失败(null)时 create 入参留空,由工作端生成最终名', () => {
     const request = buildWorktreeCreateRequest({
       sessionId: 's-1',
       eligibility: { status: 'eligible', baseRepo: '/repo/root', sourceBranch: 'main' },
       suggestedName: null,
       recoveryKey: 'recovery-key-1234567890',
-      now: 1_750_000_000_000,
     });
-    expect(request.name).toMatch(/^auto-[a-z0-9]{1,6}$/);
+    expect(request.name).toBe('');
   });
 
   it('only accepts complete request-matching worktree:create responses', () => {

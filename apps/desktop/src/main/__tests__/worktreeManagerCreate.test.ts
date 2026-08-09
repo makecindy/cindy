@@ -94,15 +94,15 @@ describe('createWorktree naming authority', () => {
     });
   });
 
-  it('replaces a legacy mobile auto-* hint with the actual final name', async () => {
+  it('preserves an explicit legal auto-* name', async () => {
     const result = await create('auto-abc123');
 
     expect(result).toMatchObject({
       ok: true,
       meta: {
-        name: 'pensive-lederberg',
-        path: path.join(baseRepo, '.cindy-worktrees', 'pensive-lederberg'),
-        branch: 'cindy/pensive-lederberg',
+        name: 'auto-abc123',
+        path: path.join(baseRepo, '.cindy-worktrees', 'auto-abc123'),
+        branch: 'cindy/auto-abc123',
       },
     });
     expect(storeMap.get('session-1')).toEqual(result.ok ? result.meta : undefined);
@@ -143,9 +143,9 @@ describe('createWorktree naming authority', () => {
     expect(result).toMatchObject({
       ok: true,
       meta: {
-        name: 'pensive-lederberg-2',
-        path: path.join(baseRepo, '.cindy-worktrees', 'pensive-lederberg-2'),
-        branch: 'cindy/pensive-lederberg-2',
+        name: 'auto-a1',
+        path: path.join(baseRepo, '.cindy-worktrees', 'auto-a1'),
+        branch: 'cindy/auto-a1',
       },
     });
   });

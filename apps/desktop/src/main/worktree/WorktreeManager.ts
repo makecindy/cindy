@@ -124,7 +124,6 @@ const precreatedWorktreeOperationQueues = new Map<string, Promise<void>>();
 const MIN_RECOVERY_KEY_LENGTH = 16;
 const MAX_RECOVERY_KEY_LENGTH = 256;
 const RECOVERY_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
-const LEGACY_AUTO_NAME_PATTERN = /^auto-[a-z0-9]{1,6}$/;
 
 async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>): Promise<T> {
   const key = path.resolve(baseRepo);
@@ -679,9 +678,9 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
     //    最终名称由 Main 在收集当前仓库占用项后生成。
     //    要求: [a-z0-9-], 首尾字母数字, 无连续 --, 长度 ≤20。
     //    符合 git ref + Windows/POSIX 路径 + cli flag 安全的交集。
-    const shouldGenerateName =
-      typeof req.name === 'string' &&
-      (req.name.trim().length === 0 || LEGACY_AUTO_NAME_PATTERN.test(req.name));
+    // Only an empty name is a generation request. `auto-*` is a valid explicit
+    // name and must remain compatible with callers that intentionally choose it.
+    const shouldGenerateName = typeof req.name === 'string' && req.name.trim().length === 0;
     const explicitNameError = shouldGenerateName ? null : validateWorktreeName(req.name);
     if (explicitNameError) {
       return {
