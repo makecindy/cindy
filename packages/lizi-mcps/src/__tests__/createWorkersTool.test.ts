@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import { registerCreateWorkersTool } from '../xdt-helper/create_workers.js';
-import type { CreateWorkerDeps, CreateWorkerSpec } from '../xdt-helper/create_worker.js';
+import {
+  createWorkerSpecSchema,
+  type CreateWorkerDeps,
+  type CreateWorkerSpec,
+} from '../xdt-helper/create_worker.js';
 
 function parse(result: XdtHelperToolResult) {
   const [block] = result.content;
@@ -64,6 +68,15 @@ describe('create_workers tool', () => {
     );
     expect(registry.get('create_workers')?.description).toContain(
       'route_provider_id 是 host 最终解析的供应商路由',
+    );
+    expect(registry.get('create_workers')?.description).toContain(
+      'WORKER_LIMIT_HARD_EXCEEDED 或 HOST_NOT_READY 后立即停止',
+    );
+    expect(registry.get('create_workers')?.description).toContain(
+      '每个 worker 可选传 provider_id（可单独传入或与 model 一起传入）',
+    );
+    expect(createWorkerSpecSchema.shape.provider_id.description).toContain(
+      '可单独传入或与 model 一起传入',
     );
   });
 

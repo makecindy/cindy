@@ -83,7 +83,7 @@ export const createWorkerSpecSchema = z.object({
     .trim()
     .min(1)
     .optional()
-    .describe('可选, 显式模型供应商 id; 与 model 一起传入后 host 会精确校验该路由'),
+    .describe('可选, 显式模型供应商 id; 可单独传入或与 model 一起传入, host 会精确校验该路由'),
   effort: z
     .enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     .optional()
