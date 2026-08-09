@@ -2683,7 +2683,10 @@ const lightSnapshotCache = new Map<string, SessionChatLightState>();
  * #2194: clientIds of user messages sent from THIS renderer's composer.
  * sendMessageCore / steerMessageCore are the choke points every local send
  * (composer send, edit-resend, steer, device-link send initiated on this
- * desktop) passes through, so every local user message is recorded there.
+ * desktop) passes through, so those local user messages are recorded there.
+ * One exception: a manual Retry's visible clone is minted by main with a
+ * fresh clientId, so retryLastError registers it separately from the invoke
+ * receipt's projection (items carrying supersedesUserClientId).
  * MessageStream uses this to tell an explicit local send — which force-pins
  * the viewport to the tail — apart from user messages injected by other
  * entries (IM channels, a mobile client driving the session remotely,

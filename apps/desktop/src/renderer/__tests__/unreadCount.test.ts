@@ -90,4 +90,43 @@ describe('countUnreadAdded', () => {
       }),
     ).toBe(1);
   });
+
+  // Codex P2（第五轮）：分页 loadOlderMessages prepend 的历史行不在 prevIds
+  // 里，纯 clientId 差分会把视口上方的旧消息误计成「新消息」。
+  it('分页 prepend 的历史行不计数，只有尾部追加才计', () => {
+    // prevIds 非空：以最后一条已见消息为界。
+    expect(
+      countUnreadAdded({
+        prevIds: new Set(['m3', 'm4']),
+        messages: [
+          msg('h1', 'assistant'),
+          msg('h2', 'user'),
+          msg('m3', 'assistant'),
+          msg('m4', 'user'),
+        ],
+        nearBottom: false,
+        isLocalUserSend: () => false,
+      }),
+    ).toBe(0);
+
+    // 同一帧里既有 prepend 又有尾部追加：只数尾部。
+    expect(
+      countUnreadAdded({
+        prevIds: new Set(['m3']),
+        messages: [msg('h1', 'assistant'), msg('m3', 'assistant'), msg('new', 'assistant')],
+        nearBottom: false,
+      }),
+    ).toBe(1);
+  });
+
+  it('prevIds 里的消息一条都不在列表中（窗口整体重置）时不计数', () => {
+    expect(
+      countUnreadAdded({
+        prevIds: new Set(['gone1', 'gone2']),
+        messages: [msg('a1', 'assistant'), msg('u1', 'user')],
+        nearBottom: false,
+        isLocalUserSend: () => false,
+      }),
+    ).toBe(0);
+  });
 });

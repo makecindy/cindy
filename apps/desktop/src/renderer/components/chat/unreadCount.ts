@@ -6,7 +6,12 @@
  *
  *  - 只累计**新出现**的 clientId；流式 token 追加（同 id 内容变化）不计数。
  *  - 视口在底部时不累计——auto-follow 已经把它送进视野。
- *  - assistant / ask_user / plan_review 始终计数。
+ *  - 只数**尾部追加**：分页 loadOlderMessages prepend 的历史行同样不在
+ *    prevIds 里，按纯 clientId 差分会把视口上方的旧消息误计成「新消息」
+ *    （Codex review P2）。prevIds 非空时以「最后一条已见消息」为界，只数
+ *    它之后的行；一条已见消息都找不到（窗口整体重置）则本轮不计。
+ *    prevIds 为空（首渲染）保持既有行为：全部按新内容计。
+ *  - assistant / ask_user / plan_review 在离底时计数。
  *  - user 消息默认不计数（本端发送会强制回底，用户必然看见）；但 #2194 之后
  *    外部入口（IM / 手机端 / 定时任务）注入的 user 消息不再抢视口，若不计数
  *    就会在屏幕外无声无息——调用方传入 isLocalUserSend 时，**非本端发送**的
@@ -40,8 +45,22 @@ export function countUnreadAdded({
   isLocalUserSend,
 }: CountUnreadAddedArgs): number {
   if (nearBottom) return 0;
+  let candidates: readonly UnreadCountMessage[] = messages;
+  if (prevIds.size > 0) {
+    // 只数尾部追加：分页 prepend 的历史行不在 prevIds 里，纯差分会误计。
+    let lastSeenIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (prevIds.has(messages[i].clientId)) {
+        lastSeenIdx = i;
+        break;
+      }
+    }
+    // 一条已见消息都找不到 = 窗口整体重置（rewind / 重载），不做未读猜测。
+    if (lastSeenIdx === -1) return 0;
+    candidates = messages.slice(lastSeenIdx + 1);
+  }
   let added = 0;
-  for (const m of messages) {
+  for (const m of candidates) {
     if (prevIds.has(m.clientId)) continue;
     if (m.isSyntheticTrigger) continue;
     if (m.role === 'assistant' || m.role === 'ask_user' || m.role === 'plan_review') {
