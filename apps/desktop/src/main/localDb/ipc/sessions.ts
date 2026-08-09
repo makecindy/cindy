@@ -169,10 +169,7 @@ export async function recycleSessionWorktreeForStatusChange(
       if (!(await recycle.isSessionStillRemovable(targetSessionId))) return;
       await routeLock.withSendToSessionLock(targetSessionId, async () => {
         if (!(await recycle.isSessionStillRemovable(targetSessionId))) return;
-        await mh
-          .getMakerIfReady()
-          ?.closeSession(targetSessionId)
-          .catch(() => undefined);
+        await mh.getMakerIfReady()?.closeSession(targetSessionId);
       });
       await recycle.recycleWorktreeForRemovedSession(targetSessionId, {
         scanOwners,

@@ -299,4 +299,30 @@ describe('recycleSessionWorktreeForStatusChange', () => {
       expect.objectContaining({ scanOwners: false, recycleOwner: expect.any(Function) }),
     );
   });
+
+  it('preserves a scanned owner when its runtime fails to close', async () => {
+    h.closeSession.mockImplementation(async (sessionId: string) => {
+      if (sessionId === 'owner') throw new Error('runtime still alive');
+    });
+    h.recycleWorktreeForRemovedSession.mockImplementation(
+      async (
+        sessionId: string,
+        options?: { recycleOwner?: (ownerId: string) => Promise<void> },
+      ) => {
+        if (sessionId === 'shared') await options?.recycleOwner?.('owner');
+      },
+    );
+
+    await recycleSessionWorktreeForStatusChange('shared', 'archived');
+
+    expect(h.closeSession).toHaveBeenCalledWith('owner');
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledTimes(1);
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+      'shared',
+      expect.objectContaining({ scanOwners: true, recycleOwner: expect.any(Function) }),
+    );
+    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', {
+      sessionId: 'shared',
+    });
+  });
 });
