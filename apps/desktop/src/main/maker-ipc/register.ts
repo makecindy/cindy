@@ -182,6 +182,12 @@ import { visibleMessageTextForConversationSearch } from '../localDb/conversation
 import { persistSubagentTaskUpdate } from '../localDb/subagentRuns.js';
 import { broadcastSubagentRunsChanged } from '../localDb/ipc/subagentRuns.js';
 import {
+  captureSubagentObservationGeneration,
+  clearSubagentObservationRewindState,
+  enqueueSubagentObservationWrite,
+  noteSubagentObservationTurnStarted,
+} from '../subagentObservationRewindFence.js';
+import {
   applyAgentSwitchToSessionRow,
   applyAgentSwitchResumeFallbackAtomically,
   broadcastSessionPatched,
@@ -3476,6 +3482,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           pendingFailedTurnAssistantPersistId.delete(session.id);
           // 记录 turn 开始时刻，供 onTurnErrorEvent 判断 error 是否属于 /clear 之前的旧 turn。
           noteTurnStarted(session.id);
+          noteSubagentObservationTurnStarted(session.id);
           // silent-stop 守卫:新 turn 开始 → 清 pendingResume + 记录时刻(陈旧判定)。
           silentStopAutoResumeGuard.noteTurnStarted(session.id);
           interruptedTurnAutoResumeGuard.noteTurnStarted(session.id, {
@@ -3739,17 +3746,27 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             ? event.source
             : undefined;
         const observedAt = Date.now();
-        void enqueueDurableWrite(`subagent_update:${session.id}`, async (ownerScope) => {
-          const persisted = await persistSubagentTaskUpdate(
-            session.id,
-            event.data,
-            source,
-            observedAt,
-          );
-          if (persisted) {
-            broadcastSubagentRunsChanged({ sessionId: session.id, ...persisted }, ownerScope);
-          }
-          return persisted;
+        const generationStamp = captureSubagentObservationGeneration({
+          sessionId: session.id,
+          data: event.data,
+          source,
+        });
+        if (generationStamp) void enqueueSubagentObservationWrite({
+          sessionId: session.id,
+          stamp: generationStamp,
+          enqueue: () =>
+            enqueueDurableWrite(`subagent_update:${session.id}`, async (ownerScope) => {
+              const persisted = await persistSubagentTaskUpdate(
+                session.id,
+                event.data,
+                source,
+                observedAt,
+              );
+              if (persisted) {
+                broadcastSubagentRunsChanged({ sessionId: session.id, ...persisted }, ownerScope);
+              }
+              return persisted;
+            }),
         }).catch((error) => {
           log.warn('Subagent workspace persistence failed', {
             sessionId: session.id,
@@ -4788,6 +4805,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
           clearClaudeSessionBackgroundActivity(session.id);
           clearSessionPersistState(session.id);
+          clearSubagentObservationRewindState(session.id);
           // 进程关闭 ≠ 通知作废:临时会话调度(非 heartbeat / 非 persistentSession)在 run
           // 终态后立刻 closeSession,此刻完成卡片刚在灵动岛上弹出来。硬删条目会让它当场
           // 消失,所以这条路径保留仍在展示的卡片,由 dwell 到期或用户 ack 收掉。

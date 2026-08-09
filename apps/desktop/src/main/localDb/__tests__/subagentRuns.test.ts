@@ -7,6 +7,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
 import {
   getSubagentRunDetail,
+  listVisibleSubagentObservationIdentities,
   listSubagentRuns,
   persistSubagentTaskUpdate,
 } from '../subagentRuns.js';
@@ -546,6 +547,50 @@ describe('durable Subagent runs', () => {
       summary: 'Lifecycle captured',
       usage: { totalTokens: 700, toolUses: 4, durationMs: 1200 },
     });
+  });
+
+  it('returns every visible provider identity needed to prime a Rewind generation', async () => {
+    insertMessage('tool-use-rewind-identity', 'tool_use', '{}', 'parent-tool', 900);
+    const visible = await persistSubagentTaskUpdate(
+      'session-1',
+      {
+        provider: 'codex',
+        taskId: 'logical-task',
+        parentToolUseId: 'parent-tool',
+        status: 'running',
+        subagentObservation: {
+          kind: 'spawn',
+          logicalSubagentId: 'logical-task',
+          parentToolUseId: 'parent-tool',
+          identityAliases: ['card-alias'],
+          providerRunIds: ['native-thread'],
+        },
+      },
+      'codex',
+      1000,
+    );
+    await persistSubagentTaskUpdate(
+      'session-1',
+      observed({ provider: 'pi', taskId: 'rewound-task', status: 'running' }),
+      'pi',
+      1100,
+    );
+    rawDb
+      .prepare('UPDATE subagent_runs SET rewind_at = 1200 WHERE logical_agent_id = ?')
+      .run('rewound-task');
+
+    expect(await listVisibleSubagentObservationIdentities('session-1')).toEqual([
+      {
+        provider: 'codex',
+        identities: expect.arrayContaining([
+          'logical-task',
+          'parent-tool',
+          'card-alias',
+          'native-thread',
+        ]),
+      },
+    ]);
+    expect(visible).toBeTruthy();
   });
 
   it('excludes background Bash and Workflow aggregation from the Subagent workspace', async () => {

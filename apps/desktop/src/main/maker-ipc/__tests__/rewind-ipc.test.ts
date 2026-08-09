@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   withSessionInputStoppedForRewind: vi.fn(),
   ownerScope: { ownerScopeKey: 'owner-1' },
   broadcastSubagentRunsInvalidated: vi.fn(),
+  beginSubagentRewindFence: vi.fn(),
+  finishSubagentRewindFence: vi.fn(),
+  primeSubagentRewindFence: vi.fn(),
+  listVisibleSubagentObservationIdentities: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -43,6 +47,16 @@ vi.mock('../../localDb/ipc/subagentRuns.js', () => ({
   broadcastSubagentRunsInvalidated: mocks.broadcastSubagentRunsInvalidated,
 }));
 
+vi.mock('../../localDb/subagentRuns.js', () => ({
+  listVisibleSubagentObservationIdentities: mocks.listVisibleSubagentObservationIdentities,
+}));
+
+vi.mock('../../subagentObservationRewindFence.js', () => ({
+  beginSubagentRewindFence: mocks.beginSubagentRewindFence,
+  finishSubagentRewindFence: mocks.finishSubagentRewindFence,
+  primeSubagentRewindFence: mocks.primeSubagentRewindFence,
+}));
+
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn() }),
 }));
@@ -62,6 +76,11 @@ describe('maker rewind IPC stop-then-rewind', () => {
     mocks.withSessionInputStoppedForRewind.mockImplementation(
       async (_sessionId: string, action: () => Promise<unknown>) => action(),
     );
+    mocks.beginSubagentRewindFence.mockReturnValue({
+      sessionId: 'session-1',
+      token: Symbol('rewind'),
+    });
+    mocks.listVisibleSubagentObservationIdentities.mockResolvedValue([]);
     registerMakerRewindIpc();
   });
 
@@ -90,6 +109,9 @@ describe('maker rewind IPC stop-then-rewind', () => {
       'session-1',
       mocks.ownerScope,
     );
+    expect(mocks.beginSubagentRewindFence).toHaveBeenCalledWith('session-1');
+    expect(mocks.primeSubagentRewindFence).toHaveBeenCalledWith(expect.any(Object), []);
+    expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(expect.any(Object), true);
   });
 
   it('waits through the post-Stop SESSION_RUNNING race before committing', async () => {
@@ -133,6 +155,7 @@ describe('maker rewind IPC stop-then-rewind', () => {
       expect(mocks.commitRewindAtMessage.mock.calls.length).toBeGreaterThan(1);
       expect(mocks.commitRewindAtMessage.mock.calls.length).toBeLessThanOrEqual(152);
       expect(mocks.broadcastSubagentRunsInvalidated).not.toHaveBeenCalled();
+      expect(mocks.finishSubagentRewindFence).toHaveBeenCalledWith(expect.any(Object), false);
     } finally {
       vi.useRealTimers();
     }

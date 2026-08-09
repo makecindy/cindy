@@ -48,6 +48,11 @@ export interface PersistSubagentTaskUpdateResult {
   firstForSession: boolean;
 }
 
+export interface VisibleSubagentObservationIdentity {
+  provider: SubagentProvider;
+  identities: string[];
+}
+
 function sliceWithoutDanglingSurrogate(value: string, end: number): string {
   let boundedEnd = end;
   if (boundedEnd > 0) {
@@ -505,6 +510,38 @@ async function readableSession(sessionId: string): Promise<{ clearedAt: number |
     .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
     .limit(1);
   return session ?? null;
+}
+
+export async function listVisibleSubagentObservationIdentities(
+  sessionId: string,
+): Promise<VisibleSubagentObservationIdentity[]> {
+  const session = await readableSession(sessionId);
+  if (!session) return [];
+  const rows = await getDbClient()
+    .drizzle.select({
+      provider: subagentRuns.provider,
+      logicalAgentId: subagentRuns.logicalAgentId,
+      parentToolUseId: subagentRuns.parentToolUseId,
+      aliases: subagentRuns.aliases,
+      providerRunIds: subagentRuns.providerRunIds,
+    })
+    .from(subagentRuns)
+    .where(
+      and(
+        eq(subagentRuns.sessionId, sessionId),
+        isNull(subagentRuns.rewindAt),
+        isNull(subagentRuns.deletedAt),
+        ...(session.clearedAt !== null ? [gt(subagentRuns.startedAt, session.clearedAt)] : []),
+      ),
+    );
+  return rows.map((row) => ({
+    provider: row.provider,
+    identities: mergeUnique(
+      parseStringArray(row.aliases),
+      [row.logicalAgentId, row.parentToolUseId, ...parseStringArray(row.providerRunIds)],
+      MAX_INDEXED_ALIAS_COUNT,
+    ),
+  }));
 }
 
 async function visibleParentToolUseIds(
