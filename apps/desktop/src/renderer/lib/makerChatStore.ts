@@ -2728,6 +2728,14 @@ function markLocalSentUserMessage(sessionId: string, clientId: string): void {
   ids.add(clientId);
 }
 
+/**
+ * Roll back a speculative mark (e.g. queued steer marked before the IPC when
+ * main persists before resolving). Never recreates a purged session's entry.
+ */
+function unmarkLocalSentUserMessage(sessionId: string, clientId: string): void {
+  localSentUserMessageIds.get(sessionId)?.delete(clientId);
+}
+
 /** Whether the given user message was sent from this renderer's composer. */
 function isLocalSentUserMessage(sessionId: string, clientId: string): boolean {
   return localSentUserMessageIds.get(sessionId)?.has(clientId) ?? false;
@@ -12013,21 +12021,24 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
   return withAgentSendDispatch(
     sessionId,
     () => Promise.resolve(false),
-    () =>
-      steerApi.input
+    () => {
+      // #2194 (Codex review P1): main 的 steer 在返回成功**之前**就
+      // persistAcceptedUserMessage，onCreated 推送可能抢在回执登记前把该行
+      // 基线化为外部消息——校验通过后、IPC 之前先登记，确定失败再回滚
+      // （unmark 不会复活已 purge 会话的条目）。
+      markLocalSentUserMessage(sessionId, clientId);
+      return steerApi.input
         .steer(sessionId, queued, {
           removeFromQueue: true,
           ...getRemoteInputClearBoundaryOpts(sessionId),
         })
         .then((ok) => {
-          // #2194 (Codex review P2): 队列项 steer 是本端点击意图——落库的 steer
-          // 行作为新尾部 user 消息出现时应触发回底；队列项可能来自上一次
-          // renderer 生命周期或外部入口，发送侧登记不到，这里按点击归属补上。
-          if (ok && sessions.has(sessionId)) markLocalSentUserMessage(sessionId, clientId);
+          if (!ok) unmarkLocalSentUserMessage(sessionId, clientId);
           requestInputProjection(sessionId);
           return ok;
         })
         .catch((err) => {
+          unmarkLocalSentUserMessage(sessionId, clientId);
           // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
           // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
           const message = decodeRemoteErrorMessage(
@@ -12041,7 +12052,8 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
             errorRetryText: null,
           }));
           return false;
-        }),
+        });
+    },
   );
 }
 
@@ -12238,6 +12250,12 @@ function retryLastError(sessionId: string): Promise<void> {
   const preRetryRecovery = sessions.get(sessionId)?.inputRecovery ?? null;
   const preRetryQueueHeadClientId =
     preRetryRecovery?.kind === 'queue-head' ? preRetryRecovery.clientId : null;
+  // 点击时刻的队列快照：回执里只登记**新出现**的项。点击前就在队列里的外部
+  // 入队项（例如被 main 按文本标记 originalSyntheticTrigger='continue' 的
+  // 外部项）不属于本次点击的产物，不能误认（Greptile review P1）。
+  const preRetryQueueIds = new Set(
+    (sessions.get(sessionId)?.pendingQueue ?? []).map((item) => item.clientId),
+  );
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
@@ -12251,6 +12269,7 @@ function retryLastError(sessionId: string): Promise<void> {
     // 条目重新创建出来（泄漏 + 同 id 会话重建后旧标记复活，Copilot review nit）。
     if (!sessions.has(sessionId)) return;
     for (const item of projection.pendingQueue) {
+      if (preRetryQueueIds.has(item.clientId)) continue;
       if (item.supersedesUserClientId) {
         markLocalSentUserMessage(sessionId, item.clientId);
       } else if (item.originalSyntheticTrigger === 'continue' && item.autoResume !== true) {

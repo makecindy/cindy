@@ -1138,10 +1138,11 @@ export function CCAgentSessionView({
   // 定时任务注入的按普通新内容处理（贴底才跟随）。useCallback 稳定引用——
   // MessageStream 的未读 diff effect 依赖它，内联箭头会让父组件每次
   // re-render 都重跑一遍 O(n) diff（Copilot review nit）。sessionId 不可用
-  // 的极短窗口返回 true，保持「缺省视为本端发送」的既有语义。
+  // 的极短窗口按**非本端发送**处理：该窗口内本端发送会被 guard 早返、根本
+  // 发不出去，能到达的 user 消息必然来自外部（Copilot review nit）。
   const isLocalUserSend = useCallback(
     (clientId: string) =>
-      sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : true,
+      sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : false,
     [sessionId],
   );
 

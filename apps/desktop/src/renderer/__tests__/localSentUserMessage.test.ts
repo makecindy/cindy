@@ -599,4 +599,36 @@ describe('isLocalSentUserMessage (#2194)', () => {
     await flushPromises();
     expect(makerChatStore.isLocalSentUserMessage(sid, 'q4')).toBe(false);
   });
+
+  // Greptile review P1（第十二轮）: 回执队列里点击前就存在的外部项（例如被
+  // main 按文本标记 originalSyntheticTrigger='continue' 的外部入队项）不属于
+  // 本次点击的产物——只登记点击后**新出现**的项。
+  it('Retry 回执里点击前就存在的外部 continue 项不被误认', async () => {
+    const sid = `retry-ext-cont-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('ext-continue', 'external continue', { originalSyntheticTrigger: 'continue' }),
+        ],
+        error: 'turn failed',
+      }),
+    );
+    // 回执：点击前的外部 continue 项仍在 + 本次 retry 的新克隆项。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('retry-clone-2', 'failed text', { supersedesUserClientId: 'orig' }),
+          queuedItem('ext-continue', 'external continue', { originalSyntheticTrigger: 'continue' }),
+        ],
+      }),
+    );
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'ext-continue')).toBe(false);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'retry-clone-2')).toBe(true);
+  });
 });
