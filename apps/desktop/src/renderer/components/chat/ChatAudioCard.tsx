@@ -380,6 +380,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
           <DropdownMenuTrigger asChild>
             <span
               aria-hidden
+              data-fixed-menu-anchor
               style={{
                 position: 'fixed',
                 left: menuPos?.x ?? 0,

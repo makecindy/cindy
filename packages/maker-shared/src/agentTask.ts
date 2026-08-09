@@ -154,6 +154,21 @@ export interface AgentTaskUpdate {
 }
 
 /**
+ * Derive the visible task status from the live update and its paired tool result.
+ * A result is a terminal fact, so it closes a stale `running` update without
+ * overriding an explicit failure or stopped state.
+ */
+export function deriveAgentTaskStatus(
+  updateStatus: AgentTaskStatus | undefined,
+  result?: string,
+  options?: { resultIsLaunchReceipt?: boolean },
+): AgentTaskStatus {
+  const hasResult = typeof result === 'string' && result.trim().length > 0;
+  if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
+  return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
+/**
  * Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents,
  * PI `subagent`(Cindy 自有扩展注册的工具名,与 pi 社区惯例一致)。
  *
@@ -362,6 +377,29 @@ export function subagentSpawnReceiptName(
   return name && trimmed && trimmed === name ? name : undefined;
 }
 
+/**
+ * V1 `collab:spawnAgent` returns a compact child-state summary. A `running`
+ * summary is a launch receipt for the spawn tool, not a terminal result for
+ * the child task, so it must not close a stale running update.
+ */
+export function subagentSpawnResultIndicatesRunning(
+  toolName: string | undefined,
+  result: string | undefined,
+): boolean {
+  const trimmed = result?.trim() ?? '';
+  // Claude's asynchronous Agent tool returns a textual launch receipt while the
+  // child is still running. Treat it like the structured Codex V1 receipt so a
+  // paired stale `running` update does not close the task prematurely.
+  if ((toolName === 'Agent' || toolName === 'Task')
+    && trimmed === 'Async agent launched successfully.') {
+    return true;
+  }
+  if (toolName !== 'collab:spawnAgent') return false;
+  return (result ?? '').split(/\r?\n/).some((line) =>
+    /^[^:\n]+:\s*(?:running|in[_-]?progress|started|active)\s*$/i.test(line.trim()),
+  );
+}
+
 export function buildAgentTaskCardModel(input: {
   toolName?: string;
   toolInput?: unknown;
@@ -369,7 +407,11 @@ export function buildAgentTaskCardModel(input: {
   result?: string;
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result } = input;
-  const status: AgentTaskStatus = update?.status ?? (result ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(update?.status, result, {
+    resultIsLaunchReceipt:
+      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
+      || subagentSpawnResultIndicatesRunning(toolName, result),
+  });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider
     ?? (toolName?.startsWith('collab:')

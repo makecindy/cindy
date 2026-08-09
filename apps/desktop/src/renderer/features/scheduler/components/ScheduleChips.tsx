@@ -73,7 +73,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex h-[34px] shrink-0 items-center rounded-full text-[13px] leading-none transition-colors',
+        'inline-flex h-[34px] shrink-0 items-center rounded-full text-13 leading-none transition-colors',
         'gap-1.5 px-3',
         variant === 'toolbar'
           ? cn(
@@ -91,7 +91,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
       {...rest}
     >
       {icon && <span className="shrink-0 -translate-y-px">{icon}</span>}
-      {label && <span className="truncate text-center text-[13px] font-normal leading-[1.33]">{label}</span>}
+      {label && <span className="truncate text-center text-13 font-normal leading-[1.33]">{label}</span>}
       <ChevronDown size={13} className="shrink-0 opacity-60" />
     </button>
   );
@@ -238,12 +238,12 @@ export function ScheduleSettingsButton({
         className={cn(POPOVER_BASE, 'w-[240px]')}
         onWheel={stopWheel}
       >
-        <div className="px-2 pt-1.5 pb-1 text-[13px] font-medium text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+        <div className="px-2 pt-1.5 pb-1 text-13 font-medium text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
           {t('scheduler.chips.advanced')}
         </div>
 
         {enabled && (
-          <p className="px-2 pb-1 text-[11px] leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+          <p className="px-2 pb-1 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
             {t('scheduler.chips.worktreeHint')}
           </p>
         )}
@@ -255,7 +255,7 @@ export function ScheduleSettingsButton({
             onClick={() => !switchDisabled && onEnabledChange(!enabled)}
             disabled={switchDisabled}
             className={cn(
-              'flex h-8 w-full items-center gap-2 rounded-md px-2 text-[13px] transition-colors',
+              'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
               'hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
               enabled ? 'text-[var(--msg-assistant-text)] dark:text-[var(--msg-assistant-text)]' : 'text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]',
@@ -455,7 +455,7 @@ export function ScheduleChip({
                 );
               })}
             </div>
-            <p className="px-1 pt-1.5 text-[11px] leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+            <p className="px-1 pt-1.5 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
               {t(
                 timingMode === 'interval' && !intervalIsPreset
                   ? 'scheduler.chips.timingMode.intervalUnsupportedHint'
@@ -509,10 +509,10 @@ function ExactIntervalPanel({ summary }: { summary: string }) {
   const { t } = useTranslation();
   return (
     <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-      <div className="text-[13px] font-medium text-[var(--msg-assistant-text)]">
+      <div className="text-13 font-medium text-[var(--msg-assistant-text)]">
         {t('scheduler.chips.timingMode.currentExact', { schedule: summary })}
       </div>
-      <p className="pt-2 text-[11px] leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+      <p className="pt-2 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
         {t('scheduler.chips.timingMode.exactIntervalPanelHint')}
       </p>
     </div>
@@ -547,7 +547,7 @@ function ScheduleConfigPanel({
                 onFocus={commit}
                 onChange={(intervalMinutes) => onUpdate({ mode: 'intervalMinutes', intervalMinutes })}
               />
-              <span className="text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.minutesSuffix')}</span>
+              <span className="text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.minutesSuffix')}</span>
             </div>
             <PreviewPill
               text={
@@ -566,7 +566,7 @@ function ScheduleConfigPanel({
                 onFocus={commit}
                 onChange={(intervalHours) => onUpdate({ mode: 'interval', intervalHours })}
               />
-              <span className="text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.hoursSuffix')}</span>
+              <span className="text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.hoursSuffix')}</span>
             </div>
             <PreviewPill text={panelConfig.intervalHours === 1 ? t('scheduler.chips.schedulePreview.everyHour') : t('scheduler.chips.schedulePreview.everyHours', { count: panelConfig.intervalHours })} />
           </>
@@ -777,7 +777,7 @@ function TimePicker({
         setOpen(next);
       }}
     >
-      <div className="grid h-[34px] w-[112px] grid-cols-[1fr_24px] items-center rounded-lg border border-[var(--settings-input-border)] bg-background px-2 text-[13px] font-medium text-[var(--settings-input-text)] dark:border-[var(--settings-input-border)] dark:text-[var(--settings-input-text)]">
+      <div className="grid h-[34px] w-[112px] grid-cols-[1fr_24px] items-center rounded-lg border border-[var(--settings-input-border)] bg-background px-2 text-13 font-medium text-[var(--settings-input-text)] dark:border-[var(--settings-input-border)] dark:text-[var(--settings-input-text)]">
         <div className="flex items-center justify-center">
         <input
           ref={hourInputRef}
@@ -809,7 +809,7 @@ function TimePicker({
             }
           }}
           aria-label={t('scheduler.chips.scheduleField.scheduleHourAria')}
-          className="w-5 bg-transparent text-center text-[13px] font-medium outline-none"
+          className="w-5 bg-transparent text-center text-13 font-medium outline-none"
         />
         <span className="select-none text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">:</span>
         <input
@@ -842,7 +842,7 @@ function TimePicker({
             }
           }}
           aria-label={t('scheduler.chips.scheduleField.scheduleMinuteAria')}
-          className="w-5 bg-transparent text-center text-[13px] font-medium outline-none"
+          className="w-5 bg-transparent text-center text-13 font-medium outline-none"
         />
         </div>
         <PopoverTrigger asChild>
@@ -894,7 +894,7 @@ function TimeColumn({
 }) {
   return (
     <div className="min-w-0">
-      <div className="px-2 pb-1 text-[11px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{label}</div>
+      <div className="px-2 pb-1 text-11 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{label}</div>
       <div className="max-h-[180px] overflow-y-auto pr-1" onWheel={stopWheel}>
         {options.map((option) => {
           const active = option === value;
@@ -904,7 +904,7 @@ function TimeColumn({
               type="button"
               onClick={() => onChange(option)}
               className={cn(
-                'flex h-7 w-full items-center justify-center rounded-md text-[13px] transition-colors',
+                'flex h-7 w-full items-center justify-center rounded-md text-13 transition-colors',
                 active
                   ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--surface-hover)] dark:text-[var(--settings-section-desc)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -943,7 +943,7 @@ function WeekdayRow({
               onFocus={onFocus}
               onClick={() => onChange(day)}
               className={cn(
-                'flex h-8 w-[38px] items-center justify-center rounded-full border text-[13px] transition-colors',
+                'flex h-8 w-[38px] items-center justify-center rounded-full border text-13 transition-colors',
                 active
                   ? 'border-transparent bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'border-[var(--cmd-palette-border)] bg-transparent text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] dark:border-[var(--cmd-palette-border)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -977,7 +977,7 @@ function MonthDayRow({
 
   return (
     <div className="flex min-h-[34px] w-full items-center gap-1.5">
-      <span className="text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.daySuffix')}</span>
+      <span className="text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.chips.scheduleField.daySuffix')}</span>
       <input
         type="text"
         inputMode="numeric"
@@ -1003,7 +1003,7 @@ function MonthDayRow({
 
 function PreviewPill({ text }: { text: string }) {
   return (
-    <div className="flex h-[34px] w-full items-center rounded-full bg-background px-3 text-[13px] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+    <div className="flex h-[34px] w-full items-center rounded-full bg-background px-3 text-13 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
       {text}
     </div>
   );
@@ -1011,7 +1011,7 @@ function PreviewPill({ text }: { text: string }) {
 
 function inputPillClass(className?: string) {
   return cn(
-    'h-[34px] rounded-lg border px-3 text-[13px] outline-none',
+    'h-[34px] rounded-lg border px-3 text-13 outline-none',
     'border-[var(--settings-input-border)] bg-background text-[var(--settings-input-text)]',
     'dark:border-[var(--settings-input-border)] dark:text-[var(--settings-input-text)]',
     className,

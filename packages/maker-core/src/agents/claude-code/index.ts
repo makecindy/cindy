@@ -109,7 +109,9 @@ import {
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
+  buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
+  buildClaudeRemoteOrcaCallerGuards,
   buildClaudeRemoteToolGuards,
   mergeClaudeHookSets,
 } from './capability-routing.js';
@@ -1172,6 +1174,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 到对应 session 的业务函数。host 直接调 startSession 而没透 sessionId
         // 时此处为 undefined, 工具按"无 session 绑定"语义处理。
         sessionId: opts.sessionId,
+        mcpCallerKind: 'root',
+        mcpCallerAttested: true,
         ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
         getSessionContext: () => context,
       };
@@ -1299,6 +1303,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
         PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
       },
+      // Keep the existing local routing/capture hooks first: callers and tests
+      // rely on their observable order. The exact-match Orca provenance guard
+      // still runs for send_to_lead after those hooks and denies descendants.
+      buildClaudeOrcaCallerProvenanceHooks(),
       this.deps.claudeHooks,
     );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -1788,8 +1796,16 @@ export class ClaudeCodeAgent extends BaseAgent {
     let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    // Claude's native OAuth Auto classifier bypasses canUseTool entirely. Once a host MCP
+    // is registered, that would also bypass Cindy's trusted-server and prompt policies,
+    // leaving permission requests with no Cindy interaction surface. Keep native Auto for
+    // MCP-free sessions, but route host-MCP sessions through SDK default so canUseTool owns
+    // the decision.
+    const hasRegisteredMcpServers = (): boolean => registeredMcpServerNames.size > 0;
     const usesNativeClaudeAutoReview = (): boolean =>
-      !nativeAutoReviewUnavailable && mutableAutoReviewCredentialMode === 'oauth-bearer';
+      !nativeAutoReviewUnavailable
+      && mutableAutoReviewCredentialMode === 'oauth-bearer'
+      && !hasRegisteredMcpServers();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -1862,6 +1878,11 @@ export class ClaudeCodeAgent extends BaseAgent {
      */
     const effectiveSdkPermissionMode = (): SdkPermissionMode =>
       mutablePlanMode || planTurnActive ? 'plan' : toSdkPermissionMode(mutablePermissionMode);
+    // Only queries that actually started in native Auto need the post-init
+    // downgrade. A host MCP can already have made a query start in `default`;
+    // retrying that no-op and treating a transport failure as fatal would close
+    // an otherwise safe session.
+    const nativeAutoQueries = new WeakSet<Query>();
 
     /**
      * **本次 turn** 目标 SDK 权限档: 只看 `planTurnActive`(本轮是否 plan turn), **不含**
@@ -1928,7 +1949,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const runtimeState: RuntimeState = newRuntimeState();
     const beginNewTurn = (): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
-      // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮 API call 计数。
+      // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
       turnState.text = '';
       turnState.toolUses = 0;
@@ -1937,6 +1958,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
       turnState.pendingApiError = null;
+      turnState.lastAssistantRequestId = undefined;
+      turnState.lastAssistantMsgHadSubstance = true;
       // 代际前进: 迟到的被打断 result 据此被 translator 识别为已被本 send 接管。
       turnState.generation += 1;
       // interruptRequested **刻意不在这里清**: watchdog / tool-loop guard 先置
@@ -2389,11 +2412,28 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 在远端不存在); 但 factory 还可能注入 host 侧 http server (协同恢复通道),
         // 所以审批归属快照不在此处定稿, 挪到 factory 调用后按 startParams 重算。
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
-        const remotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
+        const requestedRemotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
+        const remoteHasMcpServers = Object.keys(remoteMcpServers ?? {}).length > 0;
+        // effectiveSdkPermissionMode() is computed from the local registration snapshot,
+        // which still includes in-process SDK MCPs that were just filtered out above.
+        // Restore native OAuth Auto when the remote query has no serializable MCP surface;
+        // the Desktop factory will still downgrade it before opening the query if it later
+        // injects a host HTTP MCP (for example the collaboration bridge).
+        const remotePermissionMode =
+          requestedRemotePermissionMode === 'default'
+          && mutablePermissionMode === 'auto'
+          && !mutablePlanMode
+          && !planTurnActive
+          && !nativeAutoReviewUnavailable
+          && mutableAutoReviewCredentialMode === 'oauth-bearer'
+          && !remoteHasMcpServers
+            ? 'auto'
+            : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
-        const remoteToolGuards = buildClaudeRemoteToolGuards(
-          this.deps.capabilityRouting,
-        );
+        const remoteToolGuards = [
+          ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
+        ];
 
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
@@ -2705,6 +2745,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
         registeredMcpServerNames = hostMcpServerNames;
         nonHarnessMcpServerNames = hostMcpServerNames;
+        // The factory may inject host HTTP MCPs and downgrade OAuth Auto to
+        // default before opening cc-manager. Track the post-factory mode so a
+        // later SDK init cannot repeat that downgrade and turn a harmless
+        // control-RPC failure into a fatal close.
+        const finalRemotePermissionMode =
+          (startParams.permissionMode as SdkPermissionMode | undefined) ?? remotePermissionMode;
+        sdkInPlanMode = finalRemotePermissionMode === 'plan';
         // 记入 closure: handle.close / U2 兜底需要 await remoteQuery.close()。
         activeRemoteQuery = remoteQuery as unknown as { close: () => Promise<void>; detach?: () => Promise<void> };
 
@@ -2740,6 +2787,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
         })().catch(() => undefined);
 
+        if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
         return remoteQuery;
       }
 
@@ -2822,7 +2870,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 计划模式开启时 SDK 跑 plan; 读 mutable 值让 rewind/fork 重建拿到当前档而非创建时快照。
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
-      return sdkQuery({
+      const query = sdkQuery({
         prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
           abortController,
@@ -2940,6 +2988,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             : {}),
         },
       });
+      if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
+      return query;
     };
 
     // ── 死 handle 终结器 —— U2 (远端 daemon 突死) 与 crash (SDK 流异常) 共用 ──
@@ -3106,6 +3156,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // still has buffered activity. Suppress that cancelled tail until its
     // Query is replaced before the next explicit user turn.
     let continuationCancellationGeneration: number | null = null;
+    /**
+     * 本次 Stop 已经发过终态 boundary 的那一代。
+     *
+     * accept 阶段的 foreground 终态归 send 的 finishSendBeforeUserInput 发, 但
+     * abort 若同时取消了一个 awaiting continuation, 它已经先发过
+     * turn_continuation_cancelled —— 同一次 Stop 再补一个 done 就是双终态,
+     * Session 不按 generation 去重, 所有监听方都会收到两条。
+     *
+     * 单独记一个代次而不是复用 continuationCancellationGeneration: 后者在关
+     * query 分支里**无条件**设置(哪怕那一轮根本没发 boundary), 拿它当去重依据
+     * 会把 send 该发的那个终态一起吞掉。
+     */
+    let stopTerminalEmittedGeneration: number | null = null;
     let continuationCancellationRequiresQueryRebuild = false;
     const continuationClaims = new Map<number, ContinuationClaim>();
     const continuationListeners = new Set<(
@@ -3376,10 +3439,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         continuationId: claim.id,
       });
       if (emitTurnBoundary('turn_continuation_cancelled', undefined, true)) {
+        // 这一代的终态已经出去了 —— accept 阶段的 send 醒来后不要再补一个。
+        stopTerminalEmittedGeneration = turnState.generation;
         // Install the cancelled-tail fence at the same enqueue boundary as
         // the synthetic product terminal. stopTask can win before interrupt
         // resolves, so waiting for the interrupt ACK leaves a double-terminal
-        // window for a late provider result.
+        // window for a late provider result. A live Query that owns local_bash
+        // is always retired by global Stop; the fence remains as a defensive
+        // guard until the replacement Query is installed.
         continuationCancellationGeneration = turnState.generation;
         continuationCancellationRequiresQueryRebuild = true;
       }
@@ -3737,6 +3804,43 @@ export class ClaudeCodeAgent extends BaseAgent {
               continue;
             }
             if (noteSdkInitMcpServerNames(rawMsg)) {
+              // User/project/local settings MCPs are only revealed by the SDK init
+              // payload, after the query has already started. Native OAuth Auto skips
+              // canUseTool, so immediately hand later turns back to Cindy when that
+              // payload reports any connected MCP server. Do this before the optional
+              // provenance RPC below: a slow status call must not prolong native Auto.
+              if (
+                mutablePermissionMode === 'auto'
+                && !mutablePlanMode
+                && !planTurnActive
+                && mutableAutoReviewCredentialMode === 'oauth-bearer'
+                && hasRegisteredMcpServers()
+                && nativeAutoQueries.has(currentQ)
+              ) {
+                try {
+                  await currentQ.setPermissionMode(effectiveSdkPermissionMode());
+                  nativeAutoQueries.delete(currentQ);
+                } catch (error) {
+                  // Keeping this query alive would leave connected MCP tools under the
+                  // native classifier, which bypasses Cindy's canUseTool policy. Close
+                  // and surface a terminal stream failure instead of failing open.
+                  log.error('failed to downgrade native Auto after SDK settings MCP init', {
+                    error: String(error),
+                  });
+                  try {
+                    await currentQ.close();
+                  } catch (closeError) {
+                    log.warn('failed to close query after native Auto downgrade failure', {
+                      error: String(closeError),
+                    });
+                  }
+                  throw new Error(
+                    `[MCP_APPROVAL_MODE_DOWNGRADE_FAILED] ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                  );
+                }
+              }
               await refreshSdkMcpProvenance(currentQ);
             }
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
@@ -4626,7 +4730,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           pendingToolIds.clear();
           acceptingRebuiltSend = false;
           clearUpstreamResponseIdle();
-          emitTurnBoundary(reason);
+          // 同一次 Stop 只发一个终态: abort 若已为被取消的 continuation 发过
+          // turn_continuation_cancelled(同一代), 这里只清状态、不再补 done。
+          if (stopTerminalEmittedGeneration !== turnState.generation) {
+            emitTurnBoundary(reason);
+          }
         };
         if (pendingRewindTo || activeBridgeRewindResumeAt) {
           const resumeAt = pendingRewindTo ?? activeBridgeRewindResumeAt;
@@ -4936,6 +5044,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           runningBackgroundTasks.clear();
           terminalBackgroundTaskIds.clear();
           turnInFlight = false;
+          // 本分支自己发 bridge_aborted 终态, send 的收尾责任就此交接完毕 ——
+          // 一并清 sendInAcceptPhase。不清的话: send 醒来走进
+          // finishSendBeforeUserInput, 入口守卫见 turnInFlight=false 直接返回,
+          // sendInAcceptPhase 悬置 true, 后续每次 abort 都被 accept 让位守卫
+          // 错误短路。boundary 只从这里发一次, send 那侧早退不再补发。
+          sendInAcceptPhase = false;
           turnState.interruptRequested = false;
           preserveBridgeRetryTarget(abortedBridgeKind, abortedRewindResumeAt);
           emitTurnBoundary(
@@ -4956,10 +5070,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           turnState.interruptRequested = true;
           turnState.interruptGeneration = turnState.generation;
         }
-        // 先关 turn-in-flight 再 interrupt：SDK retry backoff 期间不响应 interrupt
-        // (2026-08 实踩 OAuth 全池冷却 503 持续重试)，等它返回会让后续 send 被
-        // SESSION_RUNNING 永拒。generation 守卫(translator handleResult)保证旧 q
-        // 的迟到 error_during_execution result 被丢弃、不污染新 turn。
+        // 保持 turnInFlight 为 true 直到 interrupt 返回(或超时关 query)：
+        // 提前清掉会让 Session.isTurnRunning() 报 idle，并发 send 通过守卫后
+        // 把用户消息推进旧 q 的 inputQueue，然后在 interrupt 返回后被
+        // inputQueue.clear() 抹掉 → 用户消息丢失(review P1-A)。
+        // 5s 超时 + catch 兜底保证 turnInFlight 最终一定被清除，不会造成
+        // SESSION_RUNNING 永拒。generation 守卫(translator handleResult)保证
+        // 旧 q 的迟到 error_during_execution result 被丢弃、不污染新 turn。
         // sendInAcceptPhase 守卫: 并发 send 处于 accept 阶段时, 由 send 自己的
         // finishSendBeforeUserInput 负责清 turnInFlight + emit boundary,
         // abort 不能抢清, 否则 boundary 丢失(review 3541310178)。
@@ -4967,7 +5084,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 需要旧值)。
         const foregroundWasInFlight = turnInFlight;
         if (!sendInAcceptPhase) {
-          turnInFlight = false;
           pendingToolIds.clear();
         }
         // 用户 Stop 的产品语义 = 本会话所有模型调用停止:先发 stopTask 再 interrupt
@@ -4986,7 +5102,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           // interrupt ACK guarantees these earlier stop requests have settled,
           // so allSettled intentionally has no extra timeout here.
           const settledStops = await Promise.allSettled(stopRequests.map(({ promise }) => promise));
-          const hasRejectedStops = settledStops.some((stop) => stop.status === 'rejected');
           const fulfilledWakeIds = stopRequests
             .filter((_, index) => settledStops[index]?.status === 'fulfilled')
             .map(({ taskId }) => taskId);
@@ -5004,7 +5119,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           // to prevent a queued automatic continuation from escaping Stop.
           const cancelledContinuation = stoppedClaim ?? cancelActiveContinuation('user_stop');
           const hasUnconfirmedWakeTasks = [...runningBackgroundTasks.values()].some((info) => info.wake);
-          if (cancelledContinuation || hasUnconfirmedWakeTasks || hasRejectedStops) {
+          // Once Stop has dispatched stopTask for any wake task, the provider
+          // Query must be retired regardless of RPC outcome. A fulfilled RPC
+          // only acknowledges the cancellation request; it cannot prove that
+          // an automatic continuation was not already queued in the provider.
+          // Closing the Query is therefore the only boundary that guarantees
+          // no later model call. Mixed local_bash tasks intentionally die with
+          // this Query; preserving them would reopen the unsafe same-Query path.
+          const shouldRetireQuery =
+            stopRequests.length > 0 ||
+            cancelledContinuation ||
+            hasUnconfirmedWakeTasks;
+          if (shouldRetireQuery) {
             // All cancellation sources share one terminal state: a cancelled
             // continuation claim, an unconfirmed wake task, or a rejected stop
             // means this Query must be retired. The provider tail is fenced by
@@ -5012,8 +5138,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // Query.
             const cancelledQuery = q;
             // 用 Stop 之前的 turnInFlight 快照判定 foreground 是否需要终态。
-            // turnInFlight 已被上方立即清除(防 SESSION_RUNNING 死锁)，但
-            // close-query 分支仍需要旧值决定是否补 boundary。
+            // close-query 分支需要旧值决定是否补 boundary。
             canceledBridgeQueries.add(cancelledQuery);
             // Query retirement always leaves a rebuild tombstone, even if the
             // synthetic boundary is rejected because the event queue is
@@ -5034,7 +5159,12 @@ export class ClaudeCodeAgent extends BaseAgent {
               // foreground turn has not already produced a terminal, replace
               // it with one synthetic boundary; a raced natural result leaves
               // foregroundWasInFlight=false and therefore does not get a duplicate.
-              if (foregroundWasInFlight) emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              // accept 阶段的 foreground 终态归 send 的 finishSendBeforeUserInput:
+              // 它醒来后按 signal.aborted / push 失败走到自己的 boundary。这里
+              // 抢发会重复——一次 Stop 冒出两个终态。
+              if (foregroundWasInFlight && !sendInAcceptPhase) {
+                emitTurnBoundary('user_stop_unconfirmed_wake_tasks');
+              }
             }
             inputQueue.clear();
             try {
@@ -5045,7 +5175,20 @@ export class ClaudeCodeAgent extends BaseAgent {
             recordCanceledQueryClose(cancelledQuery, 'user_stop cancellation');
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
-            turnInFlight = false;
+            // main 上 #2151 已给 interrupt 成功分支挂了同一守卫; 本 PR 的差异是
+            // close-query / 超时 / 抛错 / bridge 分支也一并纳入同一契约。
+            if (!sendInAcceptPhase) turnInFlight = false;
+          } else {
+            // interrupt 成功且无后台任务需要清：被中断的 turn 会收到
+            // error_during_execution result → translator 在 onTurnEnd 清
+            // turnInFlight。这里显式补清以防 SDK 未 drain result 的极端
+            // 情况(确保不会 SESSION_RUNNING 永拒)。
+            //
+            // accept 阶段除外——finishSendBeforeUserInput 的入口守卫是
+            // `if (!turnInFlight) return`,abort 抢清会让它以为已被收口而直接
+            // 返回,send_cancelled_before_acceptance 的终态 boundary 从此丢失,
+            // isTurnRunning 悬置(review 3541310178 的反馈原型用例钉的就是它)。
+            if (!sendInAcceptPhase) turnInFlight = false;
           }
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);
@@ -5072,10 +5215,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             recordCanceledQueryClose(q, 'user_stop interrupt timeout');
             runningBackgroundTasks.clear();
             terminalBackgroundTaskIds.clear();
-            turnInFlight = false;
+            // accept 阶段同上——终态与清理归 send 自己(query 已被关闭, send 的
+            // push 会失败并走 finishSendBeforeUserInput)。
+            if (!sendInAcceptPhase) turnInFlight = false;
           } else {
             // interrupt 真正抛错(非超时)，回收标记防误抑制(同 watchdog)。
             turnState.interruptRequested = false;
+            if (!sendInAcceptPhase) turnInFlight = false;
             log.warn('abort threw', { error: String(e) });
           }
         }

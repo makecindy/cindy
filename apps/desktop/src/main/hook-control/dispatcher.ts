@@ -40,6 +40,8 @@ import {
   makeInteractionCancel,
   makeInteractionRequest,
   makeTaskAck,
+  type MessageOpResultPayload,
+  type TelegramEmojiReactions,
   makeTurnEnd,
   makeTurnProgress,
   makeTurnReopen,
@@ -62,6 +64,7 @@ import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
+import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
@@ -341,6 +344,28 @@ export interface HookDispatcher {
   ): void;
   /** transport 离线或失去已协商能力时调用，禁止继续向旧 socket 发送帧。 */
   onDisconnected(connectionId: string): void;
+  /**
+   * msg.op.result: 消息操作的回执。当前只有 ack 表情用它 —— 表情是纯装饰,
+   * 失败只记一行, 不重试、不影响任务本身。
+   */
+  onMessageOpResult(payload: MessageOpResultPayload): void;
+  /**
+   * 用户的表情档位(off / minimal / expressive)。服务端经 provider.behavior.state
+   * 下发, manager 收到即转告。
+   *
+   * `null` = **有效值还不知道**(连接刚起、behavior.state 还没到)。这时一帧都
+   * 不发: 拿基线先斩后奏, 设置里关掉表情的用户会在每次重启后又被打一次。
+   */
+  setEmojiReactionsMode(mode: TelegramEmojiReactions | null): void;
+  /**
+   * 在 manager 关 transport / 重置档位**之前**结清 👀 欠账。
+   *
+   * deactivateAccount 里那次 onAccountTeardown 是兜底 —— 走到那里时 manager
+   * 已经 reset 了档位(null → 一帧不发)、stopAll 也删光了发送函数, 什么都发
+   * 不出去。真正有效的结账必须在两者之前, 由 manager 显式触发。幂等: opId
+   * 不变, 服务端去重, 兜底那次重复发也只是同一答复。
+   */
+  settleAckReactions(): void;
   /**
    * task.cancel: 中断指定 requestId 的任务。排队中的直接摘除并回
    * turn.end(cancelled); 执行中的标记取消并 abort 对应 session, 收口时以
@@ -725,6 +750,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const cancelRequested = new Set<string>();
   /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
   const serverFeatures = new Map<string, readonly string[]>();
+  // 官方 bot 的 ack 表情(👀 → 👍/👎) —— 个人 bot 早有, 官方侧靠 msg.op 补上。
+  // null = 档位未就绪(见 setEmojiReactionsMode), 就绪前一帧不发。
+  let emojiReactionsMode: TelegramEmojiReactions | null = null;
+  /** 连接不在时的发送器: 恒失败, 于是终态表情落进待补发队列。 */
+  const OFFLINE_SEND = (): boolean => false;
+  const ackReactions = createAckReactions({
+    serverFeatures,
+    emojiReactions: () => emojiReactionsMode,
+    log,
+  });
   /**
    * 以失败收口、**还等着被续跑**的任务, 按 sessionId 记账(见协议阶段 18)。
    *
@@ -1026,6 +1061,19 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const oldest = ackHistory.keys().next().value;
       if (oldest !== undefined) ackHistory.delete(oldest);
     }
+  }
+
+  /**
+   * ack 表情要的三个字段。triggerMessageId 只有 server 下发了才有 —— 老 server
+   * 不发, 此时整个表情动作跳过(而不是猜一个 id)。
+   */
+  function ackTaskOf(task: PendingTask): AckReactionTask {
+    return {
+      connectionId: task.connectionId,
+      requestId: task.requestId,
+      externalKey: task.externalKey,
+      triggerMessageId: task.run.source?.triggerMessageId ?? null,
+    };
   }
 
   function reply(
@@ -1468,6 +1516,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       ack: task.ack,
       turnEnd: durableTurnEnd(turnEnd),
     });
+    // 表情换终态。连接断了也要**调**一次 —— 传一个必然失败的发送器, 让
+    // ackReactions 把它记进待补发队列; 直接跳过的话那条消息会永远挂着 👀,
+    // 而重连补发拿不到任何东西可补。
+    ackReactions.onFinished(ackTaskOf(task), status, sendFns.get(task.connectionId) ?? OFFLINE_SEND);
     running.delete(sessionId);
     // 失败收口 -> 记一笔"等着被续跑"。只有 error 记: cancelled 是用户按了停止,
     // ok 没什么可续的。用户之后在桌面端点「重试」时, 这一轮的进展与结果就能接回
@@ -1560,6 +1612,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       ack: task.ack,
       turnEnd: durableTurnEnd(turnEnd),
     });
+    // 👀 必须换成终态, 否则取消掉的消息会永远挂着「在做」。取消的三个入口
+    // (排队中被 cancel、account deactivation 清队、群上下文 admission 作废)
+    // 都收敛到本方法, 所以这一处就覆盖全部 —— 不要在各入口分别补。
+    // deactivateAccount 里 sendFns.clear() 在本方法之后, 表情发得出去; 真断线
+    // 时同样要调, 让终态进待补发队列而不是消失。
+    ackReactions.onFinished(
+      ackTaskOf(task),
+      'cancelled',
+      sendFns.get(task.connectionId) ?? OFFLINE_SEND,
+    );
   }
 
   /**
@@ -2116,6 +2178,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             queue.push(task);
             queues.set(sessionId, queue);
             reply(connectionId, send, ack);
+            // 排队也要给 👀: 用户看到的是「消息发出去了但没人理」, 分不清是在
+            // 排队还是丢了。表情只在**进队列这一刻**发一次 —— 出队启动走的是
+            // startExecution, 那里不再补发, 否则同一条消息会被打两次。
+            ackReactions.onAccepted(ackTaskOf(task), send);
             // 排队时目标 session 可能是 desktop 侧用户手动在跑(runner.isBusy),
             // 没有本模块的收口点 —— 轮询兜底: 空闲即 drain
             if (!running.has(sessionId)) scheduleDrainPoll(sessionId);
@@ -2132,6 +2198,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           };
           const task: PendingTask = { ...taskBase, ack };
           reply(connectionId, send, ack);
+          ackReactions.onAccepted(ackTaskOf(task), send);
           startExecution(task);
         });
       } catch (err) {
@@ -2205,6 +2272,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           if (task.commitContextCursor) finishTaskAsCancelled(task);
         }
       }
+      // 👀 的欠账要在 sendFns 清理**之前**结: 运行中的任务会因账号代次失效
+      // 跳过 onFinished, 排队任务被直接清 —— 直接 reset 会把它们的消息永远留在
+      // 处理中。
+      ackReactions.onAccountTeardown((cid) => sendFns.get(cid));
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
@@ -2212,6 +2283,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 能力快照按连接存, 而连接身份含账号指纹 —— 换账号后旧条目永远不会再被
       // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
       serverFeatures.clear();
+      // ack 的待补发与可回落表随账号走 —— 换账号后它们指向的连接与消息都不再
+      // 属于当前主人, 留着既补不出去也是一份只涨不落的内存。
+      ackReactions.reset();
       // 续跑记账与在观察的续跑轮都属于上一个账号, 一并清掉(记账里带
       // accountGeneration 只是第二道防线, 表本身不该跨账号留存)。
       for (const sessionId of [...activeContinuations.keys()]) {
@@ -2445,12 +2519,26 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       pendingTurnEnds.clear();
       for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
     },
+    onMessageOpResult(payload: MessageOpResultPayload) {
+      // 带上按连接取发送函数的钩子: 群限制了可用表情时要用基础款回落一次,
+      // 而该发到哪条连接由 ackReactions 自己记的 task 决定。
+      ackReactions.onResult(payload, (connectionId) => sendFns.get(connectionId));
+    },
+    setEmojiReactionsMode(mode: TelegramEmojiReactions | null) {
+      emojiReactionsMode = mode;
+    },
+    settleAckReactions() {
+      ackReactions.onAccountTeardown((cid) => sendFns.get(cid));
+    },
     onConnected(connectionId, send, features) {
       if (!accountActive) return;
       // 能力集以最新一次握手为准: 滚动发布时重连可能落到另一版本的实例上,
       // 老实例不宣告 turn.reopen 时必须立刻停用回流, 不能拿上一次的快照发帧。
       serverFeatures.set(connectionId, features ? [...features] : []);
       sendFns.set(connectionId, send);
+      // 断线时没送出去的终态表情在这里补 —— 否则那条消息永远挂着 👀。
+      // opId 由 requestId 派生, 服务端按它去重, 补发不会打出第二个。
+      ackReactions.onReconnected(connectionId, send);
       const deliveryAck = supportsDeliveryAck(connectionId);
       for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
         if (pending.connectionId !== connectionId) continue;

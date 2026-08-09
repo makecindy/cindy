@@ -715,7 +715,7 @@ export function ScheduleFormDialog({
                       <summary className="w-fit cursor-pointer select-none text-[var(--settings-btn-secondary-text)] hover:text-[var(--msg-assistant-text)]">
                         {t('scheduler.editor.script.protocolExample')}
                       </summary>
-                      <pre className="mt-2 overflow-x-auto rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3 font-mono text-[11px] leading-[1.5] text-[var(--settings-input-text)]">
+                      <pre className="mt-2 overflow-x-auto rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3 font-mono text-11 leading-[1.5] text-[var(--settings-input-text)]">
                         <code>{SCRIPT_PROTOCOL_PYTHON_EXAMPLE}</code>
                       </pre>
                     </details>
@@ -1294,7 +1294,7 @@ export function ScheduleFormDialog({
                     </div>
                   )}
                   {hookGenPath && (
-                    <span className="truncate font-mono text-[11px] text-[var(--cmd-palette-item-meta)]">
+                    <span className="truncate font-mono text-11 text-[var(--cmd-palette-item-meta)]">
                       {t('scheduler.editor.preRunHook.aiDone', { path: hookGenPath })}
                     </span>
                   )}
@@ -1319,7 +1319,7 @@ export function ScheduleFormDialog({
                                 })}
                       </span>
                       {(hookTestResult.stdout.trim() || hookTestResult.stderr.trim()) && (
-                        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--cmd-palette-item-meta)]">
+                        <span className="min-w-0 flex-1 truncate font-mono text-11 text-[var(--cmd-palette-item-meta)]">
                           {(hookTestResult.stdout.trim() || hookTestResult.stderr.trim()).split('\n')[0]}
                         </span>
                       )}

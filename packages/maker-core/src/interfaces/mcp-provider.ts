@@ -1,5 +1,7 @@
 import type { AgentKind } from '../types/common.js';
 
+export type McpCallerKind = 'root' | 'descendant' | 'unknown';
+
 export interface McpProviderContext {
   agentKind: AgentKind;
   workingDir: string;
@@ -22,6 +24,10 @@ export interface McpProviderContext {
    * 但不得下发成模型或插件可控的工具参数。
    */
   sessionInstanceId?: string;
+  /** Host-owned caller provenance; never sourced from model tool arguments. */
+  mcpCallerKind?: McpCallerKind;
+  /** True only when the harness bridge has installed provenance enforcement. */
+  mcpCallerAttested?: boolean;
   /**
    * 返回当前 tool-call 绑定的真实 session ctx。
    *

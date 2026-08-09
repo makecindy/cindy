@@ -410,6 +410,10 @@ export function ComputerUseSection({
   const [browserBackendPending, setBrowserBackendPending] = useState(false);
   const [browserBackendRecovering, setBrowserBackendRecovering] = useState(false);
   const [browserBackendHealth, setBrowserBackendHealth] = useState<BrowserBackendHealth | null>(null);
+  // Health can include an automatic embedded-browser recovery and therefore
+  // take several seconds. Track the latest health owner so a late initial
+  // probe cannot overwrite a newer user-initiated switch or recovery result.
+  const browserBackendHealthSeqRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -480,9 +484,24 @@ export function ComputerUseSection({
 
   useEffect(() => {
     let cancelled = false;
+    const backendHealthSeq = ++browserBackendHealthSeqRef.current;
+    // Start the slow health/recovery path alongside the base reads, but do not
+    // include it in their render gate. The Automation cards are useful while
+    // this result is pending and BrowserBackendSubsection already supports a
+    // null health state.
+    const backendHealthPromise = (async () => {
+      try {
+        return {
+          health: await (window.electronAPI.browserBackend?.getHealth?.() ?? null),
+          error: null,
+        };
+      } catch (error) {
+        log.warn('browserBackend.getHealth failed', error);
+        return { health: null, error };
+      }
+    })();
     void (async () => {
-      let backendHealthError: unknown;
-      const [browserState, computerState, avail, computer, backendState, backendHealth] = await Promise.all([
+      const [browserState, computerState, avail, computer, backendState] = await Promise.all([
         // `browser` is hidden from plugins.list() (HOSTED_ELSEWHERE), so read its
         // enable state directly by id — list().find() would always be undefined
         // and the toggle would wrongly reset to enabled on every remount.
@@ -523,11 +542,6 @@ export function ComputerUseSection({
           log.warn('browserBackend.getState failed', err);
           return null;
         }) ?? Promise.resolve(null),
-        window.electronAPI.browserBackend?.getHealth?.().catch((err) => {
-          backendHealthError = err;
-          log.warn('browserBackend.getHealth failed', err);
-          return null;
-        }) ?? Promise.resolve(null),
       ]);
       if (cancelled) return;
       // Browser keeps the builtin default-on behavior. Direct computer control
@@ -543,6 +557,8 @@ export function ComputerUseSection({
       // 让卡片整张瘫成内置态强。
       const activeBackend = backendState?.active ?? 'external';
       setBrowserBackendKind(activeBackend);
+      const { health: backendHealth, error: backendHealthError } = await backendHealthPromise;
+      if (cancelled || browserBackendHealthSeqRef.current !== backendHealthSeq) return;
       setBrowserBackendHealth(
         backendHealth?.active === activeBackend
           ? backendHealth
@@ -569,11 +585,17 @@ export function ComputerUseSection({
         // main 返回 active 是权威 — 万一同一次 swap 失败 router 拒了我们 fallback
         // 到 main 端的真实值。
         setBrowserBackendKind(res.active);
+        const backendHealthSeq = ++browserBackendHealthSeqRef.current;
         try {
-          setBrowserBackendHealth(await window.electronAPI.browserBackend.getHealth());
+          const health = await window.electronAPI.browserBackend.getHealth();
+          if (browserBackendHealthSeqRef.current === backendHealthSeq) {
+            setBrowserBackendHealth(health);
+          }
         } catch (healthErr) {
           log.warn('browserBackend.getHealth after setKind failed', healthErr);
-          setBrowserBackendHealth(browserBackendHealthFallback(res.active));
+          if (browserBackendHealthSeqRef.current === backendHealthSeq) {
+            setBrowserBackendHealth(browserBackendHealthFallback(res.active));
+          }
         }
       } catch (err) {
         log.error('browserBackend.setKind failed', err);
@@ -591,6 +613,7 @@ export function ComputerUseSection({
     setBrowserBackendRecovering(true);
     try {
       const result = await window.electronAPI.browserBackend.recover();
+      browserBackendHealthSeqRef.current += 1;
       setBrowserBackendKind(result.health.active);
       setBrowserBackendHealth(result.health);
       if (result.ok) {
@@ -600,6 +623,7 @@ export function ComputerUseSection({
       }
     } catch (err) {
       log.error('browserBackend.recover failed', err);
+      browserBackendHealthSeqRef.current += 1;
       setBrowserBackendHealth(browserBackendHealthFallback('rsb-webview'));
       toast.error(t('settings.computerUse.browserBackend.health.recoverFailed'));
     } finally {

@@ -937,9 +937,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 同步读不卡启动,与 app-shortcuts:get 同模式。
   layout: {
     getStateSync: (): { layout: unknown } => ipcRenderer.sendSync('layout:get'),
-    set: (layout: unknown): Promise<{ layout: unknown }> =>
+    set: (layout: unknown): Promise<{ layout: unknown; persisted: boolean }> =>
       ipcRenderer.invoke('layout:set', layout),
-    reset: (): Promise<{ layout: unknown }> => ipcRenderer.invoke('layout:reset'),
+    reset: (): Promise<{ layout: unknown; persisted: boolean }> =>
+      ipcRenderer.invoke('layout:reset'),
     onChanged: fanOutLayoutChanged,
   },
 

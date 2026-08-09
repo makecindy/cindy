@@ -84,6 +84,7 @@ import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
 import {
   createPiTranslateContext,
+  disposePiTranslateContext,
   translatePiEvent,
   usageSnapshotOf,
   type PiTranslateContext,
@@ -962,6 +963,8 @@ export class PiAgent extends BaseAgent {
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
           vendorOptions: mutableVendorOptions,
+          mcpCallerKind: 'root',
+          mcpCallerAttested: true,
         });
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
@@ -1312,6 +1315,7 @@ export class PiAgent extends BaseAgent {
           translatePiEvent(event, queue, ctx);
         },
         onExit: ({ code, signal }) => {
+          disposePiTranslateContext(ctx);
           clearActiveTurnPermissionPolicy('process_exit', { dismissPending: true });
           runtimeCapabilityGeneration++;
           publishRuntimeCapabilities(undefined);
@@ -1341,6 +1345,7 @@ export class PiAgent extends BaseAgent {
         },
       });
     } catch (err) {
+      disposePiTranslateContext(ctx);
       try {
         disposeSessionRegistrations();
       } catch {
@@ -1557,6 +1562,7 @@ export class PiAgent extends BaseAgent {
         }
       }
     } catch (err) {
+      disposePiTranslateContext(ctx);
       try {
         disposeSessionRegistrations();
       } catch {
@@ -1853,6 +1859,7 @@ export class PiAgent extends BaseAgent {
 
       async close(): Promise<void> {
         closed = true;
+        disposePiTranslateContext(ctx);
         runtimeCapabilityGeneration++;
         publishRuntimeCapabilities(undefined);
         runtimeCapabilityListeners.clear();

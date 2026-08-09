@@ -18,6 +18,11 @@ describe('synthetic trigger detection', () => {
   it('classifies continuation prompts vs generic triggers', () => {
     expect(syntheticTriggerKind(CONTINUE_AFTER_APP_EXIT_PROMPT)).toBe('continue');
     expect(syntheticTriggerKind(CONTINUE_AFTER_ERROR_PROMPT)).toBe('continue');
+    expect(
+      syntheticTriggerKind(
+        `${CONTINUE_AFTER_ERROR_PROMPT}\n\n[CINDY_RECOVERY_CHECKPOINT v1]\nattempt 2`,
+      ),
+    ).toBe('continue');
     expect(syntheticTriggerKind(`${UI_ACTION_TRIGGER_PREFIX} regenerate the mivo image`)).toBe('generic');
     expect(syntheticTriggerKind('normal user message')).toBeNull();
   });

@@ -133,6 +133,20 @@ export interface AgentEvent {
   /** 事件来源标识，便于调试 */
   source?: 'claude-code' | 'codex' | 'pi';
   /**
+   * Events that finish work owned by a completed turn can still arrive after a
+   * later turn has started (for example, a V1 collab child). These are still
+   * useful to render, but must not inherit the later turn's attribution or
+   * watchdog state.
+   */
+  turnScope?: 'turn' | 'background';
+  /**
+   * Local start time of the turn that owns a background event. Main-process
+   * persistence uses this lifecycle evidence to keep pre-clear late work from
+   * repopulating a cleared conversation. Never expose it to renderer/device
+   * boundaries.
+   */
+  backgroundTurnStartedAt?: number;
+  /**
    * 本事件所属 turn 的发起来源,由 Session 在事件 fan-out 前打标(见 session.ts
    * 的 currentTurnOrigin)。turn 结束(isTerminalTurnEvent)后清空,不污染下一轮。
    * translator 不产生此字段;消费方(IM 转播等)按需读取,默认忽略。
@@ -362,6 +376,13 @@ export interface RewindCommitResult {
 export interface ForkSdkSessionOptions {
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */
   sourceSdkSessionId: string;
+  /**
+   * 源原生 session 的模型与供应商来源。Codex 的隔离 fork host 需要用相同上下文
+   * 解析 credential mode；否则 provider-oauth 源任务在本机没有 fallback 凭证时会
+   * 被误判为未登录。Claude/PI 不消费这两个字段。
+   */
+  model?: string;
+  providerId?: string | null;
   /**
    * 截断锚点 — 必须是 SDK assistant 消息的 uuid (调用方反查 + 跳 subagent)。
    * Claude 必填; Codex 协议无 message uuid, 此字段被 CodexAgent 忽略,

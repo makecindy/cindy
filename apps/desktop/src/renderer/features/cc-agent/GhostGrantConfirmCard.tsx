@@ -88,7 +88,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
             {t(descriptionKey)}
           </p>
         </div>
-        <span className="shrink-0 rounded-[6px] border border-[var(--chat-input-border)] px-2 py-1 text-[12px] font-medium text-[var(--status-bar-meta)]">
+        <span className="shrink-0 rounded-[6px] border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
           {t('ghostGrant.confirm.count', { count: pending.items.length })}
         </span>
       </div>
@@ -171,7 +171,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
         >
           <Check className="size-4" />
           <span>{t('ghostGrant.confirm.allow')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-[11px] font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
           </kbd>
         </button>

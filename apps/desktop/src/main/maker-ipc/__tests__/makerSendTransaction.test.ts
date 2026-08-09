@@ -310,6 +310,46 @@ describe('maker SEND transaction', () => {
     ).toEqual(expect.objectContaining({ turnAttemptToken: 7 }));
   });
 
+  it('persists the shared recovery checkpoint for manual retries too', async () => {
+    const { deps } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const checkpoint = {
+      version: 1,
+      source: 'manual',
+      mode: 'checkpoint',
+      attempt: 2,
+      failedUserClientId: 'failed-1',
+      rootUserClientId: 'failed-0',
+      contextTokens: 180_000,
+      contextWindow: 200_000,
+      contextRatio: 0.9,
+      progressCount: 4,
+      createdAt: '2026-08-04T00:00:00.000Z',
+      recentProgress: [],
+    };
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '[UI_ACTION_TRIGGER] continue' },
+      undefined,
+      {
+        messageUuid: 'message-uuid',
+        persistUserMessage: {
+          clientId: 'client-2',
+          content: '[UI_ACTION_TRIGGER] continue',
+          delivery: 'turn',
+          recoveryCheckpoint: checkpoint,
+        },
+      },
+    );
+
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ agentMeta: expect.objectContaining({ recoveryCheckpoint: checkpoint }) }),
+      undefined,
+    );
+  });
+
   it('omits autoResume for ordinary user sends', async () => {
     const { deps } = createDeps();
     const transaction = createMakerSendTransaction(deps);

@@ -287,6 +287,7 @@ function UserAttachmentChip({
       <DropdownMenuTrigger asChild>
         <span
           aria-hidden
+          data-fixed-menu-anchor
           style={{
             position: 'fixed',
             left: saveMenuPos?.x ?? 0,
@@ -342,7 +343,7 @@ function UserAttachmentChip({
           'rounded-[9999px]',
           'bg-[var(--msg-user-bg)]',
           'border border-[var(--msg-user-border)]',
-          'text-[13px] font-medium',
+          'text-13 font-medium',
           'text-[var(--msg-user-text)]',
           'hover:bg-[var(--cmd-palette-item-hover)]',
           'transition-colors cursor-pointer',
@@ -1379,7 +1380,7 @@ export function UserMessage({
               type="button"
               className={cn(
                 'flex w-full items-center gap-2 px-3 py-2 text-left',
-                'text-[13px] font-medium leading-none',
+                'text-13 font-medium leading-none',
                 'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
               )}
               aria-expanded={orcaExpanded}
@@ -1422,7 +1423,7 @@ export function UserMessage({
             {/* /goal 目标设定/更新:气泡上方右对齐渲一个徽标(不进气泡、不入 copyText)。 */}
             {goalBadge && (
               <span
-                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
                 style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
               >
                 <Target size={11} strokeWidth={2} aria-hidden className="shrink-0" />
@@ -1670,7 +1671,7 @@ export function UserMessage({
                         onClick={() => setLongMessageExpanded((expanded) => !expanded)}
                         className={cn(
                           'mt-2 inline-flex items-center gap-1 rounded-full px-1 py-0.5',
-                          'text-[12px] font-medium leading-5',
+                          'text-12 font-medium leading-5',
                           'text-[var(--msg-user-text)] opacity-65 transition-opacity',
                           'hover:opacity-100',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',

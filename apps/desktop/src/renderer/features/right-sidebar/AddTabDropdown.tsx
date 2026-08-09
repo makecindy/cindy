@@ -5,7 +5,7 @@
  * `RolePillDropdown.tsx` 的 WorkerLayoutMenu):
  * - 容器 12px 圆角 + 1px border-default + surface-elevated + shadow-menu, padding 4
  * - 分组头 10px / weight 500 / text-tertiary / px-2.5 pt-2 pb-1
- * - menu item 28px / rounded-lg(8px) / px-2.5 py-1.5 / text-[12px] / text-primary,
+ * - menu item 28px / rounded-lg(8px) / px-2.5 py-1.5 / text-12 / text-primary,
  *   hover bg-surface-hover, disabled opacity-50
  * - 分隔线 mx-1 my-1 h-px bg-border-default
  *
@@ -228,7 +228,7 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
             label={t(m.labelKey)}
             trailing={
               alreadyOpen ? (
-                <span className="text-[10px] text-[var(--text-tertiary)]">
+                <span className="text-10 text-[var(--text-tertiary)]">
                   {t('rightSidebar.tabs.menu.alreadyOpen')}
                 </span>
               ) : undefined
@@ -253,7 +253,7 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
 
 function GroupHeader({ label }: { label: string }) {
   return (
-    <div className="px-2.5 pt-2 pb-1 text-[10px] font-medium text-[var(--text-tertiary)]">
+    <div className="px-2.5 pt-2 pb-1 text-10 font-medium text-[var(--text-tertiary)]">
       {label}
     </div>
   );
@@ -281,7 +281,7 @@ function DropdownItem({
       className={cn(
         // focus-visible 与 hover 同款背景:键盘打开时首项自动聚焦要有可见落点,
         // 鼠标交互不触发 focus-visible,无视觉噪音。
-        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] leading-snug text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:bg-[var(--surface-hover)]',
+        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-13 leading-snug text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:bg-[var(--surface-hover)]',
         disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-[var(--surface-hover)]',
       )}
     >

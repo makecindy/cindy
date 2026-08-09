@@ -15,6 +15,7 @@ export * from './interfaces/index.js';
 
 // agents
 export * from './agents/index.js';
+export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
 
 // codex app-server transport interface — host 实现自定义 transport (e.g. SSH-bridged
 // for remote codex) 时需要这个接口形状。

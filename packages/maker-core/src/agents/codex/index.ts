@@ -22,6 +22,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 
@@ -112,6 +113,13 @@ import {
   isAuthRelatedErrorMessage,
   translateErrorNotification,
   translateItemNotification,
+  beginCodexGenerationTurn,
+  codexGenerationDurationMs,
+  finalizeCodexGenerationTurn,
+  pauseCodexGeneration,
+  resetCodexGenerationTiming,
+  resumeCodexGeneration,
+  translateAgentMessageDelta,
   translateReasoningSummaryTextDelta,
   translateReasoningSummaryPartAdded,
   translateReasoningTextDelta,
@@ -374,6 +382,22 @@ function isLocalControlPlaneHostKey(key: string): boolean {
 }
 
 /**
+ * 一次性 fork host key。thread/fork 的响应体与源 thread 历史成正比、无上界,
+ * 不能与正在服务活跃 session 的共享 host 同进程 —— 单条超限 NDJSON 会熔断整条
+ * 连接,把无关 session 一起拖下水(故障半径隔离,见 forkSdkSession)。
+ * 随机后缀保证并发 fork 互不复用。
+ */
+const LOCAL_FORK_HOST_PREFIX = 'local-fork:';
+
+function localForkHostKey(): string {
+  return `${LOCAL_FORK_HOST_PREFIX}${randomUUID()}`;
+}
+
+function isLocalForkHostKey(key: string): boolean {
+  return key.startsWith(LOCAL_FORK_HOST_PREFIX);
+}
+
+/**
  * maker permissionMode → app-server { approvalPolicy, approvalsReviewer, sandbox }。
  *
  * Phase 2 起 'ask' 走 'on-request' — server 真发 CommandExecutionRequestApproval,
@@ -464,6 +488,18 @@ function supportsCodexCapabilityRoutingProtocol(userAgent: string | undefined): 
  */
 function supportsCodexResumeExcludeTurns(userAgent: string | undefined): boolean {
   return codexUserAgentAtLeast(userAgent, [0, 125, 0]);
+}
+
+/**
+ * `thread/fork.excludeTurns` was verified against the app-server bundled with
+ * Codex 0.145.0. Without it, the fork response inlines the entire source-thread
+ * history in one NDJSON line — a 47MB rollout produced a 31MiB single line that
+ * exceeded the client's 16MiB maxLineBytes guard and killed the whole
+ * connection (2026-08-08 field incident). Older daemons keep the legacy
+ * full-history fork response.
+ */
+function supportsCodexForkExcludeTurns(userAgent: string | undefined): boolean {
+  return codexUserAgentAtLeast(userAgent, [0, 145, 0]);
 }
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
@@ -2885,6 +2921,10 @@ export class CodexAgent extends BaseAgent {
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
     };
+    // Collab terminal notifications are one-shot across the whole handle lifetime.
+    // The server can retry one after its parent turn/completed notification; remembering
+    // normal completions too keeps that retry from looking like a first late terminal.
+    const handledCollabTerminalItemIds = new Set<string>();
     const deferredTerminalTurnCompletions = new Map<string, TurnCompletedParams>();
     // 最近一次 thread/tokenUsage/updated 的 last 增量 + contextWindow,
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
@@ -2977,6 +3017,7 @@ export class CodexAgent extends BaseAgent {
       terminalSettled: boolean;
       capabilitySelectionText: string;
       sendGen: number;
+      startedAtMs: number;
     }>();
     /** 每次 turn/start RPC 的自增序号, 作为登记表的键。 */
     let turnStartSeq = 0;
@@ -3001,6 +3042,7 @@ export class CodexAgent extends BaseAgent {
         terminalSettled: false,
         capabilitySelectionText,
         sendGen: ownerSendGen,
+        startedAtMs: Date.now(),
       });
       isTurnStartPending = true;
       return seq;
@@ -3044,7 +3086,11 @@ export class CodexAgent extends BaseAgent {
      * 每一处清理同步, 漏一处就读到上一个 turn 的归属 —— 本 PR 已经在别的标量上踩过。
      * 键就是 turnId 本身, 旧条目不可能被当成另一个 turn 的答案。
      */
-    const turnOriginByTurnId = new Map<string, { startSeq: number | null; sendGen: number }>();
+    const turnOriginByTurnId = new Map<string, {
+      startSeq: number | null;
+      sendGen: number;
+      startedAtMs: number;
+    }>();
 
     const hasOtherInFlightStart = (seq: number): boolean => {
       for (const other of inFlightStarts.keys()) if (other !== seq) return true;
@@ -3119,8 +3165,51 @@ export class CodexAgent extends BaseAgent {
      */
     const capabilitySelectionTextByThreadId = new Map<string, string>();
     const descendantParentThreadByThreadId = new Map<string, string>();
+    /**
+     * Descendant notifications carry the child turn id, not the root turn that
+     * spawned the child. Preserve that root ownership for the lifetime of the
+     * handle so late child progress cannot attach itself to a newer root turn.
+     */
+    const rootTurnIdByDescendantThreadId = new Map<string, string>();
     /** A terminal child turn must not re-register tool provenance from late items. */
     const terminalDescendantTurnIds = new Set<string>();
+
+    const propagateRootTurnToDescendants = (
+      parentThreadId: string,
+      rootTurnId: string,
+      visited = new Set<string>(),
+    ): void => {
+      if (visited.has(parentThreadId)) return;
+      visited.add(parentThreadId);
+      for (const [childThreadId, parent] of descendantParentThreadByThreadId) {
+        if (parent !== parentThreadId) continue;
+        rootTurnIdByDescendantThreadId.set(childThreadId, rootTurnId);
+        propagateRootTurnToDescendants(childThreadId, rootTurnId, visited);
+      }
+    };
+
+    const descendantUpdateLifecycle = (
+      descendantThreadId: string,
+    ): Pick<AgentEvent, 'turnScope' | 'backgroundTurnStartedAt'> => {
+      const rootTurnId = rootTurnIdByDescendantThreadId.get(descendantThreadId);
+      if (
+        rootTurnId
+        && currentTurnId === rootTurnId
+        && !completedTurnIds.has(rootTurnId)
+        && !terminalErroredTurnIds.has(rootTurnId)
+      ) {
+        return {};
+      }
+      // Unknown ownership is safer as background: attaching it to the active
+      // turn would mutate that turn's origin, attempt token, and watchdog. Its
+      // missing start time also fails closed behind any later /clear boundary.
+      return {
+        turnScope: 'background',
+        backgroundTurnStartedAt: rootTurnId
+          ? turnOriginByTurnId.get(rootTurnId)?.startedAtMs ?? 0
+          : 0,
+      };
+    };
 
     const propagateCapabilitySelectionToDescendants = (
       parentThreadId: string,
@@ -3628,7 +3717,10 @@ export class CodexAgent extends BaseAgent {
       });
     }
 
-    const registerCodexMcpContext = (threadId: string): void => {
+    const registerCodexMcpContext = (
+      threadId: string,
+      mcpCallerKind: 'root' | 'descendant',
+    ): void => {
       // remoteHostId 不再跳过:远端 daemon 经 SSH remote-forward 直连本机
       // HTTP MCP bridge 后,tool call 同样按 params._meta.threadId 路由,
       // 需要这条注册让 CodexMcpThreadContextStore 能解析 remote thread。
@@ -3639,6 +3731,8 @@ export class CodexAgent extends BaseAgent {
         register({
           threadId,
           sessionId: sid,
+          mcpCallerKind,
+          mcpCallerAttested: true,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
@@ -3648,6 +3742,7 @@ export class CodexAgent extends BaseAgent {
         log.debug('codex MCP thread context registered', {
           threadId: prefixId(threadId),
           sessionId: prefixId(sid),
+          mcpCallerKind,
           orcaRole: typeof vo.orcaRole === 'string' ? vo.orcaRole : undefined,
           workerId: typeof vo.orcaWorkerId === 'string' ? prefixId(vo.orcaWorkerId) : undefined,
         });
@@ -3671,10 +3766,14 @@ export class CodexAgent extends BaseAgent {
       }
     };
     const descendantMcpThreadIds = new Set<string>();
+    const registerRootCodexMcpContext = (): void => {
+      descendantMcpThreadIds.delete(threadId);
+      registerCodexMcpContext(threadId, 'root');
+    };
     const registerDescendantCodexMcpContext = (descendantThreadId: string): void => {
       if (descendantThreadId === threadId || descendantMcpThreadIds.has(descendantThreadId)) return;
       descendantMcpThreadIds.add(descendantThreadId);
-      registerCodexMcpContext(descendantThreadId);
+      registerCodexMcpContext(descendantThreadId, 'descendant');
     };
     const unregisterDescendantCodexMcpContexts = (): void => {
       for (const descendantThreadId of descendantMcpThreadIds) {
@@ -3701,7 +3800,10 @@ export class CodexAgent extends BaseAgent {
       subagentModelFallback: host.getSubagentModelFallback?.(),
     });
 
-    const emitSubagentCardUpdate = (update: SubagentLiveCardUpdate): void => {
+    const emitSubagentCardUpdate = (
+      update: SubagentLiveCardUpdate,
+      lifecycle: Pick<AgentEvent, 'turnScope' | 'backgroundTurnStartedAt'> = {},
+    ): void => {
       // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:每条事件都会刷新
       // upstreamIdleLastEventAt + armUpstreamIdle(),并喂给 observeReconnectStallEvent ——
       // 而 `agent_task_update` 正在 isReconnectRecoveryEvent 的白名单里(那对 Claude 的主线程
@@ -3726,8 +3828,9 @@ export class CodexAgent extends BaseAgent {
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
             durationMs: update.durationMs,
           },
-        },
+          },
           source: 'codex',
+          ...lifecycle,
         });
       } finally {
         emittingDescendantUpdate = false;
@@ -3749,11 +3852,21 @@ export class CodexAgent extends BaseAgent {
     const registerDescendantThreadRouting = (
       childThreadId: string,
       parentThreadId: string,
+      rootTurnId?: string,
     ): void => {
       if (!childThreadId || childThreadId === parentThreadId) return;
+      descendantParentThreadByThreadId.set(childThreadId, parentThreadId);
+      const inheritedRootTurnId = rootTurnId
+        ?? rootTurnIdByDescendantThreadId.get(parentThreadId);
+      if (inheritedRootTurnId) {
+        rootTurnIdByDescendantThreadId.set(childThreadId, inheritedRootTurnId);
+        // A grandchild lineage may have arrived before the root spawn item.
+        // Backfill the whole known subtree before host registration replays its
+        // buffered notifications synchronously.
+        propagateRootTurnToDescendants(childThreadId, inheritedRootTurnId);
+      }
       // 测试用的 fake host 可能没有这个方法;真实 AppServerHost 恒有。
       host.registerDescendantLineage?.(childThreadId, parentThreadId);
-      descendantParentThreadByThreadId.set(childThreadId, parentThreadId);
       const inheritedSelection = capabilitySelectionTextByThreadId.get(parentThreadId)
         ?? (parentThreadId === threadId && currentTurnId
           ? capabilitySelectionTextByTurnId.get(currentTurnId)
@@ -3793,11 +3906,11 @@ export class CodexAgent extends BaseAgent {
       return registration.childThreadIds;
     };
 
-    const registerSubagentSpawnLineage = (item: unknown): boolean => {
+    const registerSubagentSpawnLineage = (item: unknown, rootTurnId: string): boolean => {
       const registration = readCodexSubagentSpawnRegistration(item);
       if (!registration) return false;
       for (const childThreadId of registration.childThreadIds) {
-        registerDescendantThreadRouting(childThreadId, threadId);
+        registerDescendantThreadRouting(childThreadId, threadId, rootTurnId);
       }
       return true;
     };
@@ -3868,7 +3981,12 @@ export class CodexAgent extends BaseAgent {
               nested.model,
               nested.failed === true,
             );
-            if (replayedNested) emitSubagentCardUpdate(replayedNested);
+            if (replayedNested) {
+              emitSubagentCardUpdate(
+                replayedNested,
+                descendantUpdateLifecycle(grandChildThreadId),
+              );
+            }
           }
         }
       }
@@ -3885,7 +4003,7 @@ export class CodexAgent extends BaseAgent {
         }
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
-      if (update) emitSubagentCardUpdate(update);
+      if (update) emitSubagentCardUpdate(update, descendantUpdateLifecycle(childThreadId));
 
       if (method === 'turn/completed') {
         const status = record?.turn && typeof record.turn === 'object'
@@ -3904,7 +4022,7 @@ export class CodexAgent extends BaseAgent {
     };
 
     /**
-     * 登记 spawn 映射,并回传"在 translator 之后重新声明真实聚合状态"的补发闭包。
+     * 登记 spawn 映射,并回传"在 translator 之后重新声明真实聚合状态"的快照。
      *
      * 发帧点必须在 translateItemNotification **之后**,两个理由:
      *  - V2:translator 对 spawn 推一帧 status=running(无 usage),而重放出的状态可能
@@ -3913,18 +4031,20 @@ export class CodexAgent extends BaseAgent {
      *    status=completed —— 那只是 spawn 工具调用自己收口,子线程可能还在跑。不重新声明
      *    就会把运行中的子代理提前标成完成,还会抹掉先到的 failed/stopped(review)。
      */
-    const noteSubagentSpawnItem = (item: unknown): (() => void) | null => {
-      if (!registerSubagentSpawnLineage(item)) return null;
+    const noteSubagentSpawnItem = (
+      item: unknown,
+      rootTurnId: string,
+    ): SubagentLiveCardUpdate | null => {
+      if (!registerSubagentSpawnLineage(item, rootTurnId)) return null;
       // 先接 host 路由再进 tracker:registerDescendantLineage 会把子线程 TTL 缓冲里的
       // 早到通知同步补投进 handleDescendantNotification(tracker 缓冲),随后
       // noteSpawnItem 建卡时统一重放,首帧就带上真实用量。
-      const replayed = subagentLiveCards.noteSpawnItem(item);
-      if (!replayed) return null;
-      return () => emitSubagentCardUpdate(replayed);
+      return subagentLiveCards.noteSpawnItem(item);
     };
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
       closed = true;
+      resetCodexGenerationTiming(translatorRt);
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
@@ -3932,6 +4052,7 @@ export class CodexAgent extends BaseAgent {
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();
+      rootTurnIdByDescendantThreadId.clear();
       terminalDescendantTurnIds.clear();
       // 与 close() 同规:handle 被终止后子代理卡不会再有消费者。同样先收终态再清 ——
       // 这条路径(thread cleanup failure / 强制 retire)恰恰是最容易留下永久转圈卡的。
@@ -4629,7 +4750,7 @@ export class CodexAgent extends BaseAgent {
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
           subscription = host.subscribeThread(threadId, handlers);
-          registerCodexMcpContext(threadId);
+          registerRootCodexMcpContext();
           refreshCodexAutoReviewerRoute(threadId);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
           if (replacementServiceTierGeneration !== serviceTierMutationGeneration) {
@@ -4755,7 +4876,7 @@ export class CodexAgent extends BaseAgent {
       pendingForTurn: Map<string, PendingUserInputInteraction>;
       pendingInteraction: PendingUserInputInteraction;
     }>();
-    registerCodexMcpContext(threadId);
+    registerRootCodexMcpContext();
     let mcpElicitationSeq = 0;
 
     const codexSessionApprovalSuggestions = () =>
@@ -4792,6 +4913,34 @@ export class CodexAgent extends BaseAgent {
       } catch (e) {
         log.error('interactionResolver threw → deny', { kind: req.kind, message: (e as Error).message });
         return defaultInteractionDecision(req, 'interaction_resolver_error');
+      }
+    }
+
+    async function withCodexGenerationPaused<T>(
+      requestThreadId: string | null | undefined,
+      turnId: string | null | undefined,
+      pauseId: string,
+      run: () => Promise<T>,
+    ): Promise<T> {
+      if (requestThreadId && requestThreadId !== threadId) {
+        // Descendant requests are routed through the root session UI, but their
+        // waits belong to the child turn. The root collab item already owns the
+        // generation pause, so child ids must never reset the shared root timer.
+        return run();
+      }
+      if (!turnId) {
+        // Without a turn id the wait cannot be paired with a reliable resume
+        // boundary. Keep the interaction usable, but fail closed for TPS.
+        translatorRt.generationTimingReliable = false;
+        return run();
+      }
+      pauseCodexGeneration(translatorRt, turnId, pauseId);
+      try {
+        return await run();
+      } finally {
+        // Covers user decisions, server-side resolution, cancellation and
+        // resolver failures without leaking human wait into model duration.
+        resumeCodexGeneration(translatorRt, turnId, pauseId);
       }
     }
 
@@ -4927,112 +5076,117 @@ export class CodexAgent extends BaseAgent {
      * 就走用户决策; settled=true 说明 dismissAllPending 已经替它做了决定, 用户后续点了也吞掉。
      */
     async function awaitApprovalDecision(
+      requestThreadId: string | null | undefined,
+      turnId: string | null,
       requestId: string,
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation',
       req: InteractionRequest,
       opts?: { forcePrompt?: boolean; autoReviewAction?: ReviewableAction },
     ): Promise<ApprovalDecision> {
-      let forcePrompt =
-        opts?.forcePrompt === true ||
-        (req.kind === 'permission' &&
-          forceTurnConfirmation(req.toolName, req.input));
-      // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
-      // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
-      // 再由 Cindy reviewer 静默裁决。
-      // forcePrompt 高风险 MCP inner tool
-      // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
-      if (
-        !forcePrompt &&
-        mutablePermissionMode === 'bypassPermissions'
-      ) {
-        return Promise.resolve('accept');
-      }
-      // Policy turns (unattended: feishu bot / 定时任务) 以 untrusted + read-only 发射,把命令/文件
-      // 升级请求发回 host 后自动接受非强制回调 —— 保留该无人值守语义,但**仍对危险桶 fail-closed**:
-      // 无人值守时没有人能批准一个 destructive / 凭证 / 远程执行动作,应拒绝,而不是让它逃出 read-only
-      // 沙箱静默执行(与交互式 Auto 共用同一张 Cindy core 安全网)。安全 / 仅需升级的动作照常自动
-      // 接受,不影响正常无人值守自动化(真需要跑危险命令的自动化应走 bypassPermissions,不受此影响)。
-      if (
-        !forcePrompt &&
-        activeTurnPermissionPolicy &&
-        mutablePermissionMode === 'auto'
-      ) {
-        if (opts?.autoReviewAction) {
-          const verdict = reviewAction(
-            opts.autoReviewAction,
-            runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
-            { platform: sessionReviewPlatform },
-          );
-          // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
-          // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
-          return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
+      const timingPauseId = `approval:${kind}:${requestId}`;
+      return withCodexGenerationPaused(requestThreadId, turnId, timingPauseId, async () => {
+        let forcePrompt =
+          opts?.forcePrompt === true ||
+          (req.kind === 'permission' &&
+            forceTurnConfirmation(req.toolName, req.input));
+        // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
+        // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
+        // 再由 Cindy reviewer 静默裁决。
+        // forcePrompt 高风险 MCP inner tool
+        // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
+        if (
+          !forcePrompt &&
+          mutablePermissionMode === 'bypassPermissions'
+        ) {
+          return Promise.resolve('accept');
         }
-        // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
-        // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
-        if (kind === 'commandExecution' || kind === 'fileChange') {
-          return Promise.resolve('decline');
+        // Policy turns (unattended: feishu bot / 定时任务) 以 untrusted + read-only 发射,把命令/文件
+        // 升级请求发回 host 后自动接受非强制回调 —— 保留该无人值守语义,但**仍对危险桶 fail-closed**:
+        // 无人值守时没有人能批准一个 destructive / 凭证 / 远程执行动作,应拒绝,而不是让它逃出 read-only
+        // 沙箱静默执行(与交互式 Auto 共用同一张 Cindy core 安全网)。安全 / 仅需升级的动作照常自动
+        // 接受,不影响正常无人值守自动化(真需要跑危险命令的自动化应走 bypassPermissions,不受此影响)。
+        if (
+          !forcePrompt &&
+          activeTurnPermissionPolicy &&
+          mutablePermissionMode === 'auto'
+        ) {
+          if (opts?.autoReviewAction) {
+            const verdict = reviewAction(
+              opts.autoReviewAction,
+              runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+              { platform: sessionReviewPlatform },
+            );
+            // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
+            // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
+            return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
+          }
+          // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
+          // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
+          if (kind === 'commandExecution' || kind === 'fileChange') {
+            return Promise.resolve('decline');
+          }
+          return Promise.resolve('accept');
         }
-        return Promise.resolve('accept');
-      }
-      // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
-      // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
-      // "原生优先、Cindy 兜底")。明显安全由本地规则放行；灰区调用当前会话模型做轻量
-      // allow/block/ask 裁决。allow/block 不依赖 interactionResolver；只有真正红线 ask 才走 UI，
-      // UI 不可用时 dispatchInteraction 自然 fail-closed decline。
-      if (
-        !forcePrompt &&
-        mutablePermissionMode === 'auto' &&
-        opts?.autoReviewAction
-      ) {
-        const decision = await reviewAutoAction(opts.autoReviewAction);
-        // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)或
-        // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
-        // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
-        // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
-        const modeAfterReview = mutablePermissionMode as PermissionMode;
-        if (modeAfterReview === 'bypassPermissions') return 'accept';
-        if (modeAfterReview !== 'auto') {
-          forcePrompt = true;
-        } else if (decision.verdict === 'allow') {
-          return 'accept';
-        } else if (decision.verdict === 'block') {
-          // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
-          // 后者按 Auto 本意保持静默。动作两种都仍然 decline。
-          if (decision.unavailable) autoReviewUnavailableNotice.notify();
-          return 'decline';
-        } else {
-          // Only red-line decisions reach the user and they cannot be remembered.
-          forcePrompt = true;
+        // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
+        // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
+        // "原生优先、Cindy 兜底")。明显安全由本地规则放行；灰区调用当前会话模型做轻量
+        // allow/block/ask 裁决。allow/block 不依赖 interactionResolver；只有真正红线 ask 才走 UI，
+        // UI 不可用时 dispatchInteraction 自然 fail-closed decline。
+        if (
+          !forcePrompt &&
+          mutablePermissionMode === 'auto' &&
+          opts?.autoReviewAction
+        ) {
+          const decision = await reviewAutoAction(opts.autoReviewAction);
+          // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)或
+          // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
+          // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
+          // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
+          const modeAfterReview = mutablePermissionMode as PermissionMode;
+          if (modeAfterReview === 'bypassPermissions') return 'accept';
+          if (modeAfterReview !== 'auto') {
+            forcePrompt = true;
+          } else if (decision.verdict === 'allow') {
+            return 'accept';
+          } else if (decision.verdict === 'block') {
+            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
+            // 后者按 Auto 本意保持静默。动作两种都仍然 decline。
+            if (decision.unavailable) autoReviewUnavailableNotice.notify();
+            return 'decline';
+          } else {
+            // Only red-line decisions reach the user and they cannot be remembered.
+            forcePrompt = true;
+          }
         }
-      }
-      const routedRequest =
-        forcePrompt && req.kind === 'permission'
-          ? { ...req, suggestions: undefined }
-          : req;
-      return new Promise<ApprovalDecision>((resolve) => {
-        const entry: PendingEntry = { resolve, kind, settled: false, forcePrompt };
-        pendingApprovals.set(requestId, entry);
-        const finalize = (d: ApprovalDecision) => {
-          if (entry.settled) return;
-          entry.settled = true;
-          pendingApprovals.delete(requestId);
-          // A stale/custom UI may still return a session grant. Forced policy
-          // confirmation applies to this call only and must never persist.
-          resolve(forcePrompt && d === 'acceptForSession' ? 'accept' : d);
-        };
-        dispatchInteraction(routedRequest)
-          .then((decision) => {
-            if (decision.kind !== 'permission') {
-              log.warn('unexpected non-permission decision → decline', { kind: decision.kind });
+        const routedRequest =
+          forcePrompt && req.kind === 'permission'
+            ? { ...req, suggestions: undefined }
+            : req;
+        return await new Promise<ApprovalDecision>((resolve) => {
+          const entry: PendingEntry = { resolve, kind, settled: false, forcePrompt };
+          pendingApprovals.set(requestId, entry);
+          const finalize = (d: ApprovalDecision) => {
+            if (entry.settled) return;
+            entry.settled = true;
+            pendingApprovals.delete(requestId);
+            // A stale/custom UI may still return a session grant. Forced policy
+            // confirmation applies to this call only and must never persist.
+            resolve(forcePrompt && d === 'acceptForSession' ? 'accept' : d);
+          };
+          dispatchInteraction(routedRequest)
+            .then((decision) => {
+              if (decision.kind !== 'permission') {
+                log.warn('unexpected non-permission decision → decline', { kind: decision.kind });
+                finalize('decline');
+                return;
+              }
+              finalize(mapPermissionDecisionToApproval(decision));
+            })
+            .catch((e) => {
+              log.error('dispatchInteraction threw → decline', { requestId, message: (e as Error).message });
               finalize('decline');
-              return;
-            }
-            finalize(mapPermissionDecisionToApproval(decision));
-          })
-          .catch((e) => {
-            log.error('dispatchInteraction threw → decline', { requestId, message: (e as Error).message });
-            finalize('decline');
-          });
+            });
+        });
       });
     }
 
@@ -5682,7 +5836,7 @@ export class CodexAgent extends BaseAgent {
     eventQueue.push = (ev: AgentEvent): boolean => {
       // 子代理卡帧只是"子线程有进展",不代表主 turn 还活着 —— 不参与静默计时与
       // reconnect 恢复判定,否则主 turn 哑火时会被子代理的心跳一直掩盖(review)。
-      if (!emittingDescendantUpdate) {
+      if (!emittingDescendantUpdate && ev.turnScope !== 'background') {
         upstreamIdleLastEventType = ev.type;
         upstreamIdleLastEventAt = Date.now();
         armUpstreamIdle();
@@ -5701,7 +5855,7 @@ export class CodexAgent extends BaseAgent {
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
       const requestId = params.approvalId ?? params.itemId;
-      const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
+      const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolName: 'exec',
@@ -5734,7 +5888,7 @@ export class CodexAgent extends BaseAgent {
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       const requestId = params.itemId;
-      const decision = await awaitApprovalDecision(requestId, 'fileChange', {
+      const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'fileChange', {
         kind: 'permission',
         requestId,
         toolName: 'file_change',
@@ -5958,6 +6112,8 @@ export class CodexAgent extends BaseAgent {
       const innerToolName = mcpInnerToolName(params);
       const requestId = `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
       const decision = await awaitApprovalDecision(
+        params.threadId,
+        params.turnId,
         requestId,
         'mcpServerElicitation',
         {
@@ -6005,7 +6161,7 @@ export class CodexAgent extends BaseAgent {
       const requestId = params.itemId ?? params.turnId;
       // kind 借用 'commandExecution' 仅为复用其 fail-closed 语义(见 awaitApprovalDecision:无 action /
       // 无人值守时 decline)——权限升级请求本就该 fail-closed。此处不是命令执行,只是共用同一条兜底路径。
-      const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
+      const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolName: 'permissions',
@@ -6315,6 +6471,10 @@ export class CodexAgent extends BaseAgent {
       const questions = normalizeRequestUserInputQuestions(params.questions);
       if (questions.length === 0) return { answers: {} };
       const kind = classifyUserInputRequest(params);
+      const activeToolContext = activeToolContexts.get(params.itemId);
+      const hasToolGenerationBoundary =
+        activeToolContext?.type === 'mcpToolCall'
+        || activeToolContext?.type === 'dynamicToolCall';
       log.debug('native requestUserInput received', {
         requestId,
         threadId: params.threadId,
@@ -6323,7 +6483,7 @@ export class CodexAgent extends BaseAgent {
         kind,
         questionCount: questions.length,
       });
-      return userInputBroker.track(
+      const waitForUserInput = () => userInputBroker.track(
         {
           kind: 'request_user_input',
           connectionId,
@@ -6344,6 +6504,16 @@ export class CodexAgent extends BaseAgent {
           settle(response);
         },
       );
+      // mcpToolCall/dynamicToolCall already pause generation through their item
+      // lifecycle. Only the native fallback needs its own human-wait boundary.
+      return kind === 'ask_user_question' && !hasToolGenerationBoundary
+        ? withCodexGenerationPaused(
+            params.threadId,
+            params.turnId,
+            `user-input:${requestId}`,
+            waitForUserInput,
+          )
+        : waitForUserInput();
     };
 
     const dynamicToolCall = async (
@@ -6413,6 +6583,14 @@ export class CodexAgent extends BaseAgent {
 
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
+      const pendingApproval = pendingApprovals.get(requestId);
+      let approvalCancelled = false;
+      if (pendingApproval && !pendingApproval.settled) {
+        pendingApproval.settled = true;
+        pendingApprovals.delete(requestId);
+        pendingApproval.resolve('decline');
+        approvalCancelled = true;
+      }
       const brokerKey = { connectionId, requestId: params.requestId };
       const userInputPending = userInputBroker.has(brokerKey);
       const dynamicPending = dynamicToolBroker.has(brokerKey);
@@ -6433,7 +6611,7 @@ export class CodexAgent extends BaseAgent {
           success: false,
         },
       );
-      if (userInputCancelled || dynamicCancelled) {
+      if (approvalCancelled || userInputCancelled || dynamicCancelled) {
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
@@ -6689,6 +6867,46 @@ export class CodexAgent extends BaseAgent {
       return waitForBufferedTurnReconcile(turnId).then(
         (valid) => valid && !terminalErroredTurnIds.has(turnId) && !completedTurnIds.has(turnId),
       );
+    };
+
+    const collabTerminalItemKey = (
+      turnId: string | null | undefined,
+      item: unknown,
+    ): string | undefined => {
+      if (!turnId) return undefined;
+      if (!item || typeof item !== 'object') return undefined;
+      const candidate = item as { id?: unknown; type?: unknown; status?: unknown };
+      if (
+        candidate.type !== 'collabAgentToolCall' ||
+        (candidate.status !== 'completed' && candidate.status !== 'failed') ||
+        typeof candidate.id !== 'string' ||
+        candidate.id.length === 0
+      ) return undefined;
+      return `${turnId}:${candidate.id}`;
+    };
+
+    const collabItemHasRunningAgentState = (item: unknown): boolean => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as { type?: unknown; agentsStates?: unknown };
+      if (
+        record.type !== 'collabAgentToolCall'
+        || !record.agentsStates
+        || typeof record.agentsStates !== 'object'
+      ) return false;
+      return Object.values(record.agentsStates as Record<string, unknown>).some((state) => {
+        let label: unknown = typeof state === 'string' ? state : undefined;
+        if (!label && state && typeof state === 'object') {
+          const stateRecord = state as Record<string, unknown>;
+          for (const key of ['status', 'state', 'phase']) {
+            if (typeof stateRecord[key] === 'string') {
+              label = stateRecord[key];
+              break;
+            }
+          }
+        }
+        return typeof label === 'string'
+          && /^(running|in[_-]?progress|started|active)$/i.test(label.trim());
+      });
     };
 
     const stopActiveRolloutPlanFallback = (): void => {
@@ -7108,6 +7326,7 @@ export class CodexAgent extends BaseAgent {
       // usage 用它, 不用 contextTokens 降级值 (那是整个上下文快照, 不是本 turn 增量)。
       // 必须在 endTurn 之前取: endTurn 会用降级 aggregate 覆盖后 reset。
       const realTurnUsage = usageTracker.getTurnUsage();
+      finalizeCodexGenerationTurn(translatorRt, turn.id);
       usageTracker.endTurn({
         inputTokens: lastSnap.contextTokens ?? 0,
         outputTokens: 0,
@@ -7231,11 +7450,16 @@ export class CodexAgent extends BaseAgent {
       // daily_model_usage 记账) 直接累加, 不做任何 delta 化。整个 turn 没收到
       // tokenUsage/updated 时就是全 0 (该 turn 不记账) — 不退回 contextTokens:
       // 在直接累加的消费方手里, 上下文快照会被当成一笔巨额输入, 高估远糟于漏记。
+      const generationDurationMs = codexGenerationDurationMs(translatorRt);
       const codexDoneUsage = {
         promptTokens: realTurnUsage.input,
         completionTokens: realTurnUsage.output,
         reasoningTokens: 0,
         cachedTokens: realTurnUsage.cacheRead,
+        ...(generationDurationMs !== undefined ? { durationMs: generationDurationMs } : {}),
+        ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
+          ? { turnDurationMs: turn.durationMs }
+          : {}),
       };
       eventQueue.push({
         type: 'done',
@@ -7939,6 +8163,7 @@ export class CodexAgent extends BaseAgent {
       hostForcedRetire: ({ reason }) => {
         sessionHostForceRetired = true;
         subscriptionInvalidatedByTransport = false;
+        resetCodexGenerationTiming(translatorRt);
 
         const hadPendingWork =
           isTurnInFlight
@@ -7966,6 +8191,7 @@ export class CodexAgent extends BaseAgent {
         capabilitySelectionTextByTurnId.clear();
         capabilitySelectionTextByThreadId.clear();
         descendantParentThreadByThreadId.clear();
+        rootTurnIdByDescendantThreadId.clear();
         terminalDescendantTurnIds.clear();
         stopActiveRolloutPlanFallback();
         resetUpstreamIdleForTurnEnd();
@@ -8016,7 +8242,9 @@ export class CodexAgent extends BaseAgent {
             : undefined;
         registerDescendantThreadRouting(childThreadId, parentThreadId);
         const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId, childModel);
-        if (replayed) emitSubagentCardUpdate(replayed);
+        if (replayed) {
+          emitSubagentCardUpdate(replayed, descendantUpdateLifecycle(childThreadId));
+        }
       },
       descendantNotification: handleDescendantNotification,
       turnStarted: (params) => {
@@ -8072,9 +8300,15 @@ export class CodexAgent extends BaseAgent {
         const startedOwner = startedOwnerEntries.length === 1
           ? startedOwnerEntries[0]
           : undefined;
+        const existingTurnOrigin = turnOriginByTurnId.get(params.turn.id);
         turnOriginByTurnId.set(params.turn.id, {
           startSeq: startedOwner?.[0] ?? null,
           sendGen: startedOwner?.[1].sendGen ?? sendGeneration,
+          startedAtMs:
+            startedOwner?.[1].startedAtMs
+            ?? (existingTurnOrigin
+              ? existingTurnOrigin.startedAtMs
+              : (startedOwnerEntries.length === 0 ? Date.now() : 0)),
         });
         // Notifications may arrive before the turn/start RPC response. Bind the
         // selector at the same unique-owner boundary as turnOrigin so an early
@@ -8119,6 +8353,7 @@ export class CodexAgent extends BaseAgent {
         // started 若无条件清空, plan 模式下刚重放的 proposed plan 永久丢失。
         if (!wasSameTurn) proposedPlanText = null;
         terminalErroredTurnIds.delete(params.turn.id);
+        if (!wasSameTurn) beginCodexGenerationTurn(translatorRt, params.turn.id);
         // Reset auth retry-loop dedupe key — 让下一个 turn 重新可以 emit 第一条
         // auth error。详见 translator.translateErrorNotification dedupe 逻辑。
         translatorRt.lastAuthErrorKey = null;
@@ -8258,7 +8493,7 @@ export class CodexAgent extends BaseAgent {
         noteActiveToolContext(params.item, params.turnId);
         noteToolItemLifecycle(params.item, 'started');
         // 先登记再翻译:子线程通知可能紧随 spawn item 到达,映射就位才不丢首帧。
-        const emitReplayedSubagentUpdate = noteSubagentSpawnItem(params.item);
+        const replayedSubagentUpdate = noteSubagentSpawnItem(params.item, params.turnId);
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
@@ -8266,7 +8501,7 @@ export class CodexAgent extends BaseAgent {
           onCompactBoundary: handleCompactBoundary,
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
-        emitReplayedSubagentUpdate?.();
+        if (replayedSubagentUpdate) emitSubagentCardUpdate(replayedSubagentUpdate);
       },
       itemUpdated: (params) => {
         const reservedChildThreadIds = reserveSubagentSpawnLineage(params.item);
@@ -8291,13 +8526,15 @@ export class CodexAgent extends BaseAgent {
         // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
         // 子线程的 item / token / turn 终态全被缓冲,卡片在整个运行期(可能好几分钟)没有实时
         // 数据,最后才一次性补上。那恰好是本 PR 要解决的问题本身(review)。
-        const emitReplayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item);
+        const replayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item, params.turnId);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
         });
-        emitReplayedSubagentUpdateOnUpdated?.();
+        if (replayedSubagentUpdateOnUpdated) {
+          emitSubagentCardUpdate(replayedSubagentUpdateOnUpdated);
+        }
       },
       itemCompleted: (params) => {
         const reservedChildThreadIds = reserveSubagentSpawnLineage(params.item);
@@ -8307,28 +8544,98 @@ export class CodexAgent extends BaseAgent {
           rememberPendingSpawnLineage(params.turnId, reservedChildThreadIds);
           return;
         }
-        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+        const collabTerminalKey = collabTerminalItemKey(params.turnId, params.item);
+        if (collabTerminalKey && handledCollabTerminalItemIds.has(collabTerminalKey)) {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
+        }
+        let isLateCollabTerminal = false;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+          // A non-transport terminal error can close the logical turn before the
+          // authoritative turn/completed arrives. Keep the same one-shot late
+          // collab carve-out open for that error tombstone, otherwise the stale
+          // guard would swallow the child's terminal item and leave its task card
+          // running forever.
+          if (
+            !collabTerminalKey
+            || (!completedTurnIds.has(params.turnId) && !terminalErroredTurnIds.has(params.turnId))
+          ) {
+            discardPendingSpawnLineageIds(reservedChildThreadIds);
+            return;
+          }
+          isLateCollabTerminal = true;
         }
         if (interceptProposedPlanItem(params.item)) {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
+        if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
-        noteToolItemLifecycle(params.item, 'completed');
+        // This late item belongs to an already-terminal parent. The parent
+        // cleanup already cleared its pending tools; touching the shared
+        // lifecycle set here would re-arm the currently active turn's idle
+        // watchdog with a fresh budget.
+        if (!isLateCollabTerminal) noteToolItemLifecycle(params.item, 'completed');
         // 防御:spawn item 的 started phase 若被上游省略,completed 仍能补上映射。
-        const emitReplayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(params.item);
-        translateItemNotification('completed', params, eventQueue, {
+        const replayedSubagentUpdateOnCompleted = noteSubagentSpawnItem(
+          params.item,
+          params.turnId,
+        );
+        const itemEventQueue = isLateCollabTerminal
+          ? {
+            push: (event: AgentEvent) => eventQueue.push({
+              ...event,
+              turnScope: 'background',
+              // Missing ownership fails closed only if a later /clear exists.
+              backgroundTurnStartedAt:
+                turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
+            }),
+            end: () => eventQueue.end(),
+            clear: () => eventQueue.clear(),
+            get pending() { return eventQueue.pending; },
+            [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
+          } as AsyncQueue<AgentEvent>
+          : eventQueue;
+        translateItemNotification('completed', params, itemEventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
         });
-        emitReplayedSubagentUpdateOnCompleted?.();
+        // A late V1 spawn completion is the spawn tool closing, not necessarily
+        // the child closing. Reassert a running compact state, or an explicit
+        // failed/stopped tracker state; a completed replay would only duplicate
+        // the translator's own frame.
+        const shouldReplayLateSubagentState =
+          collabItemHasRunningAgentState(params.item)
+          || replayedSubagentUpdateOnCompleted?.status === 'failed'
+          || replayedSubagentUpdateOnCompleted?.status === 'stopped';
+        if (!isLateCollabTerminal || shouldReplayLateSubagentState) {
+          if (replayedSubagentUpdateOnCompleted) {
+            emitSubagentCardUpdate(
+              replayedSubagentUpdateOnCompleted,
+              isLateCollabTerminal
+                ? {
+                  turnScope: 'background',
+                  backgroundTurnStartedAt:
+                    turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
+                }
+                : {},
+            );
+          }
+        }
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
-        if (isTurnInFlight) pushStatus('Generating...');
+        // 迟到的旧 turn 收口只允许发 background 结果,不能给当前 turn 注入前台状态。
+        if (isTurnInFlight && !isLateCollabTerminal) pushStatus('Generating...');
+      },
+      agentMessageDelta: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.agentMessageDelta?.(params), {
+          modelWork: true,
+        })) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        producedOutputTurnIds.add(params.turnId);
+        translateAgentMessageDelta(params, eventQueue, { rt: translatorRt, log });
       },
       turnPlanUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.turnPlanUpdated?.(params))) return;
@@ -8438,6 +8745,7 @@ export class CodexAgent extends BaseAgent {
           capabilitySelectionTextByTurnId.clear();
           capabilitySelectionTextByThreadId.clear();
           descendantParentThreadByThreadId.clear();
+          rootTurnIdByDescendantThreadId.clear();
           terminalDescendantTurnIds.clear();
           submittedUserInputByTurn.clear();
           clearAllPendingUserInputInteractions();
@@ -8716,6 +9024,7 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      resetCodexGenerationTiming(translatorRt);
       clearReconnectStall();
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
@@ -8724,6 +9033,7 @@ export class CodexAgent extends BaseAgent {
       capabilitySelectionTextByTurnId.clear();
       capabilitySelectionTextByThreadId.clear();
       descendantParentThreadByThreadId.clear();
+      rootTurnIdByDescendantThreadId.clear();
       terminalDescendantTurnIds.clear();
       // 会话收口后子代理卡不再有消费者。清状态**之前**必须先把仍在跑的卡收成终态:
       // 之后后代通知永远不会再到,只清内部状态会让渲染端一直留着最后一帧 running,卡片
@@ -8976,6 +9286,7 @@ export class CodexAgent extends BaseAgent {
               turnOriginByTurnId.set(resp.turn.id, {
                 startSeq: ownerSeq,
                 sendGen: startEntry.sendGen,
+                startedAtMs: startEntry.startedAtMs,
               });
             }
             // 缓冲的歧义 started 对账 (codex R9 P2): 本响应确立在飞 RPC 的
@@ -9058,7 +9369,14 @@ export class CodexAgent extends BaseAgent {
                 capabilitySelectionText,
               );
               // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
-              turnOriginByTurnId.set(resp.turn.id, { startSeq: ownerSeq, sendGen: mySendGen });
+              turnOriginByTurnId.set(resp.turn.id, {
+                startSeq: ownerSeq,
+                sendGen: mySendGen,
+                startedAtMs:
+                  startEntry?.startedAtMs
+                  ?? turnOriginByTurnId.get(resp.turn.id)?.startedAtMs
+                  ?? Date.now(),
+              });
               currentTurnId = resp.turn.id;
               isTurnInFlight = true;
               turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
@@ -9862,9 +10180,9 @@ export class CodexAgent extends BaseAgent {
         // Keep the same vendorOptions object so active MCP handlers and the
         // host bridge see runtime Orca role/workflow updates by reference.
         Object.assign(vo, patch);
-        registerCodexMcpContext(threadId);
+        registerRootCodexMcpContext();
         for (const descendantThreadId of descendantMcpThreadIds) {
-          registerCodexMcpContext(descendantThreadId);
+          registerCodexMcpContext(descendantThreadId, 'descendant');
         }
         log.debug('setVendorOptions', {
           patchKeys: Object.keys(patch),
@@ -9927,7 +10245,7 @@ export class CodexAgent extends BaseAgent {
           readonlyReferencesProfileActive = false;
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
-          registerCodexMcpContext(threadId);
+          registerRootCodexMcpContext();
           refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
@@ -10048,41 +10366,30 @@ export class CodexAgent extends BaseAgent {
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
     let stripCopyPath: string | undefined;
-    let utilityHostKey: string | undefined;
-    let utilityHost: AppServerHost | undefined;
-    let utilityHostGeneration: number | undefined;
-    let utilityHostWasRegistered = false;
+    // 故障半径隔离(2026-08-08 实排):thread/fork 的响应体与源 thread 历史成正比、
+    // 无上界 —— 47MB rollout 实测产出 31MiB 单行 NDJSON,超过 client 16MiB
+    // maxLineBytes 守卫后整条连接被熔断,当时共享 utility host 上挂着的 5 个活跃
+    // session 全部同时报错。fork 是离线控制面操作(不跑 turn、无订阅者),改用
+    // 唯一 key 的一次性 app-server:超限只让 fork 自己失败,不波及活跃任务。
+    const forkHostKey = localForkHostKey();
+    let forkHost: AppServerHost | undefined;
     const createdThreadIds = new Set<string>();
     const cleanupCreatedThreads = async (): Promise<void> => {
-      if (!utilityHost || !utilityHostKey || createdThreadIds.size === 0) return;
+      if (!forkHost || createdThreadIds.size === 0) return;
       for (const threadId of createdThreadIds) {
         try {
-          // Codex 0.145 keeps a forked child loaded in the shared app-server.
-          // Unload it before the new Cindy Session resumes with its own MCP
-          // instance URL; otherwise thread/resume.config is ignored and the
-          // child remains bound to the utility host's spawn-level URL.
-          await utilityHost.unsubscribeThread(threadId);
+          // Codex 0.145 keeps a forked child loaded in the app-server. Unload
+          // it before the new Cindy Session resumes with its own MCP instance
+          // URL; otherwise thread/resume.config is ignored and the child
+          // remains bound to this host's spawn-level URL. The ephemeral host
+          // is retired right after, but graceful unload also flushes the
+          // child's state before the process dies.
+          await forkHost.unsubscribeThread(threadId);
         } catch (error) {
-          const reason = `Codex fork child ${threadId} could not be unloaded safely`;
-          log.warn('fork child cleanup failed; retiring shared app-server', {
+          log.warn('fork child cleanup failed; ephemeral fork host will be retired', {
             threadId,
             error: error instanceof Error ? error.message : String(error),
           });
-          try {
-            await this.retireHostKey(utilityHostKey, reason, {
-              failIfActive: false,
-              logPrefix: 'codex fork child cleanup',
-              ...(utilityHostWasRegistered ? { expectedHost: utilityHost } : {}),
-              ...(utilityHostGeneration !== undefined
-                ? { expectedGeneration: utilityHostGeneration }
-                : {}),
-            });
-          } catch (retireError) {
-            log.warn('fork child cleanup host retire threw', {
-              threadId,
-              error: retireError instanceof Error ? retireError.message : String(retireError),
-            });
-          }
           throw error;
         }
       }
@@ -10093,20 +10400,28 @@ export class CodexAgent extends BaseAgent {
       upToMessageId: opts.upToMessageId,
       tailTurnsToDrop,
       stripEncryptedReasoning: opts.stripEncryptedReasoning === true,
-      note: 'Codex 精确 fork: thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
+      forkHostKey,
+      note: 'Codex 精确 fork: 独立一次性 host 上 thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
     });
     try {
-      const utility = await this.getUtilityHost();
-      utilityHostKey = utility.key;
-      utilityHost = utility.host;
-      utilityHostGeneration = this.hostGenerations.get(utility.key) ?? 0;
-      utilityHostWasRegistered = this.hosts.get(utility.key) === utility.host;
-      const { host } = utility;
-      await host.ensureStarted();
+      const forkCredentialMode = resolveAgentCredentialMode({
+        agentKind: 'codex',
+        providerId: opts.providerId,
+        model: opts.model,
+      });
+      const host = await this.getHost(undefined, forkCredentialMode, {
+        keyOverride: forkHostKey,
+        hostPurpose: 'control-plane',
+      });
+      forkHost = host;
+      const initResp = await host.ensureStarted();
+      // createSafeForkRolloutCopy 扫描 this.codexHome;之前由共享 host 启动时填充,
+      // 隔离后 fork 可能是本进程第一台 host,须自己补上。
+      if (initResp.codexHome) this.codexHome = initResp.codexHome;
       // Imported Codex threads may still live under another CODEX_HOME. Resume
       // already asks the desktop host to link/adopt their state and rollout;
       // fork must cross the same preparation boundary before thread/fork or the
-      // utility app-server cannot resolve a freshly imported thread.
+      // fork app-server cannot resolve a freshly imported thread.
       const preparedRolloutResult = await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
       const preparedRolloutPath = typeof preparedRolloutResult === 'string'
         ? preparedRolloutResult
@@ -10121,6 +10436,10 @@ export class CodexAgent extends BaseAgent {
       const params: ThreadForkParams = {
         threadId: opts.sourceSdkSessionId,
         persistExtendedHistory: true,
+        // 响应体瘦身:fork 后 Cindy 自己的会话数据负责历史展示,thread.turns 全量
+        // 回传只会撑爆单行上限。老 daemon 不认识该字段则保持 legacy 行为 —— 此时
+        // 一次性 host 的隔离仍兜住故障半径。
+        ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
         ...(stripCopyPath ? { path: stripCopyPath } : {}),
         ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
       };
@@ -10132,6 +10451,8 @@ export class CodexAgent extends BaseAgent {
           threadId: newSdkSessionId,
           numTurns: tailTurnsToDrop,
         };
+        // thread/rollback 没有 excludeTurns 对应物,响应仍可能携带完整历史;
+        // 超限时熔断的只是这台一次性 host,活跃 session 不受影响。
         const rollbackResp = await host.request<ThreadRollbackResponse>(
           Method.ThreadRollback,
           rollbackParams,
@@ -10146,6 +10467,20 @@ export class CodexAgent extends BaseAgent {
       try {
         await cleanupCreatedThreads();
       } finally {
+        // 一次性 host 用完即收,无论成败。key 唯一、无 session 绑定,
+        // retire 不会波及任何共享 host 或活跃会话。
+        if (forkHost) {
+          await this.retireHostKey(forkHostKey, 'Codex fork host is single-use', {
+            failIfActive: false,
+            logPrefix: 'codex fork host cleanup',
+            expectedHost: forkHost,
+          }).catch((err) => {
+            log.warn('fork host retire failed', {
+              forkHostKey,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
         if (stripCopyPath) {
           await fs.rm(path.dirname(stripCopyPath), { recursive: true, force: true }).catch((err) => {
             log.warn('strip encrypted rollout temp cleanup failed', {
@@ -10238,10 +10573,10 @@ export class CodexAgent extends BaseAgent {
   async forceDisposeLocalHostForAuthChange(reason = 'CodexAgent local auth changed'): Promise<void> {
     const keys = new Set<string>([hostKey()]);
     for (const key of this.hosts.keys()) {
-      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key)) keys.add(key);
     }
     for (const key of this.hostPromises.keys()) {
-      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key)) keys.add(key);
     }
     await Promise.all(Array.from(keys, (key) =>
       this.retireHostKey(key, reason, {
@@ -10402,7 +10737,10 @@ export class CodexAgent extends BaseAgent {
     // 立即 push, 让所有 live thread 通过 server 端 reload_user_config 拿到新值
     try {
       const localSessionHosts = Array.from(this.hosts.entries()).filter(
-        ([key]) => !key.startsWith('remote:') && !isLocalControlPlaneHostKey(key),
+        ([key]) =>
+          !key.startsWith('remote:') &&
+          !isLocalControlPlaneHostKey(key) &&
+          !isLocalForkHostKey(key),
       );
       if (localSessionHosts.length === 0) {
         log.info('setMemory ◀ no live app-server, will apply on next session');

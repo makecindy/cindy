@@ -71,7 +71,7 @@ export function CindyCapabilityPrefs({
         <p
           className={cn(
             'font-medium text-[var(--text-primary)]',
-            appearance === 'plugin' ? 'text-14 leading-[22px]' : 'text-13',
+            appearance === 'plugin' ? 'text-14 leading-[1.571]' : 'text-13',
           )}
         >
           {t('settings.ghosts.detail.cindyPrefs.title')}

@@ -19,6 +19,7 @@ import {
   Layers,
   ListTodo,
   LoaderCircle,
+  RefreshCw,
   PencilLine,
   Share as ShareIcon,
   Send,
@@ -154,6 +155,7 @@ import {
 import {
   groupMobileMarkdownSelectableBlocks,
   isMobileMarkdownImageDirectUrl,
+  mobileMarkdownImageAltChipText,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
   mobileMarkdownInlineImageSize,
@@ -161,6 +163,7 @@ import {
   parseMobileMarkdownInlines,
   type MobileMarkdownBlockGroup,
   type MobileMarkdownInline,
+  type MobileMarkdownTextRunGroupingOptions,
 } from '@/session/messageMarkdown';
 import {
   extractSessionLinkIds,
@@ -272,6 +275,12 @@ import type {
 } from '@/session/mediaPlayerWebViewHtml';
 import { formatMobileSystemCard } from '@/session/systemCard';
 import {
+  getMobileAutoResumePresentation,
+  isMobileAutoResumeRowInFlight,
+  toggleMobileAutoResumeExpanded,
+} from '@/session/autoResumePresentation';
+import type { ContinuationInFlightProjectionCapability } from '@/session/types';
+import {
   projectMobileWorkActivities,
   projectRecentMobileWorkActivities,
   type MobileProjectedThinkingActivity,
@@ -324,6 +333,12 @@ const MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS = 1400;
 /** Cold-open history fill is useful, but bounded so a short/duplicate host page cannot drain history forever. */
 const MAX_INITIAL_HISTORY_AUTOFILL_PAGES = 3;
 const MOBILE_MESSAGE_ESTIMATED_ITEM_SIZE = 140;
+const ANDROID_SELECTABLE_TEXT_RUN_MAX_BLOCKS = 12;
+const ANDROID_SELECTABLE_TEXT_RUN_MAX_UTF16_LENGTH = 1800;
+const ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS: MobileMarkdownTextRunGroupingOptions = {
+  maxTextRunBlocks: ANDROID_SELECTABLE_TEXT_RUN_MAX_BLOCKS,
+  maxTextRunUtf16Length: ANDROID_SELECTABLE_TEXT_RUN_MAX_UTF16_LENGTH,
+};
 /** Running work groups expose only the same latest-five activity window as desktop. */
 const MAX_LIVE_WORK_ACTIVITIES = 5;
 // LegendList 预渲距离(px,视口外每侧):约 1 屏,挂载集小 → 滚动 mount 帧压进一帧内(见 listperf 实测)。
@@ -422,6 +437,10 @@ function MarkdownSelectableSpan(props: ComponentProps<typeof Text>) {
   return <UITextView maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} {...props} />;
 }
 
+function isTextRunContinuationGroup(group: MobileMarkdownBlockGroup): boolean {
+  return group.type === 'text_run' && group.textRunContinuation === true;
+}
+
 /** Composer-ready user message body with product quotes kept out of raw text. */
 export interface MobileMessageDraft {
   document: ComposerDocument;
@@ -464,6 +483,14 @@ interface MessageActions {
   screenWidth?: number;
   /** 会话是否流式中:驱动工具行 running/done 状态(未 settled 且流式中才显示进行中)。 */
   isSessionStreaming?: boolean;
+  /** 当前 maker vendor turn 是否仍在运行；旧端续跑归属兜底只允许使用这条窄信号。 */
+  makerTurnRunning?: boolean;
+  /** 当前 vendor turn 的自动续跑 owner。 */
+  continuationTurnClientId?: string | null;
+  /** 只有明确识别为 legacy 的投影才允许使用最后一条输入的兼容判据。 */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
+  /** 含自动续跑合成行、排除 steer 的最后一条用户输入。 */
+  lastUserInputClientId?: string | null;
 }
 
 export function MessageRenderer({
@@ -492,6 +519,9 @@ export function MessageRenderer({
   emptyTestID,
   bottomOverlayHeight,
   isSessionStreaming,
+  makerTurnRunning,
+  continuationTurnClientId,
+  continuationInFlightProjectionCapability,
   loadingEarlier,
   focusedRequestKey,
   queueFooter,
@@ -534,6 +564,7 @@ export function MessageRenderer({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const firstUserMessageClientId = findFirstUserMessageClientId(items);
+  const lastUserInputClientId = findLastUserInputClientId(items);
   const focusedItemKeyRef = useRef(focusedItemKey);
   focusedItemKeyRef.current = focusedItemKey;
   const listRef = useRef<LegendListRef>(null);
@@ -787,13 +818,21 @@ export function MessageRenderer({
     busyClientId,
     busyAction,
     firstUserMessageClientId,
+    lastUserInputClientId,
+    makerTurnRunning,
+    continuationTurnClientId,
+    continuationInFlightProjectionCapability,
     isSessionStreaming,
     screenWidth: viewportLayout.contentWidth,
   }), [
     busyClientId,
     busyAction,
+    continuationInFlightProjectionCapability,
+    continuationTurnClientId,
     firstUserMessageClientId,
     isSessionStreaming,
+    lastUserInputClientId,
+    makerTurnRunning,
     onCopyMessageLink,
     onAddMessageToComposer,
     onDeleteMessage,
@@ -1939,6 +1978,13 @@ function MessageBubble({
       ) : null}
       {item.message.systemCardType ? (
         <MobileSystemCard
+          autoResumeInFlight={isMobileAutoResumeRowInFlight({
+            isContinuationTurnOwner: clientId === actions.continuationTurnClientId,
+            makerTurnRunning: actions.makerTurnRunning === true,
+            isLastUserInput: clientId === actions.lastUserInputClientId,
+            projectionCapability:
+              actions.continuationInFlightProjectionCapability ?? 'unknown',
+          })}
           data={item.message.systemCardData}
           type={item.message.systemCardType}
         />
@@ -3216,15 +3262,22 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
 }
 
 function MobileSystemCard({
+  autoResumeInFlight,
   data,
   type,
 }: {
+  autoResumeInFlight?: boolean;
   data?: Record<string, unknown>;
   type: NonNullable<NormalizedRemoteMessage['systemCardType']>;
 }) {
   const styles = useThemedStyles(makeStyles);
   // agent-switch 走专用「分隔线 + 药丸」渲染(对齐桌面),不落通用盒子卡片。
   if (type === 'agent-switch') return <MobileAgentSwitchCard data={data} />;
+  // auto-resume 复用桌面 AgentActionRow 的单行状态布局:默认只显示当前状态和压缩后的
+  // 中断原因,完整诊断按需展开,避免底层错误全文把手机消息流撑成一张大卡片。
+  if (type === 'auto-resume') {
+    return <MobileAutoResumeActionRow data={data} inFlight={autoResumeInFlight === true} />;
+  }
   const card = formatMobileSystemCard(type, data);
   return (
     <View style={styles.systemCard} testID={`message.systemCard.${type}`}>
@@ -3239,6 +3292,125 @@ function MobileSystemCard({
               <Text style={styles.systemCardValue}>{row.value}</Text>
             </View>
           ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function MobileAutoResumeActionRow({
+  data,
+  inFlight,
+}: {
+  data?: Record<string, unknown>;
+  inFlight: boolean;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const presentation = getMobileAutoResumePresentation(data, inFlight);
+  const { canExpand, hasProgress, info, state, summary } = presentation;
+
+  if (state === 'separator') {
+    const label = t('message.systemCard.autoResume.separator');
+    return (
+      <View style={styles.autoResumeSeparator} testID="message.systemCard.auto-resume-separator">
+        <View style={styles.autoResumeDivider} />
+        <View style={styles.autoResumeSeparatorPill}>
+          <RefreshCw color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+          <Text style={styles.autoResumeSeparatorText}>{label}</Text>
+        </View>
+        <View style={styles.autoResumeDivider} />
+      </View>
+    );
+  }
+
+  const label = state === 'live'
+    ? hasProgress
+      ? t('message.systemCard.autoResume.pendingWithProgress', {
+          attempt: info.attempt,
+          total: info.maxAttempts,
+        })
+      : t('message.systemCard.autoResume.pending')
+    : state === 'succeeded'
+      ? t('message.systemCard.autoResume.succeeded')
+      : state === 'failed'
+        ? t('message.systemCard.autoResume.failed')
+        : t('message.systemCard.autoResume.neutral');
+  const accessibilityLabel = summary ? `${label}: ${summary}` : label;
+
+  return (
+    <View style={styles.autoResumeRow} testID="message.systemCard.auto-resume">
+      <Pressable
+        accessibilityLabel={accessibilityLabel}
+        accessibilityRole={canExpand ? 'button' : undefined}
+        accessibilityState={canExpand ? { expanded } : undefined}
+        disabled={!canExpand}
+        onPress={canExpand
+          ? () => setExpanded((value) => toggleMobileAutoResumeExpanded(value, canExpand))
+          : undefined}
+        style={({ pressed }) => [styles.autoResumeHeader, pressed && styles.pressed]}
+      >
+        <View
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={styles.autoResumeIconSlot}
+        >
+          {state === 'live' ? (
+            <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />
+          ) : state === 'succeeded' ? (
+            <Check color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : state === 'failed' ? (
+            <X color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : (
+            <RefreshCw color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          )}
+        </View>
+        <Text style={styles.autoResumeTitle} numberOfLines={1}>{label}</Text>
+        {summary ? (
+          <Text style={styles.autoResumeSummary} numberOfLines={1}>{summary}</Text>
+        ) : (
+          <View style={styles.autoResumeHeaderSpacer} />
+        )}
+        {canExpand ? (
+          expanded ? (
+            <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : (
+            <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          )
+        ) : null}
+      </Pressable>
+      {expanded && canExpand ? (
+        <View style={styles.autoResumeDetailPanel}>
+          {info.error ? (
+            <>
+              <Text style={styles.autoResumeDetailLabel}>
+                {t('message.systemCard.autoResume.detail.reason')}
+              </Text>
+              <Text selectable style={styles.autoResumeDetailText}>{info.error}</Text>
+            </>
+          ) : null}
+          {(hasProgress || info.sessionTotal !== undefined) ? (
+            <View style={[styles.autoResumeDetailMeta, info.error && styles.autoResumeDetailMetaWithReason]}>
+              {hasProgress ? (
+                <Text style={styles.autoResumeDetailMetaText}>
+                  {t('message.systemCard.autoResume.detail.attempt', {
+                    attempt: info.attempt,
+                    total: info.maxAttempts,
+                  })}
+                </Text>
+              ) : null}
+              {info.sessionTotal !== undefined ? (
+                <Text style={styles.autoResumeDetailMetaText}>
+                  {t('message.systemCard.autoResume.detail.sessionTotal', {
+                    count: info.sessionTotal,
+                  })}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -3386,8 +3558,16 @@ function MarkdownBody({
     ),
     [onOpenSessionLink, openMarkdownImage, sessionLinkTitles, sessionReferenceDetails, streaming, styles],
   );
+  const textRunGroupingOptions = selectable === true && Platform.OS === 'android'
+    ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS
+    : undefined;
   // 连续纯文本块合并为 text_run(跨段选择),代码块/表格/mermaid/含直连图块保持独立。
-  const groups = useMemo(() => groupMobileMarkdownSelectableBlocks(blocks), [blocks]);
+  // Android selectable Text 在超长原生文本视图里会偶发高度/滚动协商异常,长 run 分块
+  // 后仍保留块内跨段选择,同时避免单个 LegendList item 内出现巨型 selectable Text。
+  const groups = useMemo(
+    () => groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions),
+    [blocks, textRunGroupingOptions],
+  );
   // 块可选中且 iOS → 嵌套 span 必须是 UITextView 家族;其余场景缺省 RN Text。
   const spanFor = useCallback((blockSelectable: boolean) => (
     blockSelectable && allowIosUITextView && Platform.OS === 'ios'
@@ -3397,7 +3577,8 @@ function MarkdownBody({
   // 文本运行组:连续纯文本块(段落/标题/列表项)合进同一个原生文本视图,
   // 原生选择手柄即可横跨段落(单个 text view 是 iOS/Android 原生选择的天然边界)。
   // 段间距用「lineHeight = markdownBodyGap 的空行 span」还原:原生文本树内没有块级 gap 可用,
-  // 一个高度恰为 gap 的空行在视觉上与原块间距一致。列表项在树内表达为「marker 前缀 span + 正文」
+  // 一个高度恰为 gap 的空行在视觉上与原块间距一致。由单块切出的 continuation 不插间距。
+  // 列表项在树内表达为「marker 前缀 span + 正文」
   // (无悬挂缩进;任务项以 ☑/☐ 字符替代原边框小方块)。
   const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
     const runSelectable = selectable === true;
@@ -3412,7 +3593,7 @@ function MarkdownBody({
       >
         {group.blocks.flatMap((block, index) => {
           const spans: ReactNode[] = [];
-          if (index > 0) {
+          if (index > 0 && !block.textRunContinuation) {
             spans.push(
               <RunSpan key={`${block.key}:gap`} style={{ lineHeight: layout.markdownBodyGap }}>
                 {'\n\n'}
@@ -3422,7 +3603,7 @@ function MarkdownBody({
           const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
             ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
             : styles.messageText;
-          if (block.type === 'list_item') {
+          if (block.type === 'list_item' && !block.textRunContinuation) {
             const task = typeof block.checked === 'boolean';
             spans.push(
               <RunSpan
@@ -3441,15 +3622,16 @@ function MarkdownBody({
   };
   return (
     <View
-      style={[styles.markdownBody, { gap: layout.markdownBodyGap }]}
+      style={styles.markdownBody}
       testID="message.markdownBody"
     >
-      {groups.map((group) => {
-        if (group.type === 'text_run') {
-          return renderTextRun(group);
-        }
-        const block = group.block;
-        if (block.type === 'mermaid') {
+      {groups.flatMap((group, groupIndex) => {
+        const renderedGroup = (() => {
+          if (group.type === 'text_run') {
+            return renderTextRun(group);
+          }
+          const block = group.block;
+          if (block.type === 'mermaid') {
           // 内联图表按「图片」形态呈现:无卡片 chrome、无标签文字、无按钮,
           // 就是一块圆角图表;点击任意位置打开沉浸式全屏详情(透明 Pressable
           // 盖住整块——WebView 会吞掉触摸事件,不盖层拿不到点击)。
@@ -3565,6 +3747,7 @@ function MarkdownBody({
           const columnWidths = buildMobileMarkdownTableColumnWidths({
             header: block.header,
             rows: block.rows,
+            availableWidth: layout.markdownTableAvailableWidth,
             minWidth: layout.markdownTableCellMinWidth,
           });
           return (
@@ -3625,6 +3808,14 @@ function MarkdownBody({
             {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
           </MarkdownSelectableText>
         );
+        })();
+        if (groupIndex === 0 || isTextRunContinuationGroup(group)) {
+          return [renderedGroup];
+        }
+        return [
+          <View key={`${group.key}:body-gap`} style={{ height: layout.markdownBodyGap }} />,
+          renderedGroup,
+        ];
       })}
     </View>
   );
@@ -3986,6 +4177,9 @@ function renderInline(
       // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
       // 点开后由 ImageLightbox 经 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
+        const imageChipText = inline.alt
+          ? mobileMarkdownImageAltChipText(inline.alt)
+          : i18n.t('message.renderer.imageFallbackTitle');
         return (
           <SpanText
             key={spanKey(`image:${index}:${inline.url}`)}
@@ -3993,7 +4187,7 @@ function renderInline(
             style={clickableInlineStyle(styles, openImageChip, ctx.baseStyle)}
             testID="message.markdownInlineImageChip"
           >
-            {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
+            {imageChipText}
           </SpanText>
         );
       }
@@ -5763,6 +5957,30 @@ function findFirstUserMessageClientIdInItem(
   return undefined;
 }
 
+function findLastUserInputClientId(items: readonly MobileMessageRenderItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const found = findLastUserInputClientIdInItem(items[index]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findLastUserInputClientIdInItem(
+  item: MobileMessageRenderItem | MobileWorkChildItem,
+): string | null {
+  if (item.type === 'message' && item.message.role === 'user') {
+    const delivery = item.message.source.agentMeta?.delivery;
+    return delivery === 'steer' ? null : messageClientId(item);
+  }
+  if (item.type === 'work_group') {
+    for (let index = item.children.length - 1; index >= 0; index--) {
+      const found = findLastUserInputClientIdInItem(item.children[index]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function messageClientId(item: MobileMessageItem): string {
   return item.message.source.clientId || item.message.source.id || item.message.key;
 }
@@ -6036,6 +6254,102 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },
+  autoResumeSeparator: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  autoResumeDivider: {
+    backgroundColor: colors.border,
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
+  autoResumeSeparatorPill: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    maxWidth: '78%',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  autoResumeSeparatorText: {
+    color: colors.textTertiary,
+    flexShrink: 1,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+  },
+  autoResumeRow: {
+    alignSelf: 'stretch',
+  },
+  autoResumeHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingHorizontal: spacing.xs,
+  },
+  autoResumeIconSlot: {
+    alignItems: 'center',
+    height: 18,
+    justifyContent: 'center',
+    width: iconSize.md,
+  },
+  autoResumeTitle: {
+    color: colors.textSecondary,
+    flexShrink: 1,
+    flexGrow: 0,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.medium,
+  },
+  autoResumeSummary: {
+    color: colors.textSecondary,
+    flex: 1,
+    fontSize: typeScale.footnote,
+    minWidth: 0,
+  },
+  autoResumeHeaderSpacer: {
+    flex: 1,
+    minWidth: spacing.xs,
+  },
+  autoResumeDetailPanel: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: radius.control,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginHorizontal: spacing.xs,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  autoResumeDetailLabel: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+  },
+  autoResumeDetailText: {
+    color: colors.textSecondary,
+    fontFamily: monoFont,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    marginTop: 2,
+  },
+  autoResumeDetailMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  autoResumeDetailMetaWithReason: {
+    marginTop: spacing.sm,
+  },
+  autoResumeDetailMetaText: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+  },
   // ── agent-switch 分隔线 + 药丸(对齐桌面 AgentSwitchCard)────────────────
   agentSwitchWrap: {
     paddingVertical: spacing.sm,
@@ -6098,7 +6412,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },
-  markdownBody: { gap: 10 },
+  markdownBody: {},
   // 外链 / 会话深链等一切可点行内元素:**只有下划线**,不加粗、不换色、不换字体
   // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只有 text-decoration)。
   //

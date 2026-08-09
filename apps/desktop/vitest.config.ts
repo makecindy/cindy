@@ -54,6 +54,9 @@ export default defineConfig({
       // into renderer code can resolve '@/...' the same way the build does.
       '@': path.resolve(__dirname, 'src/renderer'),
       electron: path.resolve(__dirname, 'src/test/vitest/electron-stub.ts'),
+      // original-fs is provided by Electron at runtime. Unit tests run in Node,
+      // where the standard fs module has the same physical-filesystem semantics.
+      'original-fs': 'node:fs',
     },
   },
   test: {

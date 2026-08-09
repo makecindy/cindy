@@ -245,6 +245,47 @@ describe('SessionRegistry', () => {
     ).resolves.toEqual({ continue: true });
   });
 
+  it('allows the exact Orca report tool for the root and denies nested Claude agents', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+    });
+    registry.create({
+      sessionId: 's-orca-root-only',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [{
+        toolNamePrefix: 'mcp__orca_worker_bridge__send_to_lead',
+        sourceServerId: 'orca_worker_bridge',
+        invocation: 'root-only',
+        denialMessage: 'NESTED_AGENT_NOT_ALLOWED',
+      }],
+    });
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    const call = {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'mcp__orca_worker_bridge__send_to_lead',
+    };
+    await expect(preToolUse!(call)).resolves.toEqual({ continue: true });
+    await expect(preToolUse!({ ...call, agent_id: 'child-1' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'NESTED_AGENT_NOT_ALLOWED',
+      },
+    });
+    await expect(preToolUse!({
+      ...call,
+      tool_name: 'mcp__orca_worker_bridge__read_lead',
+      agent_id: 'child-1',
+    })).resolves.toEqual({ continue: true });
+  });
+
   it('keeps explicit selection across accepted same-turn steering inputs', async () => {
     let captured: SdkQueryFactoryOptions | undefined;
     const factory: SdkQueryFactory = (opts) => {

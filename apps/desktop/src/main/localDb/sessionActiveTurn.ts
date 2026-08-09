@@ -49,12 +49,13 @@
  * turn 主流程。
  */
 
-import { and, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
 import { messages, sessions } from './schema';
 import { createLogger } from '../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { boundedSummary } from '../maker-ipc/recoveryCoordinator.js';
 
 const log = createLogger('session-active-turn');
 
@@ -461,6 +462,115 @@ export async function hasAssistantProgressAfterMessage(
     )
     .limit(1);
   return Boolean(row?.found);
+}
+
+/**
+ * Read the small durable handoff used by retry recovery. This intentionally
+ * does not copy tool results or the transcript: the model can still inspect
+ * the real history, while this marker prevents a repeated retry from looking
+ * like a brand-new task after a context compaction.
+ */
+export async function getRecoveryContextSnapshot(
+  sessionId: string,
+  userClientId: string,
+): Promise<{
+  contextTokens: number;
+  contextWindow: number;
+  progressCount: number;
+  recentProgress: Array<{
+    role: 'assistant' | 'tool_use' | 'thinking' | 'ask_user' | 'plan_review';
+    summary: string;
+  }>;
+}> {
+  const db = getDbClient().drizzle;
+  const progressRoles = ['assistant', 'tool_use', 'thinking', 'ask_user', 'plan_review'] as const;
+  const afterUser = sql`EXISTS (
+    SELECT 1 FROM messages u
+    WHERE u.session_id = ${sessionId}
+      AND u.client_id = ${userClientId}
+      AND u.rewind_at IS NULL
+      AND (${messages.createdAt} > u.created_at
+        OR (${messages.createdAt} = u.created_at AND ${sql.raw('"messages"."rowid"')} > u.rowid))
+  )`;
+  const visibleProgress = and(
+    eq(messages.sessionId, sessionId),
+    inArray(messages.role, progressRoles),
+    isNull(messages.rewindAt),
+    afterUser,
+  );
+  const [session, countRow, recentRows] = await Promise.all([
+    db
+      .select({ contextTokens: sessions.contextTokens, contextWindow: sessions.contextWindow })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1),
+    db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(messages)
+      .where(visibleProgress),
+    db
+      .select({ role: messages.role, content: messages.content })
+      .from(messages)
+      .where(visibleProgress)
+      .orderBy(desc(messages.createdAt), desc(sql.raw('"messages"."rowid"')))
+      .limit(6),
+  ]);
+
+  return {
+    contextTokens: session[0]?.contextTokens ?? 0,
+    contextWindow: session[0]?.contextWindow ?? 0,
+    progressCount: Number(countRow[0]?.count ?? 0),
+    recentProgress: recentRows.reverse().map((row) => ({
+      role: normalizeRecoveryRole(row.role),
+      summary: summarizeRecoveryContent(row.content),
+    })),
+  };
+}
+
+function normalizeRecoveryRole(
+  role: string,
+): 'assistant' | 'tool_use' | 'thinking' | 'ask_user' | 'plan_review' {
+  if (
+    role === 'tool_use' ||
+    role === 'thinking' ||
+    role === 'ask_user' ||
+    role === 'plan_review'
+  ) return role;
+  return 'assistant';
+}
+
+function summarizeRecoveryContent(raw: string): string {
+  let value: unknown = raw;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    // Keep legacy/plain content as-is.
+  }
+  let summary = '';
+  if (typeof value === 'string') {
+    summary = value;
+  } else if (Array.isArray(value)) {
+    summary = value
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        const record = part as Record<string, unknown>;
+        if (typeof record.text === 'string') return record.text;
+        if (typeof record.toolName === 'string') return `tool ${record.toolName}`;
+        if (typeof record.name === 'string') return `tool ${record.name}`;
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+  } else if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.toolName === 'string') summary = `tool ${record.toolName}`;
+    else if (typeof record.name === 'string') summary = `tool ${record.name}`;
+    else if (typeof record.text === 'string') summary = record.text;
+    else if (typeof record.summary === 'string') summary = record.summary;
+    else if (typeof record.command === 'string') summary = `command ${record.command}`;
+  }
+  return boundedSummary(summary);
 }
 
 /** 测试专用:重置模块内存态。 */
