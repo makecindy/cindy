@@ -16,9 +16,9 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { createLogger } from '@/lib/logger';
+import { chatEmbeddingFailureKey } from '@/lib/chatEmbeddingStore';
 import { useChatEmbedding } from '@/hooks/useChatEmbedding';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import { chatEmbeddingFailureKey } from './chatEmbeddingError';
 
 const log = createLogger('ChatEmbeddingCell');
 

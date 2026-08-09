@@ -20,10 +20,19 @@
  * 拉取经过账号与模型目录可用性检查的有效值，不可用或显式关过都会同步成 false。
  */
 
+import { extractIpcError } from '@/utils/ipcError';
+
 const STORAGE_KEY = 'chatEmbedding.enabled';
 
 type Subscriber = (value: boolean) => void;
 const subscribers = new Set<Subscriber>();
+
+/** Stable chat-embedding IPC errors to localized settings copy. */
+export function chatEmbeddingFailureKey(error: unknown): string {
+  return extractIpcError(error)?.code === 'UNSUPPORTED_CAPABILITY'
+    ? 'settings.chatEmbedding.toast.unavailable'
+    : 'settings.chatEmbedding.toast.toggleFailed';
+}
 
 /**
  * 同步读 — 默认开 (与 main DEFAULTS 对齐): 仅当显式存过 'false' 才关; 没存过 (null)

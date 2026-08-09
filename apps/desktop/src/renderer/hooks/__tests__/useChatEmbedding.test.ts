@@ -2,6 +2,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { chatEmbeddingFailureKey } from '../../lib/chatEmbeddingStore';
 import { useChatEmbedding } from '../useChatEmbedding';
 
 type Settings = {
@@ -55,5 +56,16 @@ describe('useChatEmbedding', () => {
 
     hook.unmount();
     expect(listeners).toHaveLength(0);
+  });
+
+  it('maps IPC failures to localized chat embedding messages', () => {
+    expect(
+      chatEmbeddingFailureKey(
+        new Error('Error invoking remote method: Error: [UNSUPPORTED_CAPABILITY] raw detail'),
+      ),
+    ).toBe('settings.chatEmbedding.toast.unavailable');
+    expect(chatEmbeddingFailureKey(new Error('[INTERNAL] raw detail'))).toBe(
+      'settings.chatEmbedding.toast.toggleFailed',
+    );
   });
 });
