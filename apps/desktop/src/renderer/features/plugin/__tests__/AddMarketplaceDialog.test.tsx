@@ -137,7 +137,7 @@ describe('AddMarketplaceDialog', () => {
     await waitFor(() =>
       expect(screen.getByText('settings.ghosts.market.sources.addedReceipt')).toBeTruthy(),
     );
-    expect(screen.getByText('settings.ghosts.market.sources.emptyWithEntries')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.market.sources.emptyWithInvalidEntries')).toBeTruthy();
     expect(screen.getByText('settings.ghosts.market.sources.skippedEntries')).toBeTruthy();
   });
 
