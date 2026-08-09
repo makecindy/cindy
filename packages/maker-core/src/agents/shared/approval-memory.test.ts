@@ -353,6 +353,64 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(signature(exec('rm -rf build'))).not.toBeNull();
   });
 
+  it('归档解压器及其同族入口不可记忆', () => {
+    for (const command of [
+      'tar -xf payload.tar -C dist',
+      'tar -xzf payload.tgz -C dist',
+      'tar -xC dist -f payload.tar',
+      'tar xCf dist payload.tar',
+      'gtar -xf payload.tar',
+      'bsdtar -xf payload.tar',
+      'unzip payload.zip -d dist',
+      'unzip -oqd dist payload.zip',
+      'unzip.exe payload.zip -d dist',
+      '7z x payload.7z -odist',
+      '7zz x payload.7z -o dist',
+      '7za x payload.7z -o dist',
+      'unrar x payload.rar dist',
+      'unar -o dist payload.rar',
+      'cabextract -d dist payload.cab',
+      'cpio -idm < payload.cpio',
+      'env tar -xf payload.tar -C dist',
+      'timeout 30 unzip.exe payload.zip -d dist',
+      'true && tar -xf payload.tar -C dist',
+      'true && unzip payload.zip -d dist',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'echo tar -xf payload.tar -C dist',
+      "echo 'unzip payload.zip -d dist'",
+      'cat payload.tar | wc -c',
+      'rm -rf dist',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    for (const action of [
+      exec('tar -xf payload.tar -C dist'),
+      exec('unzip payload.zip -d dist'),
+      exec('7z x payload.7z -odist'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      expect(memory.isRemembered(
+        action, defaultIntent, roots, reviewerRoute,
+      )).toBe(false);
+    }
+    expect(memory.size()).toBe(0);
+
+    const fixedAction = exec('rm -rf build');
+    memory.rememberReviewerAllow(fixedAction, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(
+      fixedAction, defaultIntent, roots, reviewerRoute,
+    )).toBe(true);
+  });
+
   it('输入重定向的紧贴、fd 前缀与 shell 分隔符形式均不可记忆', () => {
     for (const command of [
       'psql < input.sql',

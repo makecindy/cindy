@@ -485,6 +485,9 @@ const MUTABLE_INDIRECT_EXECUTABLES: ReadonlySet<string> = new Set([
   'http', 'https', 'httpie',
   'docker', 'podman', 'nerdctl', 'kubectl',
   'chroot', 'nsenter', 'unshare', 'systemd-run', 'wsl', 'winrs',
+  // archive readers/extractors: unchanged argv can apply replaced member paths and contents
+  'tar', 'gtar', 'bsdtar', 'unzip', '7z', '7zz', '7za', 'unrar', 'unar',
+  'cabextract', 'cpio',
   // aliases/extensions/config can redirect these stable-looking commands into project code
   'git', 'gh', 'glab',
   // project task/build/test runners
