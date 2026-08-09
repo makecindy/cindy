@@ -496,6 +496,7 @@ import {
   commitQueuedMessageAfterOrcaFence,
   type OrcaQueueCommitResult,
 } from './orcaQueueCommit.js';
+import { discardPendingOrcaWorkerInput } from './orcaQueueCleanup.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -8089,6 +8090,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 },
                 w.sessionId,
               );
+              await discardPendingOrcaWorkerInput(inputCoordinator, w.sessionId);
             }
 
             // Keep every Worker route locked until the ended/archived state is
