@@ -1975,9 +1975,12 @@ export class AgentIslandService {
   private displayForNativeId(displayId: number | null, displays: Display[]): Display | null {
     if (typeof displayId !== 'number' || !Number.isFinite(displayId)) return null;
     const direct = this.displayById(displays, displayId);
+    // AppKit and Electron expose the same system display id, while their frame
+    // coordinates use different vertical origins. A matching id is therefore
+    // stronger evidence than a full-bounds comparison.
+    if (direct) return direct;
     const metrics = this.screenMetricsByDisplayId.get(displayId);
-    if (!metrics) return direct;
-    if (direct && sameDisplayBounds(direct.bounds, metrics.frame)) return direct;
+    if (!metrics) return null;
     const exactBounds = displays.filter((display) => sameDisplayBounds(display.bounds, metrics.frame));
     if (exactBounds.length === 1) return exactBounds[0] ?? null;
     const sameSize = displays.filter((display) => (
@@ -2122,7 +2125,7 @@ export class AgentIslandService {
 
   private screenMetricsForDisplay(display: Display): AgentIslandNativeScreenMetrics | null {
     const direct = this.screenMetricsByDisplayId.get(display.id);
-    if (direct && sameDisplayBounds(display.bounds, direct.frame)) return direct;
+    if (direct) return direct;
     const exactBounds = Array.from(this.screenMetricsByDisplayId.values()).filter((metrics) => (
       sameDisplayBounds(display.bounds, metrics.frame)
     ));
