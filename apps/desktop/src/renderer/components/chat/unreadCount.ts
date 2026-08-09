@@ -10,12 +10,16 @@
  *    prevIds 里，按纯 clientId 差分会把视口上方的旧消息误计成「新消息」
  *    （Codex review P2）。prevIds 非空时以「最后一条已见消息」为界，只数
  *    它之后的行；一条已见消息都找不到（窗口整体重置）则本轮不计。
- *    prevIds 为空（首渲染）保持既有行为：全部按新内容计。
+ *    prevIds 为空（首渲染）保持既有行为：assistant 等角色全部按新内容计，
+ *    但 user 行仍不计（见下一条的基线要求）。
  *  - assistant / ask_user / plan_review 在离底时计数。
  *  - user 消息默认不计数（本端发送会强制回底，用户必然看见）；但 #2194 之后
  *    外部入口（IM / 手机端 / 定时任务）注入的 user 消息不再抢视口，若不计数
  *    就会在屏幕外无声无息——调用方传入 isLocalUserSend 时，**非本端发送**的
  *    user 消息计入未读（Codex review P2）。isLocalUserSend 缺省保持既有行为。
+ *    该规则只在 prevIds 非空（已有基线）时生效：会话重开 / 还原离底时首轮
+ *    diff 的 prevIds 为空，内存态登记在重载后对该批历史 user 行一律返回
+ *    false，若计入会把整批历史误报成「新消息」（Codex review P2，第五轮）。
  *  - 合成指令行（isSyntheticTrigger，如手动「继续」/ Mivo 触发指令）渲染 null，
  *    永远不可见，不计数——否则留下点对不掉的幻影未读（Codex review P1）。
  */
@@ -67,7 +71,9 @@ export function countUnreadAdded({
       added += 1;
       continue;
     }
-    if (m.role === 'user' && isLocalUserSend?.(m.clientId) === false) added += 1;
+    if (m.role === 'user' && prevIds.size > 0 && isLocalUserSend?.(m.clientId) === false) {
+      added += 1;
+    }
   }
   return added;
 }

@@ -53,14 +53,27 @@ describe('countUnreadAdded', () => {
   });
 
   // #2194 / Codex P2：外部注入的 user 消息不再抢视口 → 计入未读；
-  // 本端发送（会强制回底）不计。
+  // 本端发送（会强制回底）不计。该规则需要基线（prevIds 非空）才生效。
   it('非本端发送的 user 消息计数，本端发送不计', () => {
     expect(
       countUnreadAdded({
-        prevIds: new Set(),
-        messages: [msg('ext', 'user'), msg('local', 'user')],
+        prevIds: new Set(['seen']),
+        messages: [msg('seen', 'assistant'), msg('ext', 'user'), msg('local', 'user')],
         nearBottom: false,
         isLocalUserSend: (id) => id === 'local',
+      }),
+    ).toBe(1);
+  });
+
+  // Codex P2（第六轮）：会话重开 / 还原离底时首轮 diff 的 prevIds 为空，
+  // 内存态登记对整批历史 user 行一律返回 false——计入会把历史误报成新消息。
+  it('prevIds 为空（首渲染基线未建立）时 user 行不计数，assistant 行保持既有行为', () => {
+    expect(
+      countUnreadAdded({
+        prevIds: new Set(),
+        messages: [msg('u1', 'user'), msg('u2', 'user'), msg('a1', 'assistant')],
+        nearBottom: false,
+        isLocalUserSend: () => false,
       }),
     ).toBe(1);
   });
@@ -80,8 +93,9 @@ describe('countUnreadAdded', () => {
   it('合成指令行（isSyntheticTrigger）不计数', () => {
     expect(
       countUnreadAdded({
-        prevIds: new Set(),
+        prevIds: new Set(['seen']),
         messages: [
+          msg('seen', 'assistant'),
           { clientId: 'syn', role: 'user', isSyntheticTrigger: true },
           msg('ext', 'user'),
         ],
