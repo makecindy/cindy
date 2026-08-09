@@ -257,13 +257,32 @@ export function PlanReviewBubble({
  * 行高与外边距差得很远,行数和视觉高度没有稳定关系,而"能否展开"必须和用户
  * 真正看到的有没有被切掉一致 —— 否则会出现按钮点了没变化(或该给按钮时没给)。
  *
- * 折叠只裁"看得见",所以被裁掉的链接 / 文件 chip / 代码块按钮仍留在 tab 序里:
- * 键盘能聚焦并激活一个看不见的控件,而且焦点一进去浏览器就会滚动这个
- * overflow-hidden 容器,把折叠预览顶掉。修法是**只**把不完全可见的可聚焦元素
- * 移出 tab 序(syncClippedFocusability),不整块 inert —— inert 会连带禁掉预览
- * 文字的选中,而 DESIGN.md §14.1 要求消息正文默认可选。可见控件因此照常能点,
- * 被裁内容对读屏仍可读(只是 tab 不到),任何会被裁的状态都给得出展开入口 ——
- * 三态共用同一个折叠 + 展开机制,只有折叠高度不同。
+ * ## 不变量(折叠态的唯一约束)
+ *
+ * **用户看得见的内容 == 能被键盘聚焦 / 激活的内容。**
+ *
+ * 只用 `overflow-hidden` + mask 满足不了它:那两者只挡"看得见",被裁掉的链接 /
+ * 文件 chip / 代码块按钮仍留在 tab 序里,键盘能聚焦并激活一个隐形控件,焦点一
+ * 进去浏览器还会滚动这个容器把预览顶掉。反过来,整块 `inert` 又管得太宽,会连
+ * 带禁掉可见正文的选中(DESIGN.md §14.1 要求消息正文默认可选)、可见控件的点击、
+ * find-in-page 与读屏。所以判据只有一个 —— `syncClippedFocusability()` 按渲染
+ * 后的位置逐个摘 tabindex,可见部分一律不碰。
+ *
+ * ## 会打破它的全部路径(逐条都要有对应机制)
+ *
+ * 1. 内容或折叠状态本身变了 → effect 依赖(`plan` / `expanded` / 折叠高度);
+ * 2. 回流让裁剪线两侧易主(图片加载、字体就位、窗口改宽)→ `ResizeObserver`;
+ * 3. **尺寸不变**的子树替换(`useResolvedMarkdownTarget` 异步把纯文本换成带
+ *    `tabIndex={0}` 的 `FileTargetChip`)→ `MutationObserver`;
+ * 4. **容器被程序化滚动**(计划里指向折叠线下标题的内部锚点走
+ *    `MarkdownRenderer` 的 anchor 分支调 `scrollIntoView()`;`overflow-hidden`
+ *    容器照样能被程序化滚动)→ 折叠态的 `onScroll` 直接展开。
+ *
+ * 第 5 条"焦点进入被裁元素导致滚动"不需要单独机制:1–4 保证被裁元素永远不在
+ * tab 序里,它就不可能拿到焦点。
+ *
+ * 任何会被裁的状态都必须给得出展开入口 —— 三态共用同一个折叠 + 展开机制,只有
+ * 折叠高度不同。
  */
 function PlanMarkdownBody({
   workingDir,
@@ -337,6 +356,21 @@ function PlanMarkdownBody({
     <div className="flex flex-col gap-[8px]">
       <div
         className={cn('min-w-0', collapsed && 'overflow-hidden')}
+        // 路径 4(见上方不变量注释):overflow-hidden 只挡用户手动滚动,程序化滚动
+        // 照样生效 —— 计划开头指向折叠线下标题的内部锚点会调 scrollIntoView(),
+        // 把预览直接卷到下半段:既显示了本该藏起来的内容,也让"可见"与 tab 序
+        // 错位(卷走的可聚焦元素还在序里、新露出的仍是 -1)。既然有东西要跳到下面,
+        // 就直接展开;先把已经卷走的位置退回去,避免展开前闪一下下半段。展开后
+        // effect 依赖变化会重跑 sync,状态自然回到一致。
+        // 鼠标滚轮不会走到这里:overflow-hidden 容器不响应 wheel。
+        onScroll={
+          collapsed
+            ? (event) => {
+                event.currentTarget.scrollTop = 0;
+                setExpanded(true);
+              }
+            : undefined
+        }
         style={
           collapsed
             ? ({

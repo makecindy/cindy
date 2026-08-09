@@ -259,7 +259,7 @@ describe('PlanReviewBubble 计划正文渲染', () => {
       await withOverflowingContentAsync(async () => {
         render(<PlanReviewBubble message={planReviewMessage()} workingDir="/tmp/repo" />);
 
-        const body = screen.getByTestId('markdown');
+        const body: HTMLElement = screen.getByTestId('markdown');
         // 模拟异步解析就绪:往子树里插入两个 chip,一个在裁剪线下、一个在线上。
         const lateClipped = document.createElement('span');
         lateClipped.setAttribute('role', 'button');
@@ -280,6 +280,30 @@ describe('PlanReviewBubble 计划正文渲染', () => {
         });
         // 线上的 chip 必须保持可聚焦 —— 它是用户看得见、点得到的控件。
         expect(lateVisible.getAttribute('tabindex')).toBe('0');
+      });
+    });
+
+    // 回归护栏(PR #2274 review):overflow-hidden 只挡手动滚动。计划里指向折叠线
+    // 下标题的内部锚点会调 scrollIntoView() 把预览卷到下半段 —— 既露出本该藏起来
+    // 的内容,也让"可见"与 tab 序错位。折叠态遇到程序化滚动应当直接展开。
+    it('折叠态被程序化滚动(内部锚点 scrollIntoView)时自动展开并还原 tab 序', () => {
+      withOverflowingContent(() => {
+        render(<PlanReviewBubble message={planReviewMessage()} workingDir="/tmp/repo" />);
+
+        expect(screen.getByRole('button', { name: /showFull/ }).getAttribute('aria-expanded'))
+          .toBe('false');
+        expect(screen.getByTestId('clipped-link').getAttribute('tabindex')).toBe('-1');
+
+        const box = collapsedBoxOf(screen.getByTestId('markdown'));
+        box.scrollTop = 200;
+        fireEvent.scroll(box);
+
+        // 展开:折叠预览不再把内容卷在窗口里。
+        expect(screen.getByRole('button', { name: /collapse/ }).getAttribute('aria-expanded'))
+          .toBe('true');
+        // 卷走导致的可见性变化不会留下错位的 tab 序 —— 展开后全部还原。
+        expect(screen.getByTestId('clipped-link').hasAttribute('tabindex')).toBe(false);
+        expect(box.scrollTop).toBe(0);
       });
     });
   });
