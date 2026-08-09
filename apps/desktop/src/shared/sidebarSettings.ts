@@ -1,5 +1,8 @@
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from './dataOwnerPush.js';
 
+export const SIDEBAR_PINNED_ORDER_MAX_ENTRIES = 10_000;
+export const SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH = 4_096;
+
 export interface SidebarSettingsSnapshot extends DataOwnerPushStamp {
   readonly pinnedOrder: string[];
   readonly hiddenProjectKeys: string[];
@@ -24,6 +27,26 @@ export interface SidebarPinnedOrderWriteRequest extends DataOwnerPushStamp {
 export interface SidebarProjectHiddenWriteRequest extends DataOwnerPushStamp {
   readonly projectKey: string;
   readonly hidden: boolean;
+}
+
+export function normalizeSidebarPinnedOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const order: string[] = [];
+  for (const entry of value) {
+    if (
+      typeof entry !== 'string' ||
+      entry.length === 0 ||
+      entry.length > SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH ||
+      seen.has(entry)
+    ) {
+      continue;
+    }
+    seen.add(entry);
+    order.push(entry);
+    if (order.length >= SIDEBAR_PINNED_ORDER_MAX_ENTRIES) break;
+  }
+  return order;
 }
 
 export function isSidebarSettingsSnapshot(value: unknown): value is SidebarSettingsSnapshot {

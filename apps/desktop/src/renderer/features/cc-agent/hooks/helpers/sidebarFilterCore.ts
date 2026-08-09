@@ -6,9 +6,10 @@ import {
   writeSidebarOwnerStorage,
 } from '@/lib/sidebarOwnerStorage';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
-import type {
-  SidebarPinnedOrderMutation,
-  SidebarSettingsSnapshot,
+import {
+  normalizeSidebarPinnedOrder,
+  type SidebarPinnedOrderMutation,
+  type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
@@ -440,7 +441,7 @@ export function loadManualPinnedOrder(snapshot: SidebarSettingsSnapshot): Loaded
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return { order: [], needsLegacyMigration: false };
-    const legacy = normalizePinnedOrderForStorage(parsed);
+    const legacy = normalizeSidebarPinnedOrder(parsed);
     return { order: legacy, needsLegacyMigration: legacy.length > 0 };
   } catch {
     return { order: [], needsLegacyMigration: false };
@@ -457,18 +458,6 @@ export function persistManualPinnedOrder(
 
 export function finishManualPinnedOrderLegacyMigration(ownerId: string | null): void {
   clearClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, ownerId);
-}
-
-function normalizePinnedOrderForStorage(values: readonly unknown[]): string[] {
-  const seen = new Set<string>();
-  const order: string[] = [];
-  for (const value of values) {
-    if (typeof value !== 'string' || value.length === 0 || seen.has(value)) continue;
-    seen.add(value);
-    order.push(value);
-    if (order.length >= 10_000) break;
-  }
-  return order;
 }
 
 /**

@@ -9,7 +9,10 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter } from '../useSidebarFilter';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
-import type { SidebarPinnedOrderMutation } from '../../../../../shared/sidebarSettings';
+import {
+  SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
+  type SidebarPinnedOrderMutation,
+} from '../../../../../shared/sidebarSettings';
 
 const OWNER_STAMP: DataOwnerPushStamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 const SNAPSHOT = {
@@ -41,6 +44,12 @@ beforeEach(() => {
   pinnedListeners = [];
   durablePinnedOrder = [];
   mutatePinnedOrder = vi.fn().mockImplementation(async (mutation: SidebarPinnedOrderMutation) => {
+    if (
+      mutation.kind === 'migrate-legacy' &&
+      mutation.order.some((entry) => entry.length > SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH)
+    ) {
+      throw new Error('invalid sidebar pinned order');
+    }
     switch (mutation.kind) {
       case 'promote':
         durablePinnedOrder = [
@@ -223,6 +232,63 @@ describe('pinned sidebar persistence', () => {
     ]);
     expect(view.result.current.manualPinnedOrder).toEqual(['new-session', 'legacy-session']);
     expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBeNull();
+  });
+
+  it('drops invalid legacy entries before migration so later pin actions remain usable', async () => {
+    const boundarySession = 's'.repeat(SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH);
+    const projectPrefix = 'project:';
+    const boundaryProject = `${projectPrefix}${'p'.repeat(
+      SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH - projectPrefix.length,
+    )}`;
+    const overlongSession = 'x'.repeat(SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH + 1);
+    const overlongProject = `${projectPrefix}${'q'.repeat(
+      SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH - projectPrefix.length + 1,
+    )}`;
+    window.localStorage.setItem(
+      MANUAL_PINNED_ORDER_KEY,
+      JSON.stringify([
+        'legacy-session',
+        boundarySession,
+        overlongSession,
+        boundaryProject,
+        overlongProject,
+        'legacy-session',
+        '',
+        42,
+      ]),
+    );
+    const view = renderFilter();
+
+    expect(view.result.current.manualPinnedOrder).toEqual([
+      'legacy-session',
+      boundarySession,
+      boundaryProject,
+    ]);
+    await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
+    expect(mutatePinnedOrder.mock.calls[0]?.[0]).toEqual({
+      kind: 'migrate-legacy',
+      order: ['legacy-session', boundarySession, boundaryProject],
+    });
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBeNull();
+
+    let write!: Promise<void>;
+    act(() => {
+      write = view.result.current.promotePin('new-session');
+    });
+    await act(async () => {
+      await expect(write).resolves.toBeUndefined();
+    });
+
+    expect(mutatePinnedOrder.mock.calls.map(([mutation]) => mutation.kind)).toEqual([
+      'migrate-legacy',
+      'promote',
+    ]);
+    expect(view.result.current.manualPinnedOrder).toEqual([
+      'new-session',
+      'legacy-session',
+      boundarySession,
+      boundaryProject,
+    ]);
   });
 
   it('cancels a delayed legacy migration when another window has already persisted state', async () => {

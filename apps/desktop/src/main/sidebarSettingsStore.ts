@@ -13,11 +13,14 @@ import path from 'node:path';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
 import { isIpcError } from '../shared/ipc-errors.js';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
-import type {
-  SidebarPinnedOrderMutation,
-  SidebarPinnedOrderWriteRequest,
-  SidebarProjectHiddenWriteRequest,
-  SidebarSettingsSnapshot,
+import {
+  normalizeSidebarPinnedOrder,
+  SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
+  SIDEBAR_PINNED_ORDER_MAX_ENTRIES,
+  type SidebarPinnedOrderMutation,
+  type SidebarPinnedOrderWriteRequest,
+  type SidebarProjectHiddenWriteRequest,
+  type SidebarSettingsSnapshot,
 } from '../shared/sidebarSettings.js';
 import {
   activeOwnerScopeKey,
@@ -45,8 +48,6 @@ interface SidebarSettingsShape {
 }
 
 const DEFAULTS: SidebarSettingsShape = { pinnedOrder: [], hiddenProjectKeys: [] };
-const MAX_PINNED_ORDER_ENTRIES = 10_000;
-const MAX_PINNED_ORDER_ENTRY_LENGTH = 4_096;
 const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
@@ -58,26 +59,6 @@ const stores = new Map<
   ReturnType<typeof createOverrideSettingsFile<SidebarSettingsShape>>
 >();
 const writeChains = new Map<string, Promise<unknown>>();
-
-function normalizePinnedOrder(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of raw) {
-    if (
-      typeof entry !== 'string' ||
-      entry.length === 0 ||
-      entry.length > MAX_PINNED_ORDER_ENTRY_LENGTH ||
-      seen.has(entry)
-    ) {
-      continue;
-    }
-    seen.add(entry);
-    normalized.push(entry);
-    if (normalized.length >= MAX_PINNED_ORDER_ENTRIES) break;
-  }
-  return normalized;
-}
 
 function normalizeHiddenProjectKeys(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -104,7 +85,7 @@ function normalizeHiddenProjectKeys(raw: unknown): string[] {
 function normalizeSettings(raw: unknown): SidebarSettingsShape {
   const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return {
-    pinnedOrder: normalizePinnedOrder(value.pinnedOrder),
+    pinnedOrder: normalizeSidebarPinnedOrder(value.pinnedOrder),
     hiddenProjectKeys: normalizeHiddenProjectKeys(value.hiddenProjectKeys),
   };
 }
@@ -246,12 +227,12 @@ export function loadSidebarSettingsSnapshot(): SidebarSettingsSnapshot {
 function requirePinnedOrder(raw: unknown): string[] {
   if (
     !Array.isArray(raw) ||
-    raw.length > MAX_PINNED_ORDER_ENTRIES ||
+    raw.length > SIDEBAR_PINNED_ORDER_MAX_ENTRIES ||
     raw.some(
       (entry) =>
         typeof entry !== 'string' ||
         entry.length === 0 ||
-        entry.length > MAX_PINNED_ORDER_ENTRY_LENGTH,
+        entry.length > SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
     ) ||
     new Set(raw).size !== raw.length
   ) {
@@ -261,7 +242,11 @@ function requirePinnedOrder(raw: unknown): string[] {
 }
 
 function requirePinnedEntry(raw: unknown): string {
-  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PINNED_ORDER_ENTRY_LENGTH) {
+  if (
+    typeof raw !== 'string' ||
+    raw.length === 0 ||
+    raw.length > SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH
+  ) {
     throwIpcError('INVALID_PARAMS', 'invalid sidebar pinned entry');
   }
   return raw;
@@ -311,7 +296,7 @@ function rebasePinnedReorder(
     resultSet.add(entry);
   }
 
-  return normalizePinnedOrder(result);
+  return normalizeSidebarPinnedOrder(result);
 }
 
 function applyPinnedMutation(
