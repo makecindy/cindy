@@ -106,7 +106,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       workers.filter((worker) => worker.leadSessionId === leadSessionId)
     )),
     getLiveSession: vi.fn(() => null),
-    resumeWorkerSession: vi.fn(async () => {}),
+    resumeWorkerSession: vi.fn(async () => 'ready' as const),
     updateWorkerStatus: vi.fn(async (workerId, status) => {
       calls.push(`updateWorkerStatus:${status}`);
       workers = workers.map((worker) => (
@@ -480,6 +480,30 @@ describe('OrcaTeamService', () => {
       ok: false,
       errorCode: 'AGENT_NOT_READY',
       message: 'rehydrate failed',
+    });
+
+    expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
+  });
+
+  it('stops a dormant Worker dispatch when shutdown fences its locked resume', async () => {
+    const { deps, service } = createDeps({
+      resumeWorkerSession: vi.fn(async () => 'fenced' as const),
+    });
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: 'must not resume',
+        dispatchMeta: { source: 'test-source', context: 'fenced-resume' },
+      }),
+    ).resolves.toMatchObject({
+      dispatched: false,
+      dispatchOutcome: {
+        kind: 'host-send',
+        code: 'SESSION_NOT_FOUND',
+      },
     });
 
     expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();

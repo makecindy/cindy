@@ -497,6 +497,15 @@ import {
   type OrcaInterAgentDispatcher,
   type OrcaInterAgentMessageSource,
 } from './orcaInterAgentDispatcher.js';
+import {
+  commitQueuedMessageAfterOrcaFence,
+  type OrcaQueueCommitResult,
+} from './orcaQueueCommit.js';
+import {
+  commitPendingOrcaWorkerInput,
+  preparePendingOrcaWorkerInput,
+  type OrcaPendingWorkerInputPlan,
+} from './orcaQueueCleanup.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -534,6 +543,12 @@ import {
   type OrcaWorkerEffort,
   type WorkerQueuedMessageControlResult,
 } from './orcaTeamService.js';
+import {
+  closeOrcaWorkerRuntimeWhileLocked,
+  isOrcaWorkerSessionDisableFenced,
+  withOrcaWorkerDisableFence,
+  withOrcaWorkerSessionLocks,
+} from './orcaDisableWorkerRuntime.js';
 import {
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
@@ -1353,7 +1368,18 @@ type SendToSessionInternalResult =
         | 'WORKTREE_UNAVAILABLE'
         | 'INTERNAL';
       message: string;
+      shutdownFence?: true;
     };
+
+function orcaSessionUnavailableResult(targetSessionId: string): SendToSessionInternalResult {
+  return {
+    ok: false,
+    errorCode: 'NOT_FOUND',
+    message:
+      `session ${targetSessionId} is unavailable because its Orca team is ending or has ended`,
+    shutdownFence: true,
+  };
+}
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
@@ -6149,48 +6175,58 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     teamId: string;
     leadSessionId: string;
     sessionId: string;
-  }): Promise<boolean> {
-    const live = maker.getSession(target.sessionId);
-    if (live) return false;
+  }): Promise<'resumed' | 'unchanged' | 'fenced'> {
+    return withSendToSessionLock(target.sessionId, async () => {
+      if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return 'fenced';
 
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, target.sessionId))
-      .limit(1);
-    if (!row) return false;
+      // Re-read liveness only after winning the route lock. Concurrent dormant
+      // sends must not bootstrap the same Worker twice.
+      const live = maker.getSession(target.sessionId);
+      if (live) return 'unchanged';
 
-    const workerVendorOptions = {
-      orcaRole: 'worker' as const,
-      orcaWorkflowId: target.teamId,
-      orcaLeadSessionId: target.leadSessionId,
-      orcaWorkerId: target.id,
-      orcaWorkerSessionId: target.sessionId,
-    };
-    const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
-    const opts = buildCreateOptsWithStderr({
-      id: row.id,
-      agentKind: dbToMakerAgentKind(row.agentKind),
-      workingDir: row.workingDir ?? '',
-      model: row.model,
-      effort: row.effort as CreateOpts['effort'],
-      fastMode: !!row.fastMode,
-      permissionMode: permissionModeOrAsk(row.permissionMode),
-      title: row.title,
-      resumeSessionId: row.sdkSessionId ?? undefined,
-      orcaRole: row.orcaRole as 'worker' | null,
-      vendorOptions: workerVendorOptions,
-      // 远端 worker 唤醒必须带上 remoteHostId 并走 ensure (SSH 重连 / agent
-      // 安装 / codex daemon MCP 注入), 否则会以远端 workingDir 在本机 spawn,
-      // 且远端 daemon 的协同 MCP 通道不就绪。
-      remoteHostId: row.remoteHostId ?? undefined,
-      ...(extraDirs.length > 0 ? { extraDirs } : {}),
+      const db = getDbClient().drizzle;
+      const [row] = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, target.sessionId))
+        .limit(1);
+      if (!row) return 'unchanged';
+
+      const workerVendorOptions = {
+        orcaRole: 'worker' as const,
+        orcaWorkflowId: target.teamId,
+        orcaLeadSessionId: target.leadSessionId,
+        orcaWorkerId: target.id,
+        orcaWorkerSessionId: target.sessionId,
+      };
+      const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
+      const opts = buildCreateOptsWithStderr({
+        id: row.id,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir ?? '',
+        model: row.model,
+        effort: row.effort as CreateOpts['effort'],
+        fastMode: !!row.fastMode,
+        permissionMode: permissionModeOrAsk(row.permissionMode),
+        title: row.title,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        orcaRole: row.orcaRole as 'worker' | null,
+        vendorOptions: workerVendorOptions,
+        // 远端 worker 唤醒必须带上 remoteHostId 并走 ensure (SSH 重连 / agent
+        // 安装 / codex daemon MCP 注入), 否则会以远端 workingDir 在本机 spawn,
+        // 且远端 daemon 的协同 MCP 通道不就绪。
+        remoteHostId: row.remoteHostId ?? undefined,
+        ...(extraDirs.length > 0 ? { extraDirs } : {}),
+      });
+      await ensureRemoteReadyForSessionStart({ createOpts: opts });
+      // end_team installs its fence before waiting for this route lock. It can
+      // therefore start during the remote await above; never bootstrap after
+      // that point even though shutdown is still waiting for the lock.
+      if (isOrcaWorkerSessionDisableFenced(target.sessionId)) return 'fenced';
+      const { session: resumedSession } = await bootstrapSession(opts);
+      await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
+      return 'resumed';
     });
-    await ensureRemoteReadyForSessionStart({ createOpts: opts });
-    const { session: resumedSession } = await bootstrapSession(opts);
-    await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
-    return true;
   }
 
   // sessionId → remoteHostId 的进程内缓存 reader(lazy resume 路径每次 send 都
@@ -7203,6 +7239,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const prev = sendToSessionLocks.get(targetSessionId);
     const waitPrev = prev ? prev.catch(() => undefined) : Promise.resolve();
     const run = waitPrev.then(async () => {
+      // The Orca direct-send fallback releases its first route lock before it
+      // can enter this shared send path. Recheck the shutdown fence only after
+      // this path wins the same per-session lock, otherwise end_team can fence
+      // the Worker in that gap and this branch could still lazy-bootstrap it.
+      if (isOrcaWorkerSessionDisableFenced(targetSessionId)) {
+        return orcaSessionUnavailableResult(targetSessionId);
+      }
       const [meta, dbRow] = await Promise.all([
         maker.getSessionMeta(targetSessionId).catch(() => null),
         getSessionRowSnapshot(targetSessionId),
@@ -7235,7 +7278,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await inputCoordinator.ensureQueueRestored(targetSessionId).catch(() => undefined);
       if (inputCoordinator.shouldQueueNewTurn(targetSessionId)) {
         const qClientId = explicitClientId ?? createId();
-        await enqueueSendToSessionMessage({
+        const queued = await enqueueSendToSessionMessage({
           targetSessionId,
           message,
           persistedContent: persistedContent ?? message,
@@ -7246,6 +7289,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           onAcceptedRollback,
           origin,
         });
+        if (queued === 'fenced') return orcaSessionUnavailableResult(targetSessionId);
         return {
           ok: true as const,
           targetSessionId,
@@ -7284,7 +7328,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let live = maker.getSession(targetSessionId);
       if (live) {
         if (live.isTurnRunning?.()) {
-          await enqueueSendToSessionMessage({
+          const queued = await enqueueSendToSessionMessage({
             targetSessionId,
             message,
             persistedContent: persistedContent ?? message,
@@ -7295,6 +7339,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             origin,
           });
+          if (queued === 'fenced') return orcaSessionUnavailableResult(targetSessionId);
           return {
             ok: true as const,
             targetSessionId,
@@ -7413,7 +7458,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 'send_to_session:live:queued-before-dispatch',
               );
             }
-            await enqueueSendToSessionMessage({
+            const queued = await enqueueSendToSessionMessage({
               targetSessionId,
               message,
               persistedContent: persistedContent ?? message,
@@ -7424,6 +7469,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               onAcceptedRollback,
               origin,
             });
+            if (queued === 'fenced') return orcaSessionUnavailableResult(targetSessionId);
             return {
               ok: true as const,
               targetSessionId,
@@ -7516,7 +7562,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'send_to_session:resumed:queued-before-dispatch',
             );
           }
-          await enqueueSendToSessionMessage({
+          const queued = await enqueueSendToSessionMessage({
             targetSessionId,
             message,
             persistedContent: persistedContent ?? message,
@@ -7527,6 +7573,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             origin,
           });
+          if (queued === 'fenced') return orcaSessionUnavailableResult(targetSessionId);
           return {
             ok: true as const,
             targetSessionId,
@@ -7861,40 +7908,51 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
-  }): Promise<void> {
-    const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta);
-    const queued: AgentInputQueuedMessage = {
-      clientId: params.clientId,
-      text: params.message,
-      persistedContent: params.persistedContent,
-      model: createOpts.model,
-      effort: createOpts.effort ?? '',
-      permissionMode: permissionModeOrAsk(createOpts.permissionMode),
-      workingDir: createOpts.workingDir,
-      vendorOptions: createOpts.vendorOptions,
-      chatMessage: {
-        clientId: params.clientId,
-        role: 'user',
-        content: params.persistedContent,
-        createdAt: new Date().toISOString(),
-      },
-      createOpts,
-      ...(params.origin ? { origin: params.origin } : {}),
-    };
-    if (params.onAccepted) {
-      orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
-        params.clientId,
-        params.onAccepted,
-        params.onAcceptedRollback,
-      );
-    }
-    // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
-    // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
-    await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
-    inputCoordinator.enqueue(params.targetSessionId, queued);
-    log.info('send_to_session queued while target busy', {
+  }): Promise<OrcaQueueCommitResult> {
+    return commitQueuedMessageAfterOrcaFence({
       targetSessionId: params.targetSessionId,
-      clientId: params.clientId,
+      prepare: async () => {
+        const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta);
+        const queued: AgentInputQueuedMessage = {
+          clientId: params.clientId,
+          text: params.message,
+          persistedContent: params.persistedContent,
+          model: createOpts.model,
+          effort: createOpts.effort ?? '',
+          permissionMode: permissionModeOrAsk(createOpts.permissionMode),
+          workingDir: createOpts.workingDir,
+          vendorOptions: createOpts.vendorOptions,
+          chatMessage: {
+            clientId: params.clientId,
+            role: 'user',
+            content: params.persistedContent,
+            createdAt: new Date().toISOString(),
+          },
+          createOpts,
+          ...(params.origin ? { origin: params.origin } : {}),
+        };
+        return queued;
+      },
+      // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
+      // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
+      restoreQueue: () => inputCoordinator.ensureQueueRestored(params.targetSessionId).then(() => undefined).catch(() => undefined),
+      isFenced: isOrcaWorkerSessionDisableFenced,
+      registerAccepted: params.onAccepted
+        ? () => {
+            orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
+              params.clientId,
+              params.onAccepted!,
+              params.onAcceptedRollback,
+            );
+          }
+        : undefined,
+      enqueue: (targetSessionId, queued) => {
+        inputCoordinator.enqueue(targetSessionId, queued);
+        log.info('send_to_session queued while target busy', {
+          targetSessionId,
+          clientId: params.clientId,
+        });
+      },
     });
   }
 
@@ -7905,15 +7963,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
+    withSessionLock: withSendToSessionLock,
+    isSessionSendFenced: isOrcaWorkerSessionDisableFenced,
     buildCreateOptsForQueuedSession,
-    enqueueQueuedMessage: (sessionId, item) => {
+    prepareQueuedMessageQueue: async (sessionId) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
       // 队列处于 paused 态不会被新消息的 getDrainableHead 立刻 drain。
-      void (async () => {
-        await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-        inputCoordinator.enqueue(sessionId, item);
-      })();
+      await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
     },
+    enqueueQueuedMessage: (sessionId, item) => inputCoordinator.enqueue(sessionId, item),
     sendToSessionInternal,
     createDbMessage,
     beginDirectTurnChangeSet: async (sessionId, clientId) => {
@@ -8063,38 +8121,52 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
-    for (const w of activeWorkers) {
-      orcaTeamService.clearAutoBridgeState(w.sessionId);
-      const sess = maker.getSession(w.sessionId);
-      if (sess) {
-        try {
-          if (sess.isTurnRunning?.()) {
-            await sess.abort();
-          }
-        } catch (err) {
-          log.warn('disableOrca: abort failed (continuing to close)', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-        try {
-          await maker.closeSession(w.sessionId);
-        } catch (err) {
-          log.warn('disableOrca: closeSession failed', {
-            sessionId: w.sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
-      forgetKnownOrcaWorkerSession(w.sessionId);
-    }
+    await withOrcaWorkerDisableFence(
+      activeWorkers.map((worker) => worker.sessionId),
+      async (markTeamEndDurable) => {
+        await withOrcaWorkerSessionLocks(
+          withSendToSessionLock,
+          activeWorkers.map((worker) => worker.sessionId),
+          async () => {
+            const pendingWorkerInputPlans: OrcaPendingWorkerInputPlan[] = [];
+            for (const w of activeWorkers) {
+              await closeOrcaWorkerRuntimeWhileLocked(
+                {
+                  getSession: (sessionId) => maker.getSession(sessionId),
+                  closeSession: (sessionId) => maker.closeSession(sessionId),
+                  beforeClose: () => orcaTeamService.clearAutoBridgeState(w.sessionId),
+                  afterClose: () => {
+                    cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
+                    forgetKnownOrcaWorkerSession(w.sessionId);
+                  },
+                  log,
+                },
+                w.sessionId,
+              );
+              pendingWorkerInputPlans.push(
+                await preparePendingOrcaWorkerInput(inputCoordinator, w.sessionId),
+              );
+            }
 
-    await markTeamEnded(team.id, 'completed');
-    await markWorkersStatusByTeam(team.id, 'done');
-    await archiveWorkersByTeam(team.id);
+            // Keep every Worker route locked until the ended state is durable.
+            // Queue plans are only snapshots before this boundary; removing them
+            // earlier would lose callbacks if markTeamEnded rejects and the fence
+            // rolls back.
+            await markTeamEnded(team.id, 'completed');
+            markTeamEndDurable();
+            // The durable boundary has passed: now commit the prepared queue
+            // removals through coordinator.remove so discard side effects fire.
+            for (const plan of pendingWorkerInputPlans) {
+              commitPendingOrcaWorkerInput(inputCoordinator, plan);
+            }
+            await markWorkersStatusByTeam(team.id, 'done');
+            await archiveWorkersByTeam(team.id);
 
-    await clearLeadOrcaRoleState(leadSessionId);
+            await clearLeadOrcaRoleState(leadSessionId);
+          },
+        );
+      },
+    );
 
     log.info('disableOrca done', {
       leadSessionId,
@@ -8190,8 +8262,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // to 'running' — that only happens when actual work is dispatched via sendToWorker.
     if (target.status === 'idle') {
       try {
-        const didResume = await resumeOrcaWorkerSessionIfMissing(target);
-        if (didResume) {
+        const resumeResult = await resumeOrcaWorkerSessionIfMissing(target);
+        if (resumeResult === 'resumed') {
           log.info('switchFocus: resumed idle worker (session only, no status change)', {
             workerId: target.id,
             sessionId: target.sessionId,
@@ -8244,7 +8316,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listWorkersByLead,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     resumeWorkerSession: async (target) => {
-      await resumeOrcaWorkerSessionIfMissing(target);
+      const result = await resumeOrcaWorkerSessionIfMissing(target);
+      return result === 'fenced' ? 'fenced' : 'ready';
     },
     updateWorkerStatus,
     markWorkerIdle: async (workerId) => {
@@ -8976,6 +9049,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
+    isSessionSendFenced: isOrcaWorkerSessionDisableFenced,
     getSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),
@@ -10178,7 +10252,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         schedulerQueuedPromptDiscardWatchers.set(clientId, req.onDiscarded);
       }
       try {
-        await enqueueSendToSessionMessage({
+        const queued = await enqueueSendToSessionMessage({
           targetSessionId: req.sessionId,
           message: req.text,
           persistedContent: req.persistedContent,
@@ -10189,6 +10263,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           onAcceptedRollback: req.onAcceptedRollback,
           origin: req.origin,
         });
+        if (queued === 'fenced') {
+          schedulerQueuedPromptDiscardWatchers.delete(clientId);
+          return { retry: true as const };
+        }
       } catch (err) {
         schedulerQueuedPromptDiscardWatchers.delete(clientId);
         throw err;

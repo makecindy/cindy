@@ -257,6 +257,9 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 7. **重启后 Lead↔Worker 互访 / resume 不随开启路径变化（状态：不变量）**
    无论协同通过 `enableTeam` 自动创建首个 worker、MCP `start_team` + `create_worker`，还是 renderer 的协同按钮开启；也无论重启发生在对话中途，还是初始化完毕但 worker 尚未接过真实任务，maker 重启后 Lead 与 Worker 都必须能继续互访。`send_to_worker`、`send_to_lead`、`switch_focus` / idle resume 不能因为内存态丢失、worker link 懒登记缺失或空 worker rollout 缺失而失败。实现指针：`CCAgentSessionView.tsx` 的 `requestEnableCollab`、`packages/lizi-mcps/src/orca/server.ts` 的 `start_team` / `create_worker` 顶层注册、`xdt-helper/start_team.ts` / `create_worker.ts`、`orcaLifecycleService.ts` 的 `startTeam` / `createWorker` / `enableTeam`、`register.ts` 的 `synthesizeOrcaVendorOptionsFromDb` / `resumeOrcaWorkerSessionIfMissing`、`orcaTeamService.ts` 的 `sendToWorker`、`orca-bridge-mcp.ts` 的 worker `send_to_lead` handler。
 
+8. **`end_team` 必须与 Worker 发送 / rehydrate 互斥（状态：不变量）**
+   结束 Team 前先 fence 该 Team 的全部 Worker，并让 live 直发、lazy send 与 runtime rehydrate 共用同一把 per-session route lock；持锁直到 Team ended、Worker 终态和 session archive 已持久化，防止 close 后的发送重新 bootstrap runtime。直发路径不能只观察“当前有没有锁”，必须实际持锁覆盖 Session 复核、消息落库和 vendor send，并在拿锁后再次检查 fence。若锁获取或 `markTeamEnded` 失败，Team 仍是 active，必须只回滚本次 shutdown 的 fence claim，使用户可以重试；`markTeamEnded` 已成功后则保留 fence，由 no-active-team reconciliation 补齐剩余归档，不能重新放行已结束 Team 的发送。实现指针：`orcaDisableWorkerRuntime.ts`、`register.ts` 的 `disableOrcaInternal`、`orcaInterAgentDispatcher.ts` 的 live direct dispatch，以及 `makerSendTransaction.ts` 的 lazy send fence。
+
 ### 测试与回归清单
 
 当前文档要求保留以下回归方向：
