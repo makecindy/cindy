@@ -1301,6 +1301,49 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
   });
 
+  it('does not count pending attachments against the post-interaction image limit', async () => {
+    const pendingFiles = Array.from({ length: 4 }, (_, index) => ({
+      absPath: `/tmp/pending-${index}.pdf`,
+      displayName: `pending-${index}.pdf`,
+    }));
+    mocks.feishuIm.startStreamingText
+      .mockRejectedValueOnce(new Error('first card create failed'))
+      .mockRejectedValueOnce(new Error('second card create failed'));
+    mocks.materializeLocalMarkdownFiles.mockResolvedValueOnce({
+      files: pendingFiles,
+      tempDirs: [],
+      text: 'attachments pending',
+    });
+    mocks.materializeLocalMarkdownImages.mockResolvedValueOnce({
+      absPaths: ['/tmp/new-image.png'],
+      text: 'new image',
+    });
+    mocks.feishuIm.sendFile.mockResolvedValue({ ok: false, reason: 'UPLOAD_FAIL' });
+    mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-image-limit' });
+    mocks.registerPending.mockResolvedValue({ kind: 'ask_user_question', answers: {} });
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn();
+    h.emit({
+      type: 'text',
+      data: { text: '[attachments](xdt-file:///tmp/attachments.zip)', isFinal: true },
+    });
+    await h.dispatchInteraction({
+      kind: 'ask_user_question',
+      requestId: 'ask-image-limit',
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    h.emit({ type: 'text', data: { text: '![new image](/tmp/new-image.png)', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith(
+        expect.objectContaining({ existingAbsPaths: [] }),
+      );
+    });
+  });
+
   it('continues media fallback and settles safely when one generated image send fails', async () => {
     mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
     mocks.resolveXdtImageUrl.mockImplementation((url: string) => ({

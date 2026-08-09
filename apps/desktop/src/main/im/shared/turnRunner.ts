@@ -2909,7 +2909,7 @@ export function createTurnRunner(
         workingDir: state.workingDir,
         sessionId: state.makerSession.id,
         maxImages: 4,
-        existingAbsPaths: [...turn.mediaAbsPaths],
+        existingAbsPaths: [...turn.imageMediaAbsPaths],
         remoteHostId: turn.remoteHostId,
       });
       turn.presenter.replaceBody(materialized.text);
