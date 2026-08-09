@@ -326,6 +326,15 @@ interface TurnAccumulator {
    * storage await 期间提前置位但事件未写(clear/pause/替换),accepted 补发
    * turn-dispatched 需以此为准,避免孤儿派发(Greptile P1)。 */
   auditFinalized?: boolean;
+  /** 快终态时 accepted 早于收口提交挂起的派发事件;finalizeTurn 写收口后补发
+   * (clear/pause/替换使收口放弃时不补发,杜绝孤儿 dispatch)。 */
+  pendingDispatch?: {
+    generation?: number;
+    lifecycleId?: string;
+    at?: number;
+    resumeReason?: string | undefined;
+    state: GoalRunEventStateSnapshot;
+  };
   /** 生命周期唯一 id(freshTurn 生成,跨换代不变;generation 重置为 0 时仍可
    * 区分生命周期——事件排序/配对以此为准)。 */
   lifecycleId: string;
@@ -338,6 +347,9 @@ interface TurnAccumulator {
   /** 已进入“达成记录 → clear”顺序提交区；Stop 不等待，但新目标必须等旧 clear 结束。 */
   pendingCompletion: Promise<void> | null;
 }
+
+/** recordRunEvent 所需的 GoalState 快照子集(派发时捕获,补发时不受后续变更影响)。 */
+type GoalRunEventStateSnapshot = Parameters<GoalController['recordRunEvent']>[2];
 
 /** 生命周期序号(模块级单调递增,freshTurn 生成唯一 id)。 */
 let lifecycleSeq = 0;
@@ -531,6 +543,51 @@ export class GoalController {
         error: String(error),
       });
     }
+  }
+
+  /** 补发派发事件(resumed + turn-dispatched)——accepted 确认后或收口提交后。 */
+  private emitDispatchEvents(
+    sessionId: string,
+    state: GoalRunEventStateSnapshot,
+    dispatchBoundary: TurnAccumulator | undefined,
+    dispatchGeneration: number | undefined,
+    dispatchAt: number,
+    dispatchResumeReason: string | undefined,
+  ): void {
+    if (dispatchResumeReason !== undefined) {
+      this.recordRunEvent('resumed', sessionId, state, {
+        to: 'active',
+        reason: dispatchResumeReason,
+        generation: dispatchGeneration,
+        // fast-terminal 后 turns owner 可能已被 stopSession 清掉,显式盖章
+        // 捕获的 lifecycleId 保证与收口事件同生命周期配对/排序。
+        lifecycleId: dispatchBoundary?.lifecycleId,
+        at: dispatchAt,
+      });
+    }
+    this.recordRunEvent('turn-dispatched', sessionId, state, {
+      generation: dispatchGeneration,
+      lifecycleId: dispatchBoundary?.lifecycleId,
+      at: dispatchAt,
+    });
+  }
+
+  /** finalizeTurn 写收口事件后补发挂起的派发(保证 dispatch 与收口配对)。 */
+  private flushPendingDispatch(sessionId: string, turn: TurnAccumulator): void {
+    const pd = turn.pendingDispatch;
+    if (!pd) return;
+    turn.pendingDispatch = undefined;
+    // 补发时再校验:dispose 后不得写旧账号事件;owner 已被清(同账号 clear 也会
+    // 换代并保留事件——T37)时用捕获快照补发,与收口同生命周期配对。
+    if (this.disposed) return;
+    this.emitDispatchEvents(
+      sessionId,
+      pd.state,
+      turn,
+      pd.generation,
+      pd.at ?? this.now(),
+      pd.resumeReason,
+    );
   }
 
   // ── 公开 API ───────────────────────────────────────────────────────────────
@@ -1332,7 +1389,11 @@ export class GoalController {
 
   /** GET_GOAL_STATUS:返回当前状态扁平 payload(无 goal 返回 null)。 */
   async getStatus(sessionId: string): Promise<GoalStatusPayload | null> {
+    // dispose 后丢弃:GOAL_GET_STATUS 捕获实例 await storage 期间登出/切账号,
+    // 不得把旧账号的 objective-bearing 状态返回给新账号(Codex P1)。
+    if (this.disposed) return null;
     const state = await this.deps.storage.get(sessionId);
+    if (this.disposed) return null;
     return state ? toPayload(state) : null;
   }
 
@@ -1633,6 +1694,9 @@ export class GoalController {
   }
 
   private onEvent(sessionId: string, event: AgentEvent): void {
+    // dispose 后丢弃:登出/切账号后 session emitter 已排队的终止事件不得重建
+    // turns / 触发 finalizeTurn 写旧账号事件(Codex P1)。
+    if (this.disposed) return;
     let turn = this.turns.get(sessionId);
     if (!turn) {
       turn = freshTurn();
@@ -1870,6 +1934,7 @@ export class GoalController {
         // 收口事件已真实记录:accepted 补发 turn-dispatched 以此为准(Greptile P1,
         // finalized 可能在 storage await 期间提前置位但事件未写)。
         turn.auditFinalized = true;
+      this.flushPendingDispatch(sessionId, turn);
       } else {
         this.deps.logger.info('[goal] completion audit skipped — controller disposed', {
           sessionId,
@@ -1966,6 +2031,7 @@ export class GoalController {
       // 都配对——complete/budgetLimited 走终态分支,这里覆盖 paused/blocked/
       // usageLimited 等非终态收口,它们同样 stopSession 删 boundary)。
       turn.auditFinalized = true;
+      this.flushPendingDispatch(sessionId, turn);
     }
     if (status !== state.status) {
       this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
@@ -2002,6 +2068,7 @@ export class GoalController {
       // 收口事件已真实记录:accepted 补发 turn-dispatched 以此为准(T56:
       // 快终态 budgetLimited 走非 complete 分支,同样需要配对派发)。
       turn.auditFinalized = true;
+      this.flushPendingDispatch(sessionId, turn);
     }
 
     this.resetTurn(sessionId);
@@ -2446,35 +2513,44 @@ export class GoalController {
         // finalize/terminal 脱节)。resumed 用 onDispatching 固化的恢复原因
         // (pendingResume 可能已被清理);at 用派发时刻保证重放顺序在 finalize 前。
         // 发送条件:当前仍是本派发的 owner;或 finalizeTurn 已启动(finalized 在
-        // storage await 前置位)且未被登出放弃(!disposed)——快终态时 accepted 先于
-        // storage settle 执行,auditFinalized(事件记录后置位)会误吞合法 dispatch;
-        // 事件最终会写(同账号 clear/换代也写,T37),dispose 后不得补发(防旧账号
-        // 事件写回已清空的环)。
+        // storage await 前置位)且未被登出放弃(!disposed)。
+        // 孤儿防护:finalizeTurn 启动但收口事件尚未提交(auditFinalized 未置)时
+        // 挂 pendingDispatch,由 finalizeTurn 在收口事件写入后补发——clear/pause/
+        // 替换使 finalizeTurn 提前 return(current-turn 检查,收口事件不写)时
+        // 不补发,杜绝"有派发无收口"的孤儿(Greptile P1 / Codex P2)。
         const boundaryStillLive =
           this.turns.get(sessionId) === dispatchBoundary ||
           (dispatchBoundary?.finalized === true && !this.disposed);
+
+
+
+
         if (!boundaryStillLive) {
           this.deps.logger.info('[goal] dispatch audit skipped — lifecycle replaced before accepted', {
             sessionId,
           });
           return;
         }
-        if (dispatchResumeReason !== undefined) {
-          this.recordRunEvent('resumed', sessionId, state, {
-            to: 'active',
-            reason: dispatchResumeReason,
+        if (dispatchBoundary?.finalized === true && dispatchBoundary?.auditFinalized !== true) {
+          // 收口提交中(accepted 早于 storage settle):延迟到 finalizeTurn 写收口后
+          // 再补发,保证 dispatch 与收口配对;收口被放弃时(clear/替换)不补发。
+          dispatchBoundary.pendingDispatch = {
             generation: dispatchGeneration,
-            // fast-terminal 后 turns owner 可能已被 stopSession 清掉,显式盖章
-            // 捕获的 lifecycleId 保证与收口事件同生命周期配对/排序。
             lifecycleId: dispatchBoundary?.lifecycleId,
             at: dispatchAt ?? this.now(),
-          });
+            resumeReason: dispatchResumeReason,
+            state: state as GoalRunEventStateSnapshot,
+          };
+          return;
         }
-        this.recordRunEvent('turn-dispatched', sessionId, state, {
-          generation: dispatchGeneration,
-          lifecycleId: dispatchBoundary?.lifecycleId,
-          at: dispatchAt ?? this.now(),
-        });
+        this.emitDispatchEvents(
+          sessionId,
+          state,
+          dispatchBoundary,
+          dispatchGeneration,
+          dispatchAt ?? this.now(),
+          dispatchResumeReason,
+        );
         if (!isCurrentDispatch()) {
           // 快终态/换代:终态已由 finalizeTurn 处理,这里只抑制 stale 副作用。
           return;
