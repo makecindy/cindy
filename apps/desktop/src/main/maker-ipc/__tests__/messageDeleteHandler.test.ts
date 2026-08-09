@@ -25,9 +25,11 @@ function makeDeps(
     getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
     hasBackgroundActivity: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    drainPersistQueue: vi.fn(async () => undefined),
     commitDeletion: vi.fn(async (sessionId, deletedClientIds) => ({
       sessionId,
       deletedClientIds,
+      subagentRunIds: [],
       updatedAt: 500,
       preview: 'keep after',
     })),
@@ -86,7 +88,7 @@ describe('performMessageDeletion', () => {
       resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
       'utf8',
     );
-    const onCommittedStart = registerSource.indexOf('onCommitted: ({ sessionId, deletedClientIds');
+    const onCommittedStart = registerSource.indexOf('onCommitted:');
     expect(onCommittedStart).toBeGreaterThan(-1);
     const patchStart = registerSource.indexOf(
       'broadcastSessionPatched(sessionId, {',
@@ -111,10 +113,15 @@ describe('performMessageDeletion', () => {
     });
 
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
+    expect(deps.drainPersistQueue).toHaveBeenCalledOnce();
+    expect(vi.mocked(deps.drainPersistQueue).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(deps.commitDeletion).mock.invocationCallOrder[0]!,
+    );
     expect(deps.commitDeletion).toHaveBeenCalledWith(
       's1',
       ['target'],
       expect.any(String),
+      undefined,
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('keep before');
@@ -127,6 +134,7 @@ describe('performMessageDeletion', () => {
       {
         sessionId: 's1',
         deletedClientIds: ['target'],
+        subagentRunIds: [],
         updatedAt: 500,
         preview: 'keep after',
       },
@@ -140,6 +148,10 @@ describe('performMessageDeletion', () => {
         id: 'final-row',
         role: 'assistant' as const,
         deletedClientIds: ['progress', 'thinking', 'auto-resume', 'tool', 'final'],
+        subagentTurnWindow: {
+          startedAtInclusive: 100,
+          startedAtExclusive: 700,
+        },
       })),
       listMessagesForContext: vi.fn(async () => [
         { clientId: 'user', role: 'user', content: 'diagnose it', createdAt: 100 },
@@ -165,6 +177,10 @@ describe('performMessageDeletion', () => {
       's1',
       ['progress', 'thinking', 'auto-resume', 'tool', 'final'],
       expect.any(String),
+      {
+        startedAtInclusive: 100,
+        startedAtExclusive: 700,
+      },
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('diagnose it');
@@ -247,6 +263,11 @@ describe('performMessageDeletion', () => {
       clientId: 'target',
       clientIds: ['target'],
     });
-    expect(deps.commitDeletion).toHaveBeenCalledWith('s1', ['target'], expect.any(String));
+    expect(deps.commitDeletion).toHaveBeenCalledWith(
+      's1',
+      ['target'],
+      expect.any(String),
+      undefined,
+    );
   });
 });

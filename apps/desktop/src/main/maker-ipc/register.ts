@@ -6714,16 +6714,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     hasBackgroundActivity: getClaudeSessionBackgroundActivity,
     closeSession: (sessionId) => maker.closeSession(sessionId),
+    drainPersistQueue,
     commitDeletion: commitMessageDeletion,
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
-    onCommitted: ({ sessionId, deletedClientIds, updatedAt, preview }, requestedClientId) => {
+    onCommitted: (
+      { sessionId, deletedClientIds, subagentRunIds, updatedAt, preview },
+      requestedClientId,
+    ) => {
       broadcastMessageDeleted({
         sessionId,
         clientId: requestedClientId,
         clientIds: deletedClientIds,
       });
+      for (const runId of subagentRunIds) {
+        broadcastSubagentRunsChanged({
+          sessionId,
+          runId,
+          created: false,
+          firstForSession: false,
+        });
+      }
       // 不带 _count:可见消息数不是列表的权威口径,拿它 patch 的错值会被 shallow merge 一直
       // 留住;权威口径受删除影响只有 0 或 +1,交给 sessions:list / reseed 收敛就够。
       // 见 commitMessageDeletion 的注释与 issue #1282。

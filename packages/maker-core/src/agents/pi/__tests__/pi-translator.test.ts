@@ -66,6 +66,53 @@ describe('pi translator', () => {
     ]);
   });
 
+  it.each([
+    ['failed', false, 'failed'],
+    ['stopped', false, 'stopped'],
+    ['stopped', true, 'stopped'],
+    ['completed', true, 'completed'],
+    ['running', true, 'failed'],
+  ] as const)(
+    'preserves a reported %s Subagent status when the wrapper ends (isError=%s)',
+    (reportedStatus, isError, expectedStatus) => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+
+      translatePiEvent(
+        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(
+        ev({
+          type: 'tool_execution_update',
+          toolCallId: 'sa-1',
+          partialResult: {
+            details: {
+              __cindySubagent: 1,
+              taskId: 'sa-1',
+              status: reportedStatus,
+            },
+          },
+        }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(
+        ev({ type: 'tool_execution_end', toolCallId: 'sa-1', result: 'done', isError }),
+        queue,
+        ctx,
+      );
+
+      const updates = events.filter((event) => event.type === 'agent_task_update');
+      expect(updates.at(-1)?.data).toMatchObject({
+        taskId: 'sa-1',
+        status: expectedStatus,
+        subagentObservation: expect.objectContaining({ kind: 'terminal' }),
+      });
+    },
+  );
+
   it('emits live assistant deltas before the authoritative final text', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

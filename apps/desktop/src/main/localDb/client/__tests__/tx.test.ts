@@ -94,9 +94,18 @@ CREATE TABLE messages (
 CREATE TABLE subagent_runs (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude-code',
+  logical_agent_id TEXT NOT NULL DEFAULT '',
   parent_tool_use_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  title TEXT,
+  description TEXT,
+  summary TEXT,
+  activity TEXT NOT NULL DEFAULT '[]',
   started_at INTEGER NOT NULL,
-  rewind_at INTEGER
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  rewind_at INTEGER,
+  deleted_at INTEGER
 );
 CREATE TABLE im_bindings (
   channel TEXT NOT NULL,
@@ -1292,8 +1301,10 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('message.delete scrubs the selected AI round and invalidates native context atomically', async () => {
-    await withClient(async (client) => {
+  it.each([false, true])(
+    'message.delete scrubs the selected AI round, linked Subagents, and parentless Claude runs atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
       await seedSession(client, 's1');
       await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', [
         'old-native',
@@ -1320,11 +1331,74 @@ describe('db worker tx handlers', () => {
         job.lastInsertRowid,
         Buffer.from([1, 2, 3]),
       ]);
+      await client.exec('UPDATE messages SET tool_use_id = ? WHERE id = ?', [
+        'spawn-tool',
+        'tool',
+      ]);
+      await client.exec(
+        `INSERT INTO subagent_runs
+          (id, session_id, provider, logical_agent_id, parent_tool_use_id, title, description, summary, activity, started_at, updated_at)
+         VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'linked',
+          's1',
+          'pi',
+          'linked-task',
+          'spawn-tool',
+          'linked title',
+          'linked prompt',
+          'linked result',
+          '[{"sequence":1,"summary":"linked activity"}]',
+          50,
+          60,
+          'parentless-claude',
+          's1',
+          'claude-code',
+          'claude-task',
+          null,
+          'claude title',
+          'claude prompt',
+          'claude result',
+          '[{"sequence":1,"summary":"claude activity"}]',
+          210,
+          220,
+          'next-claude',
+          's1',
+          'claude-code',
+          'next-task',
+          null,
+          'next title',
+          'next prompt',
+          'next result',
+          '[{"sequence":1,"summary":"next activity"}]',
+          300,
+          310,
+          'parentless-codex',
+          's1',
+          'codex',
+          'codex-task',
+          null,
+          'codex title',
+          'codex prompt',
+          'codex result',
+          '[{"sequence":1,"summary":"codex activity"}]',
+          220,
+          230,
+        ],
+      );
 
       await expect(
         client.tx('message.delete', {
           sessionId: 's1',
           clientIds: ['target', 'thinking', 'auto-resume', 'tool'],
+          subagentTurnWindow: {
+            startedAtInclusive: 100,
+            startedAtExclusive: 300,
+          },
           contextMarker: {
             id: 'ctx-id',
             clientId: 'ctx-client',
@@ -1340,6 +1414,7 @@ describe('db worker tx handlers', () => {
           { messageId: 'auto-resume', clientId: 'auto-resume' },
           { messageId: 'tool', clientId: 'tool' },
         ],
+        subagentRunIds: ['linked', 'parentless-claude'],
       });
 
       await expect(
@@ -1399,8 +1474,47 @@ describe('db worker tx handlers', () => {
         client.query('SELECT rowid FROM embedding_jobs WHERE source_id = ?', ['target']),
       ).resolves.toEqual([]);
       await expect(client.query('SELECT rowid FROM chat_vec')).resolves.toEqual([]);
-    });
-  });
+      await expect(
+        client.query(
+          'SELECT id, title, description, summary, activity, deleted_at FROM subagent_runs ORDER BY id',
+        ),
+      ).resolves.toEqual([
+        {
+          id: 'linked',
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
+        },
+        {
+          id: 'next-claude',
+          title: 'next title',
+          description: 'next prompt',
+          summary: 'next result',
+          activity: '[{"sequence":1,"summary":"next activity"}]',
+          deleted_at: null,
+        },
+        {
+          id: 'parentless-claude',
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
+        },
+        {
+          id: 'parentless-codex',
+          title: 'codex title',
+          description: 'codex prompt',
+          summary: 'codex result',
+          activity: '[{"sequence":1,"summary":"codex activity"}]',
+          deleted_at: null,
+        },
+      ]);
+      }, { useInlineWorker });
+    },
+  );
 
   it('message.delete rejects non-deletable rows without clearing the sdk binding', async () => {
     await withClient(async (client) => {

@@ -356,6 +356,7 @@ function ScopedSubagentsBody({
   const [loadingMore, setLoadingMore] = useState(false);
   const [detail, setDetail] = useState<SubagentRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRefreshVersion, setDetailRefreshVersion] = useState(0);
   const selectedRunAlias = state.selectedRunId ?? null;
   const selectedProviderHint = state.selectedProvider ?? null;
   const remoteDevice = ctx.deviceLinkDeviceId !== null;
@@ -429,7 +430,10 @@ function ScopedSubagentsBody({
     const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
       if (!isCurrentSubagentRunsChange(payload, ownerStamp, ctx.sessionId)) return;
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => void loadRuns(), 50);
+      timer = setTimeout(() => {
+        void loadRuns();
+        setDetailRefreshVersion((version) => version + 1);
+      }, 50);
     });
     return () => {
       if (timer) clearTimeout(timer);
@@ -474,7 +478,15 @@ function ScopedSubagentsBody({
     return () => {
       disposed = true;
     };
-  }, [ctx, loadState, selectedProvider, selectedProviderHint, selectedRunAlias, visible]);
+  }, [
+    ctx,
+    detailRefreshVersion,
+    loadState,
+    selectedProvider,
+    selectedProviderHint,
+    selectedRunAlias,
+    visible,
+  ]);
 
   const grouped = useMemo(
     () => ({

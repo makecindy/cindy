@@ -11,6 +11,10 @@
 import { buildHandoffText, type HandoffSourceMessage } from './agentHandoff.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
+import type {
+  MessageDeletionTarget,
+  SubagentTurnDeletionWindow,
+} from '../localDb/ipc/messages.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 interface ContextSourceMessage extends HandoffSourceMessage {
@@ -30,6 +34,7 @@ interface MessageDeleteSessionRow {
 interface MessageDeleteCommittedPayload {
   sessionId: string;
   deletedClientIds: string[];
+  subagentRunIds: string[];
   updatedAt: number;
   preview: string | null;
 }
@@ -39,19 +44,18 @@ export interface MessageDeleteHandlerDeps {
   getMessage(
     sessionId: string,
     clientId: string,
-  ): Promise<{
-    id: string;
-    role: 'user' | 'assistant';
-    deletedClientIds: string[];
-  } | null>;
+  ): Promise<MessageDeletionTarget | null>;
   listMessagesForContext(sessionId: string): Promise<ContextSourceMessage[]>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   hasBackgroundActivity(sessionId: string): boolean;
   closeSession(sessionId: string): Promise<void>;
+  /** Wait for chat/Subagent observations queued before the deletion barrier. */
+  drainPersistQueue(): Promise<void>;
   commitDeletion(
     sessionId: string,
     clientIds: string[],
     handoff: string,
+    subagentTurnWindow?: SubagentTurnDeletionWindow,
   ): Promise<MessageDeleteCommittedPayload>;
   /** 见 sessionAgentSwitchHandler 同名字段:带代次写,防 /clear 竞态。 */
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
@@ -127,11 +131,13 @@ export async function performMessageDeletion(
       throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
     }
     if (currentLive) await deps.closeSession(sessionId);
+    await deps.drainPersistQueue();
 
     const committed = await deps.commitDeletion(
       sessionId,
       target.deletedClientIds,
       handoff,
+      target.subagentTurnWindow,
     );
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     await deps.onCommitted(committed, clientId);

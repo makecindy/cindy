@@ -664,6 +664,19 @@ const AI_TURN_DELETION_ROLES = new Set([
   'error',
 ]);
 
+export interface SubagentTurnDeletionWindow {
+  startedAtInclusive: number;
+  startedAtExclusive?: number;
+}
+
+export interface MessageDeletionTarget {
+  id: string;
+  role: 'user' | 'assistant';
+  deletedClientIds: string[];
+  /** Present only when deleting an assistant round. */
+  subagentTurnWindow?: SubagentTurnDeletionWindow;
+}
+
 /**
  * 消息菜单删除前解析本次动作的完整范围。user 仍只删除自己；assistant 以相邻
  * 真实 user 行为边界，返回整轮 AI 产出，并跳过 autoResume 这类隐藏 user 行。
@@ -672,11 +685,7 @@ const AI_TURN_DELETION_ROLES = new Set([
 export async function getMessageDeletionTarget(
   sessionId: string,
   clientId: string,
-): Promise<{
-  id: string;
-  role: 'user' | 'assistant';
-  deletedClientIds: string[];
-} | null> {
+): Promise<MessageDeletionTarget | null> {
   const db = getDbClient().drizzle;
   const [session] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -811,7 +820,15 @@ export async function getMessageDeletionTarget(
     return [];
   });
   if (!deletedClientIds.includes(clientId)) return null;
-  return { id: row.id, role: row.role, deletedClientIds };
+  return {
+    id: row.id,
+    role: row.role,
+    deletedClientIds,
+    subagentTurnWindow: {
+      startedAtInclusive: priorUser?.createdAt ?? session.clearedAt ?? 0,
+      ...(nextUser ? { startedAtExclusive: nextUser.createdAt } : {}),
+    },
+  };
 }
 
 /**
@@ -824,9 +841,11 @@ export async function commitMessageDeletion(
   sessionId: string,
   clientIds: string[],
   handoff: string,
+  subagentTurnWindow?: SubagentTurnDeletionWindow,
 ): Promise<{
   sessionId: string;
   deletedClientIds: string[];
+  subagentRunIds: string[];
   updatedAt: number;
   preview: string | null;
 }> {
@@ -835,6 +854,7 @@ export async function commitMessageDeletion(
   const result = await getDbClient().tx('message.delete', {
     sessionId,
     clientIds,
+    ...(subagentTurnWindow ? { subagentTurnWindow } : {}),
     contextMarker: {
       id: createId(),
       clientId: `context-rebuild:${createId()}`,
@@ -920,6 +940,7 @@ export async function commitMessageDeletion(
   return {
     sessionId,
     deletedClientIds: result.messages.map((message) => message.clientId),
+    subagentRunIds: result.subagentRunIds,
     updatedAt: now,
     preview,
   };

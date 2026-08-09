@@ -446,6 +446,13 @@ export function translatePiEvent(
       const subagentToolCall = ctx.subagentToolCalls.get(toolUseId);
       if (subagentToolCall) {
         ctx.subagentToolCalls.delete(toolUseId);
+        // Progress is the authoritative child lifecycle. A successful batch
+        // tool result can still contain failed children, while cancellation
+        // may finish the wrapper with isError=true after the child stopped.
+        // Only a still-running child is completed/failed by the wrapper frame.
+        const status = subagentToolCall.status === 'running'
+          ? (isError ? 'failed' : 'completed')
+          : subagentToolCall.status;
         queue.push({
           type: 'agent_task_update',
           data: {
@@ -453,7 +460,7 @@ export function translatePiEvent(
             provider: 'pi',
             taskId: toolUseId,
             parentToolUseId: toolUseId,
-            status: isError ? 'failed' : 'completed',
+            status,
             subagentObservation: {
               kind: 'terminal',
               logicalSubagentId: toolUseId,
