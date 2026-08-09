@@ -3663,7 +3663,10 @@ export class CodexAgent extends BaseAgent {
       });
     }
 
-    const registerCodexMcpContext = (threadId: string): void => {
+    const registerCodexMcpContext = (
+      threadId: string,
+      mcpCallerKind: 'root' | 'descendant',
+    ): void => {
       // remoteHostId 不再跳过:远端 daemon 经 SSH remote-forward 直连本机
       // HTTP MCP bridge 后,tool call 同样按 params._meta.threadId 路由,
       // 需要这条注册让 CodexMcpThreadContextStore 能解析 remote thread。
@@ -3674,6 +3677,8 @@ export class CodexAgent extends BaseAgent {
         register({
           threadId,
           sessionId: sid,
+          mcpCallerKind,
+          mcpCallerAttested: true,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
@@ -3683,6 +3688,7 @@ export class CodexAgent extends BaseAgent {
         log.debug('codex MCP thread context registered', {
           threadId: prefixId(threadId),
           sessionId: prefixId(sid),
+          mcpCallerKind,
           orcaRole: typeof vo.orcaRole === 'string' ? vo.orcaRole : undefined,
           workerId: typeof vo.orcaWorkerId === 'string' ? prefixId(vo.orcaWorkerId) : undefined,
         });
@@ -3706,10 +3712,14 @@ export class CodexAgent extends BaseAgent {
       }
     };
     const descendantMcpThreadIds = new Set<string>();
+    const registerRootCodexMcpContext = (): void => {
+      descendantMcpThreadIds.delete(threadId);
+      registerCodexMcpContext(threadId, 'root');
+    };
     const registerDescendantCodexMcpContext = (descendantThreadId: string): void => {
       if (descendantThreadId === threadId || descendantMcpThreadIds.has(descendantThreadId)) return;
       descendantMcpThreadIds.add(descendantThreadId);
-      registerCodexMcpContext(descendantThreadId);
+      registerCodexMcpContext(descendantThreadId, 'descendant');
     };
     const unregisterDescendantCodexMcpContexts = (): void => {
       for (const descendantThreadId of descendantMcpThreadIds) {
@@ -4665,7 +4675,7 @@ export class CodexAgent extends BaseAgent {
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
           subscription = host.subscribeThread(threadId, handlers);
-          registerCodexMcpContext(threadId);
+          registerRootCodexMcpContext();
           refreshCodexAutoReviewerRoute(threadId);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
           if (replacementServiceTierGeneration !== serviceTierMutationGeneration) {
@@ -4791,7 +4801,7 @@ export class CodexAgent extends BaseAgent {
       pendingForTurn: Map<string, PendingUserInputInteraction>;
       pendingInteraction: PendingUserInputInteraction;
     }>();
-    registerCodexMcpContext(threadId);
+    registerRootCodexMcpContext();
     let mcpElicitationSeq = 0;
 
     const codexSessionApprovalSuggestions = () =>
@@ -9964,9 +9974,9 @@ export class CodexAgent extends BaseAgent {
         // Keep the same vendorOptions object so active MCP handlers and the
         // host bridge see runtime Orca role/workflow updates by reference.
         Object.assign(vo, patch);
-        registerCodexMcpContext(threadId);
+        registerRootCodexMcpContext();
         for (const descendantThreadId of descendantMcpThreadIds) {
-          registerCodexMcpContext(descendantThreadId);
+          registerCodexMcpContext(descendantThreadId, 'descendant');
         }
         log.debug('setVendorOptions', {
           patchKeys: Object.keys(patch),
@@ -10029,7 +10039,7 @@ export class CodexAgent extends BaseAgent {
           readonlyReferencesProfileActive = false;
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
-          registerCodexMcpContext(threadId);
+          registerRootCodexMcpContext();
           refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });

@@ -109,7 +109,9 @@ import {
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
+  buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
+  buildClaudeRemoteOrcaCallerGuards,
   buildClaudeRemoteToolGuards,
   mergeClaudeHookSets,
 } from './capability-routing.js';
@@ -1172,6 +1174,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 到对应 session 的业务函数。host 直接调 startSession 而没透 sessionId
         // 时此处为 undefined, 工具按"无 session 绑定"语义处理。
         sessionId: opts.sessionId,
+        mcpCallerKind: 'root',
+        mcpCallerAttested: true,
         ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
         getSessionContext: () => context,
       };
@@ -1299,6 +1303,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
         PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
       },
+      // Keep the existing local routing/capture hooks first: callers and tests
+      // rely on their observable order. The exact-match Orca provenance guard
+      // still runs for send_to_lead after those hooks and denies descendants.
+      buildClaudeOrcaCallerProvenanceHooks(),
       this.deps.claudeHooks,
     );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -2422,9 +2430,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? 'auto'
             : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
-        const remoteToolGuards = buildClaudeRemoteToolGuards(
-          this.deps.capabilityRouting,
-        );
+        const remoteToolGuards = [
+          ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
+        ];
 
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
