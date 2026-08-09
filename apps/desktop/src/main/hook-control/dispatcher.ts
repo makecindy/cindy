@@ -67,6 +67,7 @@ import { isPathWithin } from './paths.js';
 import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
+import { terminalDeliveryExpired } from './requestLedger.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
 
 /** 会话执行器抽象 —— 生产实现 session-runner.ts(包 maker), 测试注入假的。 */
@@ -572,6 +573,12 @@ interface PendingTask {
 interface PendingTurnEnd {
   message: HookTurnEndMessage;
   terminal: Omit<HookTerminalRecord, 'completedAt' | 'delivery'>;
+  /**
+   * 与账本行同一个时间戳 —— 这条缓冲项是「我方主动补发」的出箱项, 同样受投递
+   * 时效约束(见 HOOK_TERMINAL_DELIVERY_TTL_MS 的不变量)。缺了它, 守卫就只对
+   * 落盘那份生效, 行为取决于断线期间进程有没有重启过。
+   */
+  completedAt: number;
 }
 
 /** 一条等待续跑的失败任务(见 pendingReopens)。 */
@@ -703,6 +710,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       message: HookTurnEndMessage;
       attempts: number;
       timer: ReturnType<typeof setTimeout> | null;
+      /**
+       * 这份结果算完的时刻(与账本行同一个数)。退避重发没有次数上限(只有延迟
+       * 上限), 所以投递时效是它唯一的收口条件。
+       */
+      completedAt: number;
     }
   >();
   /** 正在执行 turn 的 session(本模块发起的)。 */
@@ -930,8 +942,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     }
   }
 
-  function persistTerminal(record: Omit<HookTerminalRecord, 'completedAt'>): boolean {
-    return persistTerminalRecord({ ...record, completedAt: Date.now() });
+  function persistTerminal(
+    record: Omit<HookTerminalRecord, 'completedAt'>,
+    completedAt: number = Date.now(),
+  ): boolean {
+    return persistTerminalRecord({ ...record, completedAt });
   }
 
   function markTerminalSent(connectionId: string, requestId: string): boolean {
@@ -990,6 +1005,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (pendingDeliveryTurnEnds.get(key) !== pending) return;
     if (pending.timer) clearTimeout(pending.timer);
     pending.timer = null;
+    // 退避重发只有延迟上限、没有次数上限, 时效是唯一的终止条件。
+    if (terminalDeliveryExpired(pending.completedAt, Date.now())) {
+      log.warn(
+        `turn.end ACK retry abandoned (past delivery horizon): ${pending.message.payload.requestId}`,
+      );
+      pendingDeliveryTurnEnds.delete(key);
+      return;
+    }
     const send = sendOverride ?? sendFns.get(pending.connectionId);
     if (!send || !send(pending.message)) return;
     pending.attempts += 1;
@@ -1009,14 +1032,18 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     pending.timer = timer;
   }
 
-  function trackPendingDelivery(connectionId: string, msg: HookTurnEndMessage): void {
+  function trackPendingDelivery(
+    connectionId: string,
+    msg: HookTurnEndMessage,
+    completedAt: number,
+  ): void {
     const key = ackKey(connectionId, msg.payload.requestId);
     const existing = pendingDeliveryTurnEnds.get(key);
     if (existing !== undefined) {
       sendPendingDelivery(key, existing);
       return;
     }
-    const pending = { connectionId, message: msg, attempts: 0, timer: null };
+    const pending = { connectionId, message: msg, attempts: 0, timer: null, completedAt };
     pendingDeliveryTurnEnds.set(key, pending);
     enforcePendingDeliveryLimit(connectionId);
     if (pendingDeliveryTurnEnds.get(key) === pending) sendPendingDelivery(key, pending);
@@ -1027,27 +1054,30 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     message: HookTurnEndMessage,
     terminal: Omit<HookTerminalRecord, 'completedAt' | 'delivery'>,
   ): void {
-    const durable = persistTerminal({ ...terminal, delivery: 'pending' });
+    // 一次取时, 账本行与两条内存队列共用同一个 completedAt —— 三个出口据以判定
+    // 时效的年龄必须是同一个数, 否则「同一份结果」在不同出口有不同寿命。
+    const completedAt = Date.now();
+    const durable = persistTerminal({ ...terminal, delivery: 'pending' }, completedAt);
     if (supportsDeliveryAck(connectionId)) {
       // ACK 模式: 会话内重发由 pendingDeliveryTurnEnds 负责; 账本保持 pending,
       // 收到任一 turn.delivery 回执才收口为 sent(见 handleTurnDelivery), 跨重启
       // 由账本补发兜底「accepted 前进程崩溃」的窗口。
-      trackPendingDelivery(connectionId, message);
+      trackPendingDelivery(connectionId, message, completedAt);
       return;
     }
     const send = sendFns.get(connectionId);
     if (send && send(message)) {
       if (durable) {
         if (!markTerminalSent(terminal.connectionId, terminal.requestId)) {
-          persistTerminal({ ...terminal, delivery: 'sent' });
+          persistTerminal({ ...terminal, delivery: 'sent' }, completedAt);
         }
       } else {
-        persistTerminal({ ...terminal, delivery: 'sent' });
+        persistTerminal({ ...terminal, delivery: 'sent' }, completedAt);
       }
       return;
     }
     const buf = pendingTurnEnds.get(connectionId) ?? [];
-    buf.push({ message, terminal });
+    buf.push({ message, terminal, completedAt });
     if (buf.length > MAX_PENDING_TURN_ENDS) buf.shift();
     pendingTurnEnds.set(connectionId, buf);
     log.warn(`turn.end buffered (connection offline): ${connectionId}`);
@@ -1519,7 +1549,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 表情换终态。连接断了也要**调**一次 —— 传一个必然失败的发送器, 让
     // ackReactions 把它记进待补发队列; 直接跳过的话那条消息会永远挂着 👀,
     // 而重连补发拿不到任何东西可补。
-    ackReactions.onFinished(ackTaskOf(task), status, sendFns.get(task.connectionId) ?? OFFLINE_SEND);
+    ackReactions.onFinished(
+      ackTaskOf(task),
+      status,
+      sendFns.get(task.connectionId) ?? OFFLINE_SEND,
+    );
     running.delete(sessionId);
     // 失败收口 -> 记一笔"等着被续跑"。只有 error 记: cancelled 是用户按了停止,
     // ok 没什么可续的。用户之后在桌面端点「重试」时, 这一轮的进展与结果就能接回
@@ -2054,6 +2088,22 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       cacheAck(connectionId, terminalReplay.ack);
       const ackDelivered = send(makeTaskAck(terminalReplay.ack));
       if (!terminalReplay.turnEnd) return;
+      // 投递时效在这里也生效, 规则统一: **过线的终稿一律不再发出**, 包括 server
+      // 显式重投这一支。ack 已经回放了 —— server 由此知道这个 requestId 我们受理并
+      // 处理过, 不会再叫一次 Agent; 缺的只是一份它自己也已经放弃发布的终稿(服务端
+      // 的放弃线同为 ≈24h, 而结果总比请求更晚, 所以它索取一份过线结果时自己的
+      // outbox 早已过放弃点)。
+      //
+      // 这里刻意**不**给重投开豁免。豁免曾经存在过, 但它在持久记录里没有位置
+      // (HookTerminalRecord 没有来源字段), 于是每加一条路径就要再传播一次 ——
+      // 连续三轮 review 提的都是「豁免漏了某条路径」。统一规则把那一整类问题删掉,
+      // 代价只是「已被放弃的请求拿不到终稿」, 而它本来也不会被发布。
+      if (terminalDeliveryExpired(terminalReplay.completedAt, Date.now())) {
+        log.warn(
+          `terminal replay dropped (past delivery horizon): ${payload.requestId}; ack replayed only`,
+        );
+        return;
+      }
       if (supportsDeliveryAck(connectionId)) {
         // ACK 模式的重放帧与 sendOrBuffer 同语义: 经 ACK 缓冲重发, 账本保持
         // pending 直到 turn.delivery 回执收口(handleTurnDelivery)。server 既然
@@ -2061,7 +2111,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (terminalReplay.delivery === 'sent') {
           persistTerminalRecord({ ...terminalReplay, delivery: 'pending' });
         }
-        trackPendingDelivery(connectionId, makeTurnEnd(terminalReplay.turnEnd));
+        trackPendingDelivery(
+          connectionId,
+          makeTurnEnd(terminalReplay.turnEnd),
+          terminalReplay.completedAt,
+        );
         return;
       }
       if (!ackDelivered) {
@@ -2540,6 +2594,18 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // opId 由 requestId 派生, 服务端按它去重, 补发不会打出第二个。
       ackReactions.onReconnected(connectionId, send);
       const deliveryAck = supportsDeliveryAck(connectionId);
+      // ACK 缓冲有**两个**消费分支: 下面的 ACK 重放走 sendPendingDelivery(自带
+      // 时效守卫), 能力降级回落则直接 send()。所以时效在**入口**一次性收口, 而不是
+      // 在每个分支各加一道判据 —— 后者漏过的正是降级这一支, 而且以后再多一个消费
+      // 分支还会再漏一次。清在这里, 后面无论谁取帧都取不到过线的我方主动条目。
+      for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
+        if (pending.connectionId !== connectionId) continue;
+        if (!terminalDeliveryExpired(pending.completedAt, Date.now())) continue;
+        log.warn(
+          `ACK buffer entry dropped (past delivery horizon): ${pending.message.payload.requestId}`,
+        );
+        clearPendingDelivery(key);
+      }
       for (const [key, pending] of [...pendingDeliveryTurnEnds]) {
         if (pending.connectionId !== connectionId) continue;
         if (deliveryAck) {
@@ -2566,16 +2632,27 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         // 新 server 转入 ACK 缓冲重放, 老 server 沿用 fire-and-forget。
         while (buf.length > 0) {
           const pending = buf[0];
+          // 与持久出箱同一条时效判据: 过线的结果不再主动补发。少了这一条, 一个
+          // 长期不重启的进程会在重连瞬间把隔日回复一起吐出去 —— 而重启过的进程
+          // 不会, 同一件事有两种行为。
+          if (terminalDeliveryExpired(pending.completedAt, Date.now())) {
+            log.warn(
+              `buffered turn.end dropped (past delivery horizon): ${pending.terminal.requestId}`,
+            );
+            buf.shift();
+            flushedRequestIds.add(pending.terminal.requestId);
+            continue;
+          }
           if (deliveryAck) {
             // 账本保持 pending, 收到 turn.delivery 回执才收口(见 handleTurnDelivery)。
-            trackPendingDelivery(connectionId, pending.message);
+            trackPendingDelivery(connectionId, pending.message, pending.completedAt);
           } else {
             if (!send(pending.message)) return;
             if (!markTerminalSent(connectionId, pending.terminal.requestId)) {
               persistTerminalRecord({
                 ...pending.terminal,
                 delivery: 'sent',
-                completedAt: Date.now(),
+                completedAt: pending.completedAt,
               });
             }
           }
@@ -2599,7 +2676,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (deliveryAck) {
           // 已在 ACK 缓冲中的条目由本函数开头的循环重放, 不再用文本帧重复补发。
           if (pendingDeliveryTurnEnds.has(ackKey(connectionId, pending.requestId))) continue;
-          trackPendingDelivery(connectionId, makeTurnEnd(pending.turnEnd));
+          trackPendingDelivery(connectionId, makeTurnEnd(pending.turnEnd), pending.completedAt);
           continue;
         }
         if (!send(makeTurnEnd(pending.turnEnd))) return;

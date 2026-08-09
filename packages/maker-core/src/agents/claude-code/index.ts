@@ -213,7 +213,11 @@ function legacyToSdkModelString(model: string): string {
   if (model === 'codex/gpt-5.5' || model === 'codex/gpt-5.4') return model;
   if (model === 'codex/gpt-5.6-sol' || model === 'codex/gpt-5.6-terra') return model;
   // DeepSeek 的 [1m] 是历史兼容路由后缀; 上下文大小另走 maker capabilities。
-  if (model === 'deepseek/deepseek-v4-pro' || model === 'deepseek/deepseek-v4-flash') return `${model}[1m]`;
+  if (
+    model === 'deepseek/deepseek-v4-pro' ||
+    model === 'deepseek/deepseek-v4-flash' ||
+    model === 'deepseek-v4-flash'
+  ) return `${model}[1m]`;
   if (model === 'z-ai/glm-5.2') return `${model}[1m]`;
   return model;
 }

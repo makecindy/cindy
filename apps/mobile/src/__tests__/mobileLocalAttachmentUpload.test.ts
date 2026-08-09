@@ -138,11 +138,13 @@ describe('createMobileLocalAttachmentUploadController', () => {
     expect(uploaded[0]?.uploadedUri).toBe('file:///tmp/downsampled.jpg');
   });
 
-  it('resolve 型任务:onUploaded 回传就位后的 candidate(实际上传的 uri),保留 sourceId', async () => {
+  it('resolve 型任务:onUploaded 回传就位后的 candidate,保留来源与 composer 代际', async () => {
     const { deps, uploaded } = makeDeps();
     const controller = createMobileLocalAttachmentUploadController(deps);
     controller.enqueue([{
       ...candidate('IMG_0001.HEIC'),
+      attachmentScopeGeneration: 7,
+      attachmentScopeKey: 'session-a',
       uri: 'ph://asset-1',
       sourceId: 'asset-1',
       resolve: () => Promise.resolve({ uri: 'file:///tmp/IMG_0001.jpg', name: 'IMG_0001.jpg', skipPreprocess: true }),
@@ -152,6 +154,8 @@ describe('createMobileLocalAttachmentUploadController', () => {
     expect(uploaded[0]?.candidate.uri).toBe('file:///tmp/IMG_0001.jpg');
     expect(uploaded[0]?.candidate.name).toBe('IMG_0001.jpg');
     expect(uploaded[0]?.candidate.sourceId).toBe('asset-1');
+    expect(uploaded[0]?.candidate.attachmentScopeKey).toBe('session-a');
+    expect(uploaded[0]?.candidate.attachmentScopeGeneration).toBe(7);
     expect(uploaded[0]?.candidate.kind).toBe('image');
   });
 
@@ -217,7 +221,7 @@ describe('createMobileLocalAttachmentUploadController', () => {
     expect(discarded.map((item) => item.name)).toEqual(['slow.jpg']);
   });
 
-  it('removeAll:排队任务即刻出队、在途任务完成后回收,controller 仍可继续 enqueue(切换电脑场景)', async () => {
+  it('removeAll:切换任务/电脑时排队任务即刻出队、迟到完成只回收不回调', async () => {
     const gate = gatedUpload();
     const { deps, pendingSnapshots, uploaded, discarded } = makeDeps({ upload: gate.upload });
     const controller = createMobileLocalAttachmentUploadController(deps);

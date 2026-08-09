@@ -418,6 +418,10 @@ import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
 import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
 import { SessionListDrawer } from '@/session/SessionListDrawer';
+import {
+  switchDrawerSessionInPlace,
+  type SessionRouteParamsNavigation,
+} from '@/session/sessionDrawerNavigation';
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import {
   findMobileMessageSearchHits,
@@ -733,6 +737,38 @@ function restoreRecoverableItemsToDraft(
   }
 }
 
+interface ImmediateComposerDraftScope {
+  document: ComposerDocument;
+  ordered: ReturnType<typeof resolveOrderedQuoteDraft>;
+  quotes: ReturnType<typeof getQuotes>;
+}
+
+/**
+ * 当前任务首帧可同步取得的 composer 真相。AsyncStorage 尚未 hydrate 时宁可返回
+ * 当前任务空态，也不能让复用的 SessionScreen 把上一任务文档交给新任务编辑器。
+ */
+function readImmediateComposerDraftScope(
+  sessionId: string,
+  routeDraft: string | null,
+): ImmediateComposerDraftScope {
+  const visibleText = readComposerDraftSync(sessionId) ?? routeDraft ?? '';
+  const quotes = getQuotes(sessionId);
+  const ordered = resolveOrderedQuoteDraft(sessionId, visibleText, quotes);
+  const storedDocument = readComposerDocumentDraftSync(sessionId);
+  let document = storedDocument
+    ?? migrateLegacyComposerDraft(visibleText, quotes, ordered?.encodedBody);
+  if (storedDocument) {
+    for (const quote of quotes) {
+      document = appendComposerNode(document, { type: 'quote', quote });
+    }
+  }
+  return { document, ordered, quotes };
+}
+
+function composerDraftScopeKey(sessionId: string, routeDraft: string | null): string {
+  return JSON.stringify([sessionId, routeDraft ?? '']);
+}
+
 export default function SessionScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -768,7 +804,7 @@ export default function SessionScreen() {
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualFocusComposer) === '1';
   const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';
   const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;
-  const navigation = useNavigation();
+  const navigation = useNavigation<SessionRouteParamsNavigation & { isFocused(): boolean }>();
   const router = useRouter();
   const auth = useAuth();
   const windowDimensions = useWindowDimensions();
@@ -797,9 +833,33 @@ export default function SessionScreen() {
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
   const taskUpdates = useSessionTaskUpdates(sessionId);
-  const [draft, setDraft] = useState('');
-  const [composerDocument, setComposerDocumentState] = useState<ComposerDocument>(emptyComposerDocument);
+  const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
+  const [composerDraftStateKey, setComposerDraftStateKey] = useState(activeComposerDraftScopeKey);
+  const [composerDocument, setComposerDocumentState] = useState<ComposerDocument>(
+    () => readImmediateComposerDraftScope(sessionId, routeDraft).document,
+  );
+  const [draft, setDraft] = useState(() => composerDocumentProjectedText(composerDocument));
   const [composerDraftHydrated, setComposerDraftHydrated] = useState(false);
+  const appliedRouteDraftRef = useRef<string | null>(null);
+  const draftRef = useRef(draft);
+  const composerDocumentRef = useRef<ComposerDocument>(composerDocument);
+  // replaceParams 复用同一 SessionScreen。任务参数变化的这次 render 仍拿着 A 的
+  // state；若直接让 key={sessionId} 子树挂载，B 编辑器会先用 A 文档初始化，再等
+  // 被动 effect 水合纠正。沿本页 read-ack 的 render-phase 换代模式同步种入 B 的
+  // 内存快照（冷缓存未 hydrate 时为空），React 会丢弃本次旧输出后重渲。
+  if (composerDraftStateKey !== activeComposerDraftScopeKey) {
+    const nextScope = readImmediateComposerDraftScope(sessionId, routeDraft);
+    const nextDraft = composerDocumentProjectedText(nextScope.document);
+    setComposerDraftStateKey(activeComposerDraftScopeKey);
+    setComposerDocumentState(nextScope.document);
+    setDraft(nextDraft);
+    setComposerDraftHydrated(false);
+    // 旧 A 的 AsyncStorage promise 可能在 effect cleanup 前落定；先让它的 key 失配。
+    // 保持 null 也确保 B 的 effect 仍会继续异步 hydrate 磁盘草稿与冷启动引用。
+    appliedRouteDraftRef.current = null;
+    composerDocumentRef.current = nextScope.document;
+    draftRef.current = nextDraft;
+  }
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
@@ -869,7 +929,7 @@ export default function SessionScreen() {
       setContextSheetOpen(true);
     }
   }, [goalError]);
-  // goal 接回载荷按任务换代清理(codex review P2):任务抽屉 router.replace 原地
+  // goal 接回载荷按任务换代清理(codex review P2):任务抽屉 replaceParams 原地
   // 更新同一 SessionScreen 实例,goalRestore/goalError 只在首次挂载初始化——切
   // 任务后残留会让新任务的 Goal 表单预填旧任务的 objective/limits,甚至把旧目标
   // 提交到新任务。prevSessionIdRef 与当前 sessionId 同步初始化:首次挂载
@@ -901,6 +961,7 @@ export default function SessionScreen() {
     removePendingUpload,
     retryPendingUpload,
     discardAllPendingUploads,
+    discardAllPendingUploadsForScopeChange,
     waitForPendingUploads,
     claimActiveUploads,
     releaseClaimedUploads,
@@ -908,6 +969,7 @@ export default function SessionScreen() {
     hasPastePlaceholders,
     getPendingUploadCount,
   } = useMobileLocalAttachments({
+    attachmentScopeKey: sessionId,
     getAccessToken: () => auth.getAccessToken(),
     getAttachmentCount: () => attachmentsRef.current.length,
     onUploaded: (rawAttachment, candidate, localId) => {
@@ -1003,12 +1065,61 @@ export default function SessionScreen() {
   const [queueEditing, setQueueEditing] = useState<QueueEditingState | null>(null);
   const queueEditingRef = useRef<QueueEditingState | null>(null);
   // 会话切换 cleanup(声明在前)引用组件后段的回收函数,经 ref 断开声明顺序依赖。
-  const discardQueueEditTransientAttachmentsRef = useRef<
-    ((editing: QueueEditingState, attachmentsAtExit?: readonly RemoteSerializedAttachment[]) => void) | null
+  const discardQueueEditTransientAttachmentResourcesRef = useRef<
+    ((editing: QueueEditingState, attachmentsAtExit: readonly RemoteSerializedAttachment[]) => void) | null
   >(null);
   // 排队编辑保存(update-content RPC)在途 promise:会话切换 cleanup 据此把解锁
   // 排到保存落定之后,防止 device-link 并发下解锁超车、桌面端用旧内容抢先派发。
   const queueEditSaveInFlightRef = useRef<Promise<void> | null>(null);
+  // 保存中的排队编辑切任务时，composer 必须立即清空，但附件回收不能抢在
+  // update-content 落定前。先保存 A 的托盘快照，交给 A 的 cleanup 延后判断。
+  const queueEditScopeExitAttachmentsRef = useRef<{
+    clientId: string;
+    attachments: RemoteSerializedAttachment[];
+  } | null>(null);
+  // 当前 session 的 composer 附件是页面实例级 state；replaceParams 原地切任务不会
+  // 自动卸载它们。状态 / OSS 回收走 ref 读取最新快照；上传代际封口必须由调用方
+  // 使用旧 session render 捕获的方法执行，不能在 cleanup 时误封新 session。
+  const discardSessionComposerAttachmentStateRef = useRef<() => void>(() => undefined);
+  discardSessionComposerAttachmentStateRef.current = () => {
+    // 排队编辑时 composer 正展示队列条目的 files，用户原本未发送的附件在 stash。
+    // 两批都属于 A；切到 B 时都不能恢复或复用。对非 OSS 的队列文件 discard 是 no-op。
+    const editing = queueEditingRef.current;
+    const currentAttachments = [...attachmentsRef.current];
+    const deferQueueEditAttachments = !!editing && !!queueEditSaveInFlightRef.current;
+    if (editing && deferQueueEditAttachments && currentAttachments.length > 0) {
+      queueEditScopeExitAttachmentsRef.current = {
+        clientId: editing.clientId,
+        attachments: currentAttachments,
+      };
+    }
+    const attachmentsById = new Map<string, RemoteSerializedAttachment>();
+    // 保存中的当前托盘可能马上成为队列条目的正式 files；由旧 session cleanup
+    // 等保存落定后再区分“已保存”与“编辑期临时新增”，这里不能提前 DELETE。
+    if (!deferQueueEditAttachments) {
+      for (const attachment of currentAttachments) attachmentsById.set(attachment.id, attachment);
+    }
+    for (const attachment of editing?.stashedAttachments ?? []) {
+      attachmentsById.set(attachment.id, attachment);
+    }
+    attachmentsRef.current = [];
+    setAttachments([]);
+    setAttachmentPreviews({});
+    setMediaAssetAttachments({});
+    setPendingMediaAssets([]);
+    setComposerPreviewAttachmentId(null);
+    setAttachmentError(null);
+    composerAnnotationsRef.current?.forgetAllAttachments();
+    for (const attachment of attachmentsById.values()) {
+      discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
+    }
+  };
+  // 抽屉入口会在 replaceParams 前同步调用；这里仍保留 sessionId / 卸载兜底，覆盖
+  // 其它原地换代入口。effect 捕获本次 render 的 scope-change 方法，A cleanup 只封 A。
+  useEffect(() => () => {
+    discardAllPendingUploadsForScopeChange();
+    discardSessionComposerAttachmentStateRef.current();
+  }, [discardAllPendingUploadsForScopeChange, sessionId]);
   const queueEditLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
   const queueEditSaveOwnerRef = useRef<QueueEditLockOwner | null>(null);
   // 「已出队、消息尚未回流」的落定中条目:桌面端 drain 会先从 pendingQueue 摘除、
@@ -1247,9 +1358,6 @@ export default function SessionScreen() {
     setReadAckSyncedKey(null);
     readAckGateGenRef.current += 1;
   }
-  const appliedRouteDraftRef = useRef<string | null>(null);
-  const draftRef = useRef('');
-  const composerDocumentRef = useRef<ComposerDocument>(emptyComposerDocument());
   // 远程媒体取件队列:屏实例级缓存 + 同 url 去重 + 并发上限(每次取件都让桌面端
   // 真实上传一次 OSS,列表缩略图懒取件后必须收敛)。deps 经 ref 透传保持队列实例稳定;
   // 队列生命周期 = 单个会话:切 sessionId / 退屏时 releaseAll + 补删 + 换新实例
@@ -2017,7 +2125,7 @@ export default function SessionScreen() {
     screenWidth: windowDimensions.width,
   }), [windowDimensions.width]);
   // 宽屏导航形态(iPad / 安卓折叠屏与横屏大屏机):左上角三条杠 + 任务列表抽屉,
-  // 原地 replace 切任务;窄屏保持传统返回键。断点与按平台分闸(iOS 仅 iPad,
+  // 原地替换当前路由参数切任务;窄屏保持传统返回键。断点与按平台分闸(iOS 仅 iPad,
   // iPhone 不发)见 wideSessionNav.ts。
   const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
     iosPad: Platform.OS === 'ios' && Platform.isPad,
@@ -2110,18 +2218,22 @@ export default function SessionScreen() {
       Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
-    // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
+    // 不派发 NativeStack REPLACE:它会创建新 route key 并走 Android 原生 Screen 替换，
+    // 上次仅延后到抽屉卸载后仍未消除 crash / 白屏。当前 SessionScreen 已完整支持
+    // sessionId 原地换代，replaceParams 保持栈与 native Screen 不动，并整包替换 params
+    // 以清掉旧任务的 draft / goal / focus 等一次性参数。
     queueDrawerNavigation(() => {
-      router.replace({
-        pathname: '/sessions/[sessionId]',
-        params: {
-          deviceId: targetDeviceId,
-          deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
-          sessionId: targetSession.id,
-        },
+      // 必须早于 replaceParams：同一同步段先清 A 的附件与在途上传，再让页面看到 B。
+      // 否则上传完成回调会经 optionsRef 的最新闭包把 A 的产物追加进 B 的 composer。
+      discardAllPendingUploadsForScopeChange();
+      discardSessionComposerAttachmentStateRef.current();
+      switchDrawerSessionInPlace(navigation, {
+        deviceId: targetDeviceId,
+        deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+        sessionId: targetSession.id,
       });
     });
-  }, [closeSessionListDrawer, queueDrawerNavigation, router, sessionId, t]);
+  }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();
@@ -2602,18 +2714,30 @@ export default function SessionScreen() {
       // 回收是 no-op;失败时才真正清理。附件快照在此刻捕获:落定回调执行时
       // attachmentsRef 可能已属于新会话。
       const inFlightSave = queueEditSaveInFlightRef.current;
-      const attachmentsSnapshot = [...attachmentsRef.current];
+      const scopeExitSnapshot = queueEditScopeExitAttachmentsRef.current;
+      if (scopeExitSnapshot?.clientId === editing.clientId) {
+        queueEditScopeExitAttachmentsRef.current = null;
+      }
+      const attachmentsSnapshot = scopeExitSnapshot?.clientId === editing.clientId
+        ? scopeExitSnapshot.attachments
+        : [...attachmentsRef.current];
+      // ref 会在 B 的 effect 中更新成 B session 的实现；延迟回调必须捕获 A 的
+      // 资源回收函数值，否则保存落定后会拿 B 的 pendingQueue 判断 A 的附件归属。
+      // 这里只回收 A 的附件快照：A 的 pending uploads 已由 replaceParams 前的
+      // scope-change 封口清掉，迟到 finalize 绝不能再碰组件级 controller 或 B state。
+      const discardQueueEditTransientAttachmentResources =
+        discardQueueEditTransientAttachmentResourcesRef.current;
       const finalize = () => {
-        discardQueueEditTransientAttachmentsRef.current?.(editing, attachmentsSnapshot);
+        discardQueueEditTransientAttachmentResources?.(editing, attachmentsSnapshot);
       };
       if (lockOwner) void releaseQueueEditLockAfter(lockOwner, inFlightSave).catch(() => undefined);
       if (inFlightSave) void inFlightSave.then(finalize, finalize);
       else finalize();
-      // 托盘不是 per-session 状态:编辑中切会话若不还原,队列条目的 files 会跟进
-      // 新会话、用户原托盘丢失(review P2)。回收目标已在上方快照捕获,这里同步
-      // 还原 stash 不影响 finalize 的清理。
-      attachmentsRef.current = [...editing.stashedAttachments];
-      setAttachments([...editing.stashedAttachments]);
+      // 托盘不是 per-session 状态：编辑中切会话时既不能让队列条目的 files 跟进
+      // 新任务，也不能把 A 的 stash 恢复到 B。A 的两批附件由统一换代入口回收，
+      // 这里仅保持共享托盘为空。
+      attachmentsRef.current = [];
+      setAttachments([]);
     }
   }, [sessionId]);
 
@@ -2654,22 +2778,15 @@ export default function SessionScreen() {
   }, [composerShowSendButton]);
 
   useEffect(() => {
-    const key = `${sessionId}:${routeDraft ?? ''}`;
+    const key = activeComposerDraftScopeKey;
     if (appliedRouteDraftRef.current === key) return;
     appliedRouteDraftRef.current = key;
     setComposerDraftHydrated(false);
     let cancelled = false;
-    const immediateDraft = readComposerDraftSync(sessionId) ?? routeDraft ?? '';
-    const immediateQuotes = getQuotes(sessionId);
-    const immediateOrdered = resolveOrderedQuoteDraft(sessionId, immediateDraft, immediateQuotes);
-    const immediateStoredDocument = readComposerDocumentDraftSync(sessionId);
-    let immediateDocument = immediateStoredDocument
-      ?? migrateLegacyComposerDraft(immediateDraft, immediateQuotes, immediateOrdered?.encodedBody);
-    if (immediateStoredDocument) {
-      for (const quote of immediateQuotes) {
-        immediateDocument = appendComposerNode(immediateDocument, { type: 'quote', quote });
-      }
-    }
+    const immediateScope = readImmediateComposerDraftScope(sessionId, routeDraft);
+    const immediateQuotes = immediateScope.quotes;
+    const immediateDocument = immediateScope.document;
+    const immediateOrdered = immediateScope.ordered;
     applyComposerDocument(immediateDocument, { persist: false });
     const immediateDocumentSnapshot = immediateDocument;
     // Synchronously consumed quote-store items are already in the first paint.
@@ -2730,7 +2847,7 @@ export default function SessionScreen() {
       cancelled = true;
       void flushComposerDraftWrites(sessionId);
     };
-  }, [applyComposerDocument, routeDraft, sessionId]);
+  }, [activeComposerDraftScopeKey, applyComposerDocument, routeDraft, sessionId]);
 
   useEffect(() => {
     if (!composerDraftHydrated || quotes.length === 0) return;
@@ -6234,17 +6351,10 @@ export default function SessionScreen() {
    * 队列条目自身 files 不回收——仍被条目引用,且 enqueue 时已物化为被控端本地
    * 路径,discard 对非 OSS 引用本就是 no-op,双保险。
    */
-  const discardQueueEditTransientAttachments = useCallback((
+  const discardQueueEditTransientAttachmentResources = useCallback((
     editing: QueueEditingState,
-    // 会话切换 cleanup 传当时的托盘快照(落定回调执行时 attachmentsRef 可能已属于
-    // 新会话);常规退出路径省略,取当前托盘。
-    attachmentsAtExit: readonly RemoteSerializedAttachment[] = attachmentsRef.current,
+    attachmentsAtExit: readonly RemoteSerializedAttachment[],
   ) => {
-    // 编辑期间发起、此刻仍在途的上传一并丢弃:进入编辑有 pendingUploads 为空的门槛,
-    // 因此退出时的在途任务必然是编辑期新增——不丢弃的话,任务完成后 onUploaded 会把
-    // 已被放弃的附件追加进恢复后的原草稿托盘(review P1)。removeAll 语义:不再回调、
-    // 完成后回收 OSS。保存路径在 waitForPendingUploads 落定后才走到这里,天然 no-op。
-    discardAllPendingUploads();
     const stashedIds = new Set(editing.stashedAttachments.map((item) => item.id));
     const entryFileIds = new Set(
       (remoteSessionStore.getInputProjection(sessionId).pendingQueue
@@ -6257,6 +6367,18 @@ export default function SessionScreen() {
       discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
       discardedIds.add(attachment.id);
     }
+    return discardedIds;
+  }, [auth, sessionId]);
+
+  const discardQueueEditTransientAttachments = useCallback((
+    editing: QueueEditingState,
+    attachmentsAtExit: readonly RemoteSerializedAttachment[] = attachmentsRef.current,
+  ) => {
+    // 同 session 的正常退出要同步丢弃编辑期在途上传：进入编辑有 pendingUploads
+    // 为空的门槛，因此此刻的任务必然是编辑期新增。会话切换的迟到 finalize 不走
+    // 这里，避免旧 A 回调清掉复用 controller 上 B 刚开始的上传。
+    discardAllPendingUploads();
+    const discardedIds = discardQueueEditTransientAttachmentResources(editing, attachmentsAtExit);
     if (discardedIds.size > 0) {
       setAttachmentPreviews((current) => Object.fromEntries(
         Object.entries(current).filter(([attachmentId]) => !discardedIds.has(attachmentId)),
@@ -6265,10 +6387,11 @@ export default function SessionScreen() {
         Object.entries(current).filter(([, attachmentId]) => !discardedIds.has(attachmentId)),
       ));
     }
-  }, [auth, discardAllPendingUploads, sessionId]);
+  }, [discardAllPendingUploads, discardQueueEditTransientAttachmentResources]);
   useEffect(() => {
-    discardQueueEditTransientAttachmentsRef.current = discardQueueEditTransientAttachments;
-  }, [discardQueueEditTransientAttachments]);
+    discardQueueEditTransientAttachmentResourcesRef.current =
+      discardQueueEditTransientAttachmentResources;
+  }, [discardQueueEditTransientAttachmentResources]);
 
   /**
    * 进入排队消息编辑:把条目的文本/附件载入底部 composer(复用其全部编辑能力),
@@ -8582,6 +8705,7 @@ export default function SessionScreen() {
                   compactComposer && !composerCardActive && styles.composerSurfaceCompact,
                 ]}>
                   <MobileComposerInputRow
+                    key={sessionId}
                     accessibilityLabel={t('session.screen.composerPlaceholder')}
                     accessibilityHint={composerLayout.input.disabledReason ?? undefined}
                     accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
