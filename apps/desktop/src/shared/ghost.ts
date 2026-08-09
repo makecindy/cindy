@@ -592,6 +592,51 @@ export function ghostNetworkHostMatches(pattern: string, hostname: string): bool
   return hostname === pattern;
 }
 
+/** 凭证注入的精确 pathname 条数与单项长度上限。 */
+export const GHOST_SECRET_INJECT_MAX_PATHS = 16;
+export const GHOST_SECRET_INJECT_PATH_MAX_CHARS = 1024;
+
+/**
+ * 第一版 endpoint allowlist 只接受规范化的绝对 pathname：精确、大小写与
+ * 尾斜杠敏感，query / fragment 不参与；有歧义的编码分隔符 fail closed。
+ */
+export function isValidGhostSecretInjectPath(pathname: unknown): pathname is string {
+  if (
+    typeof pathname !== 'string'
+    || pathname.length === 0
+    || pathname.length > GHOST_SECRET_INJECT_PATH_MAX_CHARS
+    || !pathname.startsWith('/')
+    || pathname.includes('?')
+    || pathname.includes('#')
+    || pathname.includes('\\')
+    // eslint-disable-next-line no-control-regex -- 控制字符是显式清洗目标
+    || /[\x00-\x1f\x7f]/.test(pathname)
+    || /%(?:2f|5c)/i.test(pathname)
+    || /%(?![0-9a-f]{2})/i.test(pathname)
+  ) {
+    return false;
+  }
+  try {
+    return new URL(pathname, 'https://ghost.invalid').pathname === pathname;
+  } catch {
+    return false;
+  }
+}
+
+/** host + 可选精确 pathname + 可选 method 三项同时命中才允许注入。 */
+export function ghostSecretInjectMatches(
+  inject: GhostSecretInjectDecl,
+  url: URL,
+  method: string,
+  allHosts: readonly string[],
+): boolean {
+  const hosts = inject.hosts ?? allHosts;
+  if (!hosts.some((pattern) => ghostNetworkHostMatches(pattern, url.hostname))) return false;
+  if (inject.paths !== undefined && !inject.paths.includes(url.pathname)) return false;
+  if (inject.methods !== undefined && !inject.methods.includes(method as GhostFetchMethod)) return false;
+  return true;
+}
+
 /**
  * 凭证注入声明:该凭证以什么形态、进哪些域名的请求头。绑定在 secret 上
  * (而非独立 auth 模板)是刻意的——结构上保证"key 只流向它声明的域名",
@@ -603,6 +648,10 @@ export interface GhostSecretInjectDecl {
    * 缺省 = 详单里的全部域名。
    */
   hosts?: string[];
+  /** 精确 URL.pathname 白名单；缺省 = 该 host 下全部路径。 */
+  paths?: string[];
+  /** HTTP method 白名单；缺省 = 代理 fetch 支持的全部方法。 */
+  methods?: GhostFetchMethod[];
   /** 注入的请求头名(如 Authorization / X-Subscription-Token)。 */
   header: string;
   /** 头值模板:恰含一个 `{value}` 占位,其余为静态文本(如 `Bearer {value}`)。 */
@@ -1269,8 +1318,8 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
-  /** 清单格式版本,恒 2(v1 声明型已于 2026-07-12 移除,无存量不留兼容)。 */
-  schemaVersion: 2;
+  /** 清单格式版本:2 = 基线(v1 声明型已于 2026-07-12 移除);3 = endpoint-scoped 凭证注入。 */
+  schemaVersion: 2 | 3;
   /** 唯一标识,同时是安装目录名与 panelKind 后缀。 */
   id: string;
   /** 展示名。 */
@@ -1776,6 +1825,17 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     });
   }
   for (const secret of manifest.network?.secrets ?? []) {
+    // 旧 host-only manifest 不新增 detail,避免存量权限 baseline 集体变化；作者
+    // 显式声明 endpoint 范围时才把规范化事实写进 detail,后续扩大、替换或
+    // 删除限制都会被现有 key+detail diff 识别并要求复核。
+    const endpointScope =
+      secret.inject.paths !== undefined || secret.inject.methods !== undefined
+        ? [
+            `Hosts: ${[...(secret.inject.hosts ?? manifest.network?.hosts ?? [])].sort().join(', ')}`,
+            `Paths: ${secret.inject.paths?.join(', ') ?? '*'}`,
+            `Methods: ${secret.inject.methods?.join(', ') ?? '*'}`,
+          ].join('\n')
+        : undefined;
     // 来源分档文案:登录邮箱派生 vs 用户自填(意识 settingsHtml 收单——宿主
     // 凭证渲染已退役,user 凭证只剩这一档)。收单档文案不许说"意识代码无法
     // 读取"这种过头话:录入瞬间明文经过意识页面,知情同意面要如实。
@@ -1797,9 +1857,13 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'networkSecretOauth',
         labelArgs: { name: secret.label, host: authorizeHost },
         detailKey: 'networkSecretOauthDetail',
-        ...(secret.oauth.scopes && secret.oauth.scopes.length > 0
-          ? { detail: secret.oauth.scopes.join('\n') }
-          : {}),
+        ...(
+          secret.oauth.scopes && secret.oauth.scopes.length > 0
+            ? { detail: [secret.oauth.scopes.join('\n'), endpointScope].filter(Boolean).join('\n') }
+            : endpointScope !== undefined
+              ? { detail: endpointScope }
+              : {}
+        ),
       });
       continue;
     }
@@ -1810,6 +1874,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'networkSecretOrganizationIdentity',
         labelArgs: { name: secret.label },
         detailKey: 'networkSecretOrganizationIdentityDetail',
+        ...(endpointScope !== undefined ? { detail: endpointScope } : {}),
       });
       continue;
     }
@@ -1820,6 +1885,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'networkSecretGhCli',
         labelArgs: { name: secret.label },
         detailKey: 'networkSecretGhCliDetail',
+        // 与其它来源一致:声明了 endpoint 范围就把规范化事实写进 detail,
+        // 后续扩大/替换/删除限制都会被现有 key+detail diff 识别并要求复核。
+        ...(endpointScope !== undefined ? { detail: endpointScope } : {}),
       });
       continue;
     }
@@ -1830,6 +1898,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       labelKey: identity ? 'networkSecretIdentity' : 'networkSecret',
       labelArgs: { name: secret.label },
       detailKey: identity ? 'networkSecretIdentityDetail' : 'networkSecretGhostInputDetail',
+      ...(endpointScope !== undefined ? { detail: endpointScope } : {}),
     });
   }
   // fs 槽:写文件是仅次于出网的敏感能力,紧随 network 之后展示。三档目的地
@@ -2748,8 +2817,8 @@ export function resolveGhostManifestLocale(
 export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (!isPlainObject(raw)) return { ok: false, reason: '清单不是对象' };
 
-  if (raw.schemaVersion !== 2) {
-    return { ok: false, reason: `schemaVersion 必须是 2,得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)` };
+  if (raw.schemaVersion !== 2 && raw.schemaVersion !== 3) {
+    return { ok: false, reason: `schemaVersion 必须是 2 或 3,得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)` };
   }
   if (!isValidGhostId(raw.id)) {
     return { ok: false, reason: 'id 必须是 1–32 位小写字母/数字/连字符(不能以连字符开头)' };
@@ -3838,6 +3907,81 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             injectHosts.push(ihNorm);
           }
         }
+        // endpoint-scoped 注入(paths / methods)必须声明 schemaVersion 3:
+        // 旧客户端不识别这两个字段,若放行会让收窄静默退化为整域注入(fail-open)。
+        // 声明新字段即升级版本,旧客户端对 v3 整包拒装——mixed-version fail-closed。
+        if (
+          (inj.paths !== undefined || inj.methods !== undefined)
+          && raw.schemaVersion !== 3
+        ) {
+          return {
+            ok: false,
+            reason: `network.secrets[].inject 声明了 paths/methods,必须使用 schemaVersion 3(旧版本客户端会忽略这些字段并退化为整域注入,故强制升级清单版本)`,
+          };
+        }
+        let injectPaths: string[] | undefined;
+        if (inj.paths !== undefined) {
+          if (
+            !Array.isArray(inj.paths)
+            || inj.paths.length === 0
+            || inj.paths.length > GHOST_SECRET_INJECT_MAX_PATHS
+          ) {
+            return {
+              ok: false,
+              reason: `network.secrets[].inject.paths 必须是 1–${GHOST_SECRET_INJECT_MAX_PATHS} 条精确 pathname 的数组(或省略 = 全部路径)`,
+            };
+          }
+          injectPaths = [];
+          for (const path of inj.paths) {
+            if (!isValidGhostSecretInjectPath(path)) {
+              return {
+                ok: false,
+                reason: `network.secrets[].inject.paths 含非法条目 ${JSON.stringify(path)}(必须是规范化的绝对 pathname；不含 query/fragment/反斜杠/编码分隔符)`,
+              };
+            }
+            if (injectPaths.includes(path)) {
+              return { ok: false, reason: `network.secrets[].inject.paths 含重复条目 ${JSON.stringify(path)}` };
+            }
+            injectPaths.push(path);
+          }
+          injectPaths.sort();
+        }
+        let injectMethods: GhostFetchMethod[] | undefined;
+        if (inj.methods !== undefined) {
+          if (!Array.isArray(inj.methods) || inj.methods.length === 0) {
+            return {
+              ok: false,
+              reason: 'network.secrets[].inject.methods 必须是非空数组(或省略 = 全部支持的方法)',
+            };
+          }
+          injectMethods = [];
+          for (const method of inj.methods) {
+            if (
+              typeof method !== 'string'
+              || !(GHOST_FETCH_METHODS as readonly string[]).includes(method)
+            ) {
+              return {
+                ok: false,
+                reason: `network.secrets[].inject.methods 含未知项 ${JSON.stringify(method)}(可用:${GHOST_FETCH_METHODS.join(' / ')})`,
+              };
+            }
+            const typed = method as GhostFetchMethod;
+            if (injectMethods.includes(typed)) {
+              return { ok: false, reason: `network.secrets[].inject.methods 含重复条目 ${JSON.stringify(method)}` };
+            }
+            injectMethods.push(typed);
+          }
+          injectMethods.sort(
+            (a, b) => GHOST_FETCH_METHODS.indexOf(a) - GHOST_FETCH_METHODS.indexOf(b),
+          );
+        }
+        // 排序归一化只对声明了新字段(inject.paths / inject.methods)的凭证生效:
+        // 旧 host-only 清单的归一化输出必须与升级前逐字节一致(manifestDigest 按
+        // 数组原始顺序计算,排序会让已装插件的账本摘要永久失配,触发市场所有权
+        // 检查与 OIDC 签发拒绝)。新字段一经声明,权限 detail 就要稳定。
+        if (injectHosts !== undefined && (injectPaths !== undefined || injectMethods !== undefined)) {
+          injectHosts.sort();
+        }
         if (source === 'oidc-token') {
           if (inj.header !== 'Authorization' || inj.format !== 'Bearer {value}') {
             return {
@@ -4271,6 +4415,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             header: inj.header,
             format: inj.format,
             ...(injectHosts !== undefined ? { hosts: injectHosts } : {}),
+            ...(injectPaths !== undefined ? { paths: injectPaths } : {}),
+            ...(injectMethods !== undefined ? { methods: injectMethods } : {}),
           },
           ...(exchange !== undefined ? { exchange } : {}),
           ...(oauth !== undefined ? { oauth } : {}),
@@ -4516,7 +4662,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   return {
     ok: true,
     manifest: {
-      schemaVersion: 2,
+      // 保留输入版本(v3 清单不得被降级回 v2,否则 manifestDigest 与打包时失配)。
+      schemaVersion: raw.schemaVersion as 2 | 3,
       id: raw.id,
       name: raw.name,
       version: raw.version,
