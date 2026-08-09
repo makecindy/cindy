@@ -1615,7 +1615,11 @@ export class GoalController {
     afterPersist?: (value: T) => void | Promise<void>,
   ): Promise<T> {
     const committed = operation.then(async (value) => {
-      await afterPersist?.(value);
+      // dispose 后不得执行 afterPersist:marker/storage/emit 副作用在调用时
+      // resolve 当前 DB,登出/切账号后写旧账号数据(Codex P1)。
+      if (!this.disposed) {
+        await afterPersist?.(value);
+      }
       return value;
     });
     const settled = committed.then(
@@ -1903,6 +1907,9 @@ export class GoalController {
       await this.trackCompletion(
         turn,
         (async () => {
+          // dispose 后丢弃:达成记录/storage.clear/emit null 都会写旧账号
+          // (DB client 调用时解析)——登出/切账号后不得执行(Codex P1)。
+          if (this.disposed) return;
           if (this.deps.persistGoalCompletion) {
             try {
               await this.deps.persistGoalCompletion(sessionId, {
