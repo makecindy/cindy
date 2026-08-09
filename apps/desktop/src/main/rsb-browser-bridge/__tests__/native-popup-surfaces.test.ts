@@ -55,10 +55,16 @@ import {
   RSB_NATIVE_POPUP_CLAIM_TIMEOUT_MS,
   attributeRsbNativePopupSurface,
   createRsbNativePopupSurface,
+  disposeUnclaimedRsbNativePopupSurface,
   getRsbNativePopupOwnerWebContents,
+  hasActiveRsbNativePopupDependenciesForHost,
   hasActiveRsbNativePopupSurfaces,
+  hasActiveRsbNativePopupSurfacesForOwner,
   isRsbNativePopupWebContentsId,
+  onRsbNativePopupSurfaceReleased,
+  prepareQueuedRsbNativePopupSurfaceTransfer,
   registerRsbNativePopupSurfaceIpc,
+  transferRsbNativePopupSurface,
 } from '../native-popup-surfaces';
 
 function makeContents(id: number) {
@@ -181,6 +187,281 @@ describe('main-owned RSB native popup surfaces', () => {
     expect(electronMocks.views[0]?.visible).toBe(true);
   });
 
+  it('atomically transfers an unclaimed surface and rebinds ownership cleanup', async () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    const oldWindow = makeWindow();
+    const nextWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, nextWindow);
+    const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
+    const view = electronMocks.views[0]!;
+    const staleDestroyed = oldHost.listeners('destroyed')[0] as () => void;
+    const staleNavigation = oldHost.listeners('did-start-navigation')[0] as (
+      event: unknown,
+      url: string,
+      isSameDocument: boolean,
+      isMainFrame: boolean,
+    ) => void;
+
+    expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(true);
+    expect(hasActiveRsbNativePopupDependenciesForHost(oldHost.id)).toBe(true);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(false);
+
+    expect(transferRsbNativePopupSurface(surfaceId, nextHost as never)).toBe('transferred');
+    expect(oldWindow.contentView.removeChildView).toHaveBeenCalledWith(view);
+    expect(nextWindow.contentView.addChildView).toHaveBeenCalledWith(view);
+    expect(oldWindow.children.has(view)).toBe(false);
+    expect(nextWindow.children.has(view)).toBe(true);
+    expect(getRsbNativePopupOwnerWebContents(42)).toBe(nextHost);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(false);
+    // Moving the view does not move Chromium's outlivesOpener:false
+    // relationship. The creating host must stay alive until the popup ends.
+    expect(hasActiveRsbNativePopupDependenciesForHost(oldHost.id)).toBe(true);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(true);
+
+    // removeListener cannot revoke a callback Electron already queued. Both
+    // stale lifecycle callbacks must observe that oldHost is no longer owner.
+    staleDestroyed();
+    staleNavigation({}, 'https://stale-owner.test/', false, true);
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(hasActiveRsbNativePopupSurfaces()).toBe(true);
+
+    oldHost.close();
+    expect(popup.close).not.toHaveBeenCalled();
+
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    expect(() =>
+      claim({ sender: oldHost }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' }),
+    ).toThrow(/PERMISSION_DENIED/);
+    await claim({ sender: nextHost }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
+
+    const released = vi.fn();
+    const unsubscribe = onRsbNativePopupSurfaceReleased(released);
+    nextHost.close();
+    unsubscribe();
+    expect(popup.close).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledWith('tab-popup', 42);
+    expect(released).toHaveBeenCalledOnce();
+    expect(hasActiveRsbNativePopupDependenciesForHost(oldHost.id)).toBe(false);
+    expect(hasActiveRsbNativePopupSurfaces()).toBe(false);
+  });
+
+  it('prepares every queued unclaimed surface before a host transition', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const firstPopup = makeContents(42);
+    const secondPopup = makeContents(43);
+    electronMocks.windows.set(oldHost, makeWindow());
+    electronMocks.windows.set(nextHost, makeWindow());
+    const firstId = createRsbNativePopupSurface(oldHost as never, firstPopup as never)!;
+    const secondId = createRsbNativePopupSurface(oldHost as never, secondPopup as never)!;
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer([firstId, secondId], nextHost as never),
+    ).toEqual({ ready: true, droppedSurfaceIds: [] });
+    expect(getRsbNativePopupOwnerWebContents(firstPopup.id)).toBe(nextHost);
+    expect(getRsbNativePopupOwnerWebContents(secondPopup.id)).toBe(nextHost);
+  });
+
+  it('blocks a host transition for unclaimed surfaces whose payload already left the queue', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    electronMocks.windows.set(oldHost, makeWindow());
+    electronMocks.windows.set(nextHost, makeWindow());
+    createRsbNativePopupSurface(oldHost as never, popup as never);
+
+    expect(prepareQueuedRsbNativePopupSurfaceTransfer([], nextHost as never)).toEqual({
+      ready: false,
+      droppedSurfaceIds: [],
+    });
+    expect(getRsbNativePopupOwnerWebContents(popup.id)).toBe(oldHost);
+  });
+
+  it('blocks a host transition once a queued surface has been claimed', async () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    electronMocks.windows.set(oldHost, makeWindow());
+    electronMocks.windows.set(nextHost, makeWindow());
+    const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    await claim({ sender: oldHost }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
+
+    expect(prepareQueuedRsbNativePopupSurfaceTransfer([surfaceId], nextHost as never)).toEqual({
+      ready: false,
+      droppedSurfaceIds: [],
+    });
+    expect(getRsbNativePopupOwnerWebContents(popup.id)).toBe(oldHost);
+  });
+
+  it('rolls back earlier queued transfers when a later native view is retryable', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const firstPopup = makeContents(42);
+    const secondPopup = makeContents(43);
+    const oldWindow = makeWindow();
+    const nextWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, nextWindow);
+    const firstId = createRsbNativePopupSurface(oldHost as never, firstPopup as never)!;
+    const secondId = createRsbNativePopupSurface(oldHost as never, secondPopup as never)!;
+    let attachCount = 0;
+    nextWindow.contentView.addChildView.mockImplementation((view: object) => {
+      attachCount += 1;
+      if (attachCount === 2) throw new Error('second native view rejected');
+      return nextWindow.children.add(view);
+    });
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer([firstId, secondId], nextHost as never),
+    ).toEqual({ ready: false, droppedSurfaceIds: [] });
+    expect(getRsbNativePopupOwnerWebContents(firstPopup.id)).toBe(oldHost);
+    expect(getRsbNativePopupOwnerWebContents(secondPopup.id)).toBe(oldHost);
+    expect(nextWindow.children.size).toBe(0);
+  });
+
+  it('disposes a prepared surface when its rollback is also retryable', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const firstPopup = makeContents(42);
+    const secondPopup = makeContents(43);
+    const oldWindow = makeWindow();
+    const nextWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, nextWindow);
+    const firstId = createRsbNativePopupSurface(oldHost as never, firstPopup as never)!;
+    const secondId = createRsbNativePopupSurface(oldHost as never, secondPopup as never)!;
+    let targetAttachCount = 0;
+    nextWindow.contentView.addChildView.mockImplementation((view: object) => {
+      targetAttachCount += 1;
+      if (targetAttachCount === 2) throw new Error('second native view rejected');
+      return nextWindow.children.add(view);
+    });
+    let oldAttachCount = 0;
+    oldWindow.contentView.addChildView.mockImplementation((view: object) => {
+      oldAttachCount += 1;
+      if (oldAttachCount === 2) throw new Error('first native view rollback rejected');
+      return oldWindow.children.add(view);
+    });
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer([firstId, secondId], nextHost as never),
+    ).toEqual({ ready: false, droppedSurfaceIds: [firstId] });
+    expect(firstPopup.close).toHaveBeenCalledOnce();
+    expect(getRsbNativePopupOwnerWebContents(firstPopup.id)).toBeNull();
+    expect(getRsbNativePopupOwnerWebContents(secondPopup.id)).toBe(oldHost);
+    expect(hasActiveRsbNativePopupSurfacesForOwner(nextHost.id)).toBe(false);
+  });
+
+  it('allows stale queued ids when no native surface remains', () => {
+    const nextHost = makeContents(2);
+    electronMocks.windows.set(nextHost, makeWindow());
+
+    expect(
+      prepareQueuedRsbNativePopupSurfaceTransfer(['surface-already-gone'], nextHost as never),
+    ).toEqual({ ready: true, droppedSurfaceIds: [] });
+  });
+
+  it('rolls an unclaimed surface back when the new window rejects its view', async () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    const oldWindow = makeWindow();
+    const nextWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, nextWindow);
+    const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
+    const staleDestroyed = oldHost.listeners('destroyed')[0] as () => void;
+    const staleNavigation = oldHost.listeners('did-start-navigation')[0] as (
+      event: unknown,
+      url: string,
+      isSameDocument: boolean,
+      isMainFrame: boolean,
+    ) => void;
+    nextWindow.contentView.addChildView.mockImplementationOnce(() => {
+      throw new Error('native view rejected');
+    });
+
+    expect(transferRsbNativePopupSurface(surfaceId, nextHost as never)).toBe('retryable');
+    expect(getRsbNativePopupOwnerWebContents(42)).toBe(oldHost);
+    expect(oldWindow.children.has(electronMocks.views[0]!)).toBe(true);
+    expect(popup.close).not.toHaveBeenCalled();
+
+    // Rollback installs a new ownership generation. Callbacks captured before
+    // the attempted transfer must not tear down the restored surface.
+    staleDestroyed();
+    staleNavigation({}, 'https://stale-owner.test/', false, true);
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(hasActiveRsbNativePopupSurfacesForOwner(oldHost.id)).toBe(true);
+
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    expect(
+      await claim({ sender: oldHost }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' }),
+    ).toMatchObject({ alive: true });
+  });
+
+  it('fails closed when detaching leaves native view ownership ambiguous', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    const oldWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, makeWindow());
+    const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
+    oldWindow.contentView.removeChildView.mockImplementationOnce(() => {
+      throw new Error('native detach failed');
+    });
+
+    expect(transferRsbNativePopupSurface(surfaceId, nextHost as never)).toBe('gone');
+    expect(popup.close).toHaveBeenCalledOnce();
+    expect(hasActiveRsbNativePopupSurfaces()).toBe(false);
+  });
+
+  it('fails closed when both transfer and rollback reject the native view', () => {
+    const oldHost = makeContents(1);
+    const nextHost = makeContents(2);
+    const popup = makeContents(42);
+    const oldWindow = makeWindow();
+    const nextWindow = makeWindow();
+    electronMocks.windows.set(oldHost, oldWindow);
+    electronMocks.windows.set(nextHost, nextWindow);
+    const surfaceId = createRsbNativePopupSurface(oldHost as never, popup as never)!;
+    nextWindow.contentView.addChildView.mockImplementationOnce(() => {
+      throw new Error('native attach failed');
+    });
+    oldWindow.contentView.addChildView.mockImplementationOnce(() => {
+      throw new Error('native rollback failed');
+    });
+
+    expect(transferRsbNativePopupSurface(surfaceId, nextHost as never)).toBe('gone');
+    expect(popup.close).toHaveBeenCalledOnce();
+    expect(hasActiveRsbNativePopupSurfaces()).toBe(false);
+  });
+
+  it('disposes only unclaimed surfaces dropped by the main popup backlog', async () => {
+    const host = makeContents(1);
+    const unclaimedPopup = makeContents(42);
+    electronMocks.windows.set(host, makeWindow());
+    const unclaimedId = createRsbNativePopupSurface(host as never, unclaimedPopup as never)!;
+
+    expect(disposeUnclaimedRsbNativePopupSurface(unclaimedId)).toBe(true);
+    expect(unclaimedPopup.close).toHaveBeenCalledOnce();
+    expect(hasActiveRsbNativePopupSurfaces()).toBe(false);
+
+    const claimedPopup = makeContents(43);
+    const claimedId = createRsbNativePopupSurface(host as never, claimedPopup as never)!;
+    const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
+    await claim(
+      { sender: host },
+      { surfaceId: claimedId, sessionId: 'session-a', tabId: 'tab-popup' },
+    );
+    expect(disposeUnclaimedRsbNativePopupSurface(claimedId)).toBe(false);
+    expect(claimedPopup.close).not.toHaveBeenCalled();
+  });
+
   it('publishes null when a favicon update has no usable URL', async () => {
     const host = makeContents(1);
     const popup = makeContents(42);
@@ -281,10 +562,7 @@ describe('main-owned RSB native popup surfaces', () => {
     electronMocks.windows.set(host, makeWindow());
     const surfaceId = createRsbNativePopupSurface(host as never, popup as never)!;
     const claim = electronMocks.handlers.get(RSB_NATIVE_POPUP_CLAIM_CHANNEL)!;
-    await claim(
-      { sender: host },
-      { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' },
-    );
+    await claim({ sender: host }, { surfaceId, sessionId: 'session-a', tabId: 'tab-popup' });
 
     host.emit('did-start-navigation', {}, 'file:///app/index.html', false, true);
 

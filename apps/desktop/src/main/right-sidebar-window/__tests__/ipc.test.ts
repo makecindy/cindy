@@ -44,14 +44,41 @@ function getSendCommandHandler() {
   return handler;
 }
 
-function registerController(controller: RsbWindowController) {
-  const mainWebContents = { id: 1 };
-  const mainWindow = {
+function getInvokeHandler(channel: string) {
+  const handlers = (
+    ipcMain as unknown as {
+      __handlers: Map<string, (e: unknown, payload: unknown) => unknown>;
+    }
+  ).__handlers;
+  const handler = handlers.get(channel);
+  if (!handler) throw new Error(`${channel} handler not registered`);
+  return handler;
+}
+
+function registerController(
+  controller: RsbWindowController,
+  options: { mainWindow?: BrowserWindow | null } = {},
+) {
+  const mainWebContents = { id: 1, isDestroyed: vi.fn(() => false) };
+  const defaultMainWindow = {
     isDestroyed: () => false,
     webContents: mainWebContents,
   } as unknown as BrowserWindow;
-  registerRsbWindowIpc({ controller, getMainWindow: () => mainWindow });
-  return { handler: getSendCommandHandler(), mainWebContents };
+  const mainWindow = options.mainWindow === undefined ? defaultMainWindow : options.mainWindow;
+  const preparePopupHostTransition = vi.fn(() => true);
+  const hasActivePopupSurfaces = vi.fn(() => false);
+  registerRsbWindowIpc({
+    controller,
+    getMainWindow: () => mainWindow,
+    preparePopupHostTransition,
+    hasActivePopupSurfaces,
+  });
+  return {
+    handler: getSendCommandHandler(),
+    mainWebContents,
+    preparePopupHostTransition,
+    hasActivePopupSurfaces,
+  };
 }
 
 beforeEach(() => {
@@ -61,6 +88,60 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
+  it('prepares queued popup ownership before merging the detached window back', () => {
+    const controller = makeController();
+    controller.getState = vi.fn(() => ({ detached: true, lastOpen: true, open: true }));
+    controller.setDetached = vi.fn(() => ({ detached: false, lastOpen: false, open: false }));
+    const { mainWebContents, preparePopupHostTransition } = registerController(controller);
+    const setDetached = getInvokeHandler(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED);
+
+    expect(setDetached({}, false)).toEqual({ detached: false, lastOpen: false, open: false });
+    expect(preparePopupHostTransition).toHaveBeenCalledWith(mainWebContents);
+    expect(preparePopupHostTransition.mock.invocationCallOrder[0]).toBeLessThan(
+      (controller.setDetached as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it.each(['claimed', 'already delivered but unclaimed'])(
+    'keeps the detached state when a %s popup cannot be prepared from the main queue',
+    () => {
+      const controller = makeController();
+      controller.getState = vi.fn(() => ({ detached: true, lastOpen: true, open: true }));
+      const { preparePopupHostTransition } = registerController(controller);
+      preparePopupHostTransition.mockReturnValue(false);
+      const setDetached = getInvokeHandler(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED);
+
+      expect(() => setDetached({}, false)).toThrow(/PRECONDITION_FAILED/);
+      expect(controller.setDetached).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps the detached state when the main-window target is unavailable', () => {
+    const controller = makeController();
+    controller.getState = vi.fn(() => ({ detached: true, lastOpen: true, open: true }));
+    const { preparePopupHostTransition } = registerController(controller, { mainWindow: null });
+    const setDetached = getInvokeHandler(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED);
+
+    expect(() => setDetached({}, false)).toThrow(/PRECONDITION_FAILED/);
+    expect(preparePopupHostTransition).not.toHaveBeenCalled();
+    expect(controller.setDetached).not.toHaveBeenCalled();
+  });
+
+  it('still blocks detaching or closing while any native popup is active', () => {
+    const controller = makeController();
+    controller.getState = vi.fn(() => ({ detached: false, lastOpen: true, open: true }));
+    const { hasActivePopupSurfaces, preparePopupHostTransition } = registerController(controller);
+    hasActivePopupSurfaces.mockReturnValue(true);
+    const setDetached = getInvokeHandler(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED);
+    const close = getInvokeHandler(MAKER_INVOKE.RSB_WINDOW_CLOSE);
+
+    expect(() => setDetached({}, true)).toThrow(/PRECONDITION_FAILED/);
+    expect(() => close({}, undefined)).toThrow(/PRECONDITION_FAILED/);
+    expect(preparePopupHostTransition).not.toHaveBeenCalled();
+    expect(controller.setDetached).not.toHaveBeenCalled();
+    expect(controller.close).not.toHaveBeenCalled();
+  });
+
   it('forwards the optional device-link origin in window context', () => {
     const controller = makeController();
     const { mainWebContents } = registerController(controller);

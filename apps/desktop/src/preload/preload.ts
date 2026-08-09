@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import {
+  createBufferedIpcFanOut,
+  type BufferedIpcDiscardContext,
+} from './bufferedIpcFanOut';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
@@ -414,9 +418,25 @@ const fanOutSessionAttentionCleared = createIpcFanOut(SESSION_ATTENTION_CLEARED_
 // renderer 端 MainLayout 订阅 → 路由 / 聚焦 project。
 const fanOutDeepLinkNavigate = createIpcFanOut('deep-link:navigate');
 // RSB web-browser plugin:guest webview 内 window.open / target=_blank 路由。
-// main 端 webview-security setWindowOpenHandler 把 popup URL 推到这里,renderer
-// 端 RightSidebarShell 订阅 → store.addTab 开新 web-browser tab。
-const fanOutRsbBrowserPopup = createIpcFanOut('rsb:browser-popup');
+// OAuth URL 通常只推一次,preload 必须从启动起就监听:renderer 首次挂载、路由
+// 切换或 detached 窗口启动期间没有订阅者时,暂存最多 8 条、30 秒后作废。
+// 下一位订阅者只补收一次,避免 URL 静默丢失或无人订阅时无限占用内存。
+function discardBufferedRsbBrowserPopup({ data }: BufferedIpcDiscardContext): void {
+  if (!data || typeof data !== 'object') return;
+  const nativePopupSurfaceId = (data as { nativePopupSurfaceId?: unknown }).nativePopupSurfaceId;
+  if (typeof nativePopupSurfaceId !== 'string') return;
+  void ipcRenderer
+    .invoke(RSB_NATIVE_POPUP_CLOSE_CHANNEL, { surfaceId: nativePopupSurfaceId })
+    .catch(() => undefined);
+}
+
+const fanOutRsbBrowserPopup = createBufferedIpcFanOut(
+  (bridge) => {
+    ipcRenderer.on('rsb:browser-popup', bridge);
+    return () => ipcRenderer.removeListener('rsb:browser-popup', bridge);
+  },
+  { maxBufferedEvents: 8, ttlMs: 30_000, onDiscard: discardBufferedRsbBrowserPopup },
+);
 const fanOutRsbNativePopupEvent = createIpcFanOut(RSB_NATIVE_POPUP_EVENT_CHANNEL);
 // RSB terminal plugin: main 端 PTY onData / onExit 推过来,renderer 按 id filter。
 // 每个 tab 自己订阅,fanOut 内部去重 ipcRenderer.on 绑定。

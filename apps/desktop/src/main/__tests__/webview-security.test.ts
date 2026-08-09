@@ -23,13 +23,28 @@ import type { BrowserWindow, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const nativeSurfaceMocks = vi.hoisted(() => ({
-  create: vi.fn(() => 'surface-oauth'),
+  create: vi.fn<(host: WebContents, popup: WebContents) => string | null>(() => 'surface-oauth'),
   attribute: vi.fn(),
+  transfer: vi.fn<(surfaceId: string, target: WebContents) => 'transferred' | 'retryable' | 'gone'>(
+    () => 'transferred',
+  ),
+  prepare: vi.fn<
+    (
+      surfaceIds: readonly string[],
+      target: WebContents,
+    ) => { ready: boolean; droppedSurfaceIds: string[] }
+  >(() => ({ ready: true, droppedSurfaceIds: [] })),
+  dispose: vi.fn(),
+  getOwner: vi.fn<(id: number) => WebContents | null>(() => null),
 }));
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   createRsbNativePopupSurface: nativeSurfaceMocks.create,
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
+  prepareQueuedRsbNativePopupSurfaceTransfer: nativeSurfaceMocks.prepare,
+  transferRsbNativePopupSurface: nativeSurfaceMocks.transfer,
+  disposeUnclaimedRsbNativePopupSurface: nativeSurfaceMocks.dispose,
+  getRsbNativePopupOwnerWebContents: nativeSurfaceMocks.getOwner,
 }));
 
 import { BROWSER_PARTITION } from '../../shared/webviewPartition';
@@ -39,6 +54,10 @@ import {
   DEFERRED_POPUP_ROUTE_TIMEOUT_MS,
   POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS,
   POPUP_OPENER_WAIT_TIMEOUT_MS,
+  RSB_BROWSER_POPUP_BUFFER_LIMIT,
+  RSB_BROWSER_POPUP_BUFFER_TTL_MS,
+  flushRsbBrowserPopupQueue,
+  prepareRsbBrowserPopupQueueForHost,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   RSB_BROWSER_POPUP_CHANNEL,
@@ -199,10 +218,18 @@ describe('BLANK_POPUP_WINDOW_WEB_PREFERENCES(popup WebContents 安全集)', () =
 
 describe('installBrowserGuestHandlers(main-owned popup)', () => {
   afterEach(() => {
-    nativeSurfaceMocks.create.mockClear();
-    nativeSurfaceMocks.attribute.mockClear();
+    vi.useRealTimers();
     setRsbPopupOpenerResolver(null);
     setRsbPopupHostResolver(null);
+    nativeSurfaceMocks.create.mockClear();
+    nativeSurfaceMocks.attribute.mockClear();
+    nativeSurfaceMocks.transfer.mockReset();
+    nativeSurfaceMocks.transfer.mockReturnValue('transferred');
+    nativeSurfaceMocks.prepare.mockReset();
+    nativeSurfaceMocks.prepare.mockReturnValue({ ready: true, droppedSurfaceIds: [] });
+    nativeSurfaceMocks.dispose.mockClear();
+    nativeSurfaceMocks.getOwner.mockReset();
+    nativeSurfaceMocks.getOwner.mockReturnValue(null);
   });
 
   function makeContents(id: number) {
@@ -264,6 +291,292 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
     });
     expect(popup.close).not.toHaveBeenCalled();
   });
+
+  it('strict host ready 后先迁移 native surface 再投递 payload', () => {
+    const oldHost = makeContents(1);
+    const detachedHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+
+    expect(oldHost.send).not.toHaveBeenCalled();
+    expect(nativeSurfaceMocks.transfer).not.toHaveBeenCalled();
+
+    currentHost = detachedHost as never;
+    flushRsbBrowserPopupQueue();
+
+    expect(nativeSurfaceMocks.transfer).toHaveBeenCalledWith('surface-oauth', detachedHost);
+    expect(detachedHost.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+      nativePopupSurfaceId: 'surface-oauth',
+    });
+    expect(nativeSurfaceMocks.transfer.mock.invocationCallOrder[0]).toBeLessThan(
+      detachedHost.send.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('reattach preflight only prepares native surfaces whose payload is still queued', () => {
+    const oldHost = makeContents(1);
+    const mainHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+
+    expect(prepareRsbBrowserPopupQueueForHost(mainHost as never)).toBe(true);
+    expect(nativeSurfaceMocks.prepare).toHaveBeenCalledWith(['surface-oauth'], mainHost);
+    currentHost = mainHost as never;
+    flushRsbBrowserPopupQueue();
+    expect(nativeSurfaceMocks.prepare.mock.invocationCallOrder[0]).toBeLessThan(
+      nativeSurfaceMocks.transfer.mock.invocationCallOrder[0]!,
+    );
+    expect(nativeSurfaceMocks.transfer.mock.invocationCallOrder[0]).toBeLessThan(
+      mainHost.send.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('reattach preflight preserves detached state when queued surface transfer is unsafe', () => {
+    const oldHost = makeContents(1);
+    const mainHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+    nativeSurfaceMocks.prepare.mockReturnValue({
+      ready: false,
+      droppedSurfaceIds: ['surface-oauth'],
+    });
+
+    expect(prepareRsbBrowserPopupQueueForHost(mainHost as never)).toBe(false);
+    currentHost = mainHost as never;
+    flushRsbBrowserPopupQueue();
+    expect(nativeSurfaceMocks.transfer).not.toHaveBeenCalled();
+    expect(mainHost.send).not.toHaveBeenCalled();
+  });
+
+  it('native surface 迁移失败时保留队首且绝不向新 host 泄露 surface id', () => {
+    const oldHost = makeContents(1);
+    const detachedHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+    currentHost = detachedHost as never;
+    nativeSurfaceMocks.transfer.mockReturnValue('retryable');
+
+    flushRsbBrowserPopupQueue();
+    expect(detachedHost.send).not.toHaveBeenCalled();
+
+    nativeSurfaceMocks.transfer.mockReturnValue('transferred');
+    flushRsbBrowserPopupQueue();
+    expect(detachedHost.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('已失效 native surface 不阻塞队列里后续仍存活的 popup', () => {
+    const oldHost = makeContents(1);
+    const detachedHost = makeContents(2);
+    const opener = makeContents(42);
+    const deadPopup = makeContents(43);
+    const livePopup = makeContents(44);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+    nativeSurfaceMocks.create
+      .mockReturnValueOnce('surface-dead')
+      .mockReturnValueOnce('surface-live');
+
+    for (const [url, popup] of [
+      ['https://accounts.example.com/dead', deadPopup],
+      ['https://accounts.example.com/live', livePopup],
+    ] as const) {
+      const response = opener.getOpenHandler()!({
+        url,
+        disposition: 'foreground-tab',
+      }) as {
+        createWindow: (options: { webContents: WebContents }) => WebContents;
+      };
+      response.createWindow({ webContents: popup as never });
+    }
+    nativeSurfaceMocks.transfer.mockImplementation((surfaceId) =>
+      surfaceId === 'surface-dead' ? 'gone' : 'transferred',
+    );
+    currentHost = detachedHost as never;
+
+    flushRsbBrowserPopupQueue();
+
+    expect(detachedHost.send).toHaveBeenCalledTimes(1);
+    expect(detachedHost.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/live',
+      disposition: 'foreground-tab',
+      nativePopupSurfaceId: 'surface-live',
+    });
+  });
+
+  it('send 抛错后保留同一 native surface,下一 host 可再次迁移并只投递一次', () => {
+    const oldHost = makeContents(1);
+    const firstHost = makeContents(2);
+    const secondHost = makeContents(3);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = firstHost as never;
+    firstHost.send.mockImplementationOnce(() => {
+      throw new Error('renderer closed during send');
+    });
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+    expect(firstHost.send).toHaveBeenCalledTimes(1);
+
+    currentHost = secondHost as never;
+    flushRsbBrowserPopupQueue();
+
+    expect(nativeSurfaceMocks.transfer.mock.calls).toEqual([
+      ['surface-oauth', firstHost],
+      ['surface-oauth', secondHost],
+    ]);
+    expect(secondHost.send).toHaveBeenCalledTimes(1);
+    expect(secondHost.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+      nativePopupSurfaceId: 'surface-oauth',
+    });
+  });
+
+  it('TTL 淘汰 native popup 时同步释放尚未 claim 的 surface', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T00:00:00Z'));
+    const oldHost = makeContents(1);
+    const detachedHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+
+    vi.advanceTimersByTime(RSB_BROWSER_POPUP_BUFFER_TTL_MS + 1);
+    currentHost = detachedHost as never;
+    flushRsbBrowserPopupQueue();
+
+    expect(nativeSurfaceMocks.dispose).toHaveBeenCalledWith('surface-oauth');
+    expect(detachedHost.send).not.toHaveBeenCalled();
+  });
+
+  it('容量淘汰最老 native popup 时立即释放 surface,其余仍按 FIFO 投递', () => {
+    const oldHost = makeContents(1);
+    const detachedHost = makeContents(2);
+    const opener = makeContents(42);
+    let currentHost: WebContents | null = null;
+    setRsbPopupHostResolver(() => currentHost);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+    nativeSurfaceMocks.create.mockImplementation(
+      (_host, popupContents) => `surface-${popupContents.id}`,
+    );
+
+    for (let index = 0; index < RSB_BROWSER_POPUP_BUFFER_LIMIT + 2; index += 1) {
+      const popup = makeContents(100 + index);
+      const response = opener.getOpenHandler()!({
+        url: `https://accounts.example.com/oauth-${index}`,
+        disposition: 'foreground-tab',
+      }) as {
+        createWindow: (options: { webContents: WebContents }) => WebContents;
+      };
+      response.createWindow({ webContents: popup as never });
+    }
+
+    expect(nativeSurfaceMocks.dispose.mock.calls).toEqual([['surface-100'], ['surface-101']]);
+
+    currentHost = detachedHost as never;
+    flushRsbBrowserPopupQueue();
+
+    expect(detachedHost.send).toHaveBeenCalledTimes(RSB_BROWSER_POPUP_BUFFER_LIMIT);
+    expect(detachedHost.send).toHaveBeenNthCalledWith(1, RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth-2',
+      disposition: 'foreground-tab',
+      nativePopupSurfaceId: 'surface-102',
+    });
+  });
+
+  it('迁移后的 native popup 再开子 popup 时使用实时 owner,不复用旧 host 闭包', () => {
+    const oldHost = makeContents(1);
+    const detachedHost = makeContents(2);
+    const opener = makeContents(42);
+    const popup = makeContents(43);
+    const nestedPopup = makeContents(44);
+    installBrowserGuestHandlers(oldHost as never, opener as never);
+
+    const response = opener.getOpenHandler()!({
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    response.createWindow({ webContents: popup as never });
+    nativeSurfaceMocks.getOwner.mockImplementation((id) =>
+      id === popup.id ? (detachedHost as never) : null,
+    );
+
+    const nestedResponse = popup.getOpenHandler()!({
+      url: 'https://id.example.com/consent',
+      disposition: 'foreground-tab',
+    }) as {
+      createWindow: (options: { webContents: WebContents }) => WebContents;
+    };
+    nestedResponse.createWindow({ webContents: nestedPopup as never });
+
+    expect(nativeSurfaceMocks.create).toHaveBeenLastCalledWith(detachedHost, nestedPopup);
+  });
 });
 
 describe('applyGhostWebviewHardening(意识面板 webview)', () => {
@@ -314,6 +627,9 @@ describe('installDeferredPopupRouter', () => {
     setRsbPopupOpenerResolver(null);
     setRsbPopupOpenerReportSubscriber(null);
     setRsbPopupHostResolver(null);
+    nativeSurfaceMocks.transfer.mockReset();
+    nativeSurfaceMocks.transfer.mockReturnValue('transferred');
+    nativeSurfaceMocks.dispose.mockClear();
   });
 
   function makePopupHarness() {
@@ -515,9 +831,9 @@ describe('installDeferredPopupRouter', () => {
   });
 
   it('延迟路由发送时按当前宿主形态动态解析 host,不发给捕获时的旧 renderer', async () => {
-    // 归属等待期间用户 detach 侧边栏 / 切视图:捕获的 hostContents 的 Shell 已
-    // 退订(fanOut 不缓冲),发过去就是丢 popup。发送时刻经 host resolver 取当前
-    // renderer(与 tab-op bridge 同源),消息落到活着的订阅者。
+    // 归属等待期间用户 detach 侧边栏 / 切视图:捕获的 hostContents 已不是当前
+    // 形态,发过去只会在错误窗口被暂存。发送时刻经 host resolver 取当前
+    // renderer(与 tab-op bridge 同源),消息立即落到活跃订阅者。
     const { childContents, hostContents, popupWindow } = makePopupHarness();
     let registered: { tabId: string; sessionId: string } | null = null;
     const reportListeners = new Set<(id: number) => void>();
@@ -551,13 +867,18 @@ describe('installDeferredPopupRouter', () => {
       openerTabId: 'tab-1',
       openerSessionId: 'session-a',
     });
-    // 旧 host 不再收到 —— 它的 Shell 已退订,发它就是丢消息。
+    // 旧 host 不再收到 —— 它不是当前侧栏形态,不应延迟补收这条消息。
     expect(hostContents.send).not.toHaveBeenCalled();
   });
 
-  it('host resolver 解析失败或返回已销毁 host 时回落捕获的 hostContents', () => {
+  it('detached host 未 ready 时在 main 暂存,ready 后只向新 host 补发一次', () => {
     const { childContents, hostContents, popupWindow } = makePopupHarness();
-    setRsbPopupHostResolver(() => null);
+    let currentHost: WebContents | null = null;
+    const detachedHost = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    } as unknown as WebContents & { send: ReturnType<typeof vi.fn> };
+    setRsbPopupHostResolver(() => currentHost);
 
     installDeferredPopupRouter(
       hostContents,
@@ -566,10 +887,110 @@ describe('installDeferredPopupRouter', () => {
     );
     childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
 
-    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+    expect(hostContents.send).not.toHaveBeenCalled();
+    expect(detachedHost.send).not.toHaveBeenCalled();
+
+    currentHost = detachedHost;
+    flushRsbBrowserPopupQueue();
+    flushRsbBrowserPopupQueue();
+
+    expect(detachedHost.send).toHaveBeenCalledTimes(1);
+    expect(detachedHost.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
       url: 'https://accounts.example.com/oauth',
       disposition: 'foreground-tab',
     });
+  });
+
+  it('main backlog 仅保留最新上限,避免无人 host 时无限堆积', () => {
+    let currentHost: WebContents | null = null;
+    const readyHost = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    } as unknown as WebContents & { send: ReturnType<typeof vi.fn> };
+    setRsbPopupHostResolver(() => currentHost);
+
+    for (let i = 0; i < RSB_BROWSER_POPUP_BUFFER_LIMIT + 2; i += 1) {
+      const { childContents, hostContents, popupWindow } = makePopupHarness();
+      installDeferredPopupRouter(
+        hostContents,
+        popupWindow as unknown as BrowserWindow,
+        'foreground-tab',
+      );
+      childContents.emit('will-navigate', {}, `https://accounts.example.com/oauth-${i}`);
+      expect(hostContents.send).not.toHaveBeenCalled();
+    }
+    currentHost = readyHost;
+    flushRsbBrowserPopupQueue();
+
+    expect(readyHost.send).toHaveBeenCalledTimes(RSB_BROWSER_POPUP_BUFFER_LIMIT);
+    expect(readyHost.send).not.toHaveBeenCalledWith(
+      RSB_BROWSER_POPUP_CHANNEL,
+      expect.objectContaining({ url: 'https://accounts.example.com/oauth-0' }),
+    );
+    expect(readyHost.send).toHaveBeenLastCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: `https://accounts.example.com/oauth-${RSB_BROWSER_POPUP_BUFFER_LIMIT + 1}`,
+      disposition: 'foreground-tab',
+    });
+  });
+
+  it('host send 中途失败时从失败项原序重试,不重复已成功项', () => {
+    let currentHost: WebContents | null = null;
+    let sendAttempt = 0;
+    const send = vi.fn<(channel: string, payload: unknown) => void>(() => {
+      sendAttempt += 1;
+      if (sendAttempt === 2) throw new Error('renderer changed during flush');
+    });
+    const readyHost = {
+      isDestroyed: vi.fn(() => false),
+      send,
+    } as unknown as WebContents;
+    setRsbPopupHostResolver(() => currentHost);
+
+    for (const suffix of ['one', 'two', 'three']) {
+      const { childContents, hostContents, popupWindow } = makePopupHarness();
+      installDeferredPopupRouter(
+        hostContents,
+        popupWindow as unknown as BrowserWindow,
+        'foreground-tab',
+      );
+      childContents.emit('will-navigate', {}, `https://accounts.example.com/${suffix}`);
+    }
+
+    currentHost = readyHost;
+    flushRsbBrowserPopupQueue();
+    flushRsbBrowserPopupQueue();
+
+    const deliveredUrls = send.mock.calls.map(([, payload]) => (payload as { url: string }).url);
+    expect(deliveredUrls).toEqual([
+      'https://accounts.example.com/one',
+      'https://accounts.example.com/two',
+      'https://accounts.example.com/two',
+      'https://accounts.example.com/three',
+    ]);
+  });
+
+  it('main backlog 超过 TTL 后不再把陈旧 OAuth URL 发给新 host', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T00:00:00Z'));
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    let currentHost: WebContents | null = null;
+    const readyHost = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    } as unknown as WebContents & { send: ReturnType<typeof vi.fn> };
+    setRsbPopupHostResolver(() => currentHost);
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/stale');
+
+    vi.advanceTimersByTime(RSB_BROWSER_POPUP_BUFFER_TTL_MS + 1);
+    currentHost = readyHost;
+    flushRsbBrowserPopupQueue();
+
+    expect(readyHost.send).not.toHaveBeenCalled();
   });
 
   it('注入的 report 订阅器抛错时退化为超时兜底,popup 路由不中断', async () => {
@@ -725,19 +1146,13 @@ describe('resolveGuestShortcutAction', () => {
   it('matches darwin bracket tab cycling in webview input even when code is unreliable', () => {
     const getCombos = combosFor('darwin');
     expect(
-      resolveGuestShortcutAction(
-        key('Unidentified', { meta: true, shift: true }, '}'),
-        getCombos,
-      ),
+      resolveGuestShortcutAction(key('Unidentified', { meta: true, shift: true }, '}'), getCombos),
     ).toEqual({
       kind: 'command',
       command: 'right-tab-next',
     });
     expect(
-      resolveGuestShortcutAction(
-        key('Unidentified', { meta: true, shift: true }, '{'),
-        getCombos,
-      ),
+      resolveGuestShortcutAction(key('Unidentified', { meta: true, shift: true }, '{'), getCombos),
     ).toEqual({
       kind: 'command',
       command: 'right-tab-prev',
@@ -796,10 +1211,7 @@ describe('resolveGuestShortcutAction', () => {
       'win32',
     );
     expect(
-      resolveGuestShortcutAction(
-        key('KeyW', { control: true }),
-        (id) => effective.get(id) ?? [],
-      ),
+      resolveGuestShortcutAction(key('KeyW', { control: true }), (id) => effective.get(id) ?? []),
     ).toEqual({ kind: 'command', command: 'close-tab' });
   });
 
