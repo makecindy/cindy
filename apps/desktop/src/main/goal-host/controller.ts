@@ -522,8 +522,9 @@ export class GoalController {
       ...extra,
       reason: extra?.reason ?? undefined,
       // extra.lifecycleId 优先(fast-terminal 补发显式盖章,防 turns owner 被清后
-      // 写出 undefined 或新生命周期的 id),否则回退当前 boundary。
-      lifecycleId: extra?.lifecycleId ?? boundary?.lifecycleId,
+      // 写出 undefined 或新生命周期的 id),否则回退当前 boundary;仍无 owner
+      // (登出后残留/异常事件)兜底 g0——lifecycleId 必填,杜绝漏填导致排序失配。
+      lifecycleId: extra?.lifecycleId ?? boundary?.lifecycleId ?? 'g0',
       // extra.generation 可能为 undefined(派发未固化时),不得覆盖已设的
       // boundary.generation 破坏 schema——显式兜底。
       generation: extra?.generation ?? boundary?.generation ?? 0,

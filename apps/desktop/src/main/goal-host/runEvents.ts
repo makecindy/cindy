@@ -24,8 +24,9 @@ export interface GoalRunEvent {
   type: GoalRunEventType;
   goalSessionId: string;
   /** 生命周期唯一 id(freshTurn 每次换代生成):generation 会被 freshTurn 重置为 0,
-   * 同 generation 不证明同生命周期——排序/配对以 lifecycleId 为准。 */
-  lifecycleId?: string;
+   * 同 generation 不证明同生命周期——排序/配对以 lifecycleId 为准。
+   * 必填:recordRunEvent helper 统一兜底(无 owner 的事件用 g0),杜绝漏填。 */
+  lifecycleId: string;
   /** 生命周期 generation —— 防 Stop/Resume 换代后旧事件串台(与 controller 同语义)。 */
   generation: number;
   /**

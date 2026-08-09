@@ -13,6 +13,7 @@ function evt(partial: Partial<GoalRunEvent> = {}): GoalRunEvent {
   return {
     type: 'turn-dispatched',
     goalSessionId: 's1',
+    lifecycleId: 'g1',
     generation: 1,
     turnIndex: 1,
     budget: {
