@@ -198,14 +198,26 @@ describe('CustomProviderDialog preset locale ownership', () => {
       }),
     ).not.toBeNull();
 
-    fireEvent.keyDown(document, { key: 'Escape' });
-    expect(
-      screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
-    ).toBeNull();
-    expect(onClose).not.toHaveBeenCalled();
+    // Radix Popover 的退场 DismissableLayer 会短暂保留 document-capture
+    // listener。显式模拟它消费 Escape，确保 window-capture 的当前层 owner
+    // 先结算 picker，而不是被一个已关闭的菜单吞掉。
+    const staleLayerListener = vi.fn((event: KeyboardEvent) => event.preventDefault());
+    document.addEventListener('keydown', staleLayerListener, true);
+    try {
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
+        ).toBeNull(),
+      );
+      expect(staleLayerListener).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(document, { key: 'Escape' });
-    expect(onClose).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener('keydown', staleLayerListener, true);
+    }
   });
 
   it('dismisses only the model picker on its scrim gesture', async () => {

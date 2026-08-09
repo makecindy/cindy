@@ -104,4 +104,20 @@ describe('session notification copy', () => {
     setMainLocale('zh-TW');
     expect(getSessionNotificationBody('needs-reply')).toBe('需要你回覆');
   });
+
+  it.each(['foo$&bar', 'foo$`bar', "foo$'bar", 'foo$$bar'])(
+    '将包含 JavaScript replacement token 的标题 %s 原样插入三种外部通知',
+    (title) => {
+      setMainLocale('en');
+      expect(getSessionExternalNotificationText(title, 'done')).toBe(
+        `Cindy · Session “${title}” completed ✓`,
+      );
+      expect(getSessionExternalNotificationText(title, 'error')).toBe(
+        `Cindy · Session “${title}” failed`,
+      );
+      expect(getSessionExternalNotificationText(title, 'needs-reply')).toBe(
+        `Cindy · Session “${title}” needs your reply`,
+      );
+    },
+  );
 });

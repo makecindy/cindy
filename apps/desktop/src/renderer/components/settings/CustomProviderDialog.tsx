@@ -14,7 +14,7 @@
  * DESIGN.md §4 规定的 `--surface-elevated`(压在 ivory settings 卡上的输入必须用它)。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 
@@ -116,6 +116,14 @@ interface CustomProviderDialogProps {
 }
 
 type ModelRow = ProviderRuntimeModelConfig;
+interface ModelPickerState {
+  agent: DialogAgentKind;
+  models: ModelRow[];
+  selected: Set<string>;
+  query: string;
+}
+type DialogChildLayer =
+  { kind: 'preset-menu' } | { kind: 'model-picker'; value: ModelPickerState } | null;
 interface HeaderRow {
   name: string;
   value: string;
@@ -356,9 +364,9 @@ export function CustomProviderDialog({
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
-  // 嵌套 dismiss layer 的 open 状态由表单统一持有：Radix Popover 只负责呈现，
-  // 不再与表单的 Escape / scrim 关闭路径各自维护一份互不知情的状态。
-  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  // 嵌套 dismiss layer 互斥且由表单统一持有：Radix Popover 只负责呈现，
+  // 不再让退场中的菜单与新打开的模型选择器同时成为 Escape owner。
+  const [childLayer, setChildLayer] = useState<DialogChildLayer>(null);
   // per-runtime 测试连接状态。
   const [test, setTest] = useState<Record<DialogAgentKind, TestState>>({
     'claude-code': IDLE_TEST,
@@ -372,39 +380,43 @@ export function CustomProviderDialog({
     pi: false,
   });
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
-  const [picker, setPicker] = useState<{
-    agent: DialogAgentKind;
-    models: ModelRow[];
-    selected: Set<string>;
-    query: string;
-  } | null>(null);
+  const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
+  const presetMenuOpen = childLayer?.kind === 'preset-menu';
+  // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
+  // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
+  const childLayerRef = useRef(childLayer);
+  const onCloseRef = useRef(onClose);
+  useLayoutEffect(() => {
+    childLayerRef.current = childLayer;
+    onCloseRef.current = onClose;
+  }, [childLayer, onClose]);
 
   // Dismissible form contract:一个关闭输入只结算最上层一次。模型选择器优先于
   // 预设菜单，最后才是表单；Cancel 仍直接表示用户要关闭表单，且无重复 ×。
   const dismissTopmostLayer = useCallback(() => {
-    if (picker) {
-      setPicker(null);
+    const activeLayer = childLayerRef.current;
+    if (activeLayer) {
+      // 同一事件周期内先同步更新 owner，避免快速连续输入重复结算旧层。
+      childLayerRef.current = null;
+      setChildLayer((current) => (current === activeLayer ? null : current));
       return;
     }
-    if (presetMenuOpen) {
-      setPresetMenuOpen(false);
-      return;
-    }
-    onClose();
-  }, [onClose, picker, presetMenuOpen]);
+    onCloseRef.current();
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
       if (event.isComposing || event.keyCode === 229) return;
-      // Radix DismissableLayer 在 capture 阶段结算自己的最上层并 preventDefault；
-      // 底层表单不得在 bubble 阶段再次消费同一事件。
-      if (event.defaultPrevented) return;
+      // 在 Radix 的 document capture 之前由唯一 owner 结算；否则菜单的 80ms
+      // 退场层仍可能 preventDefault，吞掉刚打开的模型选择器的 Escape。
+      event.preventDefault();
+      event.stopPropagation();
       dismissTopmostLayer();
     };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [dismissTopmostLayer]);
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
@@ -736,7 +748,10 @@ export function CustomProviderDialog({
             };
           }),
         ];
-        setPicker({ agent, models: rows, selected: new Set(currentById.keys()), query: '' });
+        setChildLayer({
+          kind: 'model-picker',
+          value: { agent, models: rows, selected: new Set(currentById.keys()), query: '' },
+        });
         // 弹层锁定所属 runtime：把背景 Tab 同步切回请求的 runtime（标题也带 runtime 名），
         // 请求期间切过 Tab 也不会在错误上下文里确认。
         setActiveTab(agent);
@@ -851,7 +866,9 @@ export function CustomProviderDialog({
       }
       return next;
     });
-    setPicker(null);
+    setChildLayer((current) =>
+      current?.kind === 'model-picker' && current.value === picker ? null : current,
+    );
   }, [picker, patch]);
 
   const handleSave = useCallback(async () => {
@@ -1117,7 +1134,14 @@ export function CustomProviderDialog({
                 placeholder={t('settings.providers.custom.presets.placeholder')}
                 locale={i18n.language}
                 open={presetMenuOpen}
-                onOpenChange={setPresetMenuOpen}
+                onOpenChange={(open) => {
+                  setChildLayer((current) => {
+                    if (open) {
+                      return current?.kind === 'model-picker' ? current : { kind: 'preset-menu' };
+                    }
+                    return current?.kind === 'preset-menu' ? null : current;
+                  });
+                }}
               />
             </div>
           )}
@@ -1803,9 +1827,13 @@ export function CustomProviderDialog({
       {picker && (
         <ModelPickerOverlay
           picker={picker}
-          onChange={setPicker}
+          onChange={(next) => {
+            setChildLayer((current) =>
+              current?.kind === 'model-picker' ? { kind: 'model-picker', value: next } : current,
+            );
+          }}
           onConfirm={applyPicker}
-          onClose={() => setPicker(null)}
+          onClose={dismissTopmostLayer}
         />
       )}
     </div>
@@ -1819,13 +1847,8 @@ function ModelPickerOverlay({
   onConfirm,
   onClose,
 }: {
-  picker: { agent: DialogAgentKind; models: ModelRow[]; selected: Set<string>; query: string };
-  onChange: (next: {
-    agent: DialogAgentKind;
-    models: ModelRow[];
-    selected: Set<string>;
-    query: string;
-  }) => void;
+  picker: ModelPickerState;
+  onChange: (next: ModelPickerState) => void;
   onConfirm: () => void;
   onClose: () => void;
 }) {

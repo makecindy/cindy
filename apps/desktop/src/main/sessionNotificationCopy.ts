@@ -30,5 +30,7 @@ export function getSessionNotificationUntitled(): string {
 }
 
 export function getSessionExternalNotificationText(title: string, kind: SessionEventKind): string {
-  return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', title);
+  // replacement 必须是函数：任务标题是原样数据，`$&` / `$\`` / `$'` / `$$`
+  // 等 JavaScript replacement token 不能被解释成模板控制符。
+  return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', () => title);
 }
