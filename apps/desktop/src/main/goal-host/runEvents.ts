@@ -117,6 +117,12 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
         const m = /^g(\d+)$/.exec(id);
         return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
       };
+      // state-transition 例外:resumeGoal 的迁移(to: 'active')在 resumed 标记之前
+      // 落环,若当 closeout 会被排到 resumed 后——消费者先看到 resumed 再看到
+      // paused→active,因果倒置;只有派发后的迁移(to: complete/budgetLimited 等)
+      // 才算收口类(Codex P1)。
+      const isCloseout = (evt: GoalRunEvent): boolean =>
+        evt.type === 'state-transition' ? evt.to !== 'active' : closeoutGroup.has(evt.type);
       return ring
         .map((evt, idx) => ({
           _seq: idx,
@@ -133,8 +139,8 @@ export function createRunEventRecorder(limit = 200, sink?: RunEventSink): GoalRu
             // 仅派发类 vs 收口类跨组时用类型次序,其余保持插入序。
             const aD = dispatchGroup.has(a.type);
             const bD = dispatchGroup.has(b.type);
-            const aF = closeoutGroup.has(a.type);
-            const bF = closeoutGroup.has(b.type);
+            const aF = isCloseout(a);
+            const bF = isCloseout(b);
             if (aD && bF) return -1;
             if (aF && bD) return 1;
           }
