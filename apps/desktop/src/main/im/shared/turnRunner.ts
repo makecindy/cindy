@@ -2626,7 +2626,11 @@ export function createTurnRunner(
   }
 
   async function cleanupFallbackMedia(turn: TurnState): Promise<void> {
-    for (const tempDir of turn.mediaTempDirs) {
+    const tempDirs = [...turn.mediaTempDirs];
+    // Claim the directories synchronously so terminal and session cleanup
+    // cannot race into duplicate removals while the first rm is in flight.
+    turn.mediaTempDirs.clear();
+    for (const tempDir of tempDirs) {
       try {
         await fs.rm(tempDir, { recursive: true, force: true });
       } catch (err) {
@@ -2638,7 +2642,6 @@ export function createTurnRunner(
         });
       }
     }
-    turn.mediaTempDirs.clear();
   }
 
   async function handleTurnErrorAsync(
@@ -3130,7 +3133,7 @@ export function createTurnRunner(
 
   function detachSessionStateNow(sessionId: string, state: SessionState): void {
     sessionStates.delete(sessionId);
-    cleanupSessionState(state);
+    void cleanupSessionState(state);
     settleDetachDrain(state, 'rewire');
     log.info(`detached ${channel} hook from session=${sessionId.slice(-8)}`);
   }
@@ -3149,7 +3152,7 @@ export function createTurnRunner(
       // attached desktop-originated turn may make isTurnRunning() true while
       // queue stays empty; logout must not abort that desktop-owned work.
       const hasImTurnInFlight = state.queue.length > 0;
-      cleanupSessionState(state);
+      aborts.push(cleanupSessionState(state));
       settleDetachDrain(state, 'cancelled');
       if (hasImTurnInFlight) {
         aborts.push(
@@ -3211,7 +3214,7 @@ export function createTurnRunner(
     const state = sessionStates.get(sessionId);
     if (!state) return;
     sessionStates.delete(sessionId);
-    cleanupSessionState(state);
+    await cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');
     try {
       await state.makerSession.close();
@@ -3225,12 +3228,12 @@ export function createTurnRunner(
     const state = sessionStates.get(sessionId);
     if (!state) return;
     sessionStates.delete(sessionId);
-    cleanupSessionState(state);
+    void cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');
     log.info(`forgot cached ${channel} session=${sessionId.slice(-8)} after ${reason}`);
   }
 
-  function cleanupSessionState(state: SessionState): void {
+  function cleanupSessionState(state: SessionState): Promise<void> {
     clearPendingSends(state);
     clearQueuedTurnTimers(state);
     for (const u of state.unsubscribers) {
@@ -3240,12 +3243,15 @@ export function createTurnRunner(
         /* swallow */
       }
     }
+    const mediaCleanups: Promise<void>[] = [];
     for (const turn of state.queue) {
       releaseTurnInteractionRoute(turn, 'session_cleanup');
       turn.terminalKind = 'aborted';
       turn.terminalErrorCode ??= 'session_cleanup';
       settleTurnTerminal(turn);
+      mediaCleanups.push(cleanupFallbackMedia(turn));
     }
+    return Promise.all(mediaCleanups).then(() => undefined);
   }
 
   return {

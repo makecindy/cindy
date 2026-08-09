@@ -4,6 +4,9 @@
  * 与重构前一致(characterization)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { TurnPermissionPolicyUnsupportedError } from '@cindy/maker-core';
 import type {
@@ -907,6 +910,48 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', 'after ask', {
       threadTs: undefined,
     });
+  });
+
+  it('cleans staged fallback attachments when a pending interaction session is disposed', async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'cindy-im-fallback-cleanup-'));
+    try {
+      mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create failed'));
+      mocks.materializeLocalMarkdownFiles.mockResolvedValueOnce({
+        files: [{ absPath: path.join(tempDir, 'secret.pdf'), displayName: 'secret.pdf' }],
+        tempDirs: [tempDir],
+        text: 'before ask\nsecret.pdf',
+      });
+      mocks.feishuIm.sendFile.mockResolvedValueOnce({ ok: false, reason: 'UPLOAD_FAIL' });
+      mocks.buildAskUserCard.mockReturnValue({ elements: [] });
+      mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'ask-cleanup' });
+      mocks.registerPending.mockImplementationOnce(
+        () => new Promise<InteractionDecision>(() => undefined),
+      );
+      const h = setupSession(async () => ({ accepted: true }));
+
+      await runDefaultTurn();
+      h.emit({
+        type: 'text',
+        data: {
+          text: 'before ask\n[secret.pdf](xdt-file:///F:/XDMaker/secret.pdf)',
+          isFinal: true,
+        },
+      });
+      await flushMicrotasks();
+      void h.dispatchInteraction({
+        kind: 'ask_user_question',
+        requestId: 'ask-cleanup',
+        questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+      });
+      await waitForAssertion(() => expect(mocks.feishuIm.sendFile).toHaveBeenCalledOnce());
+
+      await runner?.disposeAllSessions();
+      runner = null;
+
+      await expect(stat(tempDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('does not resend media already delivered before an interaction boundary', async () => {

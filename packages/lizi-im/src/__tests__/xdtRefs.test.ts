@@ -236,6 +236,32 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
     expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('\\`报告\\`');
   });
 
+  it('redacts escaped file links without collecting them for upload', () => {
+    const text =
+      '\\[示例](xdt-file:///tmp/secret.pdf) and \\\\[报告](xdt-file:///tmp/report.pdf)';
+
+    expect(collectXdtFileLinks(text)).toEqual([
+      { alt: '报告', absPath: '/tmp/report.pdf' },
+    ]);
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(
+      '\\示例 and \\\\报告',
+    );
+  });
+
+  it('applies the same escaped-marker rule to managed images', () => {
+    const escaped = `cindy-media://blobs/${'e'.repeat(64)}.png`;
+    const deliverable = `cindy-media://blobs/${'d'.repeat(64)}.png`;
+    const text = `\\![示例](${escaped}) and \\\\![图片](${deliverable})`;
+
+    expect(collectXdtImageUrls(text)).toEqual([deliverable]);
+    expect(transformXdtRefs(text, { image: ({ alt }) => alt })).toBe(
+      '\\示例 and \\\\图片',
+    );
+  });
+
   it('ignores file references inside blockquote and list-container fences', () => {
     const quoted = '> ~~~md\n> [报告](xdt-file:///tmp/quoted.pdf)\n> ~~~';
     const listed = '- ```md\n  [报告](xdt-file:///tmp/listed.pdf)\n  ```';

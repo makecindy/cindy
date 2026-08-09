@@ -23,6 +23,7 @@ export interface XdtImageRef {
 
 interface ParsedXdtRef extends XdtImageRef {
   kind: 'image' | 'file';
+  escaped: boolean;
 }
 
 export interface MarkdownCodeRange {
@@ -548,6 +549,7 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     if (urlEnd > schemeStart + scheme.length) {
       refs.push({
         kind: image ? 'image' : 'file',
+        escaped: isEscapedAt(text, start),
         alt: text.slice(altStart, altEnd),
         url: text.slice(schemeStart, urlEnd),
         start,
@@ -647,7 +649,7 @@ export interface XdtFileLink {
 export function collectXdtFileLinks(text: string): XdtFileLink[] {
   const seen = new Map<string, XdtFileLink>();
   for (const ref of parseXdtRefs(text)) {
-    if (ref.kind !== 'file') continue;
+    if (ref.kind !== 'file' || ref.escaped) continue;
     const absPath = xdtFileUrlToAbsPath(ref.url);
     if (seen.has(absPath)) continue;
     seen.set(absPath, { alt: ref.alt, absPath });
@@ -658,7 +660,7 @@ export function collectXdtFileLinks(text: string): XdtFileLink[] {
 /** Collect managed-image refs in source order, including text offsets. */
 export function collectXdtImageRefs(text: string): XdtImageRef[] {
   return parseXdtRefs(text)
-    .filter((ref) => ref.kind === 'image')
+    .filter((ref) => ref.kind === 'image' && !ref.escaped)
     .map(({ alt, url, start, end }) => ({ alt, url, start, end }));
 }
 
@@ -672,7 +674,7 @@ export type XdtFileRef = XdtImageRef;
  */
 export function collectXdtFileRefs(text: string): XdtFileRef[] {
   return parseXdtRefs(text)
-    .filter((ref) => ref.kind === 'file')
+    .filter((ref) => ref.kind === 'file' && !ref.escaped)
     .map(({ alt, url, start, end }) => ({ alt, url, start, end }));
 }
 
