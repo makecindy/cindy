@@ -389,6 +389,10 @@ const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
 const fanOutPluginUpgradeNoticeAvailable = createIpcFanOut(
   'plugin-market:upgrade-notice-available',
 );
+const fanOutPluginRecoveryAvailable = createIpcFanOut('plugin-market:recovery-available');
+const fanOutPluginRecoveryNoticeAvailable = createIpcFanOut(
+  'plugin-market:recovery-notice-available',
+);
 const fanOutPluginMarketPackagePermissionReview = createIpcFanOut(
   'plugin-market:package-permission-review',
 );
@@ -1227,6 +1231,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       import('../shared/pluginMarket').PluginUpgradeUserNotice | null
     > => ipcRenderer.invoke('plugin-market:consume-upgrade-notice'),
     onUpgradeNoticeAvailable: fanOutPluginUpgradeNoticeAvailable,
+    recoveryStatus: (): Promise<import('../shared/pluginMarket').PluginRecoveryStatus> =>
+      ipcRenderer.invoke('plugin-market:recovery-status'),
+    resolveRecovery: (
+      proposalId: string,
+      decision: import('../shared/pluginMarket').PluginRecoveryDecision,
+    ): Promise<import('../shared/pluginMarket').PluginRecoveryResolution> =>
+      ipcRenderer.invoke('plugin-market:resolve-recovery', { proposalId, decision }),
+    onRecoveryAvailable: fanOutPluginRecoveryAvailable,
+    consumeRecoveryNotice: (): Promise<
+      import('../shared/pluginMarket').PluginRecoveryUserNotice | null
+    > => ipcRenderer.invoke('plugin-market:consume-recovery-notice'),
+    onRecoveryNoticeAvailable: fanOutPluginRecoveryNoticeAvailable,
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
     pickLocalSource: (
@@ -1782,7 +1798,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
     }> => ipcRenderer.invoke('discordBot:disconnect'),
-    setLifecycleAnnouncement: (enabled: boolean): Promise<{
+    setLifecycleAnnouncement: (
+      enabled: boolean,
+    ): Promise<{
       ok: boolean;
       lifecycleAnnouncement: boolean;
     }> => ipcRenderer.invoke('discordBot:set-lifecycle-announcement', { enabled }),
@@ -2073,10 +2091,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /**
    * 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」,
    * renderer 收到后 patchDraft 写真实草稿。仅被控端进程消费。
-  */
+   */
   onMakerWorktreePrefApply: fanOutMakerWorktreePrefApply,
   /** 读取工作端 canonical baseRepo 对应的 live 源分支选择；未选择返回 null。 */
-  getNewMakerWorktreeBranchPreference: (baseRepo: string): Promise<{
+  getNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+  ): Promise<{
     baseRepo: string;
     sourceBranch: string;
     revision: number;
@@ -5234,8 +5254,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workerSessionId: string;
       workerId: string;
       workerPermissionMode: 'auto' | 'bypassPermissions';
-    }> =>
-      ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
+    }> => ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
 
     /**
      * F-COLLAB: 关闭 lead session 的当前协同 workflow。

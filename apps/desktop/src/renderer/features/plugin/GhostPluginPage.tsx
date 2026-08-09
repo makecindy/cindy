@@ -80,6 +80,7 @@ import type {
   PluginMarketInstallOptions,
   PluginMarketItem,
   PluginMarketSnapshot,
+  PluginRecoveryStatus,
 } from '../../../shared/pluginMarket';
 import type { LegacyGhostRecoveryStatus } from '../../../shared/legacyGhostRecovery';
 import {
@@ -339,6 +340,21 @@ export function GhostPluginPage() {
   const [legacyRecoveryStatus, setLegacyRecoveryStatus] =
     useState<LegacyGhostRecoveryStatus | null>(null);
   const [legacyRecoveryRetrying, setLegacyRecoveryRetrying] = useState(false);
+  const recoveryStatusRequestRef = useRef(0);
+  const [recoveryStatus, setRecoveryStatus] = useState<PluginRecoveryStatus | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const pullRecoveryStatus = useCallback(async () => {
+    const requestId = ++recoveryStatusRequestRef.current;
+    try {
+      const status = await window.electronAPI.pluginMarket.recoveryStatus();
+      if (requestId !== recoveryStatusRequestRef.current) return;
+      setRecoveryStatus(status.state === 'none' ? null : status);
+    } catch {
+      if (requestId === recoveryStatusRequestRef.current) {
+        setRecoveryStatus({ state: 'failed', proposal: null });
+      }
+    }
+  }, []);
   const refreshMarket = useCallback(async (preserveOnError = false) => {
     const requestId = ++marketRefreshRequestRef.current;
     try {
@@ -458,6 +474,35 @@ export function GhostPluginPage() {
         }
       });
   }, [dataOwnerId, installedGhostLocationsKey, mode]);
+  useEffect(() => {
+    recoveryStatusRequestRef.current += 1;
+    setRecoveryStatus(null);
+    setRecoveryBusy(false);
+  }, [dataOwnerId, mode]);
+  useEffect(() => {
+    if (!dataOwnerId || (mode !== 'cloud' && mode !== 'local')) {
+      recoveryStatusRequestRef.current += 1;
+      setRecoveryStatus(null);
+      return;
+    }
+    void pullRecoveryStatus();
+  }, [dataOwnerId, marketSnapshot, mode, pullRecoveryStatus]);
+  useEffect(
+    () =>
+      window.electronAPI.pluginMarket.onRecoveryAvailable(() => {
+        void pullRecoveryStatus();
+      }),
+    [pullRecoveryStatus],
+  );
+  useEffect(() => {
+    const handleResolved = () => {
+      void refreshMarket(true).catch(() => undefined);
+    };
+    window.addEventListener('plugin-market:recovery-resolved', handleResolved);
+    return () => {
+      window.removeEventListener('plugin-market:recovery-resolved', handleResolved);
+    };
+  }, [refreshMarket]);
   // /plugins?ghost=<id> 深链:直接打开该插件详情(配置就绪弹窗等入口复用;
   // 读后即清参数,避免从详情返回列表后又被同一参数拉回详情)。
   useEffect(() => {
@@ -931,6 +976,37 @@ export function GhostPluginPage() {
     }
   }, [refreshMarket]);
 
+  const handleRetryPluginRecovery = useCallback(async () => {
+    setRecoveryBusy(true);
+    try {
+      await refreshMarket();
+      const status = await window.electronAPI.pluginMarket.recoveryStatus();
+      setRecoveryStatus(status.state === 'none' ? null : status);
+    } catch {
+      setRecoveryStatus({ state: 'failed', proposal: null });
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }, [refreshMarket]);
+
+  const handleKeepPluginRecovery = useCallback(async () => {
+    const proposal = recoveryStatus?.proposal;
+    if (!proposal) return;
+    setRecoveryBusy(true);
+    try {
+      const result = await window.electronAPI.pluginMarket.resolveRecovery(
+        proposal.proposalId,
+        'keep',
+      );
+      setRecoveryStatus(result.status.state === 'none' ? null : result.status);
+      await refreshMarket();
+    } catch (error) {
+      toast.error(t(pluginMarketErrorKey(error)));
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }, [recoveryStatus, refreshMarket, t]);
+
   const handleCreateWithCindy = useCallback(() => {
     saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
       text: plainTextToTiptapDoc(t('settings.ghosts.page.createPrompt')),
@@ -1394,6 +1470,15 @@ export function GhostPluginPage() {
                 </span>
               </div>
 
+              {recoveryStatus ? (
+                <PluginRecoveryNotice
+                  status={recoveryStatus}
+                  busy={recoveryBusy}
+                  onRetry={() => void handleRetryPluginRecovery()}
+                  onKeep={() => void handleKeepPluginRecovery()}
+                />
+              ) : null}
+
               {legacyRecoveryStatus ? (
                 <LegacyGhostRecoveryNotice
                   status={legacyRecoveryStatus}
@@ -1491,7 +1576,7 @@ export function GhostPluginPage() {
                     </InstalledPluginOverflow>
                   ) : null}
                 </>
-              ) : !legacyRecoveryStatus ? (
+              ) : !legacyRecoveryStatus && !recoveryStatus ? (
                 <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-5 py-10 text-center">
                   <p className="text-13 text-[var(--text-secondary)]">
                     {installedItems.length === 0
@@ -1655,6 +1740,66 @@ export function GhostPluginPage() {
   );
 }
 
+export function PluginRecoveryNotice({
+  status,
+  busy,
+  onRetry,
+  onKeep,
+}: {
+  status: PluginRecoveryStatus;
+  busy: boolean;
+  onRetry: () => void;
+  onKeep: () => void;
+}) {
+  const { t } = useTranslation();
+  if (status.state === 'none') return null;
+  const count = status.proposal?.candidates.length ?? 0;
+  const messageKey =
+    status.state === 'review'
+      ? 'settings.ghosts.recovery.inline.review'
+      : status.state === 'pending'
+        ? 'settings.ghosts.recovery.inline.pending'
+        : status.state === 'deferred'
+          ? 'settings.ghosts.recovery.inline.deferred'
+          : 'settings.ghosts.recovery.inline.failed';
+  return (
+    <div className="mb-4 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 py-4 text-left">
+      <p className="text-14 font-medium text-[var(--text-primary)]">
+        {t('settings.ghosts.recovery.inline.title')}
+      </p>
+      <p className="mt-1.5 text-13 leading-5 text-[var(--text-secondary)]">
+        {t(messageKey, { count })}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2.5">
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={busy}
+          className={cn(
+            'inline-flex h-9 items-center rounded-full border border-[var(--border-default)] px-4 text-12 font-medium text-[var(--text-primary)]',
+            'transition-[background-color,border-color,opacity,transform] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait disabled:opacity-55 disabled:active:scale-100',
+          )}
+        >
+          {busy
+            ? t('settings.ghosts.recovery.inline.retrying')
+            : t('settings.ghosts.recovery.inline.retry')}
+        </button>
+        {status.state === 'review' && status.proposal ? (
+          <button
+            type="button"
+            onClick={onKeep}
+            disabled={busy}
+            className="inline-flex h-9 items-center rounded-full px-4 text-12 font-medium text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait disabled:opacity-55"
+          >
+            {t('settings.ghosts.recovery.inline.keep')}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function LegacyGhostRecoveryNotice({
   status,
   retrying,
@@ -1721,9 +1866,7 @@ export function MarketPluginCard({
   const unavailable = busy || item.installState === 'conflict';
   const conflictDescriptionId = useId();
   const conflictDescription =
-    item.installState === 'conflict'
-      ? t('settings.ghosts.market.conflictDescription')
-      : undefined;
+    item.installState === 'conflict' ? t('settings.ghosts.market.conflictDescription') : undefined;
   return (
     <article
       className={cn(

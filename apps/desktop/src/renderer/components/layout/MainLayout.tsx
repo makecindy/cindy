@@ -77,6 +77,7 @@ import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
 import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
 import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast';
+import { usePluginRecoveryNoticeToast } from '@/hooks/usePluginRecoveryNoticeToast';
 import { usePluginUpgradeNoticeToast } from '@/hooks/usePluginUpgradeNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
@@ -491,6 +492,7 @@ export function MainLayout() {
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
   usePluginUpgradeNoticeToast();
+  usePluginRecoveryNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
 

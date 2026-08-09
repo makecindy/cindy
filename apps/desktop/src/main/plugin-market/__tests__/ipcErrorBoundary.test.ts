@@ -29,7 +29,7 @@ describe('Plugin Market IPC error boundary', () => {
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
-    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(13);
+    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(16);
   });
 
   it('validates local icon keys with the same reserved-prefix contract as the service', () => {
@@ -51,7 +51,10 @@ describe('Plugin Market IPC error boundary', () => {
     const consumeStart = registerSource.indexOf(
       "ipcMain.handle('plugin-market:consume-removal-notice'",
     );
-    const consumeEnd = registerSource.indexOf("ipcMain.handle('plugin-market:detail'", consumeStart);
+    const consumeEnd = registerSource.indexOf(
+      "ipcMain.handle('plugin-market:detail'",
+      consumeStart,
+    );
     const consumeBody = registerSource.slice(consumeStart, consumeEnd);
     expect(consumeBody).toContain('assertTrustedAppRendererEvent(event);');
     expect(consumeBody).toContain('service().consumeRemovalNotice()');
@@ -63,6 +66,25 @@ describe('Plugin Market IPC error boundary', () => {
     // 判据都在 helper 里),不允许退回手写 getAllWindows 循环。
     expect(signalBody).toContain('sendToTrustedAppWindows(REMOVAL_NOTICE_AVAILABLE_CHANNEL');
     expect(signalBody).not.toContain('getAllWindows');
+  });
+
+  it('keeps recovery candidates in Main and accepts only an opaque proposal decision', () => {
+    const start = registerSource.indexOf("ipcMain.handle('plugin-market:recovery-status'");
+    const end = registerSource.indexOf("ipcMain.handle('plugin-market:detail'", start);
+    const body = registerSource.slice(start, end);
+
+    expect(body.match(/assertTrustedAppRendererEvent\(event\);/g)?.length).toBe(3);
+    expect(body).toContain("requireString(payload.proposalId, 'proposalId')");
+    expect(body).toContain('/^[a-f0-9]{64}$/.test(proposalId)');
+    expect(body).toContain("decision !== 'restore' && decision !== 'keep'");
+    expect(body).not.toContain('candidateId');
+    expect(body).not.toContain('ghostId');
+
+    const signalStart = registerSource.indexOf('function signalRecoveryAvailable()');
+    const signalEnd = registerSource.indexOf('\n}\n', signalStart);
+    expect(registerSource.slice(signalStart, signalEnd)).toContain(
+      'sendToTrustedAppWindows(RECOVERY_AVAILABLE_CHANNEL',
+    );
   });
 
   it('refuses renderer-supplied local paths and only grants them via the picker', () => {
@@ -99,7 +121,10 @@ describe('Plugin Market IPC error boundary', () => {
     const ownerSyncStart = bootstrapSource.indexOf(
       'function syncDefaultPluginsForActiveOwner(): void',
     );
-    const ownerSyncEnd = bootstrapSource.indexOf('\n}\n\nconst registerIpcHandlers', ownerSyncStart);
+    const ownerSyncEnd = bootstrapSource.indexOf(
+      '\n}\n\nconst registerIpcHandlers',
+      ownerSyncStart,
+    );
     const ownerSyncBody = bootstrapSource.slice(ownerSyncStart, ownerSyncEnd);
     expect(ownerSyncBody).toContain(
       'if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;',
@@ -113,10 +138,7 @@ describe('Plugin Market IPC error boundary', () => {
     );
     expect(listenerStart).toBeGreaterThan(-1);
     expect(
-      bootstrapSource.indexOf(
-        'queueMicrotask(syncDefaultPluginsForActiveOwner);',
-        listenerStart,
-      ),
+      bootstrapSource.indexOf('queueMicrotask(syncDefaultPluginsForActiveOwner);', listenerStart),
     ).toBeGreaterThan(listenerStart);
     expect(bootstrapSource).toContain("'plugin-market-auth-listener'");
   });

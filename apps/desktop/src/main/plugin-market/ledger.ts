@@ -2,10 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 
 import type { PluginScope } from '@cindy/plugin-protocol';
-import {
-  atomicWriteFileSync,
-  readAtomicFileSync,
-} from '../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 const LEDGER_SCHEMA_VERSION = 1;
 
@@ -65,14 +62,6 @@ interface PluginMarketLedgerData {
   defaultInstallOptOuts: Record<string, string[]>;
 }
 
-function emptyLedger(): PluginMarketLedgerData {
-  return {
-    schemaVersion: LEDGER_SCHEMA_VERSION,
-    installations: {},
-    defaultInstallOptOuts: {},
-  };
-}
-
 function isCustomRecord(record: PluginMarketInstallationRecord): boolean {
   return record.source === 'git-market' || record.source === 'local-market';
 }
@@ -100,9 +89,7 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
     typeof record.releaseId === 'string' &&
     typeof record.version === 'string' &&
     typeof record.sha256 === 'string' &&
-    (record.scope === 'public' ||
-      record.scope === 'organization' ||
-      record.scope === 'personal') &&
+    (record.scope === 'public' || record.scope === 'organization' || record.scope === 'personal') &&
     (record.organizationId === null || typeof record.organizationId === 'string') &&
     (record.source === 'market' ||
       record.source === 'legacy-adopted' ||
@@ -116,9 +103,10 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
 }
 
 /** 读取并解析一个账本 JSON 文件的 installations 段;文件不存在返回空。 */
-function readInstallationsFile(
-  filePath: string,
-): { installations: Record<string, PluginMarketInstallationRecord>; raw: Record<string, unknown> | null } {
+function readInstallationsFile(filePath: string): {
+  installations: Record<string, PluginMarketInstallationRecord>;
+  raw: Record<string, unknown> | null;
+} {
   // 读失败与解析失败分开处理:文件不存在(ENOENT)才是空;文件在但读不到(文件锁/
   // 权限/瞬时 I/O)或备份救不回来时由 readAtomicFileSync **上抛**——降级成空会让
   // 紧接着的写入把真实记录覆盖掉。只有"内容确实不是合法 JSON"才按空重建。
@@ -168,15 +156,11 @@ export class PluginMarketLedger {
    * Static test/isolated ledgers keep their instance so callers can inspect them.
    */
   bind(filePath: string): PluginMarketLedger {
-    return typeof this.filePathSource === 'function'
-      ? new PluginMarketLedger(filePath)
-      : this;
+    return typeof this.filePathSource === 'function' ? new PluginMarketLedger(filePath) : this;
   }
 
   private filePath(): string {
-    return typeof this.filePathSource === 'function'
-      ? this.filePathSource()
-      : this.filePathSource;
+    return typeof this.filePathSource === 'function' ? this.filePathSource() : this.filePathSource;
   }
 
   /** 自定义溯源账本与主账本同目录（同一 owner 作用域）。 */
@@ -243,6 +227,35 @@ export class PluginMarketLedger {
       ];
     }
     this.write(data);
+  }
+
+  /**
+   * Restores one exact historical record after Main has re-established package
+   * ownership and the user has confirmed recovery. The expected record closes
+   * the review-to-commit race; a newer uninstall or install wins.
+   */
+  restoreInstallation(expected: PluginMarketInstallationRecord, userId: string): boolean {
+    const data = this.read();
+    const current = data.installations[expected.ghostId];
+    const optOuts = data.defaultInstallOptOuts[userId] ?? [];
+    if (
+      !current ||
+      current.installed ||
+      canonicalJson(current) !== canonicalJson(expected) ||
+      !optOuts.includes(current.pluginId)
+    ) {
+      return false;
+    }
+    data.installations[current.ghostId] = {
+      ...current,
+      installed: true,
+      updatedAt: new Date().toISOString(),
+    };
+    const remaining = optOuts.filter((pluginId) => pluginId !== current.pluginId);
+    if (remaining.length > 0) data.defaultInstallOptOuts[userId] = remaining;
+    else delete data.defaultInstallOptOuts[userId];
+    this.write(data);
+    return true;
   }
 
   isDefaultInstallSuppressed(userId: string, pluginId: string): boolean {

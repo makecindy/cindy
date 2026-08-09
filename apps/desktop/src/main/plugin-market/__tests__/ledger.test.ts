@@ -4,10 +4,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  PluginMarketLedger,
-  type PluginMarketInstallationRecord,
-} from '../ledger';
+import { PluginMarketLedger, type PluginMarketInstallationRecord } from '../ledger';
 
 const roots: string[] = [];
 
@@ -51,9 +48,9 @@ describe('PluginMarketLedger', () => {
       source: 'market',
     });
     expect(fs.existsSync(filePath)).toBe(true);
-    expect(
-      fs.readdirSync(path.dirname(filePath)).filter((name) => name.endsWith('.tmp')),
-    ).toEqual([]);
+    expect(fs.readdirSync(path.dirname(filePath)).filter((name) => name.endsWith('.tmp'))).toEqual(
+      [],
+    );
   });
 
   it('records defaultInstall opt-out per authenticated user on removal', () => {
@@ -62,12 +59,52 @@ describe('PluginMarketLedger', () => {
     ledger.markRemoved('cindy-test', 'user-a');
 
     expect(ledger.installationForGhost('cindy-test')?.installed).toBe(false);
-    expect(
-      ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`),
-    ).toBe(true);
-    expect(
-      ledger.isDefaultInstallSuppressed('user-b', `c${'a'.repeat(24)}`),
-    ).toBe(false);
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
+    expect(ledger.isDefaultInstallSuppressed('user-b', `c${'a'.repeat(24)}`)).toBe(false);
+  });
+
+  it('restores only the exact record and removes only its matching user opt-out', () => {
+    const { ledger } = harness();
+    const first = record({ ghostId: 'cindy-first' });
+    const second = record({
+      pluginId: `c${'d'.repeat(24)}`,
+      ghostId: 'cindy-second',
+      releaseId: 'release-2',
+    });
+    ledger.upsertInstallation(first);
+    ledger.markRemoved(first.ghostId, 'user-a');
+    ledger.markRemoved(first.ghostId, 'user-b');
+    ledger.upsertInstallation(second);
+    ledger.markRemoved(second.ghostId, 'user-a');
+    const expected = ledger.installationForGhost(first.ghostId);
+
+    expect(expected).not.toBeNull();
+    expect(ledger.restoreInstallation(expected!, 'user-a')).toBe(true);
+    expect(ledger.installationForGhost(first.ghostId)?.installed).toBe(true);
+    expect(ledger.isDefaultInstallSuppressed('user-a', first.pluginId)).toBe(false);
+    expect(ledger.isDefaultInstallSuppressed('user-a', second.pluginId)).toBe(true);
+    expect(ledger.isDefaultInstallSuppressed('user-b', first.pluginId)).toBe(true);
+    expect(ledger.restoreInstallation(expected!, 'user-a')).toBe(false);
+  });
+
+  it('rejects recovery when any installation field changed after review', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record());
+    ledger.markRemoved('cindy-test', 'user-a');
+    const expected = ledger.installationForGhost('cindy-test');
+    expect(expected).not.toBeNull();
+
+    ledger.upsertInstallation({
+      ...expected!,
+      sha256: 'e'.repeat(64),
+    });
+
+    expect(ledger.restoreInstallation(expected!, 'user-a')).toBe(false);
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({
+      installed: false,
+      sha256: 'e'.repeat(64),
+    });
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
   });
 
   it('fails closed to an empty ledger for malformed or future data', () => {
@@ -108,9 +145,7 @@ describe('PluginMarketLedger', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-ledger-owner-'));
     roots.push(root);
     let owner = 'owner-a';
-    const ledger = new PluginMarketLedger(() =>
-      path.join(root, owner, 'ledger.v1.json'),
-    );
+    const ledger = new PluginMarketLedger(() => path.join(root, owner, 'ledger.v1.json'));
 
     ledger.upsertInstallation(record());
     owner = 'owner-b';
@@ -124,9 +159,7 @@ describe('PluginMarketLedger', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-ledger-bound-'));
     roots.push(root);
     let owner = 'owner-a';
-    const ledger = new PluginMarketLedger(() =>
-      path.join(root, owner, 'ledger.v1.json'),
-    );
+    const ledger = new PluginMarketLedger(() => path.join(root, owner, 'ledger.v1.json'));
     const bound = ledger.bind(path.join(root, owner, 'ledger.v1.json'));
 
     owner = 'owner-b';

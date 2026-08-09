@@ -27,6 +27,7 @@ import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { PluginMarketPermissionReviewHost } from '@/features/plugin/PluginMarketPermissionReviewHost';
+import { PluginRecoveryPromptHost } from '@/features/plugin/PluginRecoveryPromptHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { installSystemNetworkErrorToastListener } from '@/lib/systemNetworkErrorToast';
 import { installSilentInstallToastListener } from '@/lib/silentInstallToast';
@@ -349,6 +350,9 @@ export function App() {
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
                           <PluginMarketPermissionReviewHost />
+                          {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
+                            <PluginRecoveryPromptHost />
+                          )}
                           <OwnerScopedRouter />
                         </EnvCheckGuard>
                       </LoginHandoffHost>

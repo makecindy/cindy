@@ -22,15 +22,17 @@ import {
   type GhostTrustInfo,
   type InstalledGhost,
 } from '../../shared/ghost.js';
-import {
-  verifyGhostZipSignatures,
-  type GhostTrustRegistry,
-} from './ghostSignature.js';
+import { verifyGhostZipSignatures, type GhostTrustRegistry } from './ghostSignature.js';
 import {
   readBoundedFileFollowLinks,
   readBoundedFileNoFollowSync,
 } from '../utils/readBoundedFile.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
+import {
+  GHOST_CONTENT_DIGEST_SKIP_ROOT_FILES,
+  ghostPackageContentDigest,
+  type GhostPackageContentEntry,
+} from './ghostPackageContentDigest.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -65,9 +67,7 @@ export type GhostHostTrustOverride = 'cindy-official';
  * 的 `.cindy-trust.json` 可能被误当成官方插件。其它 trust level 仍保留其
  * 原有兼容字段语义；只有官方 level 要求这组不可缺省的完整字段。
  */
-export function isCindyOfficialTrustInfo(
-  trust: GhostTrustInfo | null | undefined,
-): boolean {
+export function isCindyOfficialTrustInfo(trust: GhostTrustInfo | null | undefined): boolean {
   return (
     trust?.level === CINDY_OFFICIAL_GHOST_TRUST.level &&
     trust.publisherSigned === CINDY_OFFICIAL_GHOST_TRUST.publisherSigned &&
@@ -126,6 +126,28 @@ export type UninstallRejection =
   | { code: 'invalid-id'; reason: string }
   | { code: 'not-installed'; reason: string }
   | { code: 'io'; reason: string };
+
+async function packageEntriesContentDigest(
+  allEntries: readonly JSZip.JSZipObject[],
+  prefix: string,
+): Promise<string> {
+  const files: GhostPackageContentEntry[] = [];
+  for (const entry of [...allEntries].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  )) {
+    if (entry.dir || !entry.name.startsWith(prefix)) continue;
+    const rel = entry.name.slice(prefix.length);
+    if (!rel || GHOST_CONTENT_DIGEST_SKIP_ROOT_FILES.has(rel)) continue;
+    const hash = crypto.createHash('sha256');
+    let bytes = 0;
+    await consumeZipEntry(entry, (chunk) => {
+      bytes += chunk.byteLength;
+      hash.update(chunk);
+    });
+    files.push({ path: rel, bytes, sha256: hash.digest('hex') });
+  }
+  return ghostPackageContentDigest(files);
+}
 
 /**
  * 意识仓库的 main 端管理者:一个意识一个子目录(rootDir/<id>/),目录即事实。
@@ -215,7 +237,9 @@ export class GhostManager {
     const localePath = ghostLocalePathFor(manifest, requestedLocale);
     if (!localePath) return runtimeManifest;
     const fallbackPath = manifest.locales?.en;
-    const candidates = [...new Set([localePath, fallbackPath].filter((value): value is string => Boolean(value)))];
+    const candidates = [
+      ...new Set([localePath, fallbackPath].filter((value): value is string => Boolean(value))),
+    ];
     for (const candidatePath of candidates) {
       try {
         const absPath = path.join(dir, ...candidatePath.split('/'));
@@ -250,7 +274,10 @@ export class GhostManager {
    * 启用 / 停用一张意识。停用不删任何东西,只在安装目录里放一个 `.disabled`
    * 标记文件(目录即事实:打开文件夹一眼可见);启用即删掉标记。幂等。
    */
-  async setEnabled(id: string, enabled: boolean): Promise<{ ok: true } | { rejection: UninstallRejection }> {
+  async setEnabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<{ ok: true } | { rejection: UninstallRejection }> {
     if (!isValidGhostId(id)) {
       return { rejection: { code: 'invalid-id', reason: '非法意识 id' } };
     }
@@ -266,7 +293,9 @@ export class GhostManager {
         await fs.promises.writeFile(marker, '');
       }
     } catch (err) {
-      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
     }
     this.options.log?.info('ghost enabled state changed', { id, enabled });
     this.options.onChanged?.(this.list());
@@ -288,7 +317,10 @@ export class GhostManager {
         containWithin: fs.realpathSync(dir),
       });
       if (bytes === null) {
-        this.options.log?.warn('ghost icon skipped: missing or oversize', { dir, icon: manifest.icon });
+        this.options.log?.warn('ghost icon skipped: missing or oversize', {
+          dir,
+          icon: manifest.icon,
+        });
         return null;
       }
       return buildIconDataUrl(manifest.icon, bytes);
@@ -312,7 +344,8 @@ export class GhostManager {
         typeof raw.publisherSigned !== 'boolean' ||
         typeof raw.publisherVerified !== 'boolean' ||
         typeof raw.reviewed !== 'boolean'
-      ) return null;
+      )
+        return null;
       const trust: GhostTrustInfo = {
         level: raw.level as GhostTrustInfo['level'],
         publisherSigned: raw.publisherSigned,
@@ -321,7 +354,9 @@ export class GhostManager {
         ...(typeof raw.publisherName === 'string' ? { publisherName: raw.publisherName } : {}),
         ...(typeof raw.publisherKeyId === 'string' ? { publisherKeyId: raw.publisherKeyId } : {}),
         ...(typeof raw.reviewerName === 'string' ? { reviewerName: raw.reviewerName } : {}),
-        ...(typeof raw.unknownReviewer === 'boolean' ? { unknownReviewer: raw.unknownReviewer } : {}),
+        ...(typeof raw.unknownReviewer === 'boolean'
+          ? { unknownReviewer: raw.unknownReviewer }
+          : {}),
       };
       // Official trust is a capability-bearing identity. A malformed receipt is
       // not downgraded into a partially trusted official object; it disappears
@@ -329,11 +364,11 @@ export class GhostManager {
       if (trust.level === 'cindy-official' && !isCindyOfficialTrustInfo(trust)) return null;
       const approval = raw.approvedAtResourceProvider;
       const approvedAtResourceProviderTool =
-        approval
-        && typeof approval === 'object'
-        && !Array.isArray(approval)
-        && Object.keys(approval).length === 1
-        && typeof (approval as Record<string, unknown>).tool === 'string'
+        approval &&
+        typeof approval === 'object' &&
+        !Array.isArray(approval) &&
+        Object.keys(approval).length === 1 &&
+        typeof (approval as Record<string, unknown>).tool === 'string'
           ? (approval as Record<string, string>).tool
           : undefined;
       return {
@@ -352,6 +387,7 @@ export class GhostManager {
    */
   async inspect(
     lizFilePath: string,
+    options?: { includeContentDigest?: boolean },
   ): Promise<
     | {
         manifest: GhostManifest;
@@ -359,25 +395,28 @@ export class GhostManager {
         canonicalManifest: GhostManifest;
         trust: GhostTrustInfo;
         packageSha256: string;
+        contentDigest?: string;
         iconDataUrl?: string;
       }
     | { rejection: InstallRejection }
   > {
     const parsed = await this.parse(lizFilePath);
     if ('rejection' in parsed) return parsed;
+    const contentDigest = options?.includeContentDigest
+      ? await packageEntriesContentDigest(parsed.allEntries, parsed.prefix)
+      : undefined;
     return {
       manifest: parsed.manifest,
       canonicalManifest: parsed.canonicalManifest,
       trust: parsed.trust,
       packageSha256: parsed.packageSha256,
+      ...(contentDigest !== undefined ? { contentDigest } : {}),
       ...(parsed.iconDataUrl !== undefined ? { iconDataUrl: parsed.iconDataUrl } : {}),
     };
   }
 
   /** 装入的前半程(读文件 / 解包 / 校验清单),inspect 与 install 共用。 */
-  private async parse(
-    lizFilePath: string,
-  ): Promise<
+  private async parse(lizFilePath: string): Promise<
     | {
         manifest: GhostManifest;
         canonicalManifest: GhostManifest;
@@ -408,7 +447,9 @@ export class GhostManager {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return { rejection: { code: 'source-not-found', reason: '文件不存在' } };
       }
-      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
     }
 
     // 2) 解析 zip + 找 ghost.json(容忍"压缩时多包了一层文件夹"的常见做法)
@@ -424,7 +465,10 @@ export class GhostManager {
     }
     if (allEntries.length > MAX_NODE_ZIP_ENTRIES) {
       return {
-        rejection: { code: 'file-invalid', reason: `压缩包条目过多:${allEntries.length}(上限 ${MAX_NODE_ZIP_ENTRIES})` },
+        rejection: {
+          code: 'file-invalid',
+          reason: `压缩包条目过多:${allEntries.length}(上限 ${MAX_NODE_ZIP_ENTRIES})`,
+        },
       };
     }
     // 检查/签名/保留文件对账都按原始条目名,解压却按 canonical 路径落盘;
@@ -476,21 +520,27 @@ export class GhostManager {
     }
     const manifestEntry = zip.file(`${prefix}${GHOST_MANIFEST_FILE}`);
     if (!manifestEntry) {
-      return { rejection: { code: 'file-invalid', reason: `压缩包根部缺少 ${GHOST_MANIFEST_FILE}` } };
+      return {
+        rejection: { code: 'file-invalid', reason: `压缩包根部缺少 ${GHOST_MANIFEST_FILE}` },
+      };
     }
 
     // 3) 校验清单
     let manifestRaw: unknown;
     try {
       manifestRaw = JSON.parse(
-        (await readZipEntryBufferWithLimit(
-          manifestEntry,
-          MAX_GHOST_MANIFEST_BYTES,
-          GHOST_MANIFEST_FILE,
-        )).toString('utf8'),
+        (
+          await readZipEntryBufferWithLimit(
+            manifestEntry,
+            MAX_GHOST_MANIFEST_BYTES,
+            GHOST_MANIFEST_FILE,
+          )
+        ).toString('utf8'),
       );
     } catch {
-      return { rejection: { code: 'file-invalid', reason: `${GHOST_MANIFEST_FILE} 不是合法 JSON` } };
+      return {
+        rejection: { code: 'file-invalid', reason: `${GHOST_MANIFEST_FILE} 不是合法 JSON` },
+      };
     }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
@@ -507,7 +557,10 @@ export class GhostManager {
     const maxEntries = v.manifest.node ? MAX_NODE_ZIP_ENTRIES : MAX_BASIC_ZIP_ENTRIES;
     if (allEntries.length > maxEntries) {
       return {
-        rejection: { code: 'file-invalid', reason: `压缩包条目过多:${allEntries.length}(上限 ${maxEntries})` },
+        rejection: {
+          code: 'file-invalid',
+          reason: `压缩包条目过多:${allEntries.length}(上限 ${maxEntries})`,
+        },
       };
     }
     if (v.manifest.node && !zip.file(`${prefix}${v.manifest.node.entry}`)) {
@@ -535,11 +588,13 @@ export class GhostManager {
         let localeRaw: unknown;
         try {
           localeRaw = JSON.parse(
-            (await readZipEntryBufferWithLimit(
-              localeEntry,
-              GHOST_LOCALE_MAX_BYTES,
-              `locale ${localePath}`,
-            )).toString('utf8'),
+            (
+              await readZipEntryBufferWithLimit(
+                localeEntry,
+                GHOST_LOCALE_MAX_BYTES,
+                `locale ${localePath}`,
+              )
+            ).toString('utf8'),
           );
         } catch {
           return {
@@ -599,16 +654,15 @@ export class GhostManager {
       const iconEntry = zip.file(`${prefix}${v.manifest.icon}`);
       if (!iconEntry) {
         return {
-          rejection: { code: 'file-invalid', reason: `清单声明了 icon,但压缩包内缺少 ${v.manifest.icon}` },
+          rejection: {
+            code: 'file-invalid',
+            reason: `清单声明了 icon,但压缩包内缺少 ${v.manifest.icon}`,
+          },
         };
       }
       let iconData: Buffer;
       try {
-        iconData = await readZipEntryBufferWithLimit(
-          iconEntry,
-          GHOST_ICON_MAX_BYTES,
-          'icon',
-        );
+        iconData = await readZipEntryBufferWithLimit(iconEntry, GHOST_ICON_MAX_BYTES, 'icon');
       } catch {
         return {
           rejection: {
@@ -629,7 +683,10 @@ export class GhostManager {
       const skillEntry = zip.file(`${prefix}${relPath}`);
       if (!skillEntry) {
         return {
-          rejection: { code: 'file-invalid', reason: `skill 条目声明了 ${skillItem.dir},但压缩包内缺少 ${relPath}` },
+          rejection: {
+            code: 'file-invalid',
+            reason: `skill 条目声明了 ${skillItem.dir},但压缩包内缺少 ${relPath}`,
+          },
         };
       }
       let skillMd: Buffer;
@@ -650,7 +707,10 @@ export class GhostManager {
       const consistencyError = checkSkillMdConsistency(skillMd.toString('utf8'), skillItem);
       if (consistencyError) {
         return {
-          rejection: { code: 'file-invalid', reason: `skill 条目 ${skillItem.dir}:${consistencyError}` },
+          rejection: {
+            code: 'file-invalid',
+            reason: `skill 条目 ${skillItem.dir}:${consistencyError}`,
+          },
         };
       }
     }
@@ -692,9 +752,8 @@ export class GhostManager {
       };
     }
     const { manifest, iconDataUrl, allEntries, prefix } = parsed;
-    const trust = opts?.trustOverride === 'cindy-official'
-      ? CINDY_OFFICIAL_GHOST_TRUST
-      : parsed.trust;
+    const trust =
+      opts?.trustOverride === 'cindy-official' ? CINDY_OFFICIAL_GHOST_TRUST : parsed.trust;
 
     // 4) 目标目录冲突检查
     const root = this.options.getRootDir();
@@ -722,7 +781,10 @@ export class GhostManager {
     }
 
     // 5) 解压到 staging(zip-slip / zip bomb 防御),全过才切正式目录
-    const stagingDir = path.join(root, `.cindy-installing-${manifest.id}-${crypto.randomBytes(4).toString('hex')}`);
+    const stagingDir = path.join(
+      root,
+      `.cindy-installing-${manifest.id}-${crypto.randomBytes(4).toString('hex')}`,
+    );
     try {
       // 初始沉睡:标记在 staging 阶段就位,rename 后首个广播即沉睡态,
       // 不存在"先启用一帧再熄灯"的跳变(规则 7)。
@@ -739,7 +801,9 @@ export class GhostManager {
       if (err instanceof InstallExtractError) {
         return { rejection: { code: 'file-invalid', reason: err.message } };
       }
-      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
     }
 
     const ghost: InstalledGhost = {
@@ -781,14 +845,15 @@ export class GhostManager {
       };
     }
     const { manifest, iconDataUrl, allEntries, prefix } = parsed;
-    const trust = opts?.trustOverride === 'cindy-official'
-      ? CINDY_OFFICIAL_GHOST_TRUST
-      : parsed.trust;
+    const trust =
+      opts?.trustOverride === 'cindy-official' ? CINDY_OFFICIAL_GHOST_TRUST : parsed.trust;
 
     const root = this.options.getRootDir();
     const finalDir = path.join(root, manifest.id);
     if (!(await pathExists(finalDir))) {
-      return { rejection: { code: 'not-installed', reason: `意识 ${manifest.id} 未装入,无从更新` } };
+      return {
+        rejection: { code: 'not-installed', reason: `意识 ${manifest.id} 未装入,无从更新` },
+      };
     }
     // 延续当前唤醒/沉睡状态。
     const enabled = !fs.existsSync(path.join(finalDir, DISABLED_MARKER_FILE));
@@ -828,7 +893,9 @@ export class GhostManager {
       if (err instanceof InstallExtractError) {
         return { rejection: { code: 'file-invalid', reason: err.message } };
       }
-      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
     }
 
     // 换目录:旧版先挪去备份位,新版 rename 失败即滚回,保证任何时刻都有一份完整版本在位。
@@ -836,14 +903,18 @@ export class GhostManager {
       await fs.promises.rename(finalDir, backupDir);
     } catch (err) {
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
-      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
     }
     try {
       await fs.promises.rename(stagingDir, finalDir);
     } catch (err) {
       await fs.promises.rename(backupDir, finalDir).catch(() => {});
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
-      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
     }
     await fs.promises.rm(backupDir, { recursive: true, force: true }).catch(() => {});
 
@@ -894,9 +965,13 @@ export class GhostManager {
     }
     await fs.promises.writeFile(
       path.join(stagingDir, TRUST_METADATA_FILE),
-      `${JSON.stringify({
-        ...opts.trust,
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          ...opts.trust,
+        },
+        null,
+        2,
+      )}\n`,
     );
   }
 
@@ -925,7 +1000,9 @@ export class GhostManager {
     try {
       await fs.promises.rm(dir, { recursive: true, force: true });
     } catch (err) {
-      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
     }
     this.options.log?.info('ghost uninstalled', { id });
     if (options.notify !== false) this.options.onChanged?.(this.list());

@@ -3373,6 +3373,40 @@
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
       "emptyHint": "Install from the market, or import a .cindy file from the menu above",
+      "recovery": {
+        "prompt": {
+          "title": "Restore {{count}} Plugin",
+          "title_one": "Restore {{count}} Plugin",
+          "title_other": "Restore {{count}} Plugins",
+          "description": "These plugins are still on this device, but their installation records were disconnected. Cindy will compare every file, restore only exact matches, and leave everything else unchanged.",
+          "restore": "Restore Plugins",
+          "keep": "Leave As Is and Don't Ask Again",
+          "reviewRemaining": "{{count}} plugin could not be safely matched to its source. It was left unchanged and can be reviewed on the Plugins page.",
+          "reviewRemaining_one": "{{count}} plugin could not be safely matched to its source. It was left unchanged and can be reviewed on the Plugins page.",
+          "reviewRemaining_other": "{{count}} plugins could not be safely matched to their sources. They were left unchanged and can be reviewed on the Plugins page.",
+          "failed": "Plugin recovery could not be checked. Your plugins and settings were not changed; retry from the Plugins page."
+        },
+        "inline": {
+          "title": "Plugin Recovery Needs Attention",
+          "pending": "{{count}} plugin is still on this device and waiting for your recovery decision.",
+          "pending_one": "{{count}} plugin is still on this device and waiting for your recovery decision.",
+          "pending_other": "{{count}} plugins are still on this device and waiting for your recovery decision.",
+          "review": "{{count}} plugin could not be safely verified as the original installation. It remains unchanged; reinstall it from its source or leave it as is.",
+          "review_one": "{{count}} plugin could not be safely verified as the original installation. It remains unchanged; reinstall it from its source or leave it as is.",
+          "review_other": "{{count}} plugins could not be safely verified as the original installations. They remain unchanged; reinstall them from their sources or leave them as is.",
+          "deferred": "Recovery is waiting for a stable account and available plugin sources.",
+          "failed": "Recovery was not completed. Your plugins and settings were not changed, and you can retry.",
+          "retry": "Check Again",
+          "retrying": "Checking…",
+          "keep": "Leave As Is and Don't Ask Again"
+        },
+        "notice": {
+          "single": "Restored “{{name}}”",
+          "multiple": "Restored {{count}} plugin",
+          "multiple_one": "Restored {{count}} plugin",
+          "multiple_other": "Restored {{count}} plugins"
+        }
+      },
       "legacyRecovery": {
         "title": "Plugins from an older version are waiting to be restored",
         "deferred": "Found {{count}} older plugin directory. Cindy deferred restoration to avoid moving data while another instance may still be using it.",

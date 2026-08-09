@@ -3,10 +3,7 @@ import type { PluginIconMetadata } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
-  | 'not-installed'
-  | 'installed'
-  | 'update-available'
-  | 'conflict';
+  'not-installed' | 'installed' | 'update-available' | 'conflict';
 
 /** 市场项来源：服务端市场，或用户添加的 Git / 本地自定义市场。 */
 export type PluginMarketItemSource = 'server' | 'git-market' | 'local-market';
@@ -67,6 +64,42 @@ export interface PluginUpgradeUserNotice {
   permissions: PluginUpgradePermissionNotice[] | null;
   /** Whether any upgrade in the aggregate added permissions. */
   hasPermissionExpansion: boolean;
+}
+
+export type PluginRecoveryState = 'none' | 'pending' | 'review' | 'deferred' | 'failed';
+
+export interface PluginRecoveryCandidate {
+  /** Opaque Main-generated identity; never a filesystem path or owner id. */
+  candidateId: string;
+  pluginId: string;
+  ghostId: string;
+  name: string;
+  version: string;
+  sourceType: 'server' | 'legacy' | 'git-market' | 'local-market';
+}
+
+export interface PluginRecoveryProposal {
+  proposalId: string;
+  candidates: PluginRecoveryCandidate[];
+}
+
+/** Persistent owner-scoped recovery projection. Renderer never supplies candidates back. */
+export interface PluginRecoveryStatus {
+  state: PluginRecoveryState;
+  proposal: PluginRecoveryProposal | null;
+}
+
+export type PluginRecoveryDecision = 'restore' | 'keep';
+
+export interface PluginRecoveryResolution {
+  status: PluginRecoveryStatus;
+  restoredCount: number;
+  reviewCount: number;
+}
+
+export interface PluginRecoveryUserNotice {
+  count: number;
+  name: string | null;
 }
 
 /** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */
@@ -138,8 +171,7 @@ export interface PluginMarketInstallOptions {
 
 /** 安装成功，或用户在事务内取消真实包权限确认。 */
 export type PluginMarketInstallResult =
-  | { ghost: InstalledGhost; cancelled?: never }
-  | { ghost?: never; cancelled: true };
+  { ghost: InstalledGhost; cancelled?: never } | { ghost?: never; cancelled: true };
 
 /* ------------------------------------------------------------------------ */
 /* 自定义市场源（Git / 本地文件夹）                                           */
@@ -224,6 +256,10 @@ export function parseCustomMarketPluginId(
  * 自定义市场插件的合成 releaseId。版本变化即产生新 releaseId，
  * 从而复用服务端市场既有的 update-available / expectedReleaseId 机制。
  */
-export function customMarketReleaseId(marketName: string, ghostId: string, version: string): string {
+export function customMarketReleaseId(
+  marketName: string,
+  ghostId: string,
+  version: string,
+): string {
   return `custom:${encodeURIComponent(marketName)}:${encodeURIComponent(ghostId)}:${encodeURIComponent(version)}`;
 }

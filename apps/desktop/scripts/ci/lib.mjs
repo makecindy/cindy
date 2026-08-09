@@ -119,9 +119,9 @@ export function assertNotPublishingCindyToLegacyChannel(ossPrefix) {
   if (process.env.XDT_ALLOW_LEGACY_CHANNEL_RELEASE === '1') return;
   if (PACKAGED_APP_NAME === 'Cindy' && ossPrefix === 'xdt-maker') {
     throw new Error(
-      '[channel-freeze] 拒绝把 Cindy 身份的产物发布到已冻结的 /xdt-maker 渠道:'
-      + '存量用户更新器会因 exe 布局变化(Cindy.exe)当场断裂。'
-      + '等新渠道 OSS 前缀就绪后再发布;演练可设 XDT_ALLOW_LEGACY_CHANNEL_RELEASE=1 覆盖。',
+      '[channel-freeze] 拒绝把 Cindy 身份的产物发布到已冻结的 /xdt-maker 渠道:' +
+        '存量用户更新器会因 exe 布局变化(Cindy.exe)当场断裂。' +
+        '等新渠道 OSS 前缀就绪后再发布;演练可设 XDT_ALLOW_LEGACY_CHANNEL_RELEASE=1 覆盖。',
     );
   }
 }
@@ -163,7 +163,9 @@ export function loadDotenv(
       const match = line.match(/^\s*([^#=]+?)\s*=\s*(.*?)\s*$/);
       if (match && !process.env[match[1]]) process.env[match[1]] = match[2];
     }
-  } catch { /* no .env file, that's fine */ }
+  } catch {
+    /* no .env file, that's fine */
+  }
   if (refreshReleaseConfig) refreshOssConfig();
 }
 
@@ -189,8 +191,14 @@ export function writePackageVersion(version) {
   if (originalPackageJson === null) {
     originalPackageJson = fs.readFileSync(PACKAGE_JSON_PATH, 'utf8');
     process.on('exit', restorePackageJson);
-    process.on('SIGINT', () => { restorePackageJson(); process.exit(130); });
-    process.on('SIGTERM', () => { restorePackageJson(); process.exit(143); });
+    process.on('SIGINT', () => {
+      restorePackageJson();
+      process.exit(130);
+    });
+    process.on('SIGTERM', () => {
+      restorePackageJson();
+      process.exit(143);
+    });
   }
   const pkg = JSON.parse(originalPackageJson);
   pkg.version = version;
@@ -199,7 +207,11 @@ export function writePackageVersion(version) {
 
 function restorePackageJson() {
   if (originalPackageJson === null) return;
-  try { fs.writeFileSync(PACKAGE_JSON_PATH, originalPackageJson); } catch { /* ignore */ }
+  try {
+    fs.writeFileSync(PACKAGE_JSON_PATH, originalPackageJson);
+  } catch {
+    /* ignore */
+  }
 }
 
 // ── CDN manifest ───────────────────────────────────────────────────────────
@@ -310,9 +322,7 @@ function readFilePrefix(filePath, length) {
 }
 
 export function linuxRuntimeAssetPaths(platformKey = linuxHostPlatformKey()) {
-  return [
-    path.join(DESKTOP_ROOT, 'native', 'sqlite-vec', platformKey, 'vec0.so'),
-  ];
+  return [path.join(DESKTOP_ROOT, 'native', 'sqlite-vec', platformKey, 'vec0.so')];
 }
 
 export function collectLinuxRuntimeAssetProblems(assetPaths = linuxRuntimeAssetPaths()) {
@@ -354,15 +364,21 @@ export async function ensureLinuxRuntimeAssets({
       console.error(`  - ${filePath}`);
     }
   }
-  console.error('sqlite-vec is still Git-LFS managed; run `git lfs pull` to materialize it before release.');
+  console.error(
+    'sqlite-vec is still Git-LFS managed; run `git lfs pull` to materialize it before release.',
+  );
   process.exit(1);
 }
 
 export function logLinuxPackagingRequirements() {
   console.log('==> Linux first release packaging note:');
   console.log('    - Current packaging target is .deb (MakerDeb), not AppImage.');
-  console.log('    - Linux builders need Debian packaging tools: fakeroot, dpkg, desktop-file-utils.');
-  console.log('    - Native rebuild still needs the usual Electron toolchain: python3, make, gcc/g++.');
+  console.log(
+    '    - Linux builders need Debian packaging tools: fakeroot, dpkg, desktop-file-utils.',
+  );
+  console.log(
+    '    - Native rebuild still needs the usual Electron toolchain: python3, make, gcc/g++.',
+  );
 }
 
 export function findInstallerArtifact(makeBaseDir, extension) {
@@ -400,13 +416,17 @@ export function writeReleaseManifest(destPath, ctx) {
   let commitSha = '';
   try {
     commitSha = execSync('git rev-parse HEAD', { encoding: 'utf-8', cwd: DESKTOP_ROOT }).trim();
-  } catch { /* not in a git work tree */ }
+  } catch {
+    /* not in a git work tree */
+  }
 
   let electronVersion = '';
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(DESKTOP_ROOT, 'package.json'), 'utf-8'));
     electronVersion = (pkg.devDependencies && pkg.devDependencies.electron) || '';
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   const manifest = {
     version: ctx.version,
@@ -440,9 +460,7 @@ export function verifyPackagedDrizzle(drizzleOut) {
     process.exit(1);
   }
   const srcDrizzle = path.join(DESKTOP_ROOT, 'drizzle');
-  const expectedSql = fs
-    .readdirSync(srcDrizzle)
-    .filter((f) => /^\d{4}_.*\.sql$/.test(f));
+  const expectedSql = fs.readdirSync(srcDrizzle).filter((f) => /^\d{4}_.*\.sql$/.test(f));
   if (expectedSql.length === 0) {
     console.error(`ERROR: source drizzle/ has no NNNN_*.sql files`);
     process.exit(1);
@@ -641,7 +659,9 @@ function readCodesignEntitlements(bundlePath) {
     { encoding: 'utf8' },
   );
   if (result.status !== 0) {
-    throw new Error(`codesign entitlement inspection failed for ${bundlePath}: ${result.stderr || result.stdout}`);
+    throw new Error(
+      `codesign entitlement inspection failed for ${bundlePath}: ${result.stderr || result.stdout}`,
+    );
   }
   return `${result.stdout || ''}${result.stderr || ''}`;
 }
@@ -681,11 +701,9 @@ function hasKeychainAccessGroup(entitlements, keychainAccessGroup) {
 }
 
 function readPlistString(infoPlistPath, key) {
-  const result = spawnSync(
-    '/usr/libexec/PlistBuddy',
-    ['-c', `Print :${key}`, infoPlistPath],
-    { encoding: 'utf8' },
-  );
+  const result = spawnSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, infoPlistPath], {
+    encoding: 'utf8',
+  });
   if (result.status !== 0) {
     throw new Error(`packaged Info.plist is missing ${key}: ${result.stderr || result.stdout}`);
   }
@@ -733,7 +751,8 @@ export function verifyMacContactsPermissions(appPath, { keychainAccessGroup, sig
   }
 
   const frameworksDir = path.join(appPath, 'Contents', 'Frameworks');
-  const helperApps = fs.readdirSync(frameworksDir, { withFileTypes: true })
+  const helperApps = fs
+    .readdirSync(frameworksDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.endsWith('.app'))
     .map((entry) => path.join(frameworksDir, entry.name));
   for (const helperApp of helperApps) {
@@ -759,17 +778,25 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
 
   const asarUnpackedDir = path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked');
   if (fs.existsSync(asarUnpackedDir)) {
-    exec(`find "${asarUnpackedDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    exec(
+      `find "${asarUnpackedDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`,
+    );
   }
 
   const resourceToolsDir = path.join(appPath, 'Contents', 'Resources', 'tools');
   if (fs.existsSync(resourceToolsDir)) {
-    exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    exec(
+      `find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`,
+    );
     exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
 
-  exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
-  exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
+  exec(
+    `find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`,
+  );
+  exec(
+    `find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`,
+  );
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
   exec(`${signBase} --entitlements "${mainEntitlementsPath}" "${appPath}"`);
   exec(`/usr/bin/codesign --verify --deep --strict "${appPath}"`);
@@ -802,25 +829,33 @@ export function signMacAppWithIdentity(
   const asarUnpackedDir = path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked');
   if (fs.existsSync(asarUnpackedDir)) {
     console.log('    Signing native modules in app.asar.unpacked/...');
-    exec(`find "${asarUnpackedDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    exec(
+      `find "${asarUnpackedDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`,
+    );
   }
 
   // 0b. Contents/Resources/tools/ 下的 CLI 工具(extraResource 拷入,公证要求显式签)。
   const resourceToolsDir = path.join(appPath, 'Contents', 'Resources', 'tools');
   if (fs.existsSync(resourceToolsDir)) {
     console.log('    Signing bundled CLI tools in Contents/Resources/tools/...');
-    exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    exec(
+      `find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`,
+    );
     console.log('    Signing bundled resource app bundles...');
     exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
 
   // 1. 全部 Mach-O(库、chrome_crashpad_handler、ShipIt 等)
   console.log('    Signing all Mach-O binaries...');
-  exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+  exec(
+    `find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`,
+  );
 
   // 2. Helper apps(V8 JIT entitlements)
   console.log('    Signing helper apps...');
-  exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
+  exec(
+    `find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`,
+  );
 
   // 3. Framework bundles
   console.log('    Signing frameworks...');
@@ -893,9 +928,7 @@ function runNotarytool(operation, args, identity, { spawnCommand, logger }) {
   }
   if (result.signal) {
     throw attachNotarytoolOutput(
-      new Error(
-        `notarytool ${operation} 被信号 ${result.signal} 终止(可能公证超时);公证未通过。`,
-      ),
+      new Error(`notarytool ${operation} 被信号 ${result.signal} 终止(可能公证超时);公证未通过。`),
       result,
     );
   }
@@ -941,9 +974,7 @@ function tryParseNotarytoolSubmitResponse(stdout) {
 function printNotarizationFailureLog(submissionId, status, identity, dependencies) {
   const { logger } = dependencies;
   if (!submissionId) {
-    logger.error(
-      `    Apple 公证返回 ${status}，但响应缺少 submission id，无法拉取详细日志。`,
-    );
+    logger.error(`    Apple 公证返回 ${status}，但响应缺少 submission id，无法拉取详细日志。`);
     return;
   }
 
@@ -987,12 +1018,16 @@ function printNotarizationFailureLog(submissionId, status, identity, dependencie
  *   logger?: Console,
  * }} dependencies
  */
-export function notarizeMacApp(appPath, identity, {
-  execCommand = exec,
-  spawnCommand = spawnSync,
-  unlinkFile = fs.unlinkSync,
-  logger = console,
-} = {}) {
+export function notarizeMacApp(
+  appPath,
+  identity,
+  {
+    execCommand = exec,
+    spawnCommand = spawnSync,
+    unlinkFile = fs.unlinkSync,
+    logger = console,
+  } = {},
+) {
   const zipPath = appPath + '.zip';
   const dependencies = { spawnCommand, logger };
 
@@ -1085,7 +1120,12 @@ const PYTHON_MIN_MINOR = 10;
 
 /** 从候选里找 >= 3.10 的 python3(PATH 优先,兼容 homebrew / CLT 新版) */
 function findPython3() {
-  const candidates = ['python3', '/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3'];
+  const candidates = [
+    'python3',
+    '/opt/homebrew/bin/python3',
+    '/usr/local/bin/python3',
+    '/usr/bin/python3',
+  ];
   for (const cand of candidates) {
     const r = spawnSync(cand, ['--version'], { encoding: 'utf8' });
     if (r.status !== 0) continue;
@@ -1177,6 +1217,7 @@ export function runSmokeTest(platform, arch, region = 'global') {
       `--arch=${arch}`,
       // 产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev')。
       `--app-name=${packagedAppName(region)}`,
+      '--plugin-storage',
     ],
     { stdio: 'inherit', cwd: DESKTOP_ROOT, shell: false },
   );
@@ -1191,7 +1232,9 @@ export function runSmokeTest(platform, arch, region = 'global') {
 export function getLocalClaudeCodeVersion(platformKey, binaryName = 'claude') {
   const binPath = path.join(PROJECT_ROOT, 'apps', 'claude-code-bin', platformKey, binaryName);
   if (!fs.existsSync(binPath)) return null;
-  try { fs.chmodSync(binPath, 0o755); } catch {}
+  try {
+    fs.chmodSync(binPath, 0o755);
+  } catch {}
   try {
     const output = execSync(`"${binPath}" -v`, { encoding: 'utf8', timeout: 10000 });
     const match = output.match(/^([\d.]+)/);
@@ -1241,7 +1284,8 @@ export async function maybeBuildClaudeCodeGz({ platformKey, manifest, binaryName
   if (hashDiffers) reasons.push('binary content changed');
   console.log(`    → verdict: UPLOAD (${reasons.join(', ')})`);
 
-  const gzName = binaryName === 'claude.exe' ? 'claude.exe.gz' : `claude-${platformKey.split('-')[1]}.gz`;
+  const gzName =
+    binaryName === 'claude.exe' ? 'claude.exe.gz' : `claude-${platformKey.split('-')[1]}.gz`;
   const gzPath = path.join(RELEASE_DIR, gzName);
   console.log(`    Compressing → ${gzName} ...`);
   await gzipFile(binPath, gzPath);
@@ -1263,7 +1307,9 @@ export async function maybeBuildClaudeCodeGz({ platformKey, manifest, binaryName
 function getLocalCodexVersion(platformKey, binaryName = 'codex') {
   const binPath = path.join(PROJECT_ROOT, 'apps', 'codex-bin', platformKey, binaryName);
   if (!fs.existsSync(binPath)) return null;
-  try { fs.chmodSync(binPath, 0o755); } catch {}
+  try {
+    fs.chmodSync(binPath, 0o755);
+  } catch {}
   try {
     const output = execSync(`"${binPath}" --version`, { encoding: 'utf8', timeout: 10000 });
     const match = output.match(/(\d+\.\d+\.\d+)/);
@@ -1312,12 +1358,17 @@ export async function maybeBuildCodexGz({ platformKey, manifest, binaryName }) {
   // Keep the local temp artifact platform-qualified so parallel/staged release
   // runs do not clobber each other, but publish the canonical CDN object name
   // (`codex.gz`) to match the existing Claude manifest convention.
-  const gzPath = path.join(RELEASE_DIR, binaryName === 'codex.exe' ? 'codex.exe.gz' : `codex-${platformKey.split('-')[1]}.gz`);
+  const gzPath = path.join(
+    RELEASE_DIR,
+    binaryName === 'codex.exe' ? 'codex.exe.gz' : `codex-${platformKey.split('-')[1]}.gz`,
+  );
   console.log(`    Compressing -> ${path.basename(gzPath)} ...`);
   await gzipFile(binPath, gzPath);
   const codexHash = sha256(gzPath);
   const codexSize = fs.statSync(gzPath).size;
-  console.log(`    gz size:          ${(codexSize / 1024 / 1024).toFixed(1)} MB (${codexSize} bytes)`);
+  console.log(
+    `    gz size:          ${(codexSize / 1024 / 1024).toFixed(1)} MB (${codexSize} bytes)`,
+  );
   console.log(`    gz sha256:        ${codexHash}`);
 
   return {
@@ -1385,8 +1436,16 @@ async function computeRemoteGzInfo(client, ossKey) {
     const binarySha256 = sha256(tmpBin);
     return { gzSha256, gzSize, binarySha256 };
   } finally {
-    try { fs.unlinkSync(tmpGz); } catch { /* ignore */ }
-    try { fs.unlinkSync(tmpBin); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(tmpGz);
+    } catch {
+      /* ignore */
+    }
+    try {
+      fs.unlinkSync(tmpBin);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -1414,13 +1473,22 @@ export async function uploadVersionedGzImmutable({
   // 用本地值凑数、也绝不让 size:0 进 manifest(客户端 downloader 按 size 强校验,
   // size 错 = 该资产对全体用户下载必失败,与本次事故同级)。
   if (remote && (!remote.binarySha256 || !remote.gzSha256 || !remote.gzSize)) {
-    console.log(`    immutable guard: remote object missing sha meta or size — downloading to verify: ${ossKey}`);
+    console.log(
+      `    immutable guard: remote object missing sha meta or size — downloading to verify: ${ossKey}`,
+    );
     remote = await computeRemoteGzInfo(client, ossKey);
   }
 
   if (remote && remote.binarySha256 === binarySha256) {
-    console.log(`    immutable guard: ${ossKey} already holds the same binary — reusing remote sha256/size, no upload`);
-    return { uploaded: false, gzSha256: remote.gzSha256, gzSize: remote.gzSize, binarySha256: remote.binarySha256 };
+    console.log(
+      `    immutable guard: ${ossKey} already holds the same binary — reusing remote sha256/size, no upload`,
+    );
+    return {
+      uploaded: false,
+      gzSha256: remote.gzSha256,
+      gzSize: remote.gzSize,
+      binarySha256: remote.binarySha256,
+    };
   }
 
   if (remote) {
@@ -1428,10 +1496,10 @@ export async function uploadVersionedGzImmutable({
     if (!force) {
       throw new Error(
         `immutable guard: ${ossKey} already exists with DIFFERENT binary content ` +
-        `(remote binary sha256 ${remote.binarySha256} != local ${binarySha256}). ` +
-        `版本化路径不允许覆盖上传——覆盖会与 CDN 边缘缓存产生字节分裂,导致客户端 sha256 校验失败 ` +
-        `(2026-07-03 事故)。确认远端内容确实过期时,用对应 release-*.mjs 加 --force 覆盖,` +
-        `覆盖后必须刷新内外网 CDN 该 URL 的缓存。`,
+          `(remote binary sha256 ${remote.binarySha256} != local ${binarySha256}). ` +
+          `版本化路径不允许覆盖上传——覆盖会与 CDN 边缘缓存产生字节分裂,导致客户端 sha256 校验失败 ` +
+          `(2026-07-03 事故)。确认远端内容确实过期时,用对应 release-*.mjs 加 --force 覆盖,` +
+          `覆盖后必须刷新内外网 CDN 该 URL 的缓存。`,
       );
     }
     console.warn(`    !! FORCE overwrite of existing versioned object: ${ossKey}`);

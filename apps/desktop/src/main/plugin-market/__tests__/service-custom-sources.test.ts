@@ -81,6 +81,7 @@ import {
 import { GHOST_ICON_MAX_BYTES, type GhostManifest } from '../../../shared/ghost';
 import { PluginMarketLedger, ghostManifestDigest } from '../ledger';
 import { PluginMarketService } from '../service';
+import { PluginRecoveryStore } from '../recoveryStore';
 import { MarketSourceManager } from '../sources';
 import { MarketSourceStore } from '../sources/store';
 import type { PluginMarketApi } from '../api';
@@ -217,7 +218,12 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
     api,
     ledger,
     sourceStore,
-    service: new PluginMarketService(api as unknown as PluginMarketApi, ledger, sourceStore),
+    service: new PluginMarketService(
+      api as unknown as PluginMarketApi,
+      ledger,
+      sourceStore,
+      new PluginRecoveryStore(path.join(root, 'ledger.json')),
+    ),
   };
 }
 
@@ -402,6 +408,85 @@ describe('PluginMarketService 自定义市场聚合', () => {
       version: '2.0.0',
       enabled: true,
     });
+  });
+
+  it('offers and verifies an exact local-market recovery without reinstalling', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-recovery-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.cpSync(path.join(dir, 'plugins', 'alpha'), installedDir, { recursive: true });
+    runtime.ghosts = [{ manifest: ghostManifest('alpha'), dir: installedDir, enabled: true }];
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    h.ledger.upsertInstallation({
+      pluginId,
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha')),
+    });
+    h.ledger.markRemoved('alpha', 'user-1');
+
+    await h.service.snapshot();
+    const status = h.service.recoveryStatus();
+    expect(status).toMatchObject({
+      state: 'pending',
+      proposal: { candidates: [{ ghostId: 'alpha', sourceType: 'local-market' }] },
+    });
+    expect(h.ledger.installationForGhost('alpha')?.installed).toBe(false);
+
+    const result = await h.service.resolveRecovery(status.proposal!.proposalId, 'restore');
+    expect(result).toMatchObject({ restoredCount: 1, reviewCount: 0 });
+    expect(h.ledger.installationForGhost('alpha')?.installed).toBe(true);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', pluginId)).toBe(false);
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('keeps recovery deferred while its configured local source is unreadable', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-recovery-offline-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.cpSync(path.join(dir, 'plugins', 'alpha'), installedDir, { recursive: true });
+    runtime.ghosts = [{ manifest: ghostManifest('alpha'), dir: installedDir, enabled: true }];
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    h.ledger.upsertInstallation({
+      pluginId,
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha')),
+    });
+    h.ledger.markRemoved('alpha', 'user-1');
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    await h.service.snapshot();
+
+    const status = h.service.recoveryStatus();
+    expect(status).toMatchObject({
+      state: 'deferred',
+      proposal: { candidates: [{ ghostId: 'alpha', sourceType: 'local-market' }] },
+    });
+    await expect(
+      h.service.resolveRecovery(status.proposal!.proposalId, 'keep'),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.ledger.installationForGhost('alpha')?.installed).toBe(false);
   });
 });
 
@@ -1859,11 +1944,19 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       source: 'local-market',
       installed: true,
       updatedAt: '2026-07-30T02:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha')),
     });
 
     await expect(h.service.uninstall(pluginId)).resolves.toEqual({ ok: true });
     expect(runtime.uninstall).toHaveBeenCalledWith('alpha', { skipMarketLedger: true });
     expect(h.ledger.installationForGhost('alpha')?.installed).toBe(false);
+
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.cpSync(path.join(dir, 'plugins', 'alpha'), installedDir, { recursive: true });
+    runtime.ghosts = [{ manifest: ghostManifest('alpha'), dir: installedDir, enabled: true }];
+    await h.service.snapshot();
+    expect(h.service.recoveryStatus().state).toBe('none');
   });
 
   it('结构守卫:service.ts 不允许出现按路径的 readFile/readFileSync', async () => {

@@ -1528,6 +1528,16 @@ interface ElectronAPI {
       import('../shared/pluginMarket').PluginUpgradeUserNotice | null
     >;
     onUpgradeNoticeAvailable: (callback: () => void) => () => void;
+    recoveryStatus: () => Promise<import('../shared/pluginMarket').PluginRecoveryStatus>;
+    resolveRecovery: (
+      proposalId: string,
+      decision: import('../shared/pluginMarket').PluginRecoveryDecision,
+    ) => Promise<import('../shared/pluginMarket').PluginRecoveryResolution>;
+    onRecoveryAvailable: (callback: () => void) => () => void;
+    consumeRecoveryNotice: () => Promise<
+      import('../shared/pluginMarket').PluginRecoveryUserNotice | null
+    >;
+    onRecoveryNoticeAvailable: (callback: () => void) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,
@@ -1913,9 +1923,7 @@ interface ElectronAPI {
    * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
    */
   uploadLogsNow: () => Promise<LogUploadResult>;
-  onLogUploadSettingsChange: (
-    callback: (payload: LogUploadSettingsPayload) => void,
-  ) => () => void;
+  onLogUploadSettingsChange: (callback: (payload: LogUploadSettingsPayload) => void) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: () => Promise<{
@@ -5380,9 +5388,7 @@ interface ElectronAPI {
       id: string,
       action: import('../shared/turnChangeSet').TurnChangeAction,
     ) => Promise<import('../shared/turnChangeSet').TurnChangeActionResult>;
-    onTurnChangeSetUpdated: (
-      cb: (data: unknown, ownerStamp?: unknown) => void,
-    ) => () => void;
+    onTurnChangeSetUpdated: (cb: (data: unknown, ownerStamp?: unknown) => void) => () => void;
     onEvent: (cb: (data: unknown) => void) => () => void;
     onStatusChanged: (cb: (data: unknown) => void) => () => void;
     onInteractionRequest: (cb: (data: unknown) => void) => () => void;

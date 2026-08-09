@@ -90,7 +90,9 @@ function resolveExePath() {
     : path.join(DESKTOP_ROOT, 'out', `${appName}-${platform}-${arch}`);
   if (!fs.existsSync(baseDir)) {
     console.error(`[smoke] ERROR: packaged dir not found: ${baseDir}`);
-    console.error(`[smoke]        run 'pnpm --filter ./apps/desktop package' first, or pass --out-dir=<path>`);
+    console.error(
+      `[smoke]        run 'pnpm --filter ./apps/desktop package' first, or pass --out-dir=<path>`,
+    );
     process.exit(1);
   }
   if (platform === 'win32') {
@@ -127,8 +129,11 @@ console.log(`[smoke] exe: ${exePath}`);
 if (platform === 'darwin' && arch === 'x64') {
   let isPhysicalArm64 = false;
   try {
-    isPhysicalArm64 = execSync('sysctl -in hw.optional.arm64', { encoding: 'utf-8' }).trim() === '1';
-  } catch { /* sysctl 失败（如 Intel Mac unknown oid）→ 不是 ARM64，继续正常 smoke */ }
+    isPhysicalArm64 =
+      execSync('sysctl -in hw.optional.arm64', { encoding: 'utf-8' }).trim() === '1';
+  } catch {
+    /* sysctl 失败（如 Intel Mac unknown oid）→ 不是 ARM64，继续正常 smoke */
+  }
 
   if (isPhysicalArm64) {
     try {
@@ -157,7 +162,9 @@ function cleanupUserData() {
   try {
     fs.rmSync(tmpUserData, { recursive: true, force: true });
   } catch (err) {
-    console.warn(`[smoke] WARN: cleanup ${tmpUserData} failed: ${err instanceof Error ? err.message : err}`);
+    console.warn(
+      `[smoke] WARN: cleanup ${tmpUserData} failed: ${err instanceof Error ? err.message : err}`,
+    );
   }
 }
 
@@ -197,7 +204,11 @@ child.stderr.on('data', (chunk) => {
 
 const timeoutHandle = setTimeout(() => {
   console.error(`[smoke] ERROR: timeout after ${TIMEOUT_MS}ms, killing process`);
-  try { child.kill('SIGKILL'); } catch { /* noop */ }
+  try {
+    child.kill('SIGKILL');
+  } catch {
+    /* noop */
+  }
 }, TIMEOUT_MS);
 
 child.on('exit', (code, signal) => {
@@ -271,6 +282,21 @@ child.on('exit', (code, signal) => {
       cleanupUserData();
       process.exit(1);
     }
+    if (storage.recoveryPromptedForCorruptedLedger !== true) {
+      console.error('[smoke] FAIL: corrupted Plugin ledger did not produce a recovery proposal');
+      cleanupUserData();
+      process.exit(1);
+    }
+    if (storage.ledgerStayedRemovedBeforeRecoveryDecision !== true) {
+      console.error('[smoke] FAIL: recovery discovery changed the ledger before user consent');
+      cleanupUserData();
+      process.exit(1);
+    }
+    if (storage.optOutStayedBeforeRecoveryDecision !== true) {
+      console.error('[smoke] FAIL: recovery discovery cleared an opt-out before user consent');
+      cleanupUserData();
+      process.exit(1);
+    }
   }
   if (code !== 0) {
     console.error(`[smoke] FAIL: child exit code ${code} (expected 0)`);
@@ -302,7 +328,10 @@ child.on('error', (err) => {
  * @returns {string | null}
  */
 function extractJsonLine(buf) {
-  const lines = buf.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = buf
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (line.startsWith('{') && line.endsWith('}')) {

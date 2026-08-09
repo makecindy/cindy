@@ -31,6 +31,7 @@ import {
   GhostPluginCard,
   LegacyGhostRecoveryNotice,
   MarketPluginCard,
+  PluginRecoveryNotice,
 } from '../GhostPluginPage';
 import {
   __ingestGhostBadgeForTest,
@@ -412,9 +413,7 @@ describe('MarketPluginCard', () => {
     expect((cardBody as HTMLButtonElement).disabled).toBe(true);
     expect(cardBody.className).toContain('cursor-not-allowed');
     expect(cardBody.className).not.toContain('cursor-wait');
-    const conflictDescription = screen.getByText(
-      'settings.ghosts.market.conflictDescription',
-    );
+    const conflictDescription = screen.getByText('settings.ghosts.market.conflictDescription');
     expect(conflictDescription.id).toBeTruthy();
     expect(cardBody.getAttribute('aria-describedby')).toBe(conflictDescription.id);
     const conflictAction = screen.getByRole('button', {
@@ -578,5 +577,54 @@ describe('LegacyGhostRecoveryNotice', () => {
 
     expect(screen.getByText('settings.ghosts.legacyRecovery.partialBlocked')).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+describe('PluginRecoveryNotice', () => {
+  const proposal = {
+    proposalId: 'a'.repeat(64),
+    candidates: [
+      {
+        candidateId: 'b'.repeat(64),
+        pluginId: `c${'c'.repeat(24)}`,
+        ghostId: 'cindy-test',
+        name: 'Test Plugin',
+        version: '1.0.0',
+        sourceType: 'server' as const,
+      },
+    ],
+  };
+
+  it('offers retry without silently resolving a pending proposal', () => {
+    const onRetry = vi.fn();
+    render(
+      <PluginRecoveryNotice
+        status={{ state: 'pending', proposal }}
+        busy={false}
+        onRetry={onRetry}
+        onKeep={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.recovery.inline.retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole('button', { name: 'settings.ghosts.recovery.inline.keep' }),
+    ).toBeNull();
+  });
+
+  it('allows an explicit keep decision only for manual-review candidates', () => {
+    const onKeep = vi.fn();
+    render(
+      <PluginRecoveryNotice
+        status={{ state: 'review', proposal }}
+        busy={false}
+        onRetry={vi.fn()}
+        onKeep={onKeep}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.recovery.inline.keep' }));
+    expect(onKeep).toHaveBeenCalledTimes(1);
   });
 });

@@ -3372,6 +3372,40 @@
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
       "emptyHint": "可从插件市场安装，或点击右上角导入 .cindy 文件",
+      "recovery": {
+        "prompt": {
+          "title": "发现 {{count}} 个可恢复的插件",
+          "title_one": "发现 {{count}} 个可恢复的插件",
+          "title_other": "发现 {{count}} 个可恢复的插件",
+          "description": "这些插件仍在本机，但安装记录意外断开。Cindy 会逐一核对全部文件；只有完全一致的插件才会恢复，其他插件保持原样。",
+          "restore": "恢复插件",
+          "keep": "保持现状且不再提示",
+          "reviewRemaining": "{{count}} 个插件的内容或来源无法安全核对，已原样保留，可在插件页继续处理。",
+          "reviewRemaining_one": "{{count}} 个插件的内容或来源无法安全核对，已原样保留，可在插件页继续处理。",
+          "reviewRemaining_other": "{{count}} 个插件的内容或来源无法安全核对，已原样保留，可在插件页继续处理。",
+          "failed": "未能完成插件恢复检查。插件和配置未被改动，可在插件页重试。"
+        },
+        "inline": {
+          "title": "插件恢复需要处理",
+          "pending": "有 {{count}} 个插件仍在本机，等待你确认恢复。",
+          "pending_one": "有 {{count}} 个插件仍在本机，等待你确认恢复。",
+          "pending_other": "有 {{count}} 个插件仍在本机，等待你确认恢复。",
+          "review": "无法安全确认 {{count}} 个插件仍是原来安装的内容。它们保持不变；可从原来源重新安装，或暂不处理。",
+          "review_one": "无法安全确认 {{count}} 个插件仍是原来安装的内容。它保持不变；可从原来源重新安装，或暂不处理。",
+          "review_other": "无法安全确认 {{count}} 个插件仍是原来安装的内容。它们保持不变；可从原来源重新安装，或暂不处理。",
+          "deferred": "恢复检查正在等待稳定的账号和插件来源。",
+          "failed": "恢复检查没有完成。插件和配置未被改动，可以重试。",
+          "retry": "重新检查",
+          "retrying": "正在检查…",
+          "keep": "保持现状且不再提示"
+        },
+        "notice": {
+          "single": "已恢复插件“{{name}}”",
+          "multiple": "已恢复 {{count}} 个插件",
+          "multiple_one": "已恢复 {{count}} 个插件",
+          "multiple_other": "已恢复 {{count}} 个插件"
+        }
+      },
       "legacyRecovery": {
         "title": "旧版本插件正在等待恢复",
         "deferred": "检测到 {{count}} 个旧插件目录。为避免其它实例仍在使用这些数据，Cindy 暂缓了自动恢复。",
