@@ -624,13 +624,16 @@ export class ClaudeCodeAgent extends BaseAgent {
   }
 
   /**
-   * catalog id → SDK wire 串,[1m] 由目录 contextWindow 驱动(见 toSdkModelString)。
-   * 模型不在 capabilities(目录外/host 未注入)时窗口传 undefined → 走 legacy 兜底链。
+   * catalog id → SDK wire 串,[1m] 优先由当前 provider 路由的 contextWindow 驱动。
+   * host 未注入路由解析器时回落扁平 capabilities；模型仍未知才走 legacy 兜底链。
    */
-  private sdkModelFor(model: string): string {
+  private sdkModelFor(model: string, providerId?: string | null): string {
+    const routedWindow = this.deps.resolveClaudeModelContextWindow?.(providerId, model);
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
     const window =
-      descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
+      typeof routedWindow === 'number' && Number.isFinite(routedWindow) && routedWindow > 0
+        ? routedWindow
+        : descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
         ? descriptor.contextWindow
         : undefined;
     return toSdkModelString(model, window);
@@ -881,10 +884,11 @@ export class ClaudeCodeAgent extends BaseAgent {
 
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
-    const sdkModelFor = (model: string): string => this.sdkModelFor(model);
+    const sdkModelFor = (model: string, providerId?: string | null): string =>
+      this.sdkModelFor(model, providerId);
     const resolveRemoteClaudeRoute = this.deps.resolveRemoteClaudeRoute?.bind(this.deps);
     const getAuthEnv = this.deps.auth.getAuthEnv.bind(this.deps.auth);
-    const sdkModel = sdkModelFor(opts.model);
+    const sdkModel = sdkModelFor(opts.model, opts.providerId);
     const initialSdkEffort = this.sdkEffortForModel(opts.model, opts.effort ?? 'high');
     const binaryPath = this.deps.binaryPath;
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
@@ -2290,7 +2294,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       permissionMode?: SdkPermissionMode;
       fresh?: boolean;
     }): Promise<Query> => {
-      const currentSdkModel = sdkModelFor(mutableModel);
+      const currentSdkModel = sdkModelFor(mutableModel, mutableProviderId);
       const currentSdkEffort = getSdkEffortForModel(mutableModel, mutableEffort);
       const baseResumeAt = vo.resumeSessionAt as string | undefined;
       const baseFork = vo.forkSession as boolean | undefined;
@@ -4315,6 +4319,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 避免新 query 带旧 model/flags 起跑而 handle getter 报新值。
       const runtimeSnapshot: QueryRuntimeSnapshot = {
         model: mutableModel,
+        providerId: mutableProviderId,
         effort: mutableEffort,
         fastMode: mutableFastMode,
         sdkPermissionMode: currentTurnSdkPermissionMode(),
@@ -4423,6 +4428,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       canceledBridgeQueries.has(q);
     type QueryRuntimeSnapshot = {
       model: string;
+      providerId: string | null;
       effort: Effort;
       fastMode: boolean;
       sdkPermissionMode: SdkPermissionMode;
@@ -4430,13 +4436,18 @@ export class ClaudeCodeAgent extends BaseAgent {
     async function replayRuntimeDrift(snapshot: QueryRuntimeSnapshot, label: string): Promise<void> {
       for (let pass = 0; pass < 5; pass += 1) {
         let replayed = false;
-        if (mutableModel !== snapshot.model) {
+        if (mutableModel !== snapshot.model || mutableProviderId !== snapshot.providerId) {
           replayed = true;
           const targetModel = mutableModel;
+          const targetProviderId = mutableProviderId;
           try {
-            await q.setModel(sdkModelFor(targetModel));
+            await q.setModel(sdkModelFor(targetModel, targetProviderId));
             snapshot.model = targetModel;
-            log.debug(`${label}: replayed setModel`, { model: targetModel });
+            snapshot.providerId = targetProviderId;
+            log.debug(`${label}: replayed setModel`, {
+              model: targetModel,
+              providerId: targetProviderId,
+            });
           } catch (e) {
             log.warn(`${label}: replay setModel failed`, { error: String(e) });
           }
@@ -4759,6 +4770,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 闭包值; await 期间若有切换到达(被 controlRequestsBlocked() 短路成"只更新闭包"),
           // 下方 diff 重放据此识别漂移项。
           const snapModel = mutableModel;
+          const snapProviderId = mutableProviderId;
           const snapEffort = mutableEffort;
           const snapFastMode = mutableFastMode;
           // 用 turn-scoped 档快照 (planTurnActive + mutablePermissionMode), 不含 mutablePlanMode
@@ -4800,6 +4812,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           clearBridgeState();
           runtimeReplaySnapshot = {
             model: snapModel,
+            providerId: snapProviderId,
             effort: snapEffort,
             fastMode: snapFastMode,
             sdkPermissionMode: snapSdkPermissionMode,
@@ -5468,7 +5481,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 才有)若被当成 spawn 声明,下次切模会与仍烤着旧快照的 remoteEnv 比对
           // 误拒(codex P2 #1035)。
         }
-        const sdkModel = sdkModelFor(newModel);
+        const sdkModel = sdkModelFor(newModel, targetProviderId);
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setModel', { from: mutableModel, to: newModel, sdk: sdkModel, controlRequestsBlocked: isControlBlocked });
         if (!isControlBlocked) {

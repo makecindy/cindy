@@ -51,6 +51,13 @@ const originalIdleTimeout = process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS;
 
 const TEST_MODELS: ModelDescriptor[] = [
   {
+    id: 'claude-opus-4-8',
+    displayName: 'Claude Opus 4.8',
+    contextWindow: 1_000_000,
+    efforts: ['low', 'medium', 'high', 'max'],
+    defaultEffort: 'high',
+  },
+  {
     id: 'claude-opus-4-6',
     displayName: 'Claude Opus 4.6',
     contextWindow: 1_000_000,
@@ -193,7 +200,13 @@ async function makeTempDir(): Promise<string> {
 }
 
 async function startRewindableSession(
-  options: { autoCompactThresholdPct?: number; idleTimeoutMs?: number } = {},
+  options: {
+    autoCompactThresholdPct?: number;
+    idleTimeoutMs?: number;
+    model?: string;
+    providerId?: string;
+    resolveClaudeModelContextWindow?: AgentDeps['resolveClaudeModelContextWindow'];
+  } = {},
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -207,10 +220,12 @@ async function startRewindableSession(
   const agent = new ClaudeCodeAgent({
     ...createDeps({ autoCompactThresholdPct: options.autoCompactThresholdPct }),
     capabilityAdditions: { availableModels: TEST_MODELS },
+    resolveClaudeModelContextWindow: options.resolveClaudeModelContextWindow,
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
-    model: 'claude-opus-4-6',
+    model: options.model ?? 'claude-opus-4-6',
+    providerId: options.providerId,
     workingDir,
     permissionMode: 'acceptEdits',
   });
@@ -237,6 +252,42 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('uses the selected provider context window across start, switch, and rebuild', async () => {
+    const resolveClaudeModelContextWindow = vi.fn(
+      (providerId: string | null | undefined, modelId: string) =>
+        modelId === 'claude-opus-4-8'
+          ? providerId === 'cc'
+            ? 200_000
+            : providerId === 'anthropic'
+              ? 1_000_000
+              : null
+          : null,
+    );
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-opus-4-8',
+      providerId: 'cc',
+      resolveClaudeModelContextWindow,
+    });
+
+    const args = sdkMock.query.mock.calls[0]?.[0] as { options: Record<string, unknown> };
+    expect(args.options.model).toBe('claude-opus-4-8');
+    expect(resolveClaudeModelContextWindow).toHaveBeenCalledWith('cc', 'claude-opus-4-8');
+
+    await handle.setModel?.('claude-opus-4-8', { providerId: 'anthropic' });
+    expect(firstQuery.setModel).toHaveBeenLastCalledWith('claude-opus-4-8[1m]');
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    await handle.setModel?.('claude-opus-4-8', { providerId: 'cc' });
+    const rebuiltQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(rebuiltQuery);
+    await handle.send({ type: 'user', content: 'resume through qianlong' });
+
+    const rebuiltArgs = sdkMock.query.mock.calls[1]?.[0] as { options: Record<string, unknown> };
+    expect(rebuiltArgs.options.model).toBe('claude-opus-4-8');
+
+    await handle.close();
+  });
+
   it('passes max through when changing effort in a live Sonnet 5 session', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 
@@ -406,6 +457,33 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(rebuildArgs.options.model).toBe('claude-opus-4-6[1m]');
     // sonnet-5 fixture 窗口 500K < 1M → wire 串不带 [1m](窗口驱动规则)。
     expect(secondQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+
+    await handle.close();
+  });
+
+  it('replays a same-model provider switch that arrives during query rebuild', async () => {
+    const resolveClaudeModelContextWindow = (
+      providerId: string | null | undefined,
+      modelId: string,
+    ) => modelId === 'claude-opus-4-8' && providerId === 'cc' ? 200_000 : 1_000_000;
+    const { handle } = await startRewindableSession({
+      model: 'claude-opus-4-8',
+      providerId: 'anthropic',
+      resolveClaudeModelContextWindow,
+    });
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockImplementationOnce(() => {
+      void handle.setModel?.('claude-opus-4-8', { providerId: 'cc' });
+      return secondQuery;
+    });
+
+    await handle.send({ type: 'user', content: 'switch provider during rebuild' });
+
+    const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as { options: Record<string, unknown> };
+    expect(rebuildArgs.options.model).toBe('claude-opus-4-8[1m]');
+    expect(secondQuery.setModel).toHaveBeenCalledWith('claude-opus-4-8');
 
     await handle.close();
   });

@@ -421,6 +421,16 @@ export interface AgentDeps {
   capabilityAdditions?: AgentCapabilityAdditions;
 
   /**
+   * Claude Code wire-model context window for one provider route.
+   * Unlike resolveVerifiedContextWindow, catalog defaults are valid here: they prevent a
+   * colliding built-in model from incorrectly adding the `[1m]` transport suffix.
+   */
+  resolveClaudeModelContextWindow?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
+  /**
    * Host-owned arbitration for capabilities that overlap with harness-native
    * plugins, skills, MCP servers, apps, or tools.
    *
