@@ -8,6 +8,7 @@ import {
   GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
+  ghostAppContextLocale,
   ghostContentKeys,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -342,6 +343,15 @@ describe('ghost · 清单校验', () => {
     expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
     expect(withGhostResolvedLocale(parsed.manifest, 'zh-TW').resolvedLocale).toBe('zh-TW');
     expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
+  });
+
+  it('app-context locale 保持插件协议旧四语，新增宿主语言固定回退英文', () => {
+    expect(ghostAppContextLocale('zh-CN')).toBe('zh-CN');
+    expect(ghostAppContextLocale('zh-TW')).toBe('en');
+    expect(ghostAppContextLocale('en')).toBe('en');
+    expect(ghostAppContextLocale('ja')).toBe('ja');
+    expect(ghostAppContextLocale('ko')).toBe('ko');
+    expect(ghostAppContextLocale('fr-FR')).toBe('en');
   });
 
   it('locale 资源按稳定 tool name 合并;翻译可部分提供、缺译回退原文,错位仍拒', () => {

@@ -735,6 +735,12 @@ describe('FORGE_GUIDE', () => {
     );
   });
 
+  it('app-context 保持插件协议旧四语并说明新增宿主语言的兼容回退', () => {
+    expect(FORGE_GUIDE).toContain("locale: 'zh-CN' | 'en' | 'ja' | 'ko'");
+    expect(FORGE_GUIDE).not.toContain("locale: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko'");
+    expect(FORGE_GUIDE).toContain('会在插件边界固定映射为 `en`');
+  });
+
   it('分章体量守卫:每个 ## 章节须留在单次工具结果安全体量内(#890 分章投递的不变量)', () => {
     // 手册"随主机版本演进"持续增长;任一章越过单次 MCP 结果上限会静默复现 #890 于该章。
     // 上限取 32KB:当前最大章 ~22KB,余量 ~45%,越线即该拆小节。

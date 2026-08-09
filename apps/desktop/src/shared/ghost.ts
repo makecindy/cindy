@@ -2216,6 +2216,13 @@ export function ghostLocalePathFor(
   return (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null;
 }
 
+/** 插件 app-context 只暴露协议旧四语；宿主新增语言固定回退英文以兼容存量插件。 */
+export function ghostAppContextLocale(locale: string | undefined | null): GhostLocale {
+  return (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
+    ? locale as GhostLocale
+    : 'en';
+}
+
 /** 把当前宿主语言附到运行时清单视图；不支持的输入固定归一到英文。 */
 export function withGhostResolvedLocale(
   manifest: GhostManifest,
@@ -5116,8 +5123,8 @@ export interface GhostAppContextResult {
   ok: true;
   context: {
     region: GhostAppRegion;
-    /** 当前宿主应用语言；插件只使用本值，不读取 navigator.language。 */
-    locale: SupportedLocale;
+    /** 插件协议语言；宿主新增语言会在边界回退英文。 */
+    locale: GhostLocale;
   };
 }
 
