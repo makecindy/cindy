@@ -18,7 +18,7 @@ export async function discardPendingOrcaWorkerInput(
   coordinator: OrcaShutdownQueueCoordinator,
   sessionId: string,
 ): Promise<number> {
-  await coordinator.ensureQueueRestored(sessionId).catch(() => undefined);
+  await coordinator.ensureQueueRestored(sessionId);
   const clientIds = coordinator.getProjection(sessionId).pendingQueue.map((item) => item.clientId);
   for (const clientId of clientIds) coordinator.remove(sessionId, clientId);
   return clientIds.length;

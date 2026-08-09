@@ -28,6 +28,22 @@ function createCoordinator(
 }
 
 describe('discardPendingOrcaWorkerInput', () => {
+  it('fails closed when durable queue restore rejects', async () => {
+    const h = createCoordinator();
+    const restoreError = new Error('queue snapshot unavailable');
+    h.coordinator.ensureQueueRestored.mockRejectedValue(restoreError);
+
+    await expect(
+      discardPendingOrcaWorkerInput(h.coordinator, 'worker-a'),
+    ).rejects.toBe(restoreError);
+    expect(h.coordinator.getProjection).not.toHaveBeenCalled();
+    expect(h.coordinator.remove).not.toHaveBeenCalled();
+    expect(h.queues.get('worker-a')).toEqual([
+      { clientId: 'orca-a' },
+      { clientId: 'scheduler-a' },
+    ]);
+  });
+
   it('clears queued input through remove and fires each discard side effect once', async () => {
     const discardAccepted = vi.fn();
     const accepted = vi.fn();

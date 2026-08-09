@@ -7,7 +7,7 @@ import {
   type OrcaDisableWorkerRuntimeDeps,
   withOrcaWorkerDisableFence,
   withOrcaWorkerSessionLocks,
-} from '../orcaDisableWorkerRuntime';
+} from '../orcaDisableWorkerRuntime.js';
 
 function createSerialLock() {
   const tails = new Map<string, Promise<void>>();
