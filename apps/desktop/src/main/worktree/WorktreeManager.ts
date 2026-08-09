@@ -908,6 +908,8 @@ const removeWorktreeQueues = new Map<string, Promise<void>>();
 export interface RemoveWorktreeOptions {
   /** destructive remove 前确认 owning session 仍处于允许回收的状态。 */
   canRemove?: () => Promise<boolean>;
+  /** archived/deleted 引用只有在对应 runtime 已关闭时才可忽略。 */
+  isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
   /**
    * 预创建补偿回收不能把用户可能已经手动写入的内容变成无会话可恢复的快照；
    * 命中 dirty 时保留整个 worktree，而不是走常规删除/归档的 auto-stash 流程。
@@ -924,8 +926,8 @@ export interface RemoveWorktreeOptions {
  *
  * 流程:
  *   1. meta = store.get(sid); null → return
- *   2. live-ref 守卫: 其它未删除会话仍引用该路径 → 保留(排除 sid 自身,
- *      归档会话自己的行不算引用)
+ *   2. live-ref 守卫: 其它会话仍引用该路径 → 保留(排除 sid 自身；其它终态会话
+ *      只有在 runtime 已确认关闭时才不阻挡)
  *   3. dirty → auto-stash(失败 → 保留);成功后先撤销 store 登记，阻断 SEND
  *   4. try git worktree remove --force <meta.path>
  *   5. fail → isManagedWorktreePath 三条校验通过 → fs.rm -rf
@@ -992,11 +994,12 @@ async function removeWorktreeForSessionInner(
     return;
   }
 
-  // live-ref 守卫: worktree 路径仍被其它未删除会话的 workingDir / worktreePath
-  // 指向时不删(典型: 用户在该目录另开了会话)。查询失败按"在用"保守处理。
+  // live-ref 守卫: worktree 路径仍被其它会话的 workingDir / worktreePath 指向时不删。
+  // 产品终态不代表 runtime 已关闭；显式回收路径用 Maker 的运行态观察器确认。
   const liveKeys = await loadLiveSessionPathKeys({
     contextPath: worktreePath,
     excludeSessionId: sessionId,
+    isSessionRuntimeAlive: options.isSessionRuntimeAlive,
   });
   if (hasLiveSessionReference(meta, liveKeys)) {
     log.info(

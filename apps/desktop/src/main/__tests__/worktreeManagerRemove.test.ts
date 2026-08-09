@@ -1,6 +1,6 @@
 /**
  * removeWorktreeForSession / discardPrecreatedWorktree 删除守卫回归:
- *   - live-ref 守卫:其它 live 会话仍引用路径 → 保留;archived/deleted 不阻挡
+ *   - live-ref 守卫:其它 live 会话仍引用路径 → 保留;终态引用需确认 runtime 已关闭
  *   - 排除自身:owning session 自己的路径不算引用
  *   - dirty → stash 失败保留 / 成功后继续删
  *   - clean 无引用 → git remove + store.del
@@ -240,13 +240,53 @@ describe('removeWorktreeForSession', () => {
   });
 
   it.each(['archived', 'deleted'])(
-    '%s session references do not block worktree recycle',
+    '%s session references do not block worktree recycle without runtime observer',
     async (status) => {
       const meta = makeMeta('s1');
       storeMap.set('s1', meta);
       liveSessionRows.push({ id: 'other', status, workingDir: meta.path, worktreePath: null });
 
       await manager.removeWorktreeForSession('s1');
+
+      expect(gitExecMock).toHaveBeenCalledWith(
+        ['worktree', 'remove', '--force', meta.path],
+        BASE_REPO,
+      );
+      expect(storeMap.has('s1')).toBe(false);
+    },
+  );
+
+  it('terminal session reference still blocks when its runtime is alive', async () => {
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+    liveSessionRows.push({
+      id: 'other',
+      status: 'archived',
+      workingDir: meta.path,
+      worktreePath: null,
+    });
+
+    await manager.removeWorktreeForSession('s1', {
+      isSessionRuntimeAlive: (sessionId) => sessionId === 'other',
+    });
+
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has('s1')).toBe(true);
+  });
+
+  it.each(['archived', 'deleted'])(
+    '%s session reference stops blocking after its runtime is closed',
+    async (status) => {
+      const meta = makeMeta('s1');
+      storeMap.set('s1', meta);
+      liveSessionRows.push({ id: 'other', status, workingDir: meta.path, worktreePath: null });
+
+      await manager.removeWorktreeForSession('s1', {
+        isSessionRuntimeAlive: () => false,
+      });
 
       expect(gitExecMock).toHaveBeenCalledWith(
         ['worktree', 'remove', '--force', meta.path],

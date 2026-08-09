@@ -173,6 +173,8 @@ export async function recycleSessionWorktreeForStatusChange(
       });
       await recycle.recycleWorktreeForRemovedSession(targetSessionId, {
         scanOwners,
+        isSessionRuntimeAlive: (candidateSessionId) =>
+          mh.getMakerIfReady()?.isSessionAlive(candidateSessionId),
         recycleOwner: (ownerSessionId) => closeAndRecycle(ownerSessionId, false),
       });
     };

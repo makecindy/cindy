@@ -39,6 +39,8 @@ const log = createLogger('sessionRemovalRecycle');
 interface RecycleWorktreeOptions {
   /** Internal guard: owner retries reuse this entry point without starting another owner scan. */
   scanOwners?: boolean;
+  /** Runtime truth used by the live-reference guard for archived/deleted borrowers. */
+  isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
   /**
    * Owner retries must go back through the caller's route lock + CLI close chain before
    * entering this low-level remover. Omitted callers preserve the owner rather than
@@ -52,7 +54,7 @@ export async function recycleWorktreeForRemovedSession(
   options: RecycleWorktreeOptions = {},
 ): Promise<void> {
   try {
-    await recycleOwnWorktreeForRemovedSession(sessionId);
+    await recycleOwnWorktreeForRemovedSession(sessionId, options);
   } finally {
     if (options.scanOwners !== false) {
       const ownerSessionIds = await findOwningWorktreeSessionIds(sessionId);
@@ -73,7 +75,10 @@ export async function recycleWorktreeForRemovedSession(
  * 只处理 session 自身登记的 worktree。是否存在自身 meta、是否为 ephemeral，均不影响
  * 顶层入口随后扫描共享 owner。
  */
-async function recycleOwnWorktreeForRemovedSession(sessionId: string): Promise<void> {
+async function recycleOwnWorktreeForRemovedSession(
+  sessionId: string,
+  options: Pick<RecycleWorktreeOptions, 'isSessionRuntimeAlive'>,
+): Promise<void> {
   const meta = store.get(sessionId);
   if (!meta) return;
   if (meta.ephemeral) {
@@ -90,6 +95,7 @@ async function recycleOwnWorktreeForRemovedSession(sessionId: string): Promise<v
     return;
   }
   await removeWorktreeForSession(sessionId, {
+    isSessionRuntimeAlive: options.isSessionRuntimeAlive,
     canRemove: async () => {
       const currentStatus = await readCurrentSessionStatus(sessionId);
       return currentStatus === 'deleted' || currentStatus === 'archived';

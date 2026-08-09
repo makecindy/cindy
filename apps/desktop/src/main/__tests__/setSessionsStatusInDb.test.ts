@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   webContentsSend: vi.fn(),
   closeSession: vi.fn(),
+  isSessionAlive: vi.fn(),
   withSendToSessionLock: vi.fn(
     async (_sessionId: string, task: () => Promise<unknown>) => task(),
   ),
@@ -52,7 +53,7 @@ vi.mock('../agent-island/service.js', () => ({
 }));
 vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
 vi.mock('../maker-host/index.js', () => ({
-  getMakerIfReady: () => ({ closeSession: h.closeSession }),
+  getMakerIfReady: () => ({ closeSession: h.closeSession, isSessionAlive: h.isSessionAlive }),
 }));
 vi.mock('../maker-ipc/register.js', () => ({
   withSendToSessionLock: h.withSendToSessionLock,
@@ -71,6 +72,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-set-sessions-status-'));
   h.closeSession.mockResolvedValue(undefined);
+  h.isSessionAlive.mockReturnValue(false);
   h.isSessionStillRemovable.mockResolvedValue(true);
   h.recycleWorktreeForRemovedSession.mockResolvedValue(undefined);
 });
@@ -296,8 +298,24 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.recycleWorktreeForRemovedSession).toHaveBeenNthCalledWith(
       2,
       'owner',
-      expect.objectContaining({ scanOwners: false, recycleOwner: expect.any(Function) }),
+      expect.objectContaining({
+        scanOwners: false,
+        isSessionRuntimeAlive: expect.any(Function),
+        recycleOwner: expect.any(Function),
+      }),
     );
+  });
+
+  it('passes current Maker runtime liveness into the low-level live-reference guard', async () => {
+    h.isSessionAlive.mockImplementation((sessionId: string) => sessionId === 'borrower');
+
+    await recycleSessionWorktreeForStatusChange('owner', 'archived');
+
+    const options = h.recycleWorktreeForRemovedSession.mock.calls[0]?.[1] as
+      | { isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined }
+      | undefined;
+    expect(options?.isSessionRuntimeAlive?.('borrower')).toBe(true);
+    expect(options?.isSessionRuntimeAlive?.('closed')).toBe(false);
   });
 
   it('preserves a scanned owner when its runtime fails to close', async () => {

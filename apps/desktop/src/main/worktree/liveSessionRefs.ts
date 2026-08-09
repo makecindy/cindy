@@ -1,10 +1,10 @@
 /**
  * live-session 引用判定（WorktreePool 与 WorktreeManager 删除路径共用）。
  *
- * 语义：某 worktree 路径若仍被任何**未进入 archived/deleted 终态**会话的 workingDir /
- * worktreePath 指向，就视为"在用"，删除/淘汰路径必须保留它。查询失败时返回 null，消费方按
- * "无法确认 → 视为在用"的保守方向处理——所有分支都倾向保留而非删除。未知或 NULL status
- * 同样按在用处理，避免损坏/不完整数据导致误删。
+ * 语义：某 worktree 路径若仍被其它会话的 workingDir / worktreePath 指向，就视为"在用"，
+ * 删除/淘汰路径必须保留它。显式归档/删除回收可提供运行态观察器：archived/deleted 只在确认
+ * 对应 runtime 已关闭后才不再阻挡；其它调用方没有观察器时沿用既有终态过滤。查询失败时返回
+ * null，消费方按"无法确认 → 视为在用"的保守方向处理。未知或 NULL status 同样按在用处理。
  *
  * 原实现内联在 WorktreePool.ts（MR1），P0 重构把它抽出来给
  * removeWorktreeForSession 的删除守卫复用，并支持排除会话自身
@@ -48,9 +48,11 @@ export interface LoadLiveSessionPathKeysOptions {
   contextPath?: string;
   /**
    * 排除的会话 id：显式删除/归档会话时，该会话自己的 workingDir/worktreePath
-   * 不构成"仍在用"（archived/deleted 行统一不算 live；保留参数兼容旧调用方）。
+   * 不构成"仍在用"；显式回收观察器存在时，其它终态会话仍需运行态证明才能排除。
    */
   excludeSessionId?: string;
+  /** 终态会话只有在该观察器明确返回 false 时才不再视为 live。 */
+  isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
 }
 
 export async function loadLiveSessionPathKeys(
@@ -66,14 +68,22 @@ export async function loadLiveSessionPathKeys(
         worktreePath: sessions.worktreePath,
       })
       .from(sessions)
-      .where(sql`${sessions.status} NOT IN ('archived', 'deleted') OR ${sessions.status} IS NULL`);
+      .where(
+        opts.isSessionRuntimeAlive
+          ? sql`${sessions.workingDir} IS NOT NULL OR ${sessions.worktreePath} IS NOT NULL`
+          : sql`${sessions.status} NOT IN ('archived', 'deleted') OR ${sessions.status} IS NULL`,
+      );
 
     const keys = new Set<string>();
     for (const row of rows) {
-      // SQL 先滤掉合法终态；这里保留显式判断，防测试 fake / 损坏驱动返回了不符合 where 的行。
-      // NULL / 未知 status 必须保守地继续作为引用保留。
-      if (row.status === 'archived' || row.status === 'deleted') continue;
       if (opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
+      const isTerminal = row.status === 'archived' || row.status === 'deleted';
+      if (
+        isTerminal &&
+        (!opts.isSessionRuntimeAlive || opts.isSessionRuntimeAlive(row.id) === false)
+      ) {
+        continue;
+      }
       const workingDirKey = pathKey(row.workingDir);
       const worktreePathKey = pathKey(row.worktreePath);
       if (workingDirKey) keys.add(workingDirKey);
