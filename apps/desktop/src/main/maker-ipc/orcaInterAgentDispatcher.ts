@@ -107,6 +107,8 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'WORKTREE_UNAVAILABLE'
         | 'INTERNAL';
       message: string;
+      /** Internal marker: preserve shutdown-fence NOT_FOUND semantics in the host adapter. */
+      shutdownFence?: true;
     };
 
 /** 通过既有 sendToSessionInternal 重建或排队目标 session 时传入的最小参数。 */
@@ -454,7 +456,14 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         };
       }
       return failureResult({
-        ...createHostSendFailure(result.errorCode === 'BUSY' ? 'SESSION_RUNNING' : 'SEND_FAILED', result.message),
+        ...createHostSendFailure(
+          result.shutdownFence
+            ? 'SESSION_NOT_FOUND'
+            : result.errorCode === 'BUSY'
+              ? 'SESSION_RUNNING'
+              : 'SEND_FAILED',
+          result.message,
+        ),
         source: params.meta.source,
         context: params.meta.context,
       });

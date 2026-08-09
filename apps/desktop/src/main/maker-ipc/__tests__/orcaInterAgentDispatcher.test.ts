@@ -505,6 +505,55 @@ describe('Orca lead/worker dispatcher', () => {
     expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
   });
 
+  it('preserves shutdown-fence NOT_FOUND when the shared fallback reports it', async () => {
+    const h = createHarness({
+      getLiveSession: vi.fn(() => null),
+      sendToSessionInternal: vi.fn(async () => ({
+        ok: false,
+        errorCode: 'NOT_FOUND',
+        shutdownFence: true,
+        message: 'session is unavailable because its Orca team is ending',
+      } as const)),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Do not send after end_team',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'fallback-shutdown-fence-test' },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: { kind: 'host-send', code: 'SESSION_NOT_FOUND' },
+    });
+  });
+
+  it('keeps ordinary fallback NOT_FOUND as SEND_FAILED', async () => {
+    const h = createHarness({
+      getLiveSession: vi.fn(() => null),
+      sendToSessionInternal: vi.fn(async () => ({
+        ok: false,
+        errorCode: 'NOT_FOUND',
+        message: 'session not found',
+      } as const)),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Missing target',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'fallback-not-found-test' },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      dispatchOutcome: { kind: 'host-send', code: 'SEND_FAILED' },
+    });
+  });
+
   it('rolls back queued accepted side effects when dispatch settles as not dispatched', async () => {
     const accepted = vi.fn();
     const rollback = vi.fn();
