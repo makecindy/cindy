@@ -2040,10 +2040,7 @@ export const remoteSessionStore = {
     if ((authorityStale && expectedRemoteEpoch === undefined) || remoteStale) {
       const evidence = acceptedClientId ? inputProjectionRemoteQueuedEvidence.get(sessionId)?.get(acceptedClientId) : 0;
       const acceptedLive = Boolean(acceptedClientId && ((inputProjectionUnconfirmedQueuedClientIds.get(sessionId)?.has(acceptedClientId)) || inputProjections.get(sessionId)?.pendingQueue.some((item) => item.clientId === acceptedClientId) || (evidence ?? 0) > 0));
-      const acceptedQueued = Boolean(acceptedClientId && next.pendingQueue.some((item) => item.clientId === acceptedClientId));
       if (remoteStale && acceptedLive) recordInputProjectionRemoteEvidence(sessionId, [acceptedClientId!]);
-      const settled = remoteStale && acceptedLive && !acceptedQueued && resolveInputProjectionUnconfirmed(sessionId, new Set([acceptedClientId!]));
-      if (settled) emit();
       return false;
     }
     const queuedClientIds = new Set(next.pendingQueue.map((item) => item.clientId));

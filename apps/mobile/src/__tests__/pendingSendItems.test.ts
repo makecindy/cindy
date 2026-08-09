@@ -130,10 +130,7 @@ describe('buildPendingSendItems', () => {
     const [item] = build({
       queue: [queued('unknown')],
       unconfirmedClientIds: new Set(['unknown']),
-      presentationByClientId: new Map([['unknown', {
-        actions: {} as MobilePendingSendActions,
-        hint: null,
-      }]]),
+      presentationByClientId: new Map([['unknown', { actions: {} as MobilePendingSendActions, hint: null }]]),
     });
     expect(item.phase).toBe('sending');
     expect(item.actions).toBeNull();

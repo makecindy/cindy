@@ -2811,7 +2811,7 @@ describe('remoteSessionStore', () => {
 
     expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
-    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, operationEpoch, operationRemoteEpoch, 'q-1')).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...ownerProjection, pendingQueue: [] }, operationEpoch, operationRemoteEpoch, 'q-1')).toBe(false);
     expect([remoteSessionStore.getInputProjection('s1').pendingQueue.map((item) => item.clientId), remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-1', operationRemoteEpoch), remoteSessionStore.getInputProjectionUnconfirmedQueuedClientIds('s1').size]).toEqual([['q-1'], true, 1]);
   });
 
