@@ -155,7 +155,7 @@ describe('AppshotCoordinator boundary', () => {
 
   it('ingests bytes from the validated descriptor when the pathname is swapped', async () => {
     const replacement = Uint8Array.from([...PNG.slice(0, 8), 0x99]);
-    const ingestPng = vi.fn(async () => ({
+    const ingestPng = vi.fn<(bytes: Uint8Array) => Promise<{ url: string; filename: string }>>(async () => ({
       url: 'cindy-media://blobs/race.png',
       filename: 'race.png',
     }));
