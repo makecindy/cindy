@@ -31,6 +31,7 @@ function fakeGhost(overrides: Partial<InstalledGhost> = {}): InstalledGhost {
 interface Harness {
   dispatcher: GhostPipeDispatcher;
   deps: {
+    canAcceptCalls: ReturnType<typeof vi.fn>;
     getGhost: ReturnType<typeof vi.fn>;
     runtimeStateOf: ReturnType<typeof vi.fn>;
     spawn: ReturnType<typeof vi.fn>;
@@ -49,9 +50,11 @@ function makeHarness(opts: {
   state?: GhostRuntimeState;
   timeoutMs?: number;
   recordUsage?: (ghostId: string) => Promise<void>;
+  canAcceptCalls?: () => boolean;
 } = {}): Harness {
   const sent: GhostPipeToolCall[] = [];
   const deps = {
+    canAcceptCalls: vi.fn(opts.canAcceptCalls ?? (() => true)),
     getGhost: vi.fn(() => (opts.ghost === undefined ? fakeGhost() : opts.ghost)),
     runtimeStateOf: vi.fn(() => opts.state ?? 'running'),
     spawn: vi.fn(async () => ({ ok: true as const })),
@@ -242,6 +245,66 @@ describe('本地调用计数', () => {
       ghostId: 'art',
       error: 'database unavailable',
     });
+  });
+
+  it('退出门禁关闭后不再受理、拉起、计数或派发', async () => {
+    const h = makeHarness({ state: 'off' });
+    h.dispatcher.stopAcceptingCalls();
+
+    await expect(h.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+      message: expect.stringContaining('未受理'),
+    });
+    expect(h.deps.getGhost).not.toHaveBeenCalled();
+    expect(h.deps.spawn).not.toHaveBeenCalled();
+    expect(h.deps.recordUsage).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+  });
+
+  it('账号边界期间拒绝，边界结束后恢复受理', async () => {
+    let boundaryPending = true;
+    const h = makeHarness({ canAcceptCalls: () => !boundaryPending });
+    h.deps.sendToGhost.mockReturnValue(false);
+
+    await expect(h.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('切换账号'),
+    });
+    expect(h.deps.recordUsage).not.toHaveBeenCalled();
+
+    boundaryPending = false;
+    await expect(h.dispatcher.callGhostTool(CALL)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+    });
+    expect(h.deps.recordUsage).toHaveBeenCalledTimes(1);
+    expect(h.deps.sendToGhost).toHaveBeenCalledTimes(1);
+  });
+
+  it('调用在 spawn 期间跨过账号边界时，spawn 返回后不计数也不派发', async () => {
+    let settleSpawn!: (result: { ok: true }) => void;
+    let boundaryPending = false;
+    const h = makeHarness({ state: 'off', canAcceptCalls: () => !boundaryPending });
+    h.deps.spawn.mockImplementation(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          settleSpawn = resolve;
+        }),
+    );
+
+    const call = h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.deps.spawn).toHaveBeenCalledTimes(1));
+    boundaryPending = true;
+    settleSpawn({ ok: true });
+
+    await expect(call).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+      message: expect.stringContaining('未受理'),
+    });
+    expect(h.deps.recordUsage).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
   });
 });
 

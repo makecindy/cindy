@@ -720,6 +720,7 @@ import {
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
 import {
+  beginGhostShutdown,
   getGhostCindySlot,
   getGhostManager,
   getGhostSessionActivityTracker,
@@ -6979,6 +6980,9 @@ onQuit(
 //                           codex 子进程之后, 这里并发跑最坏是 log noise。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
+// Ghost 调用入口必须在 sync phase 封闭：async phase 有总预算，超时后会继续进入
+// post-async；只依赖 shutdown-maker 完成无法保证 DbClient drain 后没有新 usage 写入。
+onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');
 onQuit('shutdown-maker', shutdownMaker, 'async');
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');

@@ -1119,6 +1119,7 @@ let dispatcherSingleton: GhostPipeDispatcher | null = null;
 export function getGhostPipeDispatcher(): GhostPipeDispatcher {
   if (!dispatcherSingleton) {
     dispatcherSingleton = new GhostPipeDispatcher({
+      canAcceptCalls: () => !isAppSessionBoundaryPending(),
       getGhost: findAvailableGhost,
       runtimeStateOf: (id) => getGhostRuntime().stateOf(id),
       spawn: async (ghost) => {
@@ -1218,6 +1219,18 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
     });
   }
   return nodeRuntimeBrokerSingleton;
+}
+
+/**
+ * 主机退出期同步封闭 Ghost 调用入口，并停止已经存在的沙箱/Node runtime。
+ * 必须幂等：正常 before-quit 与 lifecycle 的 sync disposer 可能先后触发。
+ */
+export function beginGhostShutdown(): void {
+  // 先关入口，再销毁 runtime。callGhostTool 在 spawn await 后还会重查该门禁，
+  // 因此这里返回后不会再有新的“已受理”调用开始 usage 写入。
+  getGhostPipeDispatcher().stopAcceptingCalls();
+  suspendAllGhosts();
+  nodeRuntimeBrokerSingleton?.destroyAll();
 }
 
 /** 意识聊天卡片更新推送通道(main → 全窗口 renderer;ghostCardStore 消费)。 */
@@ -4428,10 +4441,7 @@ export function registerGhostIpc(): void {
   });
   // 主机正常退出:逐个销毁沙箱(docs/dev-rules/plugin-security-and-authoring.md 的"关完才走";
   // 主进程被强杀时 Chromium 会级联回收渲染子进程,无孤儿)。
-  app.on('before-quit', () => {
-    runtime.destroyAll();
-    getGhostNodeRuntimeBroker().destroyAll();
-  });
+  app.on('before-quit', beginGhostShutdown);
 
   // 启动序列(必须等 app ready:registerGhostIpc 在 bootstrap 顶层(ready 前)
   // 执行,而沙箱创建(session.fromPartition / new BrowserWindow)在 ready 前会

@@ -185,8 +185,41 @@ describe('runQuitDisposers', () => {
     ]);
   });
 
+  it('closes Ghost ingress before an async shutdown timeout reaches DbClient disposal', async () => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    const log: string[] = [];
+
+    onQuit(
+      'ghost-call-ingress',
+      () => {
+        log.push('ingress-closed');
+      },
+      'sync',
+    );
+    onQuit('shutdown-maker', () => new Promise<void>(() => undefined), 'async');
+    onQuit(
+      'db-client',
+      () => {
+        log.push('db-client-disposed');
+      },
+      'post-async',
+    );
+
+    const shutdown = runQuitDisposers(6_000);
+    expect(log).toEqual(['ingress-closed']);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await shutdown;
+
+    expect(log).toEqual(['ingress-closed', 'db-client-disposed']);
+  });
+
   it('wires DbClient disposal into post-async before local DB close', () => {
     const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+    const ingress = source.indexOf(
+      "onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');",
+    );
+    const maker = source.indexOf("onQuit('shutdown-maker', shutdownMaker, 'async');");
     const dbClient = source.indexOf(
       "onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');",
     );
@@ -194,7 +227,9 @@ describe('runQuitDisposers', () => {
       "onQuit('local-db-close', () => localDbCloseDb(), 'post-async');",
     );
 
-    expect(dbClient).toBeGreaterThan(-1);
+    expect(ingress).toBeGreaterThan(-1);
+    expect(maker).toBeGreaterThan(ingress);
+    expect(dbClient).toBeGreaterThan(maker);
     expect(localDb).toBeGreaterThan(dbClient);
   });
 
