@@ -60,6 +60,13 @@ export interface MakerMemoryManagerDeps {
    * 与新 owner 数据混用。缺席 = 不做作用域追踪（静态 basePath 宿主）。
    */
   ownerScopeKey?: () => string;
+  /**
+   * owner 作用域变化（首次解析 / 换根）后重新读取 enabled 初值的回调
+   * （desktop: 按新 owner 根读 memory-settings.json）。修复冷启动竞态里
+   * initialEnabled 在 owner 未就绪时冻结为全局默认、owner 就绪后不重绑定的
+   * 问题（#2388 review Codex 4th P1）。缺席 = 不重绑定（静态宿主）。
+   */
+  reloadEnabled?: () => boolean;
   /** SQLite open 工厂, host 注入 (better-sqlite3 是 native module, 不能在 maker-core require) */
   sqliteFactory: SqliteFactory;
   /** Agent 引用 — 强联动 setMemory(false) 关原生时用 */
@@ -151,7 +158,10 @@ export class MakerMemoryManager {
     if (this.deps.ownerScopeKey) {
       const key = this.deps.ownerScopeKey();
       if (this.activeScopeKey === null) {
+        // 首次解析 — 构造期 owner 可能尚未就绪 (initialEnabled 是全局默认),
+        // 这里锚定 scope 的同时按当前 owner 重绑定 enabled。
         this.activeScopeKey = key;
+        this.rebindEnabled();
       } else if (key !== this.activeScopeKey) {
         this.logger.warn('maker memory owner scope changed — closing stores and rebinding root', {
           fromScope: this.activeScopeKey,
@@ -159,6 +169,7 @@ export class MakerMemoryManager {
         });
         this.closeAllStores();
         this.activeScopeKey = key;
+        this.rebindEnabled();
       }
     }
     if (this.resolvedBasePath === null) {
@@ -169,6 +180,26 @@ export class MakerMemoryManager {
         'not-ready',
         'owner scope unavailable (signed-out or auth not settled); refusing to fall back to ephemeral storage',
       );
+    }
+  }
+
+  /**
+   * 当前 owner 作用域键的公开只读快照 — 供 MCP 工具层 (withStore) 在拿到
+   * store 后、对 store 发起 await 操作前捕获 / 操作后复核 (review #2388
+   * Codex 4th P1: getStore 返回的裸 store 在 manager 守卫之外被调用方使用)。
+   * 返回 null = 未注入 ownerScopeKey (静态宿主)。
+   */
+  currentOwnerScopeKey(): string | null {
+    return this.deps.ownerScopeKey?.() ?? null;
+  }
+
+  /** owner 作用域变化时按新 owner 设置重绑定 enabled (host 注入 reloadEnabled)。 */
+  private rebindEnabled(): void {
+    if (!this.deps.reloadEnabled) return;
+    const next = this.deps.reloadEnabled();
+    if (next !== this.enabled) {
+      this.logger.info('maker memory enabled rebound after owner scope change', { enabled: next });
+      this.enabled = next;
     }
   }
 
@@ -444,13 +475,17 @@ export class MakerMemoryManager {
         }
       }
     }
-    // 删除后复核 (review #2388 Greptile 4th): 目标 root 在入口已固定为操作开始时
-    // owner, 执行期间切换不改变删除对象 (旧 owner 数据), 但记录日志让「跨边界、
-    // 结果可能不完整」可观测。
+    // 删除后复核 (review #2388 Greptile 5th): 目标 root 在入口已固定为操作开始时
+    // owner (不会误删新 owner), 但删除期间 owner 若已切换, 结果不可信 ——
+    // fail-closed 抛 not-ready, 调用方不得按「成功清空」对待。
     if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
-      this.logger.warn('resetDigests crossed owner boundary; target fixed to scope at entry (result may be partial)', {
+      this.logger.warn('resetDigests crossed owner boundary; aborting as not-ready', {
         scopeAtEntry,
       });
+      throw new MemoryError(
+        'not-ready',
+        'owner scope changed during resetDigests; result is partial and must not be trusted',
+      );
     }
     return { removedCount: total };
   }
@@ -493,13 +528,17 @@ export class MakerMemoryManager {
       try { db.close(); } catch { /* swallow */ }
     }
     this.stores.clear();
-    // 删除后复核 (review #2388 Greptile 4th): 目标 root 在入口已固定为操作开始时
-    // owner, 执行期间切换不改变删除对象 (旧 owner 数据), 但记录日志让「跨边界、
-    // 结果可能不完整」可观测。
+    // 删除后复核 (review #2388 Greptile 5th): 目标 root 在入口已固定为操作开始时
+    // owner (不会误删新 owner), 但删除期间 owner 若已切换, 结果不可信 ——
+    // fail-closed 抛 not-ready, 调用方不得按「成功清空」对待。
     if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
-      this.logger.warn('resetAll crossed owner boundary; target fixed to scope at entry (result may be partial)', {
+      this.logger.warn('resetAll crossed owner boundary; aborting as not-ready', {
         scopeAtEntry,
       });
+      throw new MemoryError(
+        'not-ready',
+        'owner scope changed during resetAll; result is partial and must not be trusted',
+      );
     }
     return { removedCount: total };
   }

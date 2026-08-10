@@ -92,6 +92,11 @@ export function createDesktopMakerMemoryManager(): MakerMemoryManager {
     basePath: basePath ?? app.getPath('userData'),
     resolveBasePath,
     ownerScopeKey,
+    // owner 作用域变化（首次解析 / 换根）后按新 owner 根重新读取 enabled —
+    // 修复冷启动竞态里 initialEnabled 冻结为全局默认、owner 就绪后不重绑定的
+    // 问题 (review #2388 Codex 4th P1)。
+    reloadEnabled: () =>
+      readMemorySettings({ rootPath: resolveBasePath() ?? undefined }).maker,
     sqliteFactory,
     agents: {}, // 占位, attachAgents 补上
     logger: desktopMakerLogger.child('maker-memory'),
