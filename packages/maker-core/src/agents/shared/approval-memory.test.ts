@@ -679,6 +679,39 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(1);
   });
 
+  it('patch 的外部补丁输入统一不可记忆', () => {
+    for (const command of [
+      'patch -i ./deploy.patch',
+      'patch -i./deploy.patch',
+      'patch --input ./deploy.patch',
+      'patch --input=./deploy.patch',
+      'gpatch -i ./deploy.patch',
+      'patch < ./deploy.patch',
+      'env patch --input=./deploy.patch',
+      'true && patch -i ./deploy.patch',
+      'patch.exe -i .\\deploy.patch',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'echo patch -i ./deploy.patch',
+      'printf "patch --input ./deploy.patch"',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    const action = exec('patch -i ./deploy.patch');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
+  });
+
   it('MySQL 与 MariaDB 只有明确关闭各自启动配置时才可记忆', () => {
     for (const command of [
       "mysql app -e 'DELETE FROM jobs'",
@@ -1170,6 +1203,30 @@ describe('createApprovalMemory — 跨会话持久化', () => {
     );
     expect(add).toHaveBeenCalledTimes(1);
     expect(memory.size()).toBe(0);
+    memory.dispose();
+  });
+
+  it('跨进程清除代次变化会同步失效活动缓存', () => {
+    let clearGeneration = '0:0';
+    const memory = createApprovalMemory({
+      agentKind: 'pi',
+      workspaceKey: '/repo',
+      platform: 'darwin',
+      store: {
+        load: async () => new Set(),
+        add: () => {},
+        getClearGeneration: () => clearGeneration,
+      },
+    });
+    const action = exec('rm -rf build');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    const generation = memory.getGeneration();
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(true);
+
+    clearGeneration = '0:1';
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
+    expect(memory.isGenerationCurrent(generation)).toBe(false);
     memory.dispose();
   });
 

@@ -66,6 +66,11 @@ export interface ApprovalMemoryStore {
   /** 追加一条签名。宿主负责去重、体量上限与落盘节流。 */
   add(workspaceKey: string, signature: string, origin: ApprovalMemoryOrigin): void;
   /**
+   * 返回宿主持久化的清除代次。实现了跨进程文件存储的宿主应提供它；记忆层会在
+   * 每次查询/写入前同步探测代次变化，使另一个 Desktop 进程的 clear 也能撤销当前缓存。
+   */
+  getClearGeneration?(workspaceKey: string): string;
+  /**
    * 订阅宿主清除事件。成功清除指定工作区时传该 key；全量清除时不传。
    * 返回取消订阅函数。旧宿主未实现时，活动会话仍保持本地行为兼容。
    */
@@ -507,6 +512,9 @@ const MUTABLE_INDIRECT_EXECUTABLES: ReadonlySet<string> = new Set([
   'cp', 'install', 'mv', 'ln', 'dd',
   'copy', 'move', 'xcopy', 'robocopy',
   'copy-item', 'move-item',
+  // patch 默认从 stdin 读取，但 -i/--input 及等价入口会消费可替换补丁文件；整体逐次审核
+  // 比只枚举某一个选项更安全，也避免紧凑/等号/包装器形态留下旁路。
+  'patch', 'gpatch',
   // aliases/extensions/config can redirect these stable-looking commands into project code
   'git', 'gh', 'glab',
   // project task/build/test runners
@@ -705,14 +713,46 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
   const remembered = new Set<string>();
   let generation = 0;
   let disposed = false;
+  let observedStoreGeneration: string | undefined;
+
+  const readStoreGeneration = (): string | undefined => {
+    if (!store?.getClearGeneration) return undefined;
+    try {
+      return store.getClearGeneration(workspaceKey);
+    } catch {
+      // 代次读取失败时让宿主返回的哨兵值在下一次恢复后形成一次失效边界；不把
+      // 读取异常变成放行条件。
+      return 'unavailable';
+    }
+  };
+
+  const invalidate = (): void => {
+    remembered.clear();
+    generation += 1;
+    onInvalidated?.();
+  };
+
+  const syncExternalInvalidation = (): void => {
+    const next = readStoreGeneration();
+    if (next === undefined) return;
+    if (observedStoreGeneration === undefined) {
+      observedStoreGeneration = next;
+      return;
+    }
+    if (next === observedStoreGeneration) return;
+    observedStoreGeneration = next;
+    invalidate();
+  };
+
+  observedStoreGeneration = readStoreGeneration();
+
   const unsubscribeClear = store?.subscribeClear?.((clearedWorkspaceKey) => {
     if (clearedWorkspaceKey !== undefined && clearedWorkspaceKey !== workspaceKey) return;
     // Clear is a revocation boundary, not just a disk maintenance operation. Invalidate the
     // private session cache synchronously so an already-running harness cannot keep hitting an
     // approval the user just removed.
-    remembered.clear();
-    generation += 1;
-    onInvalidated?.();
+    observedStoreGeneration = readStoreGeneration() ?? observedStoreGeneration;
+    invalidate();
   });
   const currentTier = (
     action: ReviewableAction,
@@ -777,6 +817,7 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
 
   return {
     isRemembered(action, userIntent, workspaceRoots, reviewerRoute) {
+      syncExternalInvalidation();
       // 红线 / 带凭证的命令在这里就返回 null,两条路径都进不去。
       const signature = signatureOf(action, userIntent, workspaceRoots, reviewerRoute);
       if (signature === null) return false;
@@ -789,6 +830,7 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
       reviewerRoute,
       expectedGeneration = generation,
     ) {
+      syncExternalInvalidation();
       if (disposed || expectedGeneration !== generation) return;
       // 静态 auto-approve 不需要记忆；只有真的经过轻量审阅器的灰区 allow 才持久化。
       if (currentTier(action, userIntent, workspaceRoots) !== 'needs-review') return;
@@ -803,12 +845,19 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
     },
     async hydrate() {
       if (!store || disposed) return;
+      syncExternalInvalidation();
       const hydrateGeneration = generation;
+      const hydrateStoreGeneration = observedStoreGeneration;
       try {
         const persisted = await store.load(workspaceKey);
+        syncExternalInvalidation();
         // A clear may arrive while the file is loading. Never merge a pre-clear snapshot back
         // into the session cache after the revocation boundary.
-        if (disposed || hydrateGeneration !== generation) return;
+        if (
+          disposed
+          || hydrateGeneration !== generation
+          || hydrateStoreGeneration !== observedStoreGeneration
+        ) return;
         for (const signature of persisted) {
           if (remembered.size >= MAX_SESSION_SIGNATURES) break;
           remembered.add(signature);
@@ -821,9 +870,11 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
       }
     },
     getGeneration() {
+      syncExternalInvalidation();
       return generation;
     },
     isGenerationCurrent(candidateGeneration: number) {
+      syncExternalInvalidation();
       return !disposed && candidateGeneration === generation;
     },
     dispose() {
@@ -835,6 +886,7 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
       onInvalidated?.();
     },
     size() {
+      syncExternalInvalidation();
       return remembered.size;
     },
   };

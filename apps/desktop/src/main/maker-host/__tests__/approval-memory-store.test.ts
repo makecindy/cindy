@@ -112,6 +112,84 @@ describe('approval-memory-store', () => {
     expect(fs.existsSync(target)).toBe(true);
   });
 
+  it('clear 覆盖等待文件锁期间新入队的批准', async () => {
+    const { target, memory } = await fixture();
+    await writeFile(
+      `${target}.lock`,
+      JSON.stringify({ pid: process.pid, ownerId: randomUUID() }),
+      'utf8',
+    );
+
+    const clearPromise = memory.clear('/repo');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const racedSignature = digest('added-while-clear-waits');
+    memory.store.add('/repo', racedSignature, 'reviewer');
+    await rm(`${target}.lock`, { force: true });
+
+    await expect(clearPromise).resolves.toBe(0);
+    await memory.flush();
+    expect(await memory.store.load('/repo')).toEqual(new Set());
+  });
+
+  it('clear 等锁失败后仍会重新调度等待期间的新批准', async () => {
+    const { memory } = await fixture();
+    const realLink = fs.promises.link.bind(fs.promises);
+    let rejectLink: ((error: Error) => void) | undefined;
+    const blockedLink = new Promise<void>((_resolve, reject) => {
+      rejectLink = reject;
+    });
+    const linkSpy = vi.spyOn(fs.promises, 'link')
+      .mockImplementationOnce(() => blockedLink)
+      .mockImplementation(realLink);
+
+    const clearPromise = memory.clear('/repo');
+    await vi.waitFor(() => expect(linkSpy).toHaveBeenCalledTimes(1));
+    const racedSignature = digest('added-while-failed-clear-waits');
+    memory.store.add('/repo', racedSignature, 'reviewer');
+    rejectLink?.(Object.assign(new Error('locked'), { code: 'EACCES' }));
+
+    await expect(clearPromise).rejects.toThrow('locked');
+    linkSpy.mockRestore();
+    await memory.flush();
+    expect(await memory.store.load('/repo')).toEqual(new Set([racedSignature]));
+  });
+
+  it('clear 成功通知期间产生的新批准不会被遗失', async () => {
+    const { memory } = await fixture();
+    const beforeClear = digest('before-clear-notify');
+    const afterClear = digest('after-clear-notify');
+    memory.store.add('/repo', beforeClear, 'reviewer');
+    await memory.flush();
+    memory.store.subscribeClear?.(() => {
+      memory.store.add('/repo', afterClear, 'reviewer');
+    });
+
+    await expect(memory.clear('/repo')).resolves.toBe(1);
+    await memory.flush();
+    expect(await memory.store.load('/repo')).toEqual(new Set([afterClear]));
+  });
+
+  it('持久化清除代次使另一实例的活动批次和重启读取一起失效', async () => {
+    const { target } = await fixture();
+    const first = createApprovalMemoryFileStore(() => target, { flushDelayMs: 60_000 });
+    const second = createApprovalMemoryFileStore(() => target, { flushDelayMs: 60_000 });
+    const persistedSignature = digest('persisted-before-cross-process-clear');
+    const pendingSignature = digest('pending-before-cross-process-clear');
+
+    first.store.add('/repo', persistedSignature, 'reviewer');
+    await first.flush();
+    const before = second.getClearGeneration('/repo');
+    second.store.add('/repo', pendingSignature, 'reviewer');
+
+    expect(await first.clear('/repo')).toBe(1);
+    expect(second.getClearGeneration('/repo')).not.toBe(before);
+    await second.flush();
+    expect(await second.store.load('/repo')).toEqual(new Set());
+
+    const reopened = createApprovalMemoryFileStore(() => target, { flushDelayMs: 60_000 });
+    expect(await reopened.store.load('/repo')).toEqual(new Set());
+  });
+
   it('两个实例并发写同一文件不会互相覆盖', async () => {
     const { target } = await fixture();
     const first = createApprovalMemoryFileStore(() => target, { flushDelayMs: 60_000 });

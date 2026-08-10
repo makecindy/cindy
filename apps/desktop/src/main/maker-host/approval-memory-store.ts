@@ -6,7 +6,7 @@
  * maker-core 负责动作安全边界；这里负责有界存储、跨进程串行和原子替换。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import type {
@@ -35,7 +35,11 @@ interface ApprovalRecord {
 }
 
 interface ApprovalFile {
-  version: 2;
+  version: 3;
+  /** 全量 clear 的代次；变化会使所有 workspace 的活动缓存失效。 */
+  clearGeneration: number;
+  /** 指定 workspace clear 的代次；key 只保存 workspace 摘要。 */
+  workspaceClearGenerations: Record<string, number>;
   workspaces: Record<string, Record<string, ApprovalRecord>>;
 }
 
@@ -46,6 +50,15 @@ interface PendingAdd {
   signature: string;
   origin: ApprovalMemoryOrigin;
   ts: number;
+  /** add 入队时看到的清除代次；flush 持锁后再次比对，防止旧批次复活。 */
+  clearToken: string;
+}
+
+interface ClearBarrier {
+  id: number;
+  target: string;
+  workspaceHash: string | null;
+  blocked: PendingAdd[];
 }
 
 interface StoreLogger {
@@ -57,6 +70,7 @@ export interface ApprovalMemoryFileStore {
   flush(): Promise<void>;
   list(workspaceKey?: string): Promise<ApprovalListEntry[]>;
   clear(workspaceKey?: string): Promise<number>;
+  getClearGeneration(workspaceKey: string): string;
 }
 
 export interface ApprovalListEntry {
@@ -72,7 +86,29 @@ function workspaceHash(workspaceKey: string): string {
 }
 
 function emptyFile(): ApprovalFile {
-  return { version: 2, workspaces: {} };
+  return {
+    version: 3,
+    clearGeneration: 0,
+    workspaceClearGenerations: {},
+    workspaces: {},
+  };
+}
+
+function finiteGeneration(value: unknown): number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+    ? value
+    : 0;
+}
+
+function generationMap(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== 'object') return {};
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (HASH_PATTERN.test(key)) result[key] = finiteGeneration(value);
+  }
+  return result;
 }
 
 function normalize(raw: unknown): ApprovalFile {
@@ -98,9 +134,38 @@ function normalize(raw: unknown): ApprovalFile {
     }
     if (Object.keys(entries).length > 0) workspaces[workspace] = entries;
   }
-  const state: ApprovalFile = { version: 2, workspaces };
+  const state: ApprovalFile = {
+    version: 3,
+    clearGeneration: finiteGeneration(source.clearGeneration),
+    workspaceClearGenerations: generationMap(source.workspaceClearGenerations),
+    workspaces,
+  };
   evict(state);
   return state;
+}
+
+function clearToken(state: ApprovalFile, workspaceHashValue: string): string {
+  return `${state.clearGeneration}:${state.workspaceClearGenerations[workspaceHashValue] ?? 0}`;
+}
+
+/**
+ * 轻量、无恢复副作用的代次读取，供同步的记忆命中路径和 add 入队使用。
+ * 主文件正处于 atomicWriteFileSync 的备份交换窗口时返回哨兵；flush 会在持锁后重新
+ * 读取完整状态，哨兵批次不会被写回，因而不会把旧批准复活。
+ */
+function readClearTokenSync(target: string, workspaceHashValue: string): string {
+  try {
+    const raw = readFileSync(target, 'utf8');
+    if (!raw) return clearToken(emptyFile(), workspaceHashValue);
+    return clearToken(normalize(JSON.parse(raw)), workspaceHashValue);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      // 区分“首次还没有批准文件”和 atomicWriteFileSync 的备份交换窗口：对活动记忆
+      // 两者都应先失效；flush 在持锁后会把首次写入的 `missing` 批次特判为可接受。
+      return 'missing';
+    }
+    return 'unavailable';
+  }
 }
 
 function evict(state: ApprovalFile): void {
@@ -269,8 +334,10 @@ export function createApprovalMemoryFileStore(
   const now = options.now ?? Date.now;
   const pendingAdds: PendingAdd[] = [];
   const clearListeners = new Set<(workspaceKey?: string) => void>();
+  const activeClears = new Map<number, ClearBarrier>();
   let flushTimer: NodeJS.Timeout | null = null;
   let queue: Promise<unknown> = Promise.resolve();
+  let nextClearId = 0;
 
   const notifyClear = (workspaceKey?: string): void => {
     for (const listener of clearListeners) {
@@ -292,6 +359,19 @@ export function createApprovalMemoryFileStore(
     return result;
   };
 
+  const matchesBarrier = (addition: PendingAdd, barrier: ClearBarrier): boolean =>
+    addition.target === barrier.target
+    && (barrier.workspaceHash === null || addition.workspaceHash === barrier.workspaceHash);
+
+  const takePendingForBarrier = (barrier: ClearBarrier): void => {
+    for (let index = pendingAdds.length - 1; index >= 0; index--) {
+      const addition = pendingAdds[index]!;
+      if (!matchesBarrier(addition, barrier)) continue;
+      barrier.blocked.push(addition);
+      pendingAdds.splice(index, 1);
+    }
+  };
+
   const flush = async (): Promise<void> => {
     if (flushTimer) {
       clearTimeout(flushTimer);
@@ -310,7 +390,16 @@ export function createApprovalMemoryFileStore(
         try {
           await withFileLock(target, async () => {
             const state = readFileStateUnlocked(target, logger);
+            let accepted = 0;
             for (const addition of additions) {
+              // A clear in another Desktop process may have committed while this batch was
+              // waiting for the lock. Compare the enqueue snapshot with the live state under
+              // that same lock; stale additions are deliberately dropped, never replayed.
+              const liveToken = clearToken(state, addition.workspaceHash);
+              if (
+                addition.clearToken !== liveToken
+                && !(addition.clearToken === 'missing' && liveToken === '0:0')
+              ) continue;
               const bucket = state.workspaces[addition.workspaceHash]
                 ?? (state.workspaces[addition.workspaceHash] = {});
               const existing = bucket[addition.signature];
@@ -318,7 +407,9 @@ export function createApprovalMemoryFileStore(
                 origin: existing?.origin === 'user' ? 'user' : addition.origin,
                 ts: addition.ts,
               };
+              accepted += 1;
             }
+            if (accepted === 0) return;
             evict(state);
             writeFileState(target, state);
           });
@@ -353,14 +444,25 @@ export function createApprovalMemoryFileStore(
     },
     add(workspaceKey, signature, origin): void {
       if (!workspaceKey || !HASH_PATTERN.test(signature)) return;
+      const target = resolveFilePath();
+      const workspaceHashValue = workspaceHash(workspaceKey);
       pendingAdds.push({
-        target: resolveFilePath(),
-        workspaceHash: workspaceHash(workspaceKey),
+        target,
+        workspaceHash: workspaceHashValue,
         signature,
         origin,
         ts: now(),
+        clearToken: readClearTokenSync(target, workspaceHashValue),
       });
-      scheduleFlush();
+      // A matching clear owns the pending batch until its lock/write boundary completes. Avoid
+      // starting a competing timer in that window; a failed clear re-schedules in its finally.
+      const heldByClear = [...activeClears.values()].some((barrier) =>
+        target === barrier.target
+        && (barrier.workspaceHash === null || barrier.workspaceHash === workspaceHashValue));
+      if (!heldByClear) scheduleFlush();
+    },
+    getClearGeneration(workspaceKey): string {
+      return readClearTokenSync(resolveFilePath(), workspaceHash(workspaceKey));
     },
     subscribeClear(listener): (() => void) {
       clearListeners.add(listener);
@@ -371,6 +473,9 @@ export function createApprovalMemoryFileStore(
   return {
     store,
     flush,
+    getClearGeneration(workspaceKey: string): string {
+      return store.getClearGeneration!(workspaceKey);
+    },
     async list(workspaceKey?: string): Promise<ApprovalListEntry[]> {
       const target = resolveFilePath();
       await flush();
@@ -390,39 +495,78 @@ export function createApprovalMemoryFileStore(
     async clear(workspaceKey?: string): Promise<number> {
       const target = resolveFilePath();
       const selectedWorkspace = workspaceKey ? workspaceHash(workspaceKey) : null;
-      await flush();
-      return enqueue(async () => {
-        // flush 是 best-effort：若它刚因锁/I/O 失败把 batch 放回 pending，clear 必须在自己的
-        // 串行点一并撤销目标批次，否则退出或下次 flush 会把用户刚清掉的批准重新写回来。
-        for (let index = pendingAdds.length - 1; index >= 0; index--) {
-          const addition = pendingAdds[index]!;
-          if (
-            addition.target === target
-            && (!selectedWorkspace || addition.workspaceHash === selectedWorkspace)
-          ) {
-            pendingAdds.splice(index, 1);
+      const barrier: ClearBarrier = {
+        id: ++nextClearId,
+        target,
+        workspaceHash: selectedWorkspace,
+        blocked: [],
+      };
+      activeClears.set(barrier.id, barrier);
+      let completed = false;
+      try {
+        // Keep the barrier active while the pre-clear flush waits for a writer. Any add arriving
+        // in this window is held out of the queue and removed again at the lock boundary below.
+        await flush();
+        const removed = await enqueue(async () => {
+          // First pass catches batches returned by a failed pre-clear flush.
+          takePendingForBarrier(barrier);
+          return withFileLock(target, async () => {
+            // Second pass is the atomic revocation point requested by the review: add() may have
+            // run while withFileLock was waiting, so it must be removed while the target is held.
+            takePendingForBarrier(barrier);
+            const state = readFileStateUnlocked(target, logger);
+            let count = 0;
+            if (selectedWorkspace) {
+              count = Object.keys(state.workspaces[selectedWorkspace] ?? {}).length;
+              delete state.workspaces[selectedWorkspace];
+              state.workspaceClearGenerations[selectedWorkspace] =
+                (state.workspaceClearGenerations[selectedWorkspace] ?? 0) + 1;
+            } else {
+              for (const bucket of Object.values(state.workspaces)) {
+                count += Object.keys(bucket).length;
+              }
+              state.workspaces = {};
+              state.clearGeneration += 1;
+              state.workspaceClearGenerations = {};
+            }
+            // Keep the barrier active through the write. This catches an add that arrives after
+            // the second pass but before the lock is released; it is restored only if writing
+            // fails, never allowed to resurrect a successfully cleared approval.
+            takePendingForBarrier(barrier);
+            writeFileState(target, state);
+            takePendingForBarrier(barrier);
+            // Notify only after the replacement succeeds. The persisted generation is the
+            // cross-process signal; this listener remains the low-latency same-process path.
+            notifyClear(workspaceKey);
+            completed = true;
+            return count;
+          });
+        });
+        return removed;
+      } finally {
+        if (completed) {
+          // releaseOwnedLock() itself awaits filesystem cleanup. An add can arrive in that tiny
+          // post-write window while the barrier is still registered; it is newer than the clear
+          // boundary and must be retained, then scheduled normally after the barrier is removed.
+          const blockedBeforeLateAdds = barrier.blocked.length;
+          takePendingForBarrier(barrier);
+          const lateAdds = barrier.blocked.splice(blockedBeforeLateAdds);
+          if (lateAdds.length > 0) {
+            pendingAdds.unshift(...lateAdds);
           }
         }
-        return withFileLock(target, async () => {
-          const state = readFileStateUnlocked(target, logger);
-          let removed = 0;
-          if (selectedWorkspace) {
-            removed = Object.keys(state.workspaces[selectedWorkspace] ?? {}).length;
-            delete state.workspaces[selectedWorkspace];
-          } else {
-            for (const bucket of Object.values(state.workspaces)) {
-              removed += Object.keys(bucket).length;
-            }
-            state.workspaces = {};
-          }
-          writeFileState(target, state);
-          // Notify only after the replacement succeeds. This is the revocation point for
-          // active Pi/Claude/Codex session caches; a failed write must not invalidate memory
-          // that is still present on disk.
-          notifyClear(workspaceKey);
-          return removed;
-        });
-      });
+        activeClears.delete(barrier.id);
+        if (!completed && barrier.blocked.length > 0) {
+          // A failed clear must retain the old best-effort persistence semantics. Requeue the
+          // temporarily held additions instead of silently losing a legitimate approval.
+          pendingAdds.unshift(...barrier.blocked);
+        }
+        // Adds can arrive while a failed clear is still waiting for the lock, after the final
+        // takePendingForBarrier() pass. Once the barrier is removed they must be scheduled too.
+        if (pendingAdds.length > 0) {
+          scheduleFlush();
+        }
+      }
     },
   };
 }
