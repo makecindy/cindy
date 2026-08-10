@@ -32,7 +32,7 @@ import {
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
-  hasLegacyOwnerNamespaceClaim,
+  isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
@@ -136,10 +136,11 @@ function sidebarStoreAccessResult(): SidebarStoreAccessResult {
       ? { status: 'blocked' }
       : { status: 'ready', filePath: scopedPath };
   }
-  // Keep the fixed root route closed until the global claim is complete and
-  // this process is exclusive. We no longer move this file, but an older live
-  // process still writes it without the current cross-process lock.
-  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
+  // Sidebar no longer performs a move: once the immutable marker names this
+  // owner, the fixed root path is already its authority. Claim completeness,
+  // passive mode, and live peers only gate consumers that relocate legacy
+  // files; using them here would make ordinary shared state disappear.
+  if (!isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId)) {
     return { status: 'blocked' };
   }
 

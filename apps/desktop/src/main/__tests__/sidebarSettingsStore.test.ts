@@ -20,7 +20,7 @@ const harness = vi.hoisted(() => ({
   untrustedSend: vi.fn(),
   destroyedSend: vi.fn(),
   assertTrusted: vi.fn(),
-  legacyClaimReady: false,
+  legacyClaimOwnedByCurrentOwner: false,
   legacyClaimedByOtherOwner: true,
   loggerInfo: vi.fn(),
   loggerError: vi.fn(),
@@ -70,7 +70,8 @@ vi.mock('../appSessionState.js', () => ({
 }));
 
 vi.mock('../ownerNamespaceMigration.js', () => ({
-  hasLegacyOwnerNamespaceClaim: () => harness.legacyClaimReady,
+  hasLegacyOwnerNamespaceClaim: () => false,
+  isLegacyOwnerNamespaceClaimOwnedBy: () => harness.legacyClaimOwnedByCurrentOwner,
   isLegacyOwnerNamespaceClaimedByOtherOwner: () => harness.legacyClaimedByOtherOwner,
 }));
 
@@ -155,7 +156,7 @@ describe('sidebarSettingsStore', () => {
     harness.untrustedSend.mockReset();
     harness.destroyedSend.mockReset();
     harness.assertTrusted.mockReset();
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = true;
     harness.loggerInfo.mockReset();
     harness.loggerError.mockReset();
@@ -192,7 +193,7 @@ describe('sidebarSettingsStore', () => {
     });
 
     setSession('cloud', 'owner-b');
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = true;
     expect(loadSnapshot()).toMatchObject({
       dataOwnerId: 'owner-b',
@@ -237,7 +238,7 @@ describe('sidebarSettingsStore', () => {
     expect(sidebarTesting.pendingWriteChainCount()).toBe(0);
 
     setSession('cloud', 'owner-b');
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = true;
     fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
     fs.writeFileSync(ownerFile(), '{broken', 'utf-8');
@@ -297,7 +298,7 @@ describe('sidebarSettingsStore', () => {
 
     const writing = pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } }));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = false;
     fs.unlinkSync(`${file}.lock`);
 
@@ -528,7 +529,7 @@ describe('sidebarSettingsStore', () => {
     expect(fs.existsSync(legacy)).toBe(true);
 
     setSession('cloud', 'owner-a');
-    harness.legacyClaimReady = true;
+    harness.legacyClaimOwnedByCurrentOwner = true;
     harness.legacyClaimedByOtherOwner = false;
     expect(loadSnapshot().pinnedOrder).toEqual(['legacy-session']);
     await expect(
@@ -554,7 +555,7 @@ describe('sidebarSettingsStore', () => {
     expect(loadSnapshot()).toMatchObject(downgraded);
 
     setSession('cloud', 'owner-b');
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = true;
     expect(loadSnapshot().pinnedOrder).toEqual([]);
     await expect(
@@ -566,14 +567,14 @@ describe('sidebarSettingsStore', () => {
     expect(JSON.parse(fs.readFileSync(legacy, 'utf-8'))).toEqual(downgraded);
   });
 
-  it('blocks cloud writes until the global owner claim is complete and exclusive', async () => {
+  it('routes the immutable claim owner to root without requiring migration permission', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
     const legacySettings = {
       pinnedOrder: ['legacy-session'],
       hiddenProjectKeys: ['local:/workspace/legacy'],
     };
     fs.writeFileSync(legacy, JSON.stringify(legacySettings), 'utf-8');
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = false;
 
     expect(loadSnapshot()).toMatchObject({
@@ -588,7 +589,9 @@ describe('sidebarSettingsStore', () => {
     expect(JSON.parse(fs.readFileSync(legacy, 'utf-8'))).toEqual(legacySettings);
     expect(fs.existsSync(ownerFile())).toBe(false);
 
-    harness.legacyClaimReady = true;
+    // The migration-permission mock remains false, modelling a partial claim,
+    // passive instance, or live peer. Ownership alone makes root authoritative.
+    harness.legacyClaimOwnedByCurrentOwner = true;
     expect(loadSnapshot()).toMatchObject(legacySettings);
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
@@ -599,13 +602,13 @@ describe('sidebarSettingsStore', () => {
 
   it('creates the first cloud owner snapshot at the root even without legacy bytes', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = false;
 
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
     ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings owner claim is pending');
-    harness.legacyClaimReady = true;
+    harness.legacyClaimOwnedByCurrentOwner = true;
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
     ).resolves.toEqual(['new-session']);
@@ -625,7 +628,7 @@ describe('sidebarSettingsStore', () => {
 
   it('keeps a claim owner blocked for a non-regular root path', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
-    harness.legacyClaimReady = true;
+    harness.legacyClaimOwnedByCurrentOwner = true;
     harness.legacyClaimedByOtherOwner = false;
     const originalLstatSync = fs.lstatSync.bind(fs);
     const lstatSync = vi.spyOn(fs, 'lstatSync').mockImplementation((file) => {
@@ -647,7 +650,7 @@ describe('sidebarSettingsStore', () => {
   it('does not replace an orphaned root backup for the claim owner', async () => {
     const backup = path.join(harness.root, 'sidebar-settings.json.bak');
     fs.writeFileSync(backup, '{"pinnedOrder":["recoverable-session"]}', 'utf-8');
-    harness.legacyClaimReady = true;
+    harness.legacyClaimOwnedByCurrentOwner = true;
     harness.legacyClaimedByOtherOwner = false;
 
     expect(loadSnapshot().pinnedOrder).toEqual([]);
@@ -662,7 +665,7 @@ describe('sidebarSettingsStore', () => {
 
   it('fails closed when the shared legacy path cannot be inspected', async () => {
     const legacy = path.join(harness.root, 'sidebar-settings.json');
-    harness.legacyClaimReady = true;
+    harness.legacyClaimOwnedByCurrentOwner = true;
     harness.legacyClaimedByOtherOwner = false;
     const originalLstatSync = fs.lstatSync.bind(fs);
     const lstatSync = vi.spyOn(fs, 'lstatSync').mockImplementation((file) => {
@@ -771,7 +774,7 @@ describe('sidebarSettingsStore', () => {
       }),
       'utf-8',
     );
-    harness.legacyClaimReady = true;
+    harness.legacyClaimOwnedByCurrentOwner = true;
     harness.legacyClaimedByOtherOwner = false;
 
     expect(loadSnapshot()).toMatchObject({
@@ -807,7 +810,7 @@ describe('sidebarSettingsStore', () => {
       }),
       'utf-8',
     );
-    harness.legacyClaimReady = false;
+    harness.legacyClaimOwnedByCurrentOwner = false;
     harness.legacyClaimedByOtherOwner = true;
 
     await pinnedHandler(request({ mutation: { kind: 'remove', entryId: 'scoped-session' } }));
@@ -951,7 +954,7 @@ describe('sidebarSettingsStore', () => {
       fs.writeFileSync(legacy, legacyContents, 'utf-8');
       fs.mkdirSync(path.dirname(backup), { recursive: true });
       fs.writeFileSync(backup, backupContents, 'utf-8');
-      harness.legacyClaimReady = false;
+      harness.legacyClaimOwnedByCurrentOwner = false;
       harness.legacyClaimedByOtherOwner = true;
 
       expect(loadSnapshot()).toMatchObject({
@@ -986,7 +989,7 @@ describe('sidebarSettingsStore', () => {
     const obsoleteMarker = path.join(harness.root, 'sidebar-settings-legacy-owner.v1.json');
     fs.writeFileSync(legacy, '{"pinnedOrder":["legacy"]}');
     fs.writeFileSync(obsoleteMarker, 'broken');
-    harness.legacyClaimReady = true;
+    harness.legacyClaimOwnedByCurrentOwner = true;
     harness.legacyClaimedByOtherOwner = false;
 
     expect(loadSnapshot().pinnedOrder).toEqual(['legacy']);
