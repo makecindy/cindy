@@ -217,7 +217,11 @@ function legacyToSdkModelString(model: string): string {
   if (model === 'codex/gpt-5.5' || model === 'codex/gpt-5.4') return model;
   if (model === 'codex/gpt-5.6-sol' || model === 'codex/gpt-5.6-terra') return model;
   // DeepSeek 的 [1m] 是历史兼容路由后缀; 上下文大小另走 maker capabilities。
-  if (model === 'deepseek/deepseek-v4-pro' || model === 'deepseek/deepseek-v4-flash') return `${model}[1m]`;
+  if (
+    model === 'deepseek/deepseek-v4-pro' ||
+    model === 'deepseek/deepseek-v4-flash' ||
+    model === 'deepseek-v4-flash'
+  ) return `${model}[1m]`;
   if (model === 'z-ai/glm-5.2') return `${model}[1m]`;
   return model;
 }
@@ -1787,6 +1791,17 @@ export class ClaudeCodeAgent extends BaseAgent {
     const buildSettings = (): Settings =>
       buildClaudeFlagSettings({
         showThinkingSummaries,
+        // availableModels is the SDK's highest-priority allowlist. Convert the
+        // whole current catalog and the selected model through the one
+        // catalog-id → wire-string mapper so startup and live switches share
+        // the same [1m] and legacy conversion rules. Keep the selected model
+        // even when it is temporarily outside the catalog.
+        availableModels: [
+          ...new Set([
+            ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
+            sdkModelFor(mutableModel),
+          ]),
+        ],
         // Do not carry the local manager's native-memory suppression across the
         // SSH boundary: the remote host retains its own Claude memory
         // configuration. Maker Memory on remote sessions is injected via the

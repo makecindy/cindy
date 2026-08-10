@@ -8,6 +8,7 @@ import {
   GHOST_SLOTS,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
+  ghostAppContextLocale,
   ghostContentKeys,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -268,7 +269,7 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), author: 42 }).ok).toBe(false);
   });
 
-  it('locales 只接受宿主四种语言、安全 JSON 路径且必须提供英文', () => {
+  it('locales 只接受插件协议四种语言、安全 JSON 路径且必须提供英文', () => {
     const valid = validateGhostManifest({
       ...goodManifest(),
       locales: {
@@ -288,6 +289,10 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({
       ...goodManifest(),
       locales: { en: '../en.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', 'zh-TW': 'locales/zh-TW.json' },
     }).ok).toBe(false);
     expect(validateGhostManifest({
       ...goodManifest(),
@@ -333,9 +338,20 @@ describe('ghost · 清单校验', () => {
     if (!parsed.ok) return;
     expect(ghostLocalePathFor(parsed.manifest, 'ja')).toBe('locales/ja.json');
     expect(ghostLocalePathFor(parsed.manifest, 'zh-CN')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-TW')).toBe('locales/en.json');
     expect(ghostLocalePathFor(parsed.manifest, 'fr-FR')).toBe('locales/en.json');
     expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
+    expect(withGhostResolvedLocale(parsed.manifest, 'zh-TW').resolvedLocale).toBe('zh-TW');
     expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
+  });
+
+  it('app-context locale 保持插件协议旧四语，新增宿主语言固定回退英文', () => {
+    expect(ghostAppContextLocale('zh-CN')).toBe('zh-CN');
+    expect(ghostAppContextLocale('zh-TW')).toBe('en');
+    expect(ghostAppContextLocale('en')).toBe('en');
+    expect(ghostAppContextLocale('ja')).toBe('ja');
+    expect(ghostAppContextLocale('ko')).toBe('ko');
+    expect(ghostAppContextLocale('fr-FR')).toBe('en');
   });
 
   it('locale 资源按稳定 tool name 合并;翻译可部分提供、缺译回退原文,错位仍拒', () => {

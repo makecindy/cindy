@@ -22,7 +22,10 @@ import {
   prependNoteToWireUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { buildMobileClientPromptNote } from './mobileClientPromptNote.js';
+import {
+  buildMobileClientPromptNote,
+  shouldPrependMobileClientPromptNote,
+} from './mobileClientPromptNote.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -742,7 +745,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
       // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
       const mobileClientNote =
-        deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true
+        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true)
+        && shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildMobileClientPromptNote()
           : null;
       const outgoing = mobileClientNote

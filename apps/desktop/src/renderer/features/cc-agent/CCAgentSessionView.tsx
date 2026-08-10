@@ -115,10 +115,14 @@ import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { useAgentCapabilities, resolveManualCompactChannel } from '@/hooks/useAgentCapabilities';
 import { useLiveErrorSourceProvider } from '@/hooks/useLiveErrorSourceProvider';
 import { resolveFastSupported } from '@/lib/providerModels';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
+import {
+  createSessionScopedRequestGuard,
+  type SessionScopedRequestGuard,
+} from './sessionScopedRequestGuard';
 import {
   useDeviceLinkConnectionIssue,
   useRemoteSessionConnection,
@@ -133,13 +137,23 @@ import {
   useControlledBy,
 } from '@/features/remote-device/ControlledBanner';
 import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import {
+  loadAllCommands,
+  dispatchCommand,
+  PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  rebaseInlineRangesAfterSlashCommandRewrite,
+  reconcilePiRuntimeCommandForDispatch,
+  reconcilePiRuntimeCommandForDispatchWithRetry,
+  rewriteAgentSkillInvocationForDispatch,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { loadAllCommands, dispatchCommand, type UnifiedCommand } from '@/lib/slashCommands';
 import * as sessionService from '@/lib/sessionService';
 import { emitRefresh } from '@/lib/sessionsBus';
 import type { Session } from '@/lib/ccAgent.types';
 import { toast } from '@/lib/toast';
 import {
+  buildCreateOptsForCurrentSession,
   decodeRemoteErrorMessage,
   makerChatStore,
   type AgentTaskUpdate,
@@ -168,6 +182,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
 import { subscribeLearnEvents } from '@/features/learn/learnTransport';
 import { getUserPrompt } from '@/lib/userPromptStore';
+import { makerApiForSticky } from '@/lib/makerTransport';
 import {
   consumePending,
   consumePendingGoal,
@@ -1201,7 +1216,10 @@ export function CCAgentSessionView({
     // (与 ChatInput palette 同源)。否则此 cache 取的是控制端命令,maybeDispatchDesktopSlashCommand
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
-    loadAllCommands(agentKind, wd, { skipAgentSkills: isRemoteSession }, remoteDeviceId)
+    loadAllCommands(agentKind, wd, {
+      skipAgentSkills: isRemoteSession,
+      sessionId: session?.id,
+    }, remoteDeviceId)
       .then((cmds) => {
         if (!cancelled) setAllCommands(cmds);
       })
@@ -1211,7 +1229,7 @@ export function CCAgentSessionView({
     return () => {
       cancelled = true;
     };
-  }, [session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   // Keep lastWorkingDir in sync so Settings can distinguish a real project
   // scope from「新对话默认值」. Standalone dialogues have an internal runtime
@@ -1336,7 +1354,37 @@ export function CCAgentSessionView({
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
   const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
+  // 真实会话 agentKind(pending switch intent 不影响)——压缩分流必须用它,
+  // 否则 intent 乐观切到 pi 但真实会话仍在跑 claude-code 时会错调 compact-session(#1933 review)。
+  const realAgentKind = dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
+  // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
+  // 其余 agent 声明 manualCompact.supported(当前仅 pi)→ maker:compact-session;其余无入口。
+  // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
+  // 用它判定会与 realAgentKind 分流不一致);remoteDeviceId 让远程 pi 取被控端能力。
+  const { capabilities: realSessionCaps } = useAgentCapabilities(realAgentKind, remoteDeviceId);
+  const compactChannel = useMemo(
+    () => resolveManualCompactChannel(realAgentKind, realSessionCaps),
+    [realAgentKind, realSessionCaps],
+  );
+  // 最新 channel 的可变镜像:useCallback 闭包在创建后固定捕获 compactChannel,确认框
+  // await 期间同会话切换 agent(跨窗口/远程,sessionId 不变)会产生新 render 但旧 async
+  // 闭包还在跑——从闭包读到的还是旧 channel(greptile review)。ref 每次 render 同步,
+  // 异步执行中读 ref.current 才能拿到切换后的最新通道,且无需重建回调。
+  const compactChannelRef = useRef(compactChannel);
+  compactChannelRef.current = compactChannel;
+  // 最新 session 快照的可变镜像(与 compactChannelRef 同款):确认框 await 期间同会话
+  // 切换 agent 后,model/effort/permissionMode/workingDir 全部可能变化——claude-input
+  // 分支必须用切换后的快照,否则会用旧 Pi 的模型/权限去执行 Claude 的 /compact
+  // (greptile P1 / codex P2 review)。compact-session 分支只依赖 sessionId,无需此快照。
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  // 最新 running 状态的可变镜像(与 compactChannelRef / sessionRef 同款):render 闭包
+  // 固定捕获 agentStatus.isRunning——确认框 await 期间 turn 可能已从其它窗口 / 远程
+  // 启动,旧 async 闭包读不到;ref 每次 render 同步,确认后重读才能拦住「活跃 turn
+  // 仍调 compact-session → pi 拒绝 → confirm 后吃 rejection toast」(codex P2)。
+  const isRunningRef = useRef(agentStatus.isRunning);
+  isRunningRef.current = agentStatus.isRunning;
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
@@ -1752,13 +1800,13 @@ export function CCAgentSessionView({
       return await loadAllCommands(
         agentKind,
         session?.workingDir,
-        { skipAgentSkills: isRemoteSession },
+        { skipAgentSkills: isRemoteSession, sessionId: session?.id },
         remoteDeviceId,
       );
     } catch {
       return [];
     }
-  }, [session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   const insertHelpCard = useCallback(async () => {
     const commands = await getHelpCommandsSnapshot();
@@ -2206,72 +2254,6 @@ export function CCAgentSessionView({
     }
   }, [sessionId]);
 
-  const handleWorkingDirChange = useCallback(
-    (newDir: string | null) => {
-      // ChatInput already persists workingDir to server; we just refresh our local copy.
-      refreshServerSession();
-
-      // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③
-      if (newDir && pendingSendRef.current) {
-        const {
-          deliveryMode,
-          message,
-          model,
-          effort,
-          permissionMode,
-          files,
-          mentions,
-          vendorOptions,
-          quotesEncoded,
-          agentReferences,
-          pastedTextRanges,
-          slashCommandRanges,
-          onRemoteOptimisticFailure,
-          onDeferredAccepted,
-        } = pendingSendRef.current;
-        pendingSendRef.current = null;
-        const dispatch = deliveryMode === 'steer' ? steerMessage : sendMessage;
-        void dispatch(
-          message,
-          model,
-          effort,
-          permissionMode,
-          newDir,
-          files,
-          mentions,
-          quotesEncoded ||
-            vendorOptions !== undefined ||
-            agentReferences?.length ||
-            pastedTextRanges?.length ||
-            slashCommandRanges !== undefined ||
-            onRemoteOptimisticFailure !== undefined ||
-            onDeferredAccepted !== undefined
-            ? {
-                ...(vendorOptions ? { vendorOptions } : {}),
-                ...(quotesEncoded ? { quotesEncoded: true } : {}),
-                ...(agentReferences?.length ? { agentReferences } : {}),
-                ...(pastedTextRanges?.length ? { pastedTextRanges } : {}),
-                ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
-                ...(onRemoteOptimisticFailure ? { onRemoteOptimisticFailure } : {}),
-                ...(onDeferredAccepted ? { onDeferredAccepted } : {}),
-              }
-            : undefined,
-        ).then(
-          (accepted) => {
-            if (accepted) onDeferredAccepted?.();
-          },
-          (error) => {
-            log.warn(
-              'pending send after working directory selection failed:',
-              error instanceof Error ? error.message : String(error),
-            );
-          },
-        );
-      }
-    },
-    [refreshServerSession, sendMessage, steerMessage],
-  );
-
   const handleFolderPickerOpenChange = useCallback((open: boolean) => {
     setFolderPickerOpen(open);
     // If user closed the popover without selecting, clear pending send
@@ -2401,15 +2383,68 @@ export function CCAgentSessionView({
   const pendingIssueFilesRef = useRef<AttachedFile[] | undefined>(undefined);
 
   const maybeDispatchDesktopSlashCommand = useCallback(
-    async (message: string, files?: AttachedFile[]): Promise<boolean> => {
+    async (
+      message: string,
+      files?: AttachedFile[],
+      options?: {
+        allowDesktopDispatch?: boolean;
+        piRuntimeRetryDelaysMs?: readonly number[];
+        workingDirOverride?: string;
+        preparePiRuntime?: () => Promise<void>;
+      },
+    ): Promise<{ handled: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
-      if (!slashMatch) return false;
+      if (!slashMatch) return { handled: false, message };
       const cmdName = slashMatch[1].toLowerCase();
       const args = slashMatch[2] ?? '';
+      const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
+      const workingDir = options?.workingDirOverride ?? session?.workingDir;
       const cached = allCommandsRef.current;
-      const commands = cached.length > 0 ? cached : await getHelpCommandsSnapshot();
-      const hit = commands.find((c) => c.name.toLowerCase() === cmdName);
-      if (hit?.kind !== 'desktop') return false;
+      // A newly selected project changes command ownership, so do not let a
+      // pre-selection global hit suppress the forced project catalog refresh.
+      const commands = options?.workingDirOverride
+        ? []
+        : cached.length > 0
+          ? cached
+          : await getHelpCommandsSnapshot();
+      const agentKind = dbToMakerAgentKind(session?.agentKind);
+      const reconcileParams = {
+        agentKind,
+        sessionId: session?.id,
+        commandName: cmdName,
+        commands,
+        reload: () => loadAllCommands(
+          agentKind,
+          workingDir,
+          {
+            skipAgentSkills: isRemoteSession,
+            sessionId: session?.id,
+            forceReload: true,
+          },
+          remoteDeviceId,
+        ),
+      };
+      const reconciled = options?.piRuntimeRetryDelaysMs
+        ? await reconcilePiRuntimeCommandForDispatchWithRetry({
+            ...reconcileParams,
+            prepareRuntime: options.preparePiRuntime,
+            retryDelaysMs: options.piRuntimeRetryDelaysMs,
+          })
+        : await reconcilePiRuntimeCommandForDispatch(reconcileParams);
+      if (reconciled.commands !== commands) {
+        allCommandsRef.current = reconciled.commands;
+        setAllCommands(reconciled.commands);
+      }
+      const hit = reconciled.command;
+      if (hit?.kind !== 'desktop') {
+        return {
+          handled: false,
+          message: agentKind === 'pi'
+            ? rewriteAgentSkillInvocationForDispatch(message, hit)
+            : message,
+        };
+      }
+      if (!allowDesktopDispatch) return { handled: false, message };
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。
       if (hit.name === 'issue') {
@@ -2421,13 +2456,153 @@ export function CCAgentSessionView({
       // (/cmd 拿被控端路径本机 spawn、/goal /learn 在本机产生副作用;Codex review #548)。
       void dispatchCommand(hit, {
         ...(sessionId ? { sessionId } : {}),
-        ...(session?.workingDir ? { workingDir: session.workingDir } : {}),
+        ...(workingDir ? { workingDir } : {}),
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
       });
-      return true;
+      return { handled: true, message };
     },
-    [getHelpCommandsSnapshot, session?.workingDir, sessionId, remoteDeviceId],
+    [
+      getHelpCommandsSnapshot,
+      isRemoteSession,
+      session?.agentKind,
+      session?.id,
+      session?.workingDir,
+      sessionId,
+      remoteDeviceId,
+    ],
+  );
+
+  const handleWorkingDirChange = useCallback(
+    (newDir: string | null) => {
+      // ChatInput already persists workingDir to server; we just refresh our local copy.
+      refreshServerSession();
+
+      // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③.
+      // The first slash reconciliation ran before this directory existed, so refresh again with
+      // the selected project before dispatching and keep inline metadata aligned with any alias rewrite.
+      const pending = pendingSendRef.current;
+      if (!newDir || !pending) return;
+      pendingSendRef.current = null;
+      void (async () => {
+        try {
+          const slashDispatch = await maybeDispatchDesktopSlashCommand(
+            pending.message,
+            pending.files,
+            {
+              allowDesktopDispatch: pending.deliveryMode !== 'steer',
+              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              workingDirOverride: newDir,
+              preparePiRuntime: async () => {
+                if (!sessionId || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
+                const createOpts = {
+                  id: sessionId,
+                  ...buildCreateOptsForCurrentSession(
+                    sessionId,
+                    pending.model,
+                    pending.effort,
+                    pending.permissionMode,
+                    newDir,
+                    pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : undefined,
+                  ),
+                  agentKind: 'pi' as const,
+                  workingDir: newDir,
+                  orcaRole: session?.orcaRole ?? null,
+                };
+                if (remoteDeviceId) {
+                  await window.electronAPI.deviceLink.invoke(
+                    remoteDeviceId,
+                    'maker:create-session',
+                    [createOpts],
+                  );
+                } else {
+                  await window.electronAPI.maker.createSession(createOpts);
+                }
+              },
+            },
+          );
+          if (slashDispatch.handled) {
+            pending.onDeferredAccepted?.();
+            return;
+          }
+
+          const pendingAgentReferences = pending.agentReferences
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.agentReferences,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const pendingPastedTextRanges = pending.pastedTextRanges
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.pastedTextRanges,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.slashCommandRanges,
+                pending.message,
+                slashDispatch.message,
+              )
+            : undefined;
+          const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
+          const accepted = await dispatch(
+            slashDispatch.message,
+            pending.model,
+            pending.effort,
+            pending.permissionMode,
+            newDir,
+            pending.files,
+            pending.mentions,
+            pending.quotesEncoded ||
+              pending.vendorOptions !== undefined ||
+              pendingAgentReferences?.length ||
+              pendingPastedTextRanges?.length ||
+              pendingSlashCommandRanges !== undefined ||
+              pending.onRemoteOptimisticFailure !== undefined ||
+              pending.onDeferredAccepted !== undefined
+              ? {
+                  ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
+                  ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
+                  ...(pendingAgentReferences?.length
+                    ? { agentReferences: pendingAgentReferences }
+                    : {}),
+                  ...(pendingPastedTextRanges?.length
+                    ? { pastedTextRanges: pendingPastedTextRanges }
+                    : {}),
+                  ...(pendingSlashCommandRanges !== undefined
+                    ? { slashCommandRanges: pendingSlashCommandRanges }
+                    : {}),
+                  ...(pending.onRemoteOptimisticFailure
+                    ? { onRemoteOptimisticFailure: pending.onRemoteOptimisticFailure }
+                    : {}),
+                  ...(pending.onDeferredAccepted
+                    ? { onDeferredAccepted: pending.onDeferredAccepted }
+                    : {}),
+                }
+              : undefined,
+          );
+          if (accepted) pending.onDeferredAccepted?.();
+        } catch (error) {
+          log.warn(
+            'pending send after working directory selection failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      })();
+    },
+    [
+      maybeDispatchDesktopSlashCommand,
+      refreshServerSession,
+      remoteDeviceId,
+      session?.agentKind,
+      session?.orcaRole,
+      sessionId,
+      sendMessage,
+      steerMessage,
+    ],
   );
 
   const maybeShowContextUsage = useCallback(
@@ -2534,8 +2709,48 @@ export function CCAgentSessionView({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      if (deliveryMode !== 'steer' && (await maybeDispatchDesktopSlashCommand(message, files))) {
-        return;
+      const originalMessage = message;
+      const slashDispatch = deliveryMode === 'steer'
+        ? await maybeDispatchDesktopSlashCommand(message, files, {
+            allowDesktopDispatch: false,
+            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+          })
+        : await maybeDispatchDesktopSlashCommand(message, files, {
+            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+          });
+      if (slashDispatch.handled) return;
+      message = slashDispatch.message;
+      if (message !== originalMessage && opts) {
+        opts = {
+          ...opts,
+          ...(opts.agentReferences
+            ? {
+                agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.agentReferences,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+          ...(opts.pastedTextRanges
+            ? {
+                pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.pastedTextRanges,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+          ...(opts.slashCommandRanges !== undefined
+            ? {
+                slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                  opts.slashCommandRanges,
+                  originalMessage,
+                  message,
+                ),
+              }
+            : {}),
+        };
       }
 
       // ① 本机会话维持既有 readiness gate。device-link 已建任务不把视图生命周期内
@@ -2710,19 +2925,45 @@ export function CCAgentSessionView({
 
   const { confirm: confirmDialog } = useConfirmDialog();
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
-  // 多个 confirm,逐个确认就会发多次 compact 请求。in-flight 期间后续点击直接 no-op。
-  const compactRequestInFlightRef = useRef(false);
+  // 多个 confirm,逐个确认就会发多次 compact 请求。锁按 sessionId 隔离:A 的长请求不
+  // 阻塞切换后的 B，A 的迟到 finally 也不能清掉 B 的锁。
+  const compactRequestGuardRef = useRef<SessionScopedRequestGuard | null>(null);
+  if (!compactRequestGuardRef.current) {
+    compactRequestGuardRef.current = createSessionScopedRequestGuard();
+  }
+  const compactRequestGuard = compactRequestGuardRef.current;
+  // commit 阶段切换当前会话:中断 render 不应提前作废旧视图请求；layout effect 又早于用户
+  // 交互与异步回调。setup 也要重写 sessionId，确保 React StrictMode 的 setup→cleanup→setup
+  // 重放后不会停在 null。
+  useLayoutEffect(() => {
+    const committedSessionId = sessionId ?? null;
+    compactRequestGuard.setCurrentSession(committedSessionId);
+    return () => {
+      // session 变更 / 路由离开 / 登出后旧请求的确认结果与迟到响应立即失效。
+      if (committedSessionId && compactRequestGuard.isCurrent(committedSessionId)) {
+        compactRequestGuard.setCurrentSession(null);
+      }
+    };
+  }, [compactRequestGuard, sessionId]);
   const handleCompactRequest = useCallback(async () => {
-    if (!session) return;
-    if (!session.workingDir) return;
-    if (compactRequestInFlightRef.current) return;
-    compactRequestInFlightRef.current = true;
+    const sourceSession = session;
+    if (!sourceSession) return;
+    // 必须在第一个 await 前捕获 scope/channel。确认框打开期间路由切换时，旧闭包不得
+    // 从可变 ref 读取到新 sessionId 后把旧请求误认成当前请求。
+    const sourceSessionId = sourceSession.id;
+    const sourceCompactChannel = compactChannel;
+    // 无通道(Codex 等)不弹确认框;workingDir 只对 claude-input 是硬前提——
+    // compact-session(pi 原生压缩)不依赖 workingDir,不能被它挡掉(copilot review)。
+    if (sourceCompactChannel === null) return;
+    if (sourceCompactChannel === 'claude-input' && !sourceSession.workingDir) return;
+    const begun = compactRequestGuard.tryBegin(sourceSessionId);
+    if (!begun) return;
     try {
       const contextWindow = resolveDisplayContextWindow({
         sdkContextWindow: agentStatus.contextWindow,
         modelContextWindow: getModelContextWindow(
-          session.model,
-          session.agentKind ?? 'cc',
+          sourceSession.model,
+          sourceSession.agentKind ?? 'cc',
           remoteDeviceId,
         ),
       });
@@ -2738,19 +2979,67 @@ export function CCAgentSessionView({
         confirmText: t('ccAgent.layout.contextRing.confirmAction'),
         cancelText: t('ccAgent.layout.contextRing.confirmCancel'),
       });
-      if (!ok) return;
+      // 代校验:sessionId 当前 + 请求代一致——切走再切回(换代)后旧请求不再生效
+      // (greptile P1:否则旧确认结果/迟到 toast 会在重新进入的视图里弹)。
+      if (!ok || !compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
+      // 确认框打开期间，同一会话可能已在其它窗口 / 远程控制器被切换 agent(sessionId
+      // 不变):捕获的 sourceCompactChannel 已过期。必须读**最新** channel —— 从
+      // compactChannelRef.current 取(useCallback 闭包固定捕获旧值,重新 render 也不影响
+      // 正在 await 的旧 async 函数;ref 每次 render 同步,这里拿到的是切换后的通道)。
+      // 否则 Pi→Claude 会静默 null、Claude→Pi 会误走 claude 专用通道(codex P1 / greptile)。
+      const channelNow = compactChannelRef.current;
+      if (channelNow === null) return;
+      // 确认框期间 turn 可能已从其它窗口 / 远程启动:render 时的 isRunning 守卫已失效,
+      // 重读最新 running——活跃 turn 的 pi 会拒绝压缩,直接放弃,避免 confirm 后吃
+      // rejection toast(codex P2)。claude-input 保留旧行为。
+      if (channelNow === 'compact-session' && isRunningRef.current) return;
+      if (channelNow === 'compact-session') {
+        // capability-aware 通道(pi 原生 compact):本地 IPC / device-link 隧道均可路由。
+        // 用粘滞归属(makerApiForSticky)——relay 瞬时重连清空 origin 的窗口内仍隧道到
+        // 被控端,不退回控制端本机(本机无该 live 会话,固定调本机必 null 静默失败,
+        // greptile P1)。claude-code 分支继续走 inputCoordinator,不在此通道内。
+        // pi 原生压缩不依赖 workingDir,这里不再校验(copilot review)。
+        const maker = makerApiForSticky(sourceSessionId);
+        try {
+          const result = await maker.compactSession(sourceSessionId);
+          // 在途期间切换会话 / 登出 / 切回(换代):旧响应不得在当前视图弹 toast。
+          if (!compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
+          if (result?.noop) {
+            // 良性:上下文太小,无可压缩内容。信息性提示,不是失败。
+            toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
+          } else if (result) {
+            toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+          }
+          // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
+        } catch (err) {
+          if (!compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
+          // 与 SessionContentHeader 的手动压缩一致:失败给可理解提示,不泄漏裸 IPC 错误。
+          log.warn('context ring compact-session failed', err);
+          toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+        }
+        return;
+      }
+      // 真实 Claude Code:输入协调器的 maker:input:compact(旧行为不变)。
+      if (channelNow !== 'claude-input') return;
+      // 参数必须用**最新** session 快照(与 channel 同源):同会话切换 agent 后
+      // model/effort/permissionMode/workingDir 已变化,旧快照会按错误配置执行压缩,
+      // 且旧快照 workingDir 缺失时会在用户确认后静默放弃(greptile P1 / codex P2)。
+      const sessionNow = sessionRef.current;
+      if (!sessionNow?.workingDir) return; // claude 通道硬前提:输入协调器需要工作目录
       await compactSession(
-        session.model,
-        session.effort as Effort,
-        session.permissionMode as PermissionMode,
-        session.workingDir,
+        sessionNow.model,
+        sessionNow.effort as Effort,
+        sessionNow.permissionMode as PermissionMode,
+        sessionNow.workingDir,
       );
     } finally {
-      compactRequestInFlightRef.current = false;
+      begun.release();
     }
   }, [
     agentStatus.contextTokens,
     agentStatus.contextWindow,
+    compactChannel,
+    compactRequestGuard,
     compactSession,
     confirmDialog,
     remoteDeviceId,
@@ -2997,15 +3286,43 @@ export function CCAgentSessionView({
         }
         // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
         // resolve false / 抛错都保留(见该函数注释)。
-        const dispatched = await deliverRecoverableHandoff(sessionId, () =>
-          maybeDispatchDesktopSlashCommand(pending.text, pending.files),
-        );
+        let pendingText = pending.text;
+        const dispatched = await deliverRecoverableHandoff(sessionId, async () => {
+          const slashDispatch = await maybeDispatchDesktopSlashCommand(
+            pending.text,
+            pending.files,
+            { piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS },
+          );
+          pendingText = slashDispatch.message;
+          return slashDispatch.handled;
+        });
         if (dispatched) return;
+        const pendingAgentReferences = pending.agentReferences
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.agentReferences,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
+        const pendingPastedTextRanges = pending.pastedTextRanges
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.pastedTextRanges,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
+        const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
+          ? rebaseInlineRangesAfterSlashCommandRewrite(
+              pending.slashCommandRanges,
+              pending.text,
+              pendingText,
+            )
+          : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
         await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
-            pending.text,
+            pendingText,
             session.model,
             session.effort as Effort,
             session.permissionMode as PermissionMode,
@@ -3014,20 +3331,20 @@ export function CCAgentSessionView({
             pending.mentions,
             pending.vendorOptions ||
               pending.quotesEncoded ||
-              pending.agentReferences?.length ||
-              pending.pastedTextRanges?.length ||
-              pending.slashCommandRanges !== undefined
+              pendingAgentReferences?.length ||
+              pendingPastedTextRanges?.length ||
+              pendingSlashCommandRanges !== undefined
               ? {
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
-                  ...(pending.agentReferences?.length
-                    ? { agentReferences: pending.agentReferences }
+                  ...(pendingAgentReferences?.length
+                    ? { agentReferences: pendingAgentReferences }
                     : {}),
-                  ...(pending.pastedTextRanges?.length
-                    ? { pastedTextRanges: pending.pastedTextRanges }
+                  ...(pendingPastedTextRanges?.length
+                    ? { pastedTextRanges: pendingPastedTextRanges }
                     : {}),
-                  ...(pending.slashCommandRanges !== undefined
-                    ? { slashCommandRanges: pending.slashCommandRanges }
+                  ...(pendingSlashCommandRanges !== undefined
+                    ? { slashCommandRanges: pendingSlashCommandRanges }
                     : {}),
                 }
               : undefined,
@@ -3535,6 +3852,7 @@ export function CCAgentSessionView({
                   sessionId={sessionId ?? null}
                   messages={messages}
                   animated={isStreaming}
+                  streaming={isStreaming}
                   width={inputWidth}
                   taskHistoryMayBeIncomplete={
                     !historyLoaded || hasMoreMessages || historyWindowHasIsland
@@ -4077,8 +4395,18 @@ export function CCAgentSessionView({
                     sdkContextWindow={agentStatus.contextWindow}
                     deviceId={remoteDeviceId}
                     onCompact={
-                      // codex 无手动 compact;context 为 0 时压缩无意义 → 两种情况保持纯展示
-                      !isCodex && session != null && agentStatus.contextTokens > 0
+                      // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
+                      // 其余声明 manualCompact.supported(当前仅 pi)走 compact-session 通道;
+                      // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
+                      // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
+                      // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
+                      // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
+                      // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
+                      // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
+                      compactChannel !== null
+                        && !(realAgentKind === 'pi' && !!session?.remoteHostId)
+                        && session != null && agentStatus.contextTokens > 0
+                        && !(compactChannel === 'compact-session' && agentStatus.isRunning)
                         ? handleCompactRequest
                         : undefined
                     }

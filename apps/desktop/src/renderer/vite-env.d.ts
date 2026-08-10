@@ -1503,6 +1503,9 @@ interface ElectronAPI {
   pluginMarket: {
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    localIcons: (
+      requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
+    ) => Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]>;
     install: (
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
@@ -4674,7 +4677,7 @@ interface ElectronAPI {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean },
+      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
     ) => Promise<{
       success: boolean;
       error?: string;
@@ -4686,6 +4689,8 @@ interface ElectronAPI {
         path?: string;
         scope?: string;
         enabled?: boolean;
+        runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+        runtimeCommandName?: string;
       }>;
     }>;
 
@@ -5837,15 +5842,25 @@ interface SkillhubSkill {
   id: string;
   /** URL 匹配键 — 不含 engine，和路由格式一致，用于侧栏选中高亮。 */
   urlKey: string;
+  /** Pi customization 的 canonical physical source hash；Pi 条目始终提供。 */
+  sourceKey?: string;
+  /** 同一 URL 基键存在多个来源时，详情路由必须携带 sourceKey。 */
+  requiresSourceKey?: boolean;
   /** 来自哪个 agent 引擎。 */
   engine: 'claude-code' | 'codex' | 'pi';
   /** 发现该 skill 的所有引擎专属路径（去重后）。 */
-  linkedEngines: Array<{ engine: 'claude-code' | 'codex' | 'pi'; label: string }>;
+  linkedEngines: Array<{
+    engine: 'claude-code' | 'codex' | 'pi';
+    label: string;
+    runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+  }>;
   kind: SkillhubKind;
   scope: SkillhubScope;
   name: string;
   description?: string;
   absolutePath: string;
+  /** Lexical path reported by discovery before canonical realpath deduplication. */
+  discoveredPath?: string;
   mdPath: string;
   files: SkillhubFileEntry[];
   frontmatter?: Record<string, unknown>;

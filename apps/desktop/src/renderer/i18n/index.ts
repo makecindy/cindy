@@ -4,7 +4,7 @@
  * 设计要点：
  * - 资源同步 import (零网络/零 IO)，i18n.init 同步完成 → React 首屏不闪。
  * - 单 namespace 'common'，后续按 feature 切分时再加 (cc-agent / scheduler / ...)。
- * - fallbackLng：缺 key 时不显示 key 本身,直接回退英文(主干 4 语,无繁体 catalog)。
+ * - fallbackLng：缺 key 时不显示 key 本身,直接回退英文。
  * - 不接 LanguageDetector backend，用户偏好全部在 useLocale 里走 localStorage。
  *   'system' 的实际语言由 main 侧读取 OS 首选语言后传入 renderer。
  */
@@ -15,6 +15,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import enCommon from './locales/en/common.json';
 import zhCNCommon from './locales/zh-CN/common.json';
+import zhTWCommon from './locales/zh-TW/common.json';
 import jaCommon from './locales/ja/common.json';
 import koCommon from './locales/ko/common.json';
 import { DEFAULT_LOCALE } from '../../shared/locale';
@@ -30,6 +31,7 @@ export type { LocalePreference, SupportedLocale } from '../../shared/locale';
 const resources = {
   en: { common: enCommon },
   'zh-CN': { common: zhCNCommon },
+  'zh-TW': { common: zhTWCommon },
   ja: { common: jaCommon },
   ko: { common: koCommon },
 } as const;
@@ -39,7 +41,7 @@ const resources = {
 void i18n.use(initReactI18next).init({
   resources,
   lng: DEFAULT_LOCALE,
-  // 缺 key 回退英文(主干 4 语,无繁体 catalog)。
+  // 缺 key 回退英文。
   fallbackLng: { default: [DEFAULT_LOCALE] },
   defaultNS: 'common',
   ns: ['common'],

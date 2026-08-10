@@ -496,6 +496,13 @@ export function translatePiEvent(
       if (result && typeof result.estimatedTokensAfter === 'number') {
         ctx.contextTokens = result.estimatedTokensAfter;
       }
+      // #1933 review:手动压缩事件必须闭环。compaction_start 已把 isRunning 置 true,
+      // 若不收口,renderer 圆环会永久卡 running、新 contextTokens 也送不回去。
+      // 仅 manual 收口:auto 压缩发生在活跃 turn 内(turn 结束经 agent_settled 自然收口),
+      // 且若压缩期间用户已开始新 turn(ctx.isStreaming)也不能收口,否则会误杀新 turn。
+      if (event.reason === 'manual' && !ctx.isStreaming) {
+        pushStatus(queue, ctx, 'Done', false);
+      }
       return;
     }
 

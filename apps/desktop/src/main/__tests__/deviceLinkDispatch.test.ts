@@ -1195,7 +1195,9 @@ describe('被控端控制链路生命周期', () => {
       expect(hasInFlightRemoteInvokes()).toBe(true);
       expect(busyChanges).toEqual([true]);
 
-      await vi.advanceTimersByTimeAsync(dispatchTesting.remoteInvokeOrphanTimeoutMs);
+      await vi.advanceTimersByTimeAsync(
+        dispatchTesting.remoteInvokeOrphanTimeoutForChannelMs('maker:list-active'),
+      );
 
       expect(calls.invokeResult).toContainEqual({
         dst: 'ctrl-a',

@@ -12,7 +12,7 @@ import {
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
-import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import { applyCodexPlanSnapshotOnDone, markCodexPlanTurnFailed } from '@cindy/maker-shared/message-render';
 import type { RemoteSessionLiveActivity } from '@cindy/maker-shared/session-list';
 import { buildDeviceIdentity, resolveCanonicalDeviceId } from '@cindy/maker-shared/mobile-home';
 import {
@@ -663,6 +663,7 @@ function completeLivePlanSnapshotOnDone(
   snapshot: unknown,
   turnId: string | null,
   terminalStatus: string | null,
+  cancelled: boolean,
 ): boolean {
   if (!turnId) return false;
   const toolUseId = `plan:${turnId}`;
@@ -674,6 +675,8 @@ function completeLivePlanSnapshotOnDone(
     snapshot,
     turnId,
     terminalStatus,
+    undefined,
+    cancelled,
   );
   const content = completed.messages[0]?.content;
   if (!completed.changed || !isRecord(content)) return false;
@@ -2427,18 +2430,22 @@ export const remoteSessionStore = {
         const rawTurn = isRecord(data?.raw) ? data.raw : null;
         const turnId = readString(rawTurn, 'id');
         const turnStatus = readString(rawTurn, 'status');
+        const turnCancelled = data?.cancelled === true;
         const currentMessages = messages.get(sessionId) ?? [];
         const completed = applyCodexPlanSnapshotOnDone(
           currentMessages,
           data?.plan,
           turnId,
           turnStatus,
+          undefined,
+          turnCancelled,
         );
         completeLivePlanSnapshotOnDone(
           sessionId,
           data?.plan,
           turnId,
           turnStatus,
+          turnCancelled,
         );
         terminalPlanChanged = completed.changed;
         if (completed.changed) {
@@ -2453,6 +2460,27 @@ export const remoteSessionStore = {
               completed.toolUseId,
               completedMessage.content,
             );
+          }
+        }
+      } else if (readString(event, 'source') === 'codex') {
+        // 没有 done 的 codex 终态 error:这一轮的计划行等不到章,也等不到
+        // persistCodexPlanOnDone 的 turnCompleted:false。与 desktop renderer 的
+        // markCodexPlanTurnFailed 同款补印记,否则全勾完的失败计划会按旧数据
+        // 兜底退场——任务还活着,用户正要接着指挥。
+        const currentMessages = messages.get(sessionId) ?? [];
+        const failed = markCodexPlanTurnFailed(currentMessages);
+        terminalPlanChanged = failed.changed;
+        if (failed.changed) {
+          messages.set(sessionId, [...failed.messages]);
+          const failedMessage = failed.messages.find((message) => {
+            if (message.toolUseId === failed.toolUseId) return true;
+            return readString(message.content, 'toolUseId') === failed.toolUseId;
+          });
+          // 印记也要进 live-plan 缓存:overlayLivePlanSnapshot 用缓存内容整体
+          // 替换 content,缓存不补就会把 main 随后广播的落库 turnCompleted:false
+          // 盖回去,本连接周期内再也纠不回来。
+          if (failed.toolUseId && isRecord(failedMessage?.content)) {
+            rememberLivePlanContent(sessionId, failed.toolUseId, failedMessage.content);
           }
         }
       }

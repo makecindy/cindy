@@ -32,9 +32,8 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent,
 }));
 
-vi.mock('../../authManager', () => ({
-  getCurrentDataOwnerId: vi.fn(() => 'local-v1'),
-}));
+const getCurrentDataOwnerId = vi.fn((): string | null => 'local-v1');
+vi.mock('../../authManager', () => ({ getCurrentDataOwnerId }));
 
 const ensureReady = vi.fn();
 const getRawDb = vi.fn(() => ({ id: 'db' }));
@@ -44,14 +43,24 @@ vi.mock('../../localDb', () => ({
 }));
 
 const readSkillRawFile = vi.fn();
+const readSkillContent = vi.fn();
+const listSkillFolderChildren = vi.fn();
+const readSkillSiblingFile = vi.fn();
+const renameLocalSkill = vi.fn();
+const scanAllSkills = vi.fn();
+const writeSkillFile = vi.fn();
+const resolveExistingSkillPathForGrant = vi.fn();
+const isExistingSkillPathGranted = vi.fn();
 vi.mock('../scanner', () => ({
-  listSkillFolderChildren: vi.fn(),
-  readSkillContent: vi.fn(),
+  isExistingSkillPathGranted,
+  listSkillFolderChildren,
+  readSkillContent,
   readSkillRawFile,
-  readSkillSiblingFile: vi.fn(),
-  renameLocalSkill: vi.fn(),
-  scanAllSkills: vi.fn(),
-  writeSkillFile: vi.fn(),
+  readSkillSiblingFile,
+  renameLocalSkill,
+  resolveExistingSkillPathForGrant,
+  scanAllSkills,
+  writeSkillFile,
 }));
 
 vi.mock('../folderHash', () => ({
@@ -78,6 +87,7 @@ vi.mock('../importLocalSkill', () => importLocalSkillMocks);
 const publish = vi.fn();
 const cancel = vi.fn();
 const listAgentSkills = vi.fn();
+const getAllowedProjectRoots = vi.fn();
 const marketService = {
   deletePublished: vi.fn(),
   getPublishedFiles: vi.fn(),
@@ -92,15 +102,217 @@ describe('registerSkillhubIpc usage handlers', () => {
   beforeEach(async () => {
     handlers.clear();
     vi.clearAllMocks();
+    getCurrentDataOwnerId.mockReturnValue('local-v1');
     ensureReady.mockResolvedValue({ ready: true });
     requestLocalSkillUsageAnalyticsRefresh.mockReturnValue(null);
     showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    getAllowedProjectRoots.mockResolvedValue(['/repo', '/old', '/new']);
+    resolveExistingSkillPathForGrant.mockImplementation((candidate: string) => (
+      candidate.includes('/authorized/demo') ? '/physical/demo' : null
+    ));
+    isExistingSkillPathGranted.mockImplementation((candidate: string, roots: Set<string>) => (
+      roots.has('/physical/demo') && candidate.includes('/authorized/demo')
+    ));
     const { registerSkillhubIpc } = await import('../registerIpc');
     registerSkillhubIpc({
       getMaker: () => ({ listAgentSkills }) as never,
+      getAllowedProjectRoots,
       marketService: marketService as never,
       publishService: { publish, cancel } as never,
     });
+  });
+
+  it('binds SkillHub file access to the trusted renderer latest scan', async () => {
+    const destroyedCallbacks: Array<() => void> = [];
+    const sender = {
+      id: 11,
+      once: vi.fn((event: string, callback: () => void) => {
+        if (event === 'destroyed') destroyedCallbacks.push(callback);
+      }),
+    };
+    scanAllSkills.mockResolvedValueOnce({
+      skills: [{
+        absolutePath: '/physical/demo',
+        discoveredPath: '/repo/.pi/skills/authorized/demo',
+        scope: 'project',
+        projectRoot: '/repo',
+      }],
+      sources: [],
+    });
+    readSkillContent.mockResolvedValue({ success: true, content: 'demo' });
+    listSkillFolderChildren.mockResolvedValue({ success: true, entries: [] });
+    readSkillSiblingFile.mockResolvedValue({ success: true, content: 'notes' });
+    readSkillRawFile.mockResolvedValue({ success: true, content: 'raw' });
+    writeSkillFile.mockResolvedValue({ success: true });
+    renameLocalSkill.mockResolvedValue({ success: true, newAbsolutePath: '/renamed' });
+
+    const scanResult = await handlers.get('skillhub:scan')?.({ sender }, { projects: [] });
+
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledWith({ sender });
+    expect(resolveExistingSkillPathForGrant).toHaveBeenCalledWith(
+      '/repo/.pi/skills/authorized/demo',
+    );
+    expect(scanResult).toMatchObject({ success: true });
+    expect(sender.once).toHaveBeenCalledWith('destroyed', expect.any(Function));
+
+    const calls = [
+      ['skillhub:read-skill', { mdPath: '/repo/.pi/skills/authorized/demo/SKILL.md' }, readSkillContent],
+      ['skillhub:list-children', { dirPath: '/repo/.pi/skills/authorized/demo' }, listSkillFolderChildren],
+      ['skillhub:read-sibling-file', { filePath: '/repo/.pi/skills/authorized/demo/notes.md' }, readSkillSiblingFile],
+      ['skillhub:read-raw', { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' }, readSkillRawFile],
+      ['skillhub:write-file', { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md', content: '# Demo' }, writeSkillFile],
+      ['skillhub:rename-local', { absolutePath: '/repo/.pi/skills/authorized/demo', newName: 'renamed' }, renameLocalSkill],
+    ] as const;
+    for (const [channel, params, delegated] of calls) {
+      await handlers.get(channel)?.({ sender }, params);
+      expect(delegated).toHaveBeenCalledWith(params);
+    }
+
+    const wrongSender = await handlers.get('skillhub:read-raw')?.(
+      { sender: { id: 22 } },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    );
+    expect(wrongSender).toMatchObject({ success: false, error: expect.stringContaining('latest SkillHub scan') });
+
+    const unscannedPath = await handlers.get('skillhub:write-file')?.(
+      { sender },
+      { filePath: '/other/.pi/skills/unscanned/SKILL.md', content: '# Injected' },
+    );
+    expect(unscannedPath).toMatchObject({ success: false, error: expect.stringContaining('latest SkillHub scan') });
+
+    scanAllSkills.mockRejectedValueOnce(new Error('scan failed'));
+    await handlers.get('skillhub:scan')?.({ sender }, { projects: [] });
+    const afterFailedRescan = await handlers.get('skillhub:read-skill')?.(
+      { sender },
+      { mdPath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    );
+    expect(afterFailedRescan).toMatchObject({ success: false });
+
+    destroyedCallbacks[0]?.();
+    const afterDestroy = await handlers.get('skillhub:read-skill')?.(
+      { sender },
+      { mdPath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    );
+    expect(afterDestroy).toMatchObject({ success: false });
+  });
+
+  it('revokes project scan grants after the last active project session disappears', async () => {
+    const sender = { id: 12, once: vi.fn() };
+    scanAllSkills.mockResolvedValueOnce({
+      skills: [{
+        absolutePath: '/physical/demo',
+        discoveredPath: '/repo/.pi/skills/authorized/demo',
+        scope: 'project',
+        projectRoot: '/repo',
+      }],
+      sources: [],
+    });
+    readSkillRawFile.mockResolvedValue({ success: true, content: 'raw' });
+
+    await handlers.get('skillhub:scan')?.(
+      { sender },
+      { projects: [{ projectRoot: '/repo', hash: 'repo' }] },
+    );
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: true });
+
+    getAllowedProjectRoots.mockResolvedValue([]);
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+    expect(readSkillRawFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let an older concurrent scan overwrite the latest sender grant', async () => {
+    let resolveOlder!: (value: unknown) => void;
+    let resolveNewer!: (value: unknown) => void;
+    const older = new Promise((resolve) => { resolveOlder = resolve; });
+    const newer = new Promise((resolve) => { resolveNewer = resolve; });
+    scanAllSkills
+      .mockReturnValueOnce(older)
+      .mockReturnValueOnce(newer);
+    resolveExistingSkillPathForGrant.mockImplementation((candidate: string) => {
+      if (candidate.includes('/old-skill')) return '/physical/old-skill';
+      if (candidate.includes('/new-skill')) return '/physical/new-skill';
+      return null;
+    });
+    isExistingSkillPathGranted.mockImplementation((candidate: string, roots: Set<string>) => (
+      (candidate.includes('/old-skill') && roots.has('/physical/old-skill'))
+      || (candidate.includes('/new-skill') && roots.has('/physical/new-skill'))
+    ));
+    readSkillRawFile.mockResolvedValue({ success: true, content: 'raw' });
+    const sender = { id: 33, once: vi.fn() };
+    const scan = handlers.get('skillhub:scan');
+
+    const olderRequest = scan?.({ sender }, { projects: [{ projectRoot: '/old', hash: 'old' }] });
+    const newerRequest = scan?.({ sender }, { projects: [{ projectRoot: '/new', hash: 'new' }] });
+    resolveNewer({
+      skills: [{ absolutePath: '/physical/new-skill', discoveredPath: '/new/.pi/skills/new-skill' }],
+      sources: [],
+    });
+    await newerRequest;
+    resolveOlder({
+      skills: [{ absolutePath: '/physical/old-skill', discoveredPath: '/old/.pi/skills/old-skill' }],
+      sources: [],
+    });
+    await olderRequest;
+
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/new/.pi/skills/new-skill/SKILL.md' },
+    )).resolves.toMatchObject({ success: true });
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/old/.pi/skills/old-skill/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+  });
+
+  it('revokes a sender scan grant when the active data owner changes', async () => {
+    const sender = { id: 34, once: vi.fn() };
+    scanAllSkills.mockResolvedValueOnce({
+      skills: [{
+        absolutePath: '/physical/demo',
+        discoveredPath: '/repo/.pi/skills/authorized/demo',
+      }],
+      sources: [],
+    });
+    readSkillRawFile.mockResolvedValue({ success: true, content: 'raw' });
+
+    await handlers.get('skillhub:scan')?.({ sender }, { projects: [] });
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: true });
+
+    getCurrentDataOwnerId.mockReturnValue('local-v2');
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+
+    getCurrentDataOwnerId.mockReturnValue('local-v1');
+    await expect(handlers.get('skillhub:read-raw')?.(
+      { sender },
+      { filePath: '/repo/.pi/skills/authorized/demo/SKILL.md' },
+    )).resolves.toMatchObject({ success: false });
+  });
+
+  it('rejects renderer-provided project roots outside Main-owned active projects', async () => {
+    const sender = { id: 44, once: vi.fn() };
+
+    const result = await handlers.get('skillhub:scan')?.(
+      { sender },
+      { projects: [{ projectRoot: '/arbitrary', hash: 'bad' }] },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('not owned'),
+    });
+    expect(scanAllSkills).not.toHaveBeenCalled();
   });
 
   it('issues a sender-bound grant for the file selected and inspected in main', async () => {

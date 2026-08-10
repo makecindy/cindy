@@ -74,7 +74,7 @@ import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './
  * 目录与快捷方式同名互抢,该双装场景已明确放弃支持(见 brandIdentity.ts 的
  * executableNameByRegion doc)。
  *
- * 值为四语同文的区域代号(与旧 login.globalRegion 一致:区域标识不翻译),仍走
+ * 值为五语同文的区域代号(与旧 login.globalRegion 一致:区域标识不翻译),仍走
  * i18n 以便日后改判为「中国大陆版」这类可译文案时不必回改组件。
  *
  * ⚠️ 本表只负责「哪个区域用哪个 i18n key」。**「标不标」不由本表决定**——那是

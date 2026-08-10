@@ -83,6 +83,10 @@ describe('ClaudeCodeAgent model capabilities', () => {
     expect(toSdkModelString('z-ai/glm-5.2')).toBe('z-ai/glm-5.2[1m]');
   });
 
+  it('maps the bare DeepSeek V4 Flash id to the 1M Claude Code route', () => {
+    expect(toSdkModelString('deepseek-v4-flash')).toBe('deepseek-v4-flash[1m]');
+  });
+
   it('keeps the [1m] beta channel for the official gpt-5.5 / gpt-5.4 (true 1M)', () => {
     expect(toSdkModelString('gpt-5.5')).toBe('gpt-5.5[1m]');
     expect(toSdkModelString('gpt-5.4')).toBe('gpt-5.4[1m]');

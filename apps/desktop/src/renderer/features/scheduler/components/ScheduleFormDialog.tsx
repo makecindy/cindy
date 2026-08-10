@@ -421,7 +421,7 @@ export function ScheduleFormDialog({
   };
   const goConfigWecomGroup = () => {
     onOpenChange(false);
-    navigate('/settings?tab=general&section=notifications');
+    navigate('/settings?tab=im-bot&imGroup=personal');
   };
 
   const projectOptions = useProjectPickerOptions();

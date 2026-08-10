@@ -384,6 +384,7 @@ import {
 } from './hook-control';
 import { startAccountIntegrationsAfterOwnerDbReady } from './accountIntegrationStartup';
 import { registerSkillhubIpc } from './skillhub/registerIpc';
+import { listAllowedSkillhubProjectRoots } from './skillhub/allowedProjectRoots';
 import { SkillhubMarketService } from './skillhub/marketService';
 import { skillhubAutoSyncService } from './skillhub/autoSyncService';
 import { rehydrateCloseSuppression } from './maker-host/rehydrateCloseSuppression.js';
@@ -4789,7 +4790,10 @@ const registerIpcHandlers = () => {
     },
   );
 
-  registerSkillhubIpc({ getMaker: getMakerCore });
+  registerSkillhubIpc({
+    getMaker: getMakerCore,
+    getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
+  });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;
     void skillhubAutoSyncService.runOnceAfterLogin();

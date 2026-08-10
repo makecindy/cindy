@@ -485,6 +485,15 @@
       "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
       "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
       "feishuAria": "セッション完了時の Feishu 通知を切り替え",
+      "sessionEvent": {
+        "untitled": "無題のセッション",
+        "done": "完了しました ✓",
+        "error": "実行に失敗しました",
+        "needsReply": "返信が必要です",
+        "externalDone": "Cindy · セッション「{{title}}」が完了しました ✓",
+        "externalError": "Cindy · セッション「{{title}}」の実行に失敗しました",
+        "externalNeedsReply": "Cindy · セッション「{{title}}」への返信が必要です"
+      },
       "wecomGroupLabel": "WeCom グループ通知",
       "wecomGroupHint": "自動操作の完了通知に使用します。WeCom グループボットの Webhook URL を貼り付けると、このデバイスに暗号化保存されます。",
       "wecomGroupConfiguredHint": "設定済み（キー {{maskedKey}}）。全体スイッチをオンにした後、自動操作ごとに必要に応じて送信できます。",
@@ -623,6 +632,7 @@
       "options": {
         "system": "自動 (システムに従う)",
         "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -934,6 +944,7 @@
         "optionDescriptions": {
           "auto": "認識サービスが自動判定",
           "zh-CN": "簡体字中国語（中国本土）",
+          "zh-TW": "繁体字中国語（台湾）",
           "en": "英語",
           "ja": "日本語",
           "ko": "韓国語"
@@ -1737,6 +1748,12 @@
         "label": "オンライン/オフライン通知",
         "cellLabel": "メッセージ通知",
         "hint": "接続・切断時に Bot へ通知メッセージを送信"
+      },
+      "sessionNotification": {
+        "label": "セッション完了通知",
+        "cellLabel": "セッション完了または応答が必要なときに Feishu / Lark メッセージを送信",
+        "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
+        "disabledHint": "先に Bot を設定し、バインドを完了するために DM を送信してください。"
       },
       "bind": "連携"
     },
@@ -7914,6 +7931,9 @@
       "deny": "拒否"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "このプロジェクトを信頼すると使用できます"
+  },
   "skillhub": {
     "home": {
       "title": "スキル",
@@ -7941,7 +7961,12 @@
     },
     "common": {
       "openFolderFailed": "フォルダを開けませんでした",
-      "close": "閉じる"
+      "close": "閉じる",
+      "statusDiscovered": "検出済み",
+      "statusApproved": "承認済み",
+      "statusLoaded": "読み込み済み",
+      "statusFailed": "読み込み失敗",
+      "statusUnknown": "不明"
     },
     "welcome": {
       "scanning": "ローカルの skill をスキャン中…",

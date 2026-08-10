@@ -47,6 +47,7 @@ Quality bar:
 /** locale → 自述语言的人类可读名(给模型的确定性指令,不靠它从请求里猜)。 */
 const REPLY_LANGUAGE_BY_LOCALE: Record<string, string> = {
   'zh-CN': 'Simplified Chinese (简体中文)',
+  'zh-TW': 'Traditional Chinese (繁體中文)',
   en: 'English',
   ja: 'Japanese (日本語)',
   ko: 'Korean (한국어)',
