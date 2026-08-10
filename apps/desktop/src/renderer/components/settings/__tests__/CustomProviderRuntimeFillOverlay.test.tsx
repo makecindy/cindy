@@ -106,6 +106,33 @@ describe('CustomProviderRuntimeFillOverlay', () => {
     expect(choices[0].getAttribute('aria-checked')).toBe('true');
   });
 
+  it('keeps implicit endpoint clears in the same confirmation checkbox', () => {
+    renderOverlay(
+      state({
+        stage: 'confirm',
+        targets: [
+          {
+            agent: 'pi',
+            draft: draft({ modelsUrl: 'https://target.example/models' }),
+            diffs: [
+              { field: 'baseUrl', targetState: 'same' },
+              { field: 'requestPath', targetState: 'same' },
+              { field: 'wireProtocol', targetState: 'same' },
+              { field: 'modelsUrl', targetState: 'conflict', implicitClear: true },
+            ],
+          },
+        ],
+        selected: { pi: ['baseUrl', 'requestPath', 'wireProtocol', 'modelsUrl'] },
+      }),
+    );
+
+    const choices = screen.getAllByRole('checkbox');
+    expect(choices).toHaveLength(1);
+    expect(choices[0].textContent).toContain(
+      'settings.providers.custom.runtimeFill.fields.endpointBundle',
+    );
+  });
+
   it('shows protocol incompatibility instead of silently hiding the skipped field', () => {
     renderOverlay(
       state({

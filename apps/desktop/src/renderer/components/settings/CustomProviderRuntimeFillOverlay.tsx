@@ -77,12 +77,16 @@ function selectionRows(diffs: RuntimeFillFieldDiff[]): RuntimeFillSelectionRow[]
   const endpointDiffs = actionable.filter((diff) =>
     (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(diff.field),
   );
+  const implicitClearDiffs = actionable.filter((diff) => diff.implicitClear === true);
   const rows: RuntimeFillSelectionRow[] = [];
-  if (endpointDiffs.length > 0) {
+  if (endpointDiffs.length > 0 || implicitClearDiffs.length > 0) {
+    const anchor = endpointDiffs[0]?.field ?? implicitClearDiffs[0].field;
     rows.push({
       key: 'endpointBundle',
-      fields: runtimeFillFieldsForToggle(endpointDiffs[0].field, diffs),
-      targetState: endpointDiffs.some((diff) => diff.targetState === 'conflict')
+      fields: runtimeFillFieldsForToggle(anchor, diffs),
+      targetState: [...endpointDiffs, ...implicitClearDiffs].some(
+        (diff) => diff.targetState === 'conflict',
+      )
         ? 'conflict'
         : 'empty',
     });
@@ -90,6 +94,7 @@ function selectionRows(diffs: RuntimeFillFieldDiff[]): RuntimeFillSelectionRow[]
   for (const diff of actionable) {
     if ((RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(diff.field))
       continue;
+    if (diff.implicitClear === true) continue;
     rows.push({ key: diff.field, fields: [diff.field], targetState: diff.targetState });
   }
   return rows;

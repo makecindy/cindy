@@ -301,6 +301,46 @@ describe('custom provider runtime fill', () => {
     });
   });
 
+  it('clears an explicit target models URL when the source uses inference', () => {
+    const source = draft({ baseUrl: 'https://source.example/v1', modelsUrl: '' });
+    const target = draft({
+      baseUrl: 'https://target.example/v1',
+      modelsUrl: 'https://target.example/custom-models',
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'codex',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'modelsUrl')).toEqual({
+      field: 'modelsUrl',
+      targetState: 'conflict',
+      implicitClear: true,
+    });
+    expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([
+      'baseUrl',
+      'requestPath',
+      'wireProtocol',
+      'modelsUrl',
+    ]);
+    expect(normalizeRuntimeFillSelection(['modelsUrl'], diffs)).toEqual([
+      'baseUrl',
+      'requestPath',
+      'wireProtocol',
+      'modelsUrl',
+    ]);
+    expect(
+      applyRuntimeFillFields(target, source, ['baseUrl', 'requestPath', 'wireProtocol', 'modelsUrl'], {
+        sourceAgent: 'codex',
+        targetAgent: 'codex',
+      }),
+    ).toMatchObject({
+      baseUrl: source.baseUrl,
+      modelsUrl: '',
+    });
+  });
+
   it('blocks endpoint transfer when source headers exist only in main storage', () => {
     const source = draft({
       baseUrl: 'https://source.example/v1',

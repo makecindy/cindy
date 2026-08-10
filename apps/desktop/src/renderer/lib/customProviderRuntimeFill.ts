@@ -28,7 +28,7 @@ export interface RuntimeFillFieldDiff {
   field: RuntimeFillField;
   targetState: RuntimeFillTargetState;
   incompatibilityReason?: RuntimeFillIncompatibilityReason;
-  /** The main process will clear target headers when this endpoint URL changes. */
+  /** This field must be cleared together with the endpoint bundle. */
   implicitClear?: boolean;
 }
 
@@ -233,9 +233,11 @@ function targetFieldHasValue(
 function endpointUrlChanged(source: RuntimeFillDraft, target: RuntimeFillDraft): boolean {
   const sourceBaseUrl = source.baseUrl.trim();
   const sourceModelsUrl = source.modelsUrl.trim();
+  const targetModelsUrl = target.modelsUrl.trim();
   return (
     (sourceBaseUrl.length > 0 && sourceBaseUrl !== target.baseUrl.trim()) ||
-    (sourceModelsUrl.length > 0 && sourceModelsUrl !== target.modelsUrl.trim())
+    (sourceModelsUrl !== targetModelsUrl &&
+      (sourceModelsUrl.length > 0 || (sourceBaseUrl.length > 0 && targetModelsUrl.length > 0)))
   );
 }
 
@@ -297,6 +299,10 @@ export function buildRuntimeFillDiffs(
   const targetHasHeaders = targetFieldHasValue('headers', target, options.targetAgent);
   const endpointChangesUrl = endpointUrlChanged(source, target);
   const implicitHeaderClear = endpointChangesUrl && targetHasHeaders;
+  const implicitModelsUrlClear =
+    source.baseUrl.trim().length > 0 &&
+    source.modelsUrl.trim().length === 0 &&
+    target.modelsUrl.trim().length > 0;
 
   return RUNTIME_FILL_FIELD_ORDER.filter((field) => {
     if (!options.includeApiKey && field === 'apiKey') return false;
@@ -304,6 +310,9 @@ export function buildRuntimeFillDiffs(
       return sourceFieldHasValue(field, source, options.sourceAgent) ||
         sourceHasHiddenHeaders ||
         implicitHeaderClear;
+    }
+    if (field === 'modelsUrl') {
+      return sourceFieldHasValue(field, source, options.sourceAgent) || implicitModelsUrlClear;
     }
     return sourceFieldHasValue(field, source, options.sourceAgent);
   }).map((field) => {
@@ -345,7 +354,9 @@ export function buildRuntimeFillDiffs(
       field === 'headers' &&
       target.headersConfigured === true &&
       !sourceFieldHasValue('headers', source, options.sourceAgent);
-    const shouldConfirmHeaderClear = field === 'headers' && implicitHeaderClear;
+    const shouldConfirmImplicitClear =
+      (field === 'headers' && implicitHeaderClear) ||
+      (field === 'modelsUrl' && implicitModelsUrlClear);
     return {
       field,
       targetState: same && !hiddenTargetHeadersOnly
@@ -353,7 +364,7 @@ export function buildRuntimeFillDiffs(
         : targetFieldHasValue(field, target, options.targetAgent)
           ? 'conflict'
           : 'empty',
-      ...(shouldConfirmHeaderClear ? { implicitClear: true } : {}),
+      ...(shouldConfirmImplicitClear ? { implicitClear: true } : {}),
     };
   });
 }
@@ -362,27 +373,21 @@ export function runtimeFillFieldsForToggle(
   field: RuntimeFillField,
   diffs: readonly RuntimeFillFieldDiff[],
 ): RuntimeFillField[] {
-  const implicitHeaderDiff = diffs.find(
-    (diff) => diff.field === 'headers' && diff.implicitClear,
+  const bundleFields = RUNTIME_FILL_FIELD_ORDER.filter(
+    (candidate) =>
+      diffs.some(
+        (diff) =>
+          diff.field === candidate &&
+          diff.targetState !== 'incompatible' &&
+          ((RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(candidate) ||
+            diff.implicitClear === true),
+      ),
   );
-  if (!(RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(field)) {
-    return implicitHeaderDiff && field === 'headers'
-      ? [
-          ...RUNTIME_FILL_ENDPOINT_FIELDS.filter((endpointField) =>
-            diffs.some((diff) => diff.field === endpointField && diff.targetState !== 'incompatible'),
-          ),
-          'headers',
-        ]
-      : [field];
-  }
-  const endpointFields = diffs
-    .filter(
-      (diff) =>
-        (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(diff.field) &&
-        diff.targetState !== 'incompatible',
-    )
-    .map((diff) => diff.field);
-  return implicitHeaderDiff ? [...endpointFields, 'headers'] : endpointFields;
+  const fieldDiff = diffs.find((diff) => diff.field === field);
+  return (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(field) ||
+    fieldDiff?.implicitClear === true
+    ? bundleFields
+    : [field];
 }
 
 export function normalizeRuntimeFillSelection(
@@ -390,12 +395,18 @@ export function normalizeRuntimeFillSelection(
   diffs: readonly RuntimeFillFieldDiff[],
 ): RuntimeFillField[] {
   const selected = new Set(fields);
+  const selectedImplicitClear = diffs.find(
+    (diff) => diff.implicitClear === true && selected.has(diff.field),
+  );
   if (
+    selectedImplicitClear ||
     (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).some((field) =>
       selected.has(field),
     )
   ) {
-    for (const field of runtimeFillFieldsForToggle('baseUrl', diffs)) selected.add(field);
+    for (const field of runtimeFillFieldsForToggle(selectedImplicitClear?.field ?? 'baseUrl', diffs)) {
+      selected.add(field);
+    }
   }
   return RUNTIME_FILL_FIELD_ORDER.filter((field) => selected.has(field));
 }
