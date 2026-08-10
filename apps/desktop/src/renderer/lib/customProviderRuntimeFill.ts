@@ -318,9 +318,13 @@ export function buildRuntimeFillDiffs(
   // make Main discard endpoint-bound credentials/headers.
   const modelsUrlEndpointChange =
     source.modelsUrl.trim() !== target.modelsUrl.trim() && endpointChangesUrl;
+  const implicitApiKeyClear =
+    endpointChangesUrl &&
+    target.apiKey.trim().length > 0 &&
+    true;
 
   return RUNTIME_FILL_FIELD_ORDER.filter((field) => {
-    if (!options.includeApiKey && field === 'apiKey') return false;
+    if (!options.includeApiKey && field === 'apiKey' && !implicitApiKeyClear) return false;
     if (field === 'headers') {
       return sourceFieldHasValue(field, source, options.sourceAgent) ||
         sourceHasHiddenHeaders ||
@@ -328,6 +332,9 @@ export function buildRuntimeFillDiffs(
     }
     if (field === 'modelsUrl') {
       return sourceFieldHasValue(field, source, options.sourceAgent) || implicitModelsUrlClear;
+    }
+    if (field === 'apiKey') {
+      return sourceFieldHasValue(field, source, options.sourceAgent) || implicitApiKeyClear;
     }
     return sourceFieldHasValue(field, source, options.sourceAgent);
   }).map((field) => {
@@ -371,7 +378,8 @@ export function buildRuntimeFillDiffs(
       !sourceFieldHasValue('headers', source, options.sourceAgent);
     const shouldConfirmImplicitClear =
       (field === 'headers' && implicitHeaderClear) ||
-      (field === 'modelsUrl' && (implicitModelsUrlClear || modelsUrlEndpointChange));
+      (field === 'modelsUrl' && (implicitModelsUrlClear || modelsUrlEndpointChange)) ||
+      (field === 'apiKey' && implicitApiKeyClear);
     return {
       field,
       targetState: same && !hiddenTargetHeadersOnly
@@ -406,6 +414,7 @@ export function runtimeFillFieldsForToggle(
     field,
   );
   if (isEndpointField && fieldDiff?.targetState === 'incompatible') return [];
+  if (fieldDiff?.implicitClear === true && compatibleEndpointFields.length === 0) return [];
   if (isEndpointField || fieldDiff?.implicitClear === true) {
     return RUNTIME_FILL_FIELD_ORDER.filter(
       (candidate) =>
@@ -512,6 +521,10 @@ export function applyRuntimeFillFields(
   const copyBaseUrl = copyEndpoint && copyableEndpointFields.includes('baseUrl');
   const copyRequestPath = copyEndpoint && copyableEndpointFields.includes('requestPath');
   const copyWireProtocol = copyEndpoint && copyableEndpointFields.includes('wireProtocol');
+  const clearTargetApiKeyWithEndpoint =
+    copyEndpoint &&
+    target.apiKey.trim().length > 0 &&
+    !selected.has('apiKey');
   const models = selected.has('models')
     ? modelsForTarget(source.models, target.models, options.sourceAgent, options.targetAgent)
     : target.models;
@@ -531,7 +544,11 @@ export function applyRuntimeFillFields(
         : copyRequestPath
           ? source.requestPath
           : target.requestPath,
-    apiKey: selected.has('apiKey') ? source.apiKey : target.apiKey,
+    apiKey: selected.has('apiKey')
+      ? source.apiKey
+      : clearTargetApiKeyWithEndpoint
+        ? ''
+        : target.apiKey,
     wireProtocol: copyWireProtocol ? source.wireProtocol : target.wireProtocol,
     models,
     headers: copyHeaders ? canonicalHeaders(source.headers) : target.headers,

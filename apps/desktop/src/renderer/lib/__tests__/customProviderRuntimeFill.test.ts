@@ -352,6 +352,7 @@ describe('custom provider runtime fill', () => {
       'baseUrl',
       'requestPath',
       'wireProtocol',
+      'apiKey',
       'headers',
       'modelsUrl',
     ]);
@@ -366,6 +367,36 @@ describe('custom provider runtime fill', () => {
       headersConfigured: false,
       headers: [],
     });
+  });
+
+  it('binds target API-key clearing to an endpoint fill when source has no key', () => {
+    const source = draft({ baseUrl: 'https://source.example/v1' });
+    const target = draft({
+      baseUrl: 'https://target.example/v1',
+      apiKey: 'target-key',
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: false,
+      sourceAgent: 'codex',
+      targetAgent: 'codex',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'apiKey')).toMatchObject({
+      targetState: 'conflict',
+      implicitClear: true,
+    });
+    expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([
+      'baseUrl',
+      'requestPath',
+      'wireProtocol',
+      'apiKey',
+    ]);
+    expect(
+      applyRuntimeFillFields(target, source, ['baseUrl'], {
+        sourceAgent: 'codex',
+        targetAgent: 'codex',
+      }),
+    ).toMatchObject({ baseUrl: source.baseUrl, apiKey: '' });
   });
 
   it('clears an explicit target models URL when the source uses inference', () => {
