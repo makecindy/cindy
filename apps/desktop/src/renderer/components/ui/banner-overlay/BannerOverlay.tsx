@@ -15,12 +15,12 @@ const BANNER_OVERLAY_ID = 'banner-overlay';
 
 /**
  * 返回一个 portal 函数，横幅组件用它把内容渲染到全局浮层。
- * 目标 DOM 节点不存在时返回 null（SSR 安全）。
+ * 目标 DOM 节点不存在时回退为内联渲染（测试环境 / SSR 安全）。
  */
 export function useBannerPortal(): (children: ReactNode) => ReactNode {
   return (children) => {
     const target = document.getElementById(BANNER_OVERLAY_ID);
-    if (!target) return null;
+    if (!target) return children;
     return createPortal(children, target);
   };
 }
