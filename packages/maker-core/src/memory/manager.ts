@@ -399,6 +399,10 @@ export class MakerMemoryManager {
     let total = 0;
     const activeDirs = new Set<string>();
     for (const [workdir, { store }] of this.stores) {
+      // 迭代前复核 (review #2388 第三轮 P1): resetType 自身 await (list/delete),
+      // 期间 owner 切换会使本循环持有的 store 被 closeAllStores 关闭 —— 必须先
+      // 复核再操作, 不得在切换后继续用已失效的 store。
+      this.assertScopeUnchanged(scopeAtEntry);
       activeDirs.add(memoryScopeDirName(workdir));
       total += (await store.resetType('digest')).removedCount;
     }

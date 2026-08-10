@@ -238,6 +238,39 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     manager.dispose();
   });
 
+  it('owner 切换后 resetDigests 用新根, 不动旧 owner digest 文件', async () => {
+    let currentRoot = rootA;
+    let currentScope = 'cloud:old:1';
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => currentRoot,
+      ownerScopeKey: () => currentScope,
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+
+    // 旧 owner 在 rootA 写入一条 digest + 一条 curated
+    const storeA = await manager.getStore(WORKDIR);
+    await storeA.write({
+      type: 'digest', name: 'pi-drop', title: 'D', description: 'digest', body: 'summary',
+    });
+    await storeA.write({
+      type: 'project', name: 'keep', title: 'K', description: 'curated', body: 'content-K',
+    });
+    expect(existsSync(path.join(memoryDirFor(rootA), 'digest_pi-drop.md'))).toBe(true);
+
+    // 切换 owner → resetDigests 入口换根到 rootB (空), 不扫旧根
+    currentRoot = rootB;
+    currentScope = 'cloud:new:2';
+    const result = await manager.resetDigests();
+    expect(result.removedCount).toBe(0);
+    expect(existsSync(path.join(memoryDirFor(rootA), 'digest_pi-drop.md'))).toBe(true);
+    expect(existsSync(path.join(memoryDirFor(rootA), 'project_keep.md'))).toBe(true);
+    manager.dispose();
+  });
+
   it('同 workdir 并发 getStore 复用池内实例, 多余 db 被关闭', async () => {
     const sqlite = trackingSqlite();
     const manager = new MakerMemoryManager({
