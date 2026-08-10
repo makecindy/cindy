@@ -1,4 +1,6 @@
 import {
+  linkSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -88,10 +90,8 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('(input as Record<string, unknown>).path = resolvedPaths[0]!');
     expect(source).toContain('pathFields[index].write(resolvedPaths[index]!)');
     expect(source).not.toContain("toolName === 'grep' && statSync(target).isDirectory()");
-    expect(source).toContain(
-      'stat.isDirectory() ? isInsideRoot(target, allowed) : target === allowed',
-    );
-    expect(source).toContain('targetStat.isFile() && targetStat.nlink > 1');
+    expect(source).toContain('reviewFileLinkLayoutIsSafe(target, targetStat, allowed)');
+    expect(source).toContain("candidates.add(path.join(dependencyRoot, 'node_modules'");
     expect(source).toContain('reviewSearchPathHasMultipleLinks');
     expect(source).toContain('REVIEW_CREDENTIAL_PATH_PATTERNS.some');
     expect(source).toContain('REVIEW_CREDENTIAL_GLOB_PATTERNS.some');
@@ -107,7 +107,7 @@ describe('cindy-bridge extension source', () => {
       expect(helperEnd).toBeGreaterThan(helperStart);
 
       const executableSource = [
-        'const REVIEW_CREDENTIAL_PATH_PATTERNS: RegExp[] = [];',
+        "const REVIEW_CREDENTIAL_PATH_PATTERNS: RegExp[] = [/(?:^|[\\\\/])node_modules(?:[\\\\/]|$)/i];",
         source.slice(helperStart, helperEnd),
         '(globalThis as any).normalizeReviewReadInput = normalizeReviewReadInput;',
       ].join('\n');
@@ -141,6 +141,7 @@ describe('cindy-bridge extension source', () => {
         } & Record<string, unknown> = {
           path,
           process: { cwd: () => workingDir, platform: process.platform },
+          lstatSync,
           realpathSync,
           statSync,
         };
@@ -149,26 +150,30 @@ describe('cindy-bridge extension source', () => {
         expect(normalizeReviewReadInput).toBeTypeOf('function');
         if (!normalizeReviewReadInput) throw new Error('Review read normalizer was not loaded');
 
+        const readInput = { path: linkPath };
+        const grepInput = { request: { paths: [linkPath] }, pattern: 'approved' };
+        const findInput = { options: { filePath: linkPath }, pattern: '*.txt' };
+        const lsInput = { filepath: linkPath };
         const inputs = [
-          { tool: 'read', input: { path: linkPath } },
+          { tool: 'read', input: readInput },
           {
             tool: 'grep',
-            input: { request: { paths: [linkPath] }, pattern: 'approved' },
+            input: grepInput,
           },
           {
             tool: 'find',
-            input: { options: { filePath: linkPath }, pattern: '*.txt' },
+            input: findInput,
           },
-          { tool: 'ls', input: { filepath: linkPath } },
+          { tool: 'ls', input: lsInput },
         ];
         for (const { tool, input } of inputs) {
           expect(normalizeReviewReadInput(tool, input, [approvedPath])).toBe(true);
         }
 
-        expect(inputs[0]!.input.path).toBe(realpathSync(approvedPath));
-        expect(inputs[1]!.input.request.paths).toEqual([realpathSync(approvedPath)]);
-        expect(inputs[2]!.input.options.filePath).toBe(realpathSync(approvedPath));
-        expect(inputs[3]!.input.filepath).toBe(realpathSync(approvedPath));
+        expect(readInput.path).toBe(realpathSync(approvedPath));
+        expect(grepInput.request.paths).toEqual([realpathSync(approvedPath)]);
+        expect(findInput.options.filePath).toBe(realpathSync(approvedPath));
+        expect(lsInput.filepath).toBe(realpathSync(approvedPath));
 
         for (const tool of ['read', 'grep', 'find', 'ls']) {
           const defaultInput: Record<string, unknown> = {};
@@ -176,9 +181,38 @@ describe('cindy-bridge extension source', () => {
           expect(defaultInput.path).toBe(realpathSync(workingDir));
         }
 
+        const localSource = path.join(
+          workingDir,
+          'apps',
+          'mobile',
+          'modules',
+          'local-module',
+          'src',
+          'index.ts',
+        );
+        const localMirror = path.join(
+          workingDir,
+          'node_modules',
+          'local-module',
+          'src',
+          'index.ts',
+        );
+        mkdirSync(path.dirname(localSource), { recursive: true });
+        mkdirSync(path.dirname(localMirror), { recursive: true });
+        writeFileSync(localSource, 'export const value = 1;');
+        linkSync(localSource, localMirror);
+        expect(
+          normalizeReviewReadInput('read', { path: localSource }, [workingDir]),
+        ).toBe(true);
+
+        linkSync(localSource, path.join(outsideDir, 'third-link.ts'));
+        expect(
+          normalizeReviewReadInput('read', { path: localSource }, [workingDir]),
+        ).toBe(false);
+
         unlinkSync(linkPath);
         symlinkSync(outsidePath, linkPath);
-        expect(readFileSync(inputs[0]!.input.path, 'utf8')).toBe('approved');
+        expect(readFileSync(readInput.path, 'utf8')).toBe('approved');
       } finally {
         rmSync(tempRoot, { recursive: true, force: true });
       }

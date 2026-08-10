@@ -6417,6 +6417,7 @@
           "sourceConversationChanged": "来源任务已变化，请针对当前任务重新运行 /review。",
           "sourceFilesChanged": "来源任务的文件已变化，请针对当前成果重新运行 /review。",
           "artifactChanged": "审查成果已变化，请针对当前成果重新运行 /review。",
+          "artifactUnavailable": "Cindy 无法安全读取审查成果，请检查工作区或附件后重新运行 /review。",
           "providerFailed": "审查任务执行失败"
         }
       }

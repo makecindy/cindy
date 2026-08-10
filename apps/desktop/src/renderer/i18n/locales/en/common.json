@@ -6420,6 +6420,7 @@
           "sourceConversationChanged": "The source task changed. Run /review again for the current task.",
           "sourceFilesChanged": "The source task files changed. Run /review again for the current result.",
           "artifactChanged": "A review artifact changed. Run /review again for the current result.",
+          "artifactUnavailable": "Cindy couldn't safely read the review artifacts. Check the workspace or attachments, then run /review again.",
           "providerFailed": "The review task failed"
         }
       }

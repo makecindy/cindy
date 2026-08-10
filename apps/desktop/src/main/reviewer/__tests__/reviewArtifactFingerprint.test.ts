@@ -25,6 +25,18 @@ afterEach(async () => {
 });
 
 describe('review artifact fingerprint', () => {
+  it.runIf(Boolean(process.env.CINDY_REVIEW_REAL_WORKSPACE))(
+    'fingerprints an explicitly requested real workspace',
+    async () => {
+      const workspace = process.env.CINDY_REVIEW_REAL_WORKSPACE!;
+      const before = await fingerprintReviewArtifacts([workspace]);
+      const after = await fingerprintReviewArtifacts([workspace]);
+
+      expect(before).toMatch(/^[a-f0-9]{64}$/);
+      expect(after).toBe(before);
+    },
+  );
+
   it('changes for same-size file edits and nested directory edits', async () => {
     const dir = await makeTempDir();
     const nested = path.join(dir, 'nested');
@@ -210,6 +222,73 @@ describe('review artifact fingerprint', () => {
     await expect(fingerprintReviewArtifacts([workspace])).rejects.toBeInstanceOf(
       ReviewArtifactFingerprintChangedError,
     );
+  });
+
+  it('accepts a two-link local package mirror confined to the denied node_modules tree', async () => {
+    if (process.platform === 'win32') return;
+    const workspace = await makeTempDir();
+    const sourcePackage = path.join(workspace, 'apps', 'mobile', 'modules', 'local-module');
+    const sourceFile = path.join(sourcePackage, 'src', 'index.ts');
+    const dependencyFile = path.join(workspace, 'node_modules', 'local-module', 'src', 'index.ts');
+    await fs.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fs.mkdir(path.dirname(dependencyFile), { recursive: true });
+    await fs.writeFile(path.join(sourcePackage, 'package.json'), '{"name":"local-module"}');
+    await fs.writeFile(sourceFile, 'export const value = 1;');
+    await fs.link(sourceFile, dependencyFile);
+
+    await expect(fingerprintReviewArtifacts([workspace])).resolves.toMatch(/^[a-f0-9]{64}$/);
+    await expect(fingerprintReviewArtifacts([sourceFile, workspace])).resolves.toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+  });
+
+  it('still rejects a local dependency mirror when the inode has any outside link', async () => {
+    if (process.platform === 'win32') return;
+    const root = await makeTempDir();
+    const workspace = path.join(root, 'workspace');
+    const sourcePackage = path.join(workspace, 'packages', 'local-module');
+    const sourceFile = path.join(sourcePackage, 'index.ts');
+    const dependencyFile = path.join(workspace, 'node_modules', 'local-module', 'index.ts');
+    const outsideFile = path.join(root, 'outside.ts');
+    await fs.mkdir(sourcePackage, { recursive: true });
+    await fs.mkdir(path.dirname(dependencyFile), { recursive: true });
+    await fs.writeFile(sourceFile, 'export const value = 1;');
+    await fs.link(sourceFile, dependencyFile);
+    await fs.link(sourceFile, outsideFile);
+
+    await expect(fingerprintReviewArtifacts([workspace])).rejects.toBeInstanceOf(
+      ReviewArtifactFingerprintChangedError,
+    );
+  });
+
+  it('rejects when a confined dependency mirror is replaced before the source is opened', async () => {
+    if (process.platform === 'win32') return;
+    const root = await makeTempDir();
+    const workspace = path.join(root, 'workspace');
+    const sourcePackage = path.join(workspace, 'packages', 'local-module');
+    const sourceFile = path.join(sourcePackage, 'index.ts');
+    const dependencyFile = path.join(workspace, 'node_modules', 'local-module', 'index.ts');
+    const outsideFile = path.join(root, 'outside.ts');
+    await fs.mkdir(sourcePackage, { recursive: true });
+    await fs.mkdir(path.dirname(dependencyFile), { recursive: true });
+    await fs.writeFile(sourceFile, 'export const value = 1;');
+    await fs.writeFile(outsideFile, 'outside bytes');
+    await fs.link(sourceFile, dependencyFile);
+    const canonicalSourceFile = await fs.realpath(sourceFile);
+    let replaced = false;
+
+    await expect(
+      fingerprintReviewArtifacts([workspace], {
+        openFile: async (filePath, flags) => {
+          if (filePath === canonicalSourceFile && !replaced) {
+            replaced = true;
+            await fs.unlink(dependencyFile);
+            await fs.link(sourceFile, outsideFile + '.linked');
+          }
+          return fs.open(filePath, flags);
+        },
+      }),
+    ).rejects.toBeInstanceOf(ReviewArtifactFingerprintChangedError);
   });
 
   it('rejects a same-size replacement between extraction and the first baseline', async () => {

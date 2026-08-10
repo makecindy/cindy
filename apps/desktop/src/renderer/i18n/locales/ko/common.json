@@ -6417,6 +6417,7 @@
           "sourceConversationChanged": "원본 작업이 변경되었습니다. 현재 작업에 대해 /review를 다시 실행하세요.",
           "sourceFilesChanged": "원본 작업의 파일이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
           "artifactChanged": "검토 대상 결과물이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
+          "artifactUnavailable": "Cindy가 검토 대상 결과물을 안전하게 읽지 못했습니다. 작업 공간 또는 첨부 파일을 확인한 후 /review를 다시 실행하세요.",
           "providerFailed": "검토 작업 실행에 실패했습니다"
         }
       }

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants, promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 
-import { isReviewSensitiveCredentialPath } from '@cindy/maker-core';
+import { isReviewSensitiveCredentialPath, reviewFileLinkLayoutIsSafe } from '@cindy/maker-core';
 
 import { reviewArtifactPathIdentityMatches } from './reviewArtifactAuthorization.js';
 
@@ -22,6 +22,14 @@ interface FingerprintState {
   maxDirectoryEntries: number;
   contentBytesRemaining: number;
   openFile: ReviewArtifactFileOpener;
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === '' ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+  );
 }
 
 export interface ReviewArtifactFingerprintOptions {
@@ -107,10 +115,11 @@ async function hashRange(
 async function addFile(
   absolutePath: string,
   relativePath: string,
+  fingerprintRoot: string,
   stat: Stats,
   state: FingerprintState,
 ): Promise<void> {
-  if (stat.nlink > 1) {
+  if (!(await reviewFileLinkLayoutIsSafe(absolutePath, fingerprintRoot, stat))) {
     throw new ReviewArtifactFingerprintChangedError(
       'Review refused a multiply linked file in its artifact workspace',
     );
@@ -135,8 +144,8 @@ async function addFile(
     const opened = await handle.stat();
     if (
       !opened.isFile() ||
-      opened.nlink > 1 ||
-      !reviewArtifactPathIdentityMatches(stat, opened)
+      !reviewArtifactPathIdentityMatches(stat, opened) ||
+      !(await reviewFileLinkLayoutIsSafe(absolutePath, fingerprintRoot, opened))
     ) {
       throw new ReviewArtifactFingerprintChangedError(
         'A review artifact changed while its content fingerprint was being prepared',
@@ -149,11 +158,11 @@ async function addFile(
     if (
       bytesRead !== opened.size ||
       !reviewArtifactPathIdentityMatches(opened, afterHandle) ||
-      afterHandle.nlink > 1 ||
       !afterPath ||
       afterPath.isSymbolicLink() ||
-      afterPath.nlink > 1 ||
-      !reviewArtifactPathIdentityMatches(opened, afterPath)
+      !reviewArtifactPathIdentityMatches(opened, afterPath) ||
+      afterHandle.nlink !== afterPath.nlink ||
+      !(await reviewFileLinkLayoutIsSafe(absolutePath, fingerprintRoot, afterHandle))
     ) {
       throw new ReviewArtifactFingerprintChangedError(
         'A review artifact changed while its content fingerprint was being prepared',
@@ -175,6 +184,7 @@ async function addFile(
 async function walk(
   absolutePath: string,
   relativePath: string,
+  fingerprintRoot: string,
   state: FingerprintState,
 ): Promise<void> {
   if (isSensitive(absolutePath, relativePath)) return;
@@ -214,7 +224,7 @@ async function walk(
     await assertCanonicalReviewArtifactPath(absolutePath);
   }
   if (stat.isFile()) {
-    await addFile(absolutePath, relativePath, stat, state);
+    await addFile(absolutePath, relativePath, fingerprintRoot, stat, state);
     return;
   }
   if (!stat.isDirectory()) {
@@ -239,7 +249,7 @@ async function walk(
   for (const entry of entries) {
     const childRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name;
     if (isSensitive(entry.name, childRelative)) continue;
-    await walk(path.join(absolutePath, entry.name), childRelative, state);
+    await walk(path.join(absolutePath, entry.name), childRelative, fingerprintRoot, state);
   }
 }
 
@@ -274,9 +284,15 @@ export async function fingerprintReviewArtifacts(
     const canonical = await resolveFingerprintRoot(rawPath);
     if (!isSensitive(canonical)) canonicalRoots.add(canonical);
   }
-  for (const root of [...canonicalRoots].sort()) {
+  const effectiveRoots: string[] = [];
+  for (const root of [...canonicalRoots].sort(
+    (left, right) => left.length - right.length || (left < right ? -1 : left > right ? 1 : 0),
+  )) {
+    if (!effectiveRoots.some((parent) => isPathWithin(parent, root))) effectiveRoots.push(root);
+  }
+  for (const root of effectiveRoots.sort()) {
     addRecord(state, 'root', root);
-    await walk(root, '.', state);
+    await walk(root, '.', root, state);
   }
   return state.hash.digest('hex');
 }

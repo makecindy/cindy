@@ -200,7 +200,11 @@ import {
   cleanupOrphanedReviewArtifactSnapshots,
   prepareStableReviewArtifactSnapshots,
 } from '../reviewer/reviewArtifactSnapshot.js';
-import { fingerprintReviewArtifacts } from '../reviewer/reviewArtifactFingerprint.js';
+import {
+  fingerprintReviewArtifacts,
+  ReviewArtifactFingerprintChangedError,
+  ReviewArtifactFingerprintLimitError,
+} from '../reviewer/reviewArtifactFingerprint.js';
 import { enforceReviewCreateOptions } from '../reviewer/reviewSessionPolicy.js';
 import { reviewSourceIdentityMatches } from '../reviewer/reviewSourceIdentity.js';
 import { buildReviewSessionTitle } from '../reviewer/reviewSessionTitle.js';
@@ -642,7 +646,11 @@ import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
-import { registerReviewStartHandler, type ReviewFailureReason } from './reviewStartHandler.js';
+import {
+  registerReviewStartHandler,
+  ReviewPreconditionError,
+  type ReviewFailureReason,
+} from './reviewStartHandler.js';
 import { registerStopAgentTaskHandler } from './stopAgentTaskHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgroundTasksHandler.js';
 import { registerProviderHandlers } from './providerHandlers.js';
@@ -7070,9 +7078,33 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // caches or nested-submodule contents, so the reusable result must
           // also bind the complete non-sensitive readable workspace content.
           const artifactPaths = [...reviewReadPaths, sourceWorkingDir];
-          const artifactFingerprint = await fingerprintReviewArtifacts(artifactPaths);
-          const completeArtifactFingerprintIsCurrent = async (): Promise<boolean> =>
-            (await fingerprintReviewArtifacts(artifactPaths)) === artifactFingerprint;
+          let artifactFingerprint: string;
+          try {
+            artifactFingerprint = await fingerprintReviewArtifacts(artifactPaths);
+          } catch (error) {
+            if (
+              error instanceof ReviewArtifactFingerprintChangedError ||
+              error instanceof ReviewArtifactFingerprintLimitError
+            ) {
+              throw new ReviewPreconditionError({
+                code: 'artifact-unavailable',
+                message: error.message,
+              });
+            }
+            throw error;
+          }
+          const artifactFingerprintIsCurrent = async (
+            paths: readonly string[],
+            expected: string,
+          ): Promise<boolean> => {
+            try {
+              return (await fingerprintReviewArtifacts(paths)) === expected;
+            } catch {
+              return false;
+            }
+          };
+          const completeArtifactFingerprintIsCurrent = (): Promise<boolean> =>
+            artifactFingerprintIsCurrent(artifactPaths, artifactFingerprint);
           const readCurrentSourceIdentity = async () => {
             const [currentSource] = await db
               .select({
@@ -7136,8 +7168,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 };
               }
               if (
-                (await fingerprintReviewArtifacts(authorizedArtifactPaths)) !==
-                sourceArtifactFingerprint
+                !(await artifactFingerprintIsCurrent(
+                  authorizedArtifactPaths,
+                  sourceArtifactFingerprint,
+                ))
               ) {
                 return {
                   code: 'artifact-changed',
@@ -7185,8 +7219,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 };
               }
               if (
-                (await fingerprintReviewArtifacts(authorizedArtifactPaths)) !==
-                sourceArtifactFingerprint
+                !(await artifactFingerprintIsCurrent(
+                  authorizedArtifactPaths,
+                  sourceArtifactFingerprint,
+                ))
               ) {
                 return {
                   code: 'artifact-changed',
