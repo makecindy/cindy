@@ -683,7 +683,7 @@ interface PrepareLocalBridgeBodyOptions {
 /**
  * localHandler runs before the shared request transform chain. Keep the preprocessing
  * needed by every Responses bridge in one place so adding another wire adapter cannot
- * accidentally lose product instructions or cross-provider compaction recovery.
+ * accidentally lose product instructions or cross-provider encrypted-history recovery.
  */
 function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
   let body = opts.parsedBody;
@@ -727,14 +727,16 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
           : [existingText, opts.instructions].filter(Boolean).join('\n\n'),
     };
   }
-  const compactionSafe = replaceEncryptedCompactionItems(body);
-  if (compactionSafe) {
-    log.info('replaced encrypted compaction history for local bridge upstream', {
+  const historySafe = isChatGptUpstreamBase(opts.upstreamBase)
+    ? null
+    : rewriteCrossProviderHistoryItems(body);
+  if (historySafe) {
+    log.info('rewrote incompatible Codex history for local bridge upstream', {
       bridge: opts.bridge,
       providerId: opts.providerId,
       upstreamBase: opts.upstreamBase,
     });
-    body = compactionSafe;
+    body = historySafe;
   }
   return body;
 }
@@ -1812,18 +1814,21 @@ function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
 }
 
 /**
- * 把 body.input 里**确实携带加密内容**的压缩项替换为明文占位 user message。
- * 返回 null = 无压缩项,零改写。透明转发路径(transform 链)与 Chat bridge
- * localHandler 路径共用——两条路都可能重放跨来源恢复的加密压缩历史。
+ * 把 body.input 里无法跨供应商重放的 Codex 历史降级成目标上游可接受的形态。
+ * 返回 null = 无需改写。透明转发路径(transform 链)与 localHandler 路径共用。
  *
- * 只替换 encrypted_content 非空的项(codex wire 上 Compaction.encrypted_content
- * 必填、ContextCompaction 可选):未来若出现可读/非加密的 compaction 变体,
- * 不在「上游解不开」的问题域内,原样透传交给目标上游/翻译层自行处理。
+ * - 加密 compaction 仍替换成明文上下文缺失提示。
+ * - 多 Agent 历史会在 agent_message.content 里夹带仅原供应商可解的 encrypted_content；
+ *   非 ChatGPT 上游会直接拒绝整次请求。只删除这些嵌套密文，保留可读正文与路由元数据；
+ *   若消息只剩密文则整条丢弃。
+ * - reasoning.encrypted_content 不属于本故障；继续交给后续供应商兼容层判断，
+ *   不在这里扩大删除面。
  */
-function replaceEncryptedCompactionItems(body: unknown): Record<string, unknown> | null {
+function rewriteCrossProviderHistoryItems(body: unknown): Record<string, unknown> | null {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
   let changed = false;
-  const input = body.input.map((item) => {
+  const input: unknown[] = [];
+  for (const item of body.input) {
     if (
       isPlainObject(item) &&
       (item.type === 'compaction' || item.type === 'context_compaction') &&
@@ -1831,14 +1836,25 @@ function replaceEncryptedCompactionItems(body: unknown): Record<string, unknown>
       item.encrypted_content.length > 0
     ) {
       changed = true;
-      return {
+      input.push({
         type: 'message',
         role: 'user',
         content: [{ type: 'input_text', text: COMPACTION_UNAVAILABLE_NOTE }],
-      };
+      });
+      continue;
     }
-    return item;
-  });
+    if (isPlainObject(item) && item.type === 'agent_message' && Array.isArray(item.content)) {
+      const content = item.content.filter(
+        (part) => !(isPlainObject(part) && part.type === 'encrypted_content'),
+      );
+      if (content.length !== item.content.length) {
+        changed = true;
+        if (content.length > 0) input.push({ ...item, content });
+        continue;
+      }
+    }
+    input.push(item);
+  }
   return changed ? { ...body, input } : null;
 }
 
@@ -1847,9 +1863,9 @@ export function createCrossProviderCompactionCompatTransform(): RequestTransform
     // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
     // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
     if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
-    const replaced = replaceEncryptedCompactionItems(body);
+    const replaced = rewriteCrossProviderHistoryItems(body);
     if (!replaced) return null;
-    log.info('replaced encrypted compaction history for non-ChatGPT upstream', {
+    log.info('rewrote incompatible Codex history for non-ChatGPT upstream', {
       reqId: ctx.reqId,
       upstreamBase: ctx.upstreamBase,
       threadId: selectedThreadIdFromHeaders(ctx.headers),
@@ -2272,8 +2288,8 @@ function createTransformRequestChain(
     // compatibility transforms inspect the request.
     createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
     createGatewayNativeWebSearchTransform(),
-    // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
-    // 针对具体供应商的 input 归一化才能按标准 message 处理它。
+    // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
+    // 后续针对具体供应商的 input 归一化才能稳定处理。
     createCrossProviderCompactionCompatTransform(),
     createStrictGatewayHistoryCompatTransform(),
     createXaiResponsesCompatTransform(),
