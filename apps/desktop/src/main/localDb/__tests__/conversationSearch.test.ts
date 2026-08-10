@@ -20,7 +20,16 @@ describe('conversationSearch source invariants', () => {
   // renderer 渲染同一个 conversationSearchTitle,两端逐字一致(PR #1031)。
   it('matches session titles through the shared display projection', () => {
     expect(conversationSearchSource).toContain(
-      'fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query)',
+      'conversationSearchTitle(row.title, request.unnamedLabel)',
+    );
+  });
+
+  it('uses schedule run associations when an instance title omits the automation name', () => {
+    expect(conversationSearchSource).toContain(
+      'fetchScheduleNamesBySessionId(sessionIdsWithoutTitleMatch)',
+    );
+    expect(conversationSearchSource).toContain(
+      'bestScheduleNameMatch(scheduleNamesBySessionId.get(row.id), query)',
     );
   });
 

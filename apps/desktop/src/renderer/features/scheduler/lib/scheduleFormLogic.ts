@@ -14,6 +14,7 @@
  *   - buildScheduleInput:表单 → CreateScheduleInput(原 toInput 迁入)
  */
 
+import { renderSessionTitleTemplate } from '@cindy/maker-scheduler/session-title-template';
 import type { CreateScheduleInput, ScheduleTemplate, ScheduleWorkspaceKind, ScriptCapability } from '@cindy/maker-scheduler';
 import {
   effectiveSourceIdForModel,
@@ -154,6 +155,41 @@ export interface ScheduleFormState {
   notifyDesktop: boolean;
   notifyFeishu: boolean;
   notifyWecomGroup?: boolean;
+}
+
+export interface SessionTitleTemplatePreviewInput {
+  form: Pick<
+    ScheduleFormState,
+    'name' | 'timezone' | 'manual' | 'workspaceKind' | 'workingDir' | 'sessionTitleTemplate'
+  >;
+  sampleName: string;
+  locale?: string;
+  scheduledFor?: number;
+  runId?: string;
+}
+
+/**
+ * Render the same fresh-session title context that the scheduler runner will
+ * use. Keeping this pure makes the form preview testable and prevents manual
+ * runs or localized weekday names from drifting from the runtime title.
+ */
+export function renderSessionTitleTemplatePreview({
+  form,
+  sampleName,
+  locale,
+  scheduledFor = Date.now(),
+  runId = '12345678-preview',
+}: SessionTitleTemplatePreviewInput): string {
+  return renderSessionTitleTemplate(form.sessionTitleTemplate, {
+    scheduleName: form.name.trim() || sampleName,
+    timezone: form.timezone.trim() || 'Asia/Shanghai',
+    scheduledFor,
+    source: form.manual ? 'run-now' : 'automatic',
+    workspaceKind: form.workspaceKind,
+    workingDir: form.workingDir,
+    runId,
+    locale,
+  });
 }
 
 /** bound 态"已选绑定但尚未挑会话"的占位 id;validate 用 selectThread 拦截。 */

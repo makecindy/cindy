@@ -19,7 +19,6 @@ import { useFeishuBot } from '@/hooks/useFeishuBot';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
 import {
-  renderSessionTitleTemplate,
   SESSION_TITLE_TEMPLATE_TOKENS,
   validateSessionTitleTemplate,
 } from '@cindy/maker-scheduler/session-title-template';
@@ -47,6 +46,7 @@ import {
   isExplicitScheduleModelUnavailable,
   needsBoundSessionGenerationRouteResolution,
   parsePreRunHookTimeoutMs,
+  renderSessionTitleTemplatePreview,
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   usesBoundSessionGenerationModel,
@@ -142,7 +142,7 @@ export function ScheduleFormDialog({
   editProjectSchedule = false,
   requestedByGhostName = null,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const formApi = useScheduleForm(initial);
   const { form, setField, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   const caps = useAgentCapabilities(form.agentKind);
@@ -194,23 +194,29 @@ export function ScheduleFormDialog({
       return '';
     }
     try {
-      return renderSessionTitleTemplate(sessionTitleTemplateValidation.template, {
-        scheduleName: form.name.trim() || t('scheduler.editor.sessionTitleTemplate.sampleName'),
-        timezone: form.timezone.trim() || 'Asia/Shanghai',
-        scheduledFor: Date.now(),
-        source: 'automatic',
-        workspaceKind: form.workspaceKind,
-        workingDir: form.workingDir,
-        runId: '12345678-preview',
+      return renderSessionTitleTemplatePreview({
+        form: {
+          name: form.name,
+          timezone: form.timezone,
+          manual: form.manual,
+          workspaceKind: form.workspaceKind,
+          workingDir: form.workingDir,
+          sessionTitleTemplate: sessionTitleTemplateValidation.template,
+        },
+        sampleName: t('scheduler.editor.sessionTitleTemplate.sampleName'),
+        locale: i18n.resolvedLanguage ?? i18n.language,
       });
     } catch {
       return '';
     }
   }, [
     form.name,
+    form.manual,
     form.timezone,
     form.workspaceKind,
     form.workingDir,
+    i18n.language,
+    i18n.resolvedLanguage,
     sessionTitleTemplateValidation,
     t,
   ]);

@@ -57,6 +57,7 @@ import {
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getSessionRowSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
+import { getResolvedMainLocale } from '../i18n.js';
 import {
   getSessionProvider,
   setSessionProvider,
@@ -979,6 +980,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // for this run, so {projectName} stays stable across fires.
             workingDir: schedule.workingDir,
             runId: ctx.runId,
+            locale: getResolvedMainLocale(),
           }) || legacySessionTitle;
       } catch (err) {
         // A corrupted row must never fail a scheduled run. Validation normally happens in

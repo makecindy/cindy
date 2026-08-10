@@ -1060,6 +1060,8 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    // 全局会话搜索按实例 session 查所属自动化名称，再与 schedules 连接。
+    idxBySessionSchedule: index('idx_schedule_runs_session_schedule').on(t.sessionId, t.scheduleId),
   }),
 );
 

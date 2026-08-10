@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   wireSessionToIpc: vi.fn(),
   resolveWorkingDir: vi.fn(),
   backfillSessionMeta: vi.fn(),
+  getResolvedMainLocale: vi.fn(() => 'en-US'),
 }));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -49,6 +50,10 @@ vi.mock('../workdir-resolver', () => ({
 
 vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
+}));
+
+vi.mock('../../i18n.js', () => ({
+  getResolvedMainLocale: mocks.getResolvedMainLocale,
 }));
 
 import { MakerScheduleRunner } from '../runner';
@@ -182,6 +187,7 @@ describe('MakerScheduleRunner workingDir fallback(未指定目录回退 dialogue
     mocks.ensureDialogueWorkspaceDir.mockReturnValue('/managed/dialogue/dir');
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/wt/dir' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    mocks.getResolvedMainLocale.mockReturnValue('en-US');
   });
 
   it('project 形态但 workingDir 缺失 → 分配 dialogue 工作区而非报错(MCP 建任务常见形态)', async () => {
@@ -347,6 +353,24 @@ describe('MakerScheduleRunner workingDir fallback(未指定目录回退 dialogue
 
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ title: '[Schedule] fallback' }),
+    );
+  });
+
+  it('uses the resolved app locale when rendering weekday titles', async () => {
+    mocks.getResolvedMainLocale.mockReturnValue('zh-CN');
+    const h = createSessionHarness();
+    const { runner, createSession } = createRunnerHarness(h.session);
+
+    await fireToCompletion(
+      runner,
+      baseSchedule({ sessionTitleTemplate: '{weekday}' }),
+      h,
+      createFireContext({ scheduledFor: Date.UTC(2026, 7, 10, 1, 0) }),
+    );
+
+    expect(mocks.getResolvedMainLocale).toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '周一' }),
     );
   });
 });

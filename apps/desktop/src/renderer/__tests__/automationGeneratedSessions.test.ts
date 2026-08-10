@@ -354,6 +354,7 @@ describe('automation-generated sessions', () => {
         }),
       ],
     ]);
+    // 两个实例标题模拟 `{date} deploy {runId:short}`，只能依赖稳定的 scheduleId 聚合。
     const sessions = [
       makeSession({
         id: 'manual',
@@ -363,13 +364,13 @@ describe('automation-generated sessions', () => {
       }),
       makeSession({
         id: 'jira-2',
-        title: 'BUG-2',
+        title: '2026-08-11 deploy 12345678',
         source: 'scheduler',
         userSendAt: '2026-01-04T00:00:00.000Z',
       }),
       makeSession({
         id: 'jira-1',
-        title: 'BUG-1',
+        title: '2026-08-10 deploy abcdefgh',
         source: 'scheduler',
         userSendAt: '2026-01-03T00:00:00.000Z',
       }),
