@@ -340,7 +340,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[9rem]">
-          <DropdownMenuLabel className="px-2 py-1 text-[12px] font-medium text-[var(--text-secondary)]">
+          <DropdownMenuLabel className="px-2 py-1 text-xs font-medium text-[var(--text-secondary)]">
             {t('rightSidebar.browser.pageZoom')}
           </DropdownMenuLabel>
           <DropdownMenuGroup className="flex items-center gap-1 px-1 pb-1">
@@ -358,7 +358,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
               title={t('rightSidebar.browser.resetZoom')}
               disabled={normalizedZoomFactor === DEFAULT_BROWSER_ZOOM_FACTOR}
               onSelect={(event) => keepMenuOpen(event, DEFAULT_BROWSER_ZOOM_FACTOR)}
-              className="flex h-7 flex-1 justify-center rounded-full px-2 text-[12px]"
+              className="flex h-7 flex-1 justify-center rounded-full px-2 text-xs"
             >
               {formatBrowserZoomFactor(normalizedZoomFactor)}
             </DropdownMenuItem>
