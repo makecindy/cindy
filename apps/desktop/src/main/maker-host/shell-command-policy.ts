@@ -1150,6 +1150,15 @@ function maskQuotedAndCommentRegions(
       index += 1;
       continue;
     }
+    // `<<<` is a here-string operator, not a heredoc opener; mask all three
+    // characters so the scanner cannot match a `<<EOF` from the second `<`.
+    if (char === '<' && line[index + 1] === '<' && line[index + 2] === '<') {
+      masked[index] = ' ';
+      masked[index + 1] = ' ';
+      masked[index + 2] = ' ';
+      index += 2;
+      continue;
+    }
     // A real heredoc marker keeps its delimiter word and quoting unmasked:
     // the quotes in `<<'END'` are syntax, not text.
     if (char === '<' && line[index + 1] === '<' && line[index + 2] !== '<') {

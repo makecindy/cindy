@@ -266,6 +266,10 @@ PY`,
     `node - <<'JS'
 require("child_process").execSync(\`xcr\${'un'} sim\${'ctl'} shutdown DEVICE\`)
 JS`,
+    `cat <<<EOF
+$(printf xcr) $(printf un) shutdown DEVICE`,
+    `cat <<< EOF
+$(printf xcr) $(printf un) shutdown DEVICE`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
     `python3 -c 'import subprocess; subprocess.run(["/usr/bin/open","-a","Simulator"])'`,
@@ -402,6 +406,8 @@ PY`,
 const name = "world";
 console.log(\`hello \${name}\`);
 JS`,
+    `cat <<<hello`,
+    `cat <<< 'simctl'`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',
     'find . -maxdepth 1 -name simctl',
