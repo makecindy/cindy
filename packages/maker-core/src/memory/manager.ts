@@ -398,7 +398,10 @@ export class MakerMemoryManager {
     const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
     let total = 0;
     const activeDirs = new Set<string>();
-    for (const [workdir, { store }] of this.stores) {
+    // 入口快照池 — owner 切换时 closeAllStores 会 clear Map, for-of 直遍历会提前
+    // 结束; 用快照保证循环体仍按原 owner 的 store 逐项复核+处理 (review #2388)。
+    const storeSnapshot = [...this.stores.entries()];
+    for (const [workdir, { store }] of storeSnapshot) {
       // 迭代前复核 (review #2388 第三轮 P1): resetType 自身 await (list/delete),
       // 期间 owner 切换会使本循环持有的 store 被 closeAllStores 关闭 —— 必须先
       // 复核再操作, 不得在切换后继续用已失效的 store。
@@ -441,6 +444,14 @@ export class MakerMemoryManager {
         }
       }
     }
+    // 删除后复核 (review #2388 Greptile 4th): 目标 root 在入口已固定为操作开始时
+    // owner, 执行期间切换不改变删除对象 (旧 owner 数据), 但记录日志让「跨边界、
+    // 结果可能不完整」可观测。
+    if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
+      this.logger.warn('resetDigests crossed owner boundary; target fixed to scope at entry (result may be partial)', {
+        scopeAtEntry,
+      });
+    }
     return { removedCount: total };
   }
 
@@ -482,6 +493,14 @@ export class MakerMemoryManager {
       try { db.close(); } catch { /* swallow */ }
     }
     this.stores.clear();
+    // 删除后复核 (review #2388 Greptile 4th): 目标 root 在入口已固定为操作开始时
+    // owner, 执行期间切换不改变删除对象 (旧 owner 数据), 但记录日志让「跨边界、
+    // 结果可能不完整」可观测。
+    if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
+      this.logger.warn('resetAll crossed owner boundary; target fixed to scope at entry (result may be partial)', {
+        scopeAtEntry,
+      });
+    }
     return { removedCount: total };
   }
 
