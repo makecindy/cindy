@@ -16,10 +16,12 @@
  * 本模块只做纯数据变换(node 可单测);上传路由、enqueue RPC、React state 接线
  * 在 [sessionId].tsx。
  *
- * 生命周期与 Desktop 的 device-link renderer outbox 对齐：队列只在当前客户端进程内
- * 自动重连续发，不承诺 App 重启后恢复。正常切任务 / 退屏由页面 cleanup 把尚未派发的
- * 正文接回草稿；若未来要跨进程恢复，必须单独设计可对账的持久 outbox，不能把草稿库
- * 当 write-ahead log（它没有消息边界、附件任务或远端 acceptance 状态）。
+ * 生命周期边界：队列只拥有尚未开始 enqueue、或能证明请求尚未发出的条目，并在当前
+ * 会话页存活期间自动重连续发。正常切任务 / 退屏由页面 cleanup 把这些正文接回草稿；
+ * 一旦 enqueue 已开始，所有权转给既有在线发送 / optimistic projection 路径，回执不确定
+ * 的写请求绝不重新降级成会丢 clientId 的草稿。若未来要跨页面或跨进程继续自动重试，
+ * 必须单独设计可对账的 outbox owner，不能把草稿库当 write-ahead log（它没有消息边界、
+ * 附件任务或远端 acceptance 状态）。
  */
 import { i18n } from '@/i18n';
 import type { MobileSessionReference } from '@/session/sessionReferences';

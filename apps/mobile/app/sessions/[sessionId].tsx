@@ -705,14 +705,6 @@ function isAutoRecoveringSessionReferencePreparationError(err: unknown): boolean
     || (err instanceof MobileSessionReferenceError && err.code === 'SESSION_REFERENCE_OFFLINE');
 }
 
-/**
- * 明确未发出的连接失败和「请求可能已到桌面、只丢了回执」都留在 outbox。
- * 后一类必须复用原 clientId 重试，由桌面 enqueue 幂等去重，不能恢复草稿后生成新 id。
- */
-function shouldWaitForOutboxEnqueueRecovery(err: unknown): boolean {
-  return isSafelyUnsentOutboxEnqueueError(err) || isAutoRecoveringRemoteError(err);
-}
-
 /** enqueue 对可安全重发的瞬时传输错误做有界退避。 */
 const ENQUEUE_RECONNECT_RETRIES = 3;
 const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
@@ -5557,23 +5549,46 @@ export default function SessionScreen() {
       );
     } catch (err) {
       // 与原路径同口径:先对账分辨「确实没应用」vs「已应用但响应丢了」。
-      const applied = await (async (): Promise<boolean> => {
-        const authorityEpochAtReconcileStart =
-          remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
+      const safeToRetry = isSafelyUnsentOutboxEnqueueError(err);
+      const acceptanceUnknown = !safeToRetry && isAutoRecoveringRemoteError(err);
+      if (acceptanceUnknown) {
+        // 写请求已出、回执不确定时，fresh projection 不含 clientId 也不能证明没应用：
+        // 空闲 agent 可能已把消息从 pendingQueue 取进 active turn。只在 fresh 明确
+        // 含原 id 时吸收它；否则保留现有 optimistic projection，交给后续权威同步
+        // 收敛。这里绝不回 outbox / 草稿，避免离场后用新 id 重发造成重复执行。
         try {
+          const projectionEpochAtRequestStart =
+            remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
+          const fresh = await maker.input.getProjection(item.sessionId);
+          if (fresh.pendingQueue.some((entry) => entry.clientId === queued.clientId)) {
+            remoteSessionStore.setInputProjectionIfCurrent(
+              item.sessionId,
+              fresh,
+              projectionEpochAtRequestStart,
+            );
+          }
+        } catch {
+          // 自动恢复同步会继续收敛；当前 optimistic clientId 仍是唯一 Mobile owner。
+        }
+        if (outboxSessionAliveRef.current === item.sessionId) {
+          setError(formatRemoteError(err));
+        }
+        return;
+      }
+      const applied = await (async () => {
+        try {
+          const projectionEpochAtRequestStart =
+            remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
           const fresh = await maker.input.getProjection(item.sessionId);
           remoteSessionStore.setInputProjectionIfCurrent(
             item.sessionId,
             fresh,
-            authorityEpochAtReconcileStart,
+            projectionEpochAtRequestStart,
           );
-          // applied 判定只认这次 RPC 返回的权威 projection。fence 被 turn boundary
-          // 拒绝时，本地 store 仍可能只是我们刚 append 的乐观项，绝不能拿来自证。
+          // safeToRetry 时 fresh 是同 clientId 先前重试是否已经生效的唯一证据；本地
+          // optimistic pendingQueue 不能自证。确定性远端失败也沿用同一权威口径。
           return fresh.pendingQueue.some((entry) => entry.clientId === queued.clientId);
         } catch {
-          // 本地乐观 projection 本来就含这个 clientId，不能拿它自证送达；通用
-          // authority epoch 还会被 turn boundary 推进，并不代表 pendingQueue 收到
-          // 了权威替换。对账失败时一律按「无法证明已送达」处理。
           return false;
         }
       })();
@@ -5583,7 +5598,7 @@ export default function SessionScreen() {
           ...current,
           pendingQueue: current.pendingQueue.filter((entry) => entry.clientId !== queued.clientId),
         });
-        if (shouldWaitForOutboxEnqueueRecovery(err)) {
+        if (safeToRetry) {
           waitForConnection(err);
           return 'deferred' as const;
         }
@@ -5591,8 +5606,8 @@ export default function SessionScreen() {
       }
       // applied:消息已在桌面队列,按成功继续(不回滚、不报错)。
     } finally {
-      // 落定(入队确认 / 回 outbox 标失败)后收掉转圈:失败条目的气泡由 outbox 侧
-      // 重新持有(它自己画错误徽标),排队行里不该留下悬空的在途标记。
+      // 入队确认、回 outbox / 失败，或转交 optimistic projection 等待权威同步后，
+      // 都不再是当前 RPC 在途；收掉 sending 标记，避免后续同 id 气泡悬空转圈。
       clearQueueItemSending(queued.clientId);
     }
     // enqueue / 对账期间离场时，成功路径无需恢复草稿，但旧 pump 也绝不能接着
@@ -6235,9 +6250,6 @@ export default function SessionScreen() {
       }
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
       const sendAttachments = attachmentsRef.current;
-      const sendAttachmentPreviews = sendAttachments.map(
-        (attachment) => attachmentPreviews[attachment.id] ?? null,
-      );
       // currentSession 同理是等待前的快照:上传等待期间(sending 不锁控制面板)用户
       // 可能已切 model / effort / permission / fast,重读 store 拿最新会话字段,
       // 排队消息与 UI 显示的运行时保持一致(codex review R19)。
@@ -6552,25 +6564,24 @@ export default function SessionScreen() {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:弱网下 enqueue 的 invoke
         // 响应可能超时丢失而桌面端已入队——此时摘除气泡会让手机隐藏一条桌面将处理的
         // 消息,用户重发即重复(codex review R19)。优先 refetch 权威 projection 判断,
-        // refetch 失败时不能拿本地乐观 projection 自证送达。
-        const applied = await (async (): Promise<boolean> => {
-          const authorityEpochAtReconcileStart =
-            remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
+        // refetch 也失败再退回本地 store(订阅推送在此窗口内可能已带回该 clientId)。
+        const applied = await (async () => {
           try {
+            const projectionEpochAtRequestStart =
+              remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
             const fresh = await maker.input.getProjection(sessionId);
-            remoteSessionStore.setInputProjectionIfCurrent(
+            const accepted = remoteSessionStore.setInputProjectionIfCurrent(
               sessionId,
               fresh,
-              authorityEpochAtReconcileStart,
+              projectionEpochAtRequestStart,
             );
-            // store 写入可被更新的 turn boundary 挡住，但送达证据只来自刚返回的
-            // 权威 projection；本地乐观 pendingQueue 没有证明资格。
-            return fresh.pendingQueue.some((item) => item.clientId === queued.clientId);
+            // If a newer push/terminal boundary won the fence, the fetched value is
+            // stale for both the mirror and the applied decision; consult current state.
+            const current = accepted ? fresh : remoteSessionStore.getInputProjection(sessionId);
+            return current.pendingQueue.some((item) => item.clientId === queued.clientId);
           } catch {
-            // 本地乐观 projection 不能自证送达；通用 authority epoch 还会被 turn
-            // boundary 推进，并不代表 pendingQueue 收到权威替换。对账失败时一律
-            // 按「无法证明已送达」处理。
-            return false;
+            return remoteSessionStore.getInputProjection(sessionId).pendingQueue
+              .some((item) => item.clientId === queued.clientId);
           }
         })();
         if (!applied) {
@@ -6581,52 +6592,18 @@ export default function SessionScreen() {
             ...current,
             pendingQueue: current.pendingQueue.filter((item) => item.clientId !== queued.clientId),
           });
-          const recoverableItem = buildOutboxItem({
-            clientId: queued.clientId,
-            sessionId,
-            text,
-            quotesEncoded: quotesEncodedAtSend,
-            sessionRefs: sessionRefsAtSend,
-            agentReferences: agentReferencesAtSend,
-            pastedTextRanges: pastedTextRangesAtSend,
-            slashCommandRanges: slashCommandRangesAtSend ?? [],
-            permissionModeAtSend: sessionAtSend.permissionMode,
-            readyAttachments: sendAttachments,
-            readyPreviews: sendAttachmentPreviews,
-            claimedUploads: [],
-          });
-          if (outboxSessionAliveRef.current !== sessionId) {
-            // await 期间原地切任务 / 退屏：两类失败都不能恢复进 B 的 composer，
-            // 也不能继续执行后续 UI 清理。交回 A 的持久草稿后直接收口。
-            salvageOutboxItem(recoverableItem);
-            return;
-          }
-          if (shouldWaitForOutboxEnqueueRecovery(err) && !legacyPlanRequiresLiveDispatch) {
-            // 明确未发出或 enqueue 已到桌面但回执不确定：都把同一 clientId/内容
-            // 接回 outbox。恢复后同 id 重试由桌面幂等去重，不能恢复草稿让用户用
-            // 新 id 重发，否则第一次其实已执行时会产生重复任务。
-            updateOutbox((items) => (
-              items.some((item) => item.clientId === recoverableItem.clientId)
-                ? replaceOutboxItem(items, recoverableItem)
-                : [recoverableItem, ...items]
-            ));
-            setError(formatRemoteError(err));
-          } else {
-            // 旧协议 Plan 依赖实时会话权限，不能在这里转入恢复后自动重试的 outbox；
-            // 沿用改动前的在线失败收口，把内容与附件完整交还 composer。
-            // 合并而非替换(与成功路径的差集清理对称,codex review R11):enqueue 在途期间
-            // 新落定的附件已进 attachments / ref,整体覆盖会把它从托盘丢掉且预览映射残留、
-            // OSS 中转对象失去 UI 移除路径;恢复本批的同时保留期间新增。
-            const restoredIds = new Set(sendAttachments.map((attachment) => attachment.id));
-            const mergeRestored = (current: RemoteSerializedAttachment[]) => [
-              ...sendAttachments,
-              ...current.filter((attachment) => !restoredIds.has(attachment.id)),
-            ];
-            attachmentsRef.current = mergeRestored(attachmentsRef.current);
-            setAttachments(mergeRestored);
-            restoreDirectSendDraftAfterFailure();
-            throw err;
-          }
+          // 在线直发一旦开始 enqueue 就不再转入本 PR 的页面 outbox。该 outbox 只
+          // 拥有写请求开始前已知要等待的消息；在线失败继续沿用既有收口，避免为
+          // 离场回执不确定场景新增跨页 clientId owner。
+          const restoredIds = new Set(sendAttachments.map((attachment) => attachment.id));
+          const mergeRestored = (current: RemoteSerializedAttachment[]) => [
+            ...sendAttachments,
+            ...current.filter((attachment) => !restoredIds.has(attachment.id)),
+          ];
+          attachmentsRef.current = mergeRestored(attachmentsRef.current);
+          setAttachments(mergeRestored);
+          restoreDirectSendDraftAfterFailure();
+          throw err;
         }
         // applied:消息已在桌面队列(权威 / 推送 projection 已含该 clientId),
         // 按成功继续——不回滚、不报错,后续收尾(plan 恢复 / 映射清理)照常执行。

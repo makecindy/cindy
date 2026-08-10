@@ -160,9 +160,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     );
     expect(source).toContain('applyComposerDocument(recovery.document);');
     expect((source.match(/restoreDirectSendDraftAfterFailure\(\)/g) ?? [])).toHaveLength(4);
-    expect(source).toContain(
-      'if (shouldWaitForOutboxEnqueueRecovery(err) && !legacyPlanRequiresLiveDispatch) {',
-    );
+    expect(source).not.toContain('shouldWaitForOutboxEnqueueRecovery');
     expect(source).toContain('maker.setPlanMode(sessionId, next)');
     expect(source).not.toContain('restoreOnly');
     expect(source).not.toContain('legacyPlanRecovery');
@@ -179,35 +177,40 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain("setError(t('session.menu.aiRenameOffline'));");
   });
 
-  it('defers disconnect races instead of turning them into failed or falsely delivered messages', () => {
+  it('keeps the page outbox on the pre-write side of the enqueue ownership boundary', () => {
     const source = readSource(SCREEN);
-    const recoveryHelperStart = source.indexOf('function shouldWaitForOutboxEnqueueRecovery');
-    const recoveryHelperEnd = source.indexOf('\n}', recoveryHelperStart);
-    const recoveryHelper = source.slice(recoveryHelperStart, recoveryHelperEnd);
+    const outboxStart = source.indexOf('const dispatchOutboxItem = async (item: MobileOutboxItem) => {');
+    const directStart = source.indexOf('const queuedDraft = buildQueuedTextMessage(');
+    const directEnd = source.indexOf('// applied:消息已在桌面队列', directStart);
+    const outboxDispatch = source.slice(outboxStart, directStart);
+    const directRecovery = source.slice(directStart, directEnd);
+    const unknownStart = outboxDispatch.indexOf('if (acceptanceUnknown) {');
+    const unknownEnd = outboxDispatch.indexOf('const applied = await', unknownStart);
+    const acceptanceUnknownRecovery = outboxDispatch.slice(unknownStart, unknownEnd);
 
     expect(source).toContain('const waitForConnection = (');
     expect(source).toContain('const waiting = outboxItemWaitingForConnection(item);');
     expect(source).toContain("if (result === 'deferred' || result === 'stopped') return;");
     expect(source).toContain("return 'stopped' as const;");
-    expect(source).toContain('isSafelyUnsentOutboxEnqueueError(err)');
-    expect(recoveryHelper).toContain('isSafelyUnsentOutboxEnqueueError(err)');
-    expect(recoveryHelper).toContain('isAutoRecoveringRemoteError(err)');
-    // direct 与 outbox-originated enqueue 都必须用同一判据，把回执不确定项保留在
-    // 原 clientId 上自动重试；不能一条自动等、另一条退回草稿生成新 id。
-    expect((source.match(/shouldWaitForOutboxEnqueueRecovery\(err\)/g) ?? []))
-      .toHaveLength(2);
-    expect((source.match(/按「无法证明已送达」处理。\n\s+return false;/g) ?? [])).toHaveLength(2);
-    expect(source).not.toContain('const authorityAdvanced = remoteSessionStore.captureInputProjectionAuthorityEpoch(');
+    expect(source).toContain('const safeToRetry = isSafelyUnsentOutboxEnqueueError(err);');
+    expect(source).toContain(
+      'const acceptanceUnknown = !safeToRetry && isAutoRecoveringRemoteError(err);',
+    );
+    expect(source).toContain('if (safeToRetry) {\n          waitForConnection(err);');
+    // 回执不确定时只保留原 optimistic projection，不能把已开始写的消息重新交给
+    // page-local outbox / 草稿；后者离场时没有跨页 clientId owner。
+    expect(acceptanceUnknownRecovery).toContain('fresh.pendingQueue.some(');
+    expect(acceptanceUnknownRecovery).toContain('setError(formatRemoteError(err));');
+    expect(acceptanceUnknownRecovery).not.toContain('failItem(');
+    expect(acceptanceUnknownRecovery).not.toContain('waitForConnection(');
+    expect(acceptanceUnknownRecovery).not.toContain('salvageOutboxItem(');
+    expect(outboxDispatch).toContain('return fresh.pendingQueue.some(');
+    expect(source).not.toContain('shouldWaitForOutboxEnqueueRecovery');
     expect(source).toContain('isAutoRecoveringSessionReferencePreparationError(err)');
-    expect(source).toContain('const recoverableItem = buildOutboxItem({');
-    expect(source).toContain('if (outboxSessionAliveRef.current !== sessionId) {');
-    expect(source).toContain('salvageOutboxItem(recoverableItem);\n            return;');
-    expect(source).toContain('setError(formatRemoteError(err));');
-    // enqueue 对账是否已送达只能看刚拉回的权威 projection。即使 store 写入被较新的
-    // turn boundary 拒绝，也不能退回本地乐观 pendingQueue 自证成功。
-    expect((source.match(/return fresh\.pendingQueue\.some/g) ?? [])).toHaveLength(2);
-    expect(source).not.toContain('const current = accepted ? fresh : remoteSessionStore.getInputProjection');
-    expect(source).not.toContain('const accepted = remoteSessionStore.setInputProjectionIfCurrent');
+    expect(directRecovery).not.toContain('buildOutboxItem({');
+    expect(directRecovery).not.toContain('salvageOutboxItem(');
+    expect(directRecovery).not.toContain('updateOutbox(');
+    expect(directRecovery).toContain('在线直发一旦开始 enqueue 就不再转入本 PR 的页面 outbox');
   });
 
   it('keeps retrying authoritative recovery syncs with bounded backoff', () => {
