@@ -39,6 +39,8 @@ type ClaimState =
   | { kind: 'envelope'; raw: string; envelope: LegacySidebarEnvelope }
   | { kind: 'malformed'; raw: string };
 
+type ScopedWritePlan = 'blocked' | 'initialize-envelope' | 'write';
+
 let ownerAuthorityReaderForTest: OwnerAuthorityReader | null = null;
 let cachedMainAuthority: {
   token: number;
@@ -206,6 +208,35 @@ function sameAuthority(left: OwnerAuthority, right: OwnerAuthority): boolean {
   return left.dataOwnerId === right.dataOwnerId && left.ownerGeneration === right.ownerGeneration;
 }
 
+/**
+ * Decide the only safe transition before a first owner-scoped write.
+ *
+ * Existing scoped state is already authoritative. Otherwise an unresolved or
+ * malformed shared claim must not be shadowed; a known foreign claim is safe
+ * because its legacy snapshot can never belong to the current owner.
+ */
+function scopedWritePlan(
+  state: ClaimState,
+  ownerId: string,
+  authority: OwnerAuthority,
+  hasScopedValue: boolean,
+): ScopedWritePlan {
+  if (hasScopedValue) return 'write';
+
+  switch (state.kind) {
+    case 'absent':
+      return authority.claimed && authority.canInitialize ? 'initialize-envelope' : 'blocked';
+    case 'bare':
+      if (state.ownerId !== ownerId) return 'write';
+      return authority.claimed && authority.canInitialize ? 'initialize-envelope' : 'blocked';
+    case 'envelope':
+      if (state.envelope.ownerId !== ownerId) return 'write';
+      return authority.claimed ? 'write' : 'blocked';
+    case 'malformed':
+      return 'blocked';
+  }
+}
+
 function initializeLegacyEnvelope(
   storage: Storage,
   ownerId: string,
@@ -293,17 +324,6 @@ function getLegacyEnvelope(
   return initializeLegacyEnvelope(storage, ownerId, state, authority);
 }
 
-/**
- * The first current Main data owner atomically claims a complete snapshot of
- * all unscoped renderer sidebar values. Malformed/foreign claims fail closed.
- */
-export function claimLegacySidebarOwner(ownerId: string | null): boolean {
-  if (!ownerId) return false;
-  const storage = safeStorage();
-  const authority = readOwnerAuthority(ownerId);
-  return storage && authority ? getLegacyEnvelope(storage, ownerId, authority) !== null : false;
-}
-
 /** Read scoped state first, then the immutable first-upgrade fallback. */
 export function readSidebarOwnerStorage(baseKey: string, ownerId: string | null): string | null {
   if (!ownerId) return null;
@@ -334,17 +354,9 @@ export function writeSidebarOwnerStorage(
     const state = readClaimState(storage);
     const scopedKey = sidebarOwnerStorageKey(baseKey, ownerId);
     const hasScopedValue = storage.getItem(scopedKey) !== null;
-    const sameOwnerReservation =
-      (state.kind === 'envelope' && state.envelope.ownerId === ownerId) ||
-      (state.kind === 'bare' && state.ownerId === ownerId);
-    if (!hasScopedValue && sameOwnerReservation && !authority.claimed) {
-      return false;
-    }
-    if (
-      authority.claimed &&
-      (state.kind === 'absent' || (state.kind === 'bare' && state.ownerId === ownerId)) &&
-      getLegacyEnvelope(storage, ownerId, authority) === null
-    ) {
+    const plan = scopedWritePlan(state, ownerId, authority, hasScopedValue);
+    if (plan === 'blocked') return false;
+    if (plan === 'initialize-envelope' && getLegacyEnvelope(storage, ownerId, authority) === null) {
       return false;
     }
     storage.setItem(scopedKey, value);

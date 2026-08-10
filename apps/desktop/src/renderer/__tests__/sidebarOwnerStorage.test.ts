@@ -136,6 +136,20 @@ describe('sidebar owner-scoped renderer storage', () => {
     expect(localStorage.getItem(PROJECTS_KEY)).toBe('["uncaptured"]');
   });
 
+  it('blocks a first scoped write while shared legacy ownership is unresolved', () => {
+    localStorage.setItem(PROJECTS_KEY, '["legacy"]');
+    __testing.setOwnerAuthorityReader((ownerId) =>
+      ownerId === 'owner-a'
+        ? { ...OWNER_A, claimed: false, canInitialize: false }
+        : null,
+    );
+
+    expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["default-derived"]')).toBe(false);
+    expect(localStorage.getItem(__testing.OWNER_CLAIM_KEY)).toBeNull();
+    expect(localStorage.getItem(sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a'))).toBeNull();
+    expect(localStorage.getItem(PROJECTS_KEY)).toBe('["legacy"]');
+  });
+
   it('does not shadow a same-owner envelope while its durable marker is unavailable', () => {
     localStorage.setItem(PROJECTS_KEY, '["legacy"]');
     expect(readSidebarOwnerStorage(PROJECTS_KEY, 'owner-a')).toBe('["legacy"]');
@@ -346,6 +360,15 @@ describe('sidebar owner-scoped renderer storage', () => {
       expect(readSidebarOwnerStorage(PROJECTS_KEY, 'owner-a')).toBeNull();
       expect(localStorage.getItem(PROJECTS_KEY)).toBe('["legacy"]');
     }
+  });
+
+  it('does not create first scoped state while the shared claim is malformed', () => {
+    localStorage.setItem(__testing.OWNER_CLAIM_KEY, 'broken');
+    localStorage.setItem(PROJECTS_KEY, '["legacy"]');
+
+    expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["default-derived"]')).toBe(false);
+    expect(localStorage.getItem(sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a'))).toBeNull();
+    expect(localStorage.getItem(PROJECTS_KEY)).toBe('["legacy"]');
   });
 
   it('still reads and writes explicit scoped state when a claim is malformed', () => {

@@ -652,21 +652,43 @@ type LegacySidebarClaimResult = 'blocked' | 'ready' | 'snapshot-changed';
 function initializeScopedSidebarSettings(
   scopedPath: string,
   ownerKey: string,
+  legacyPath?: string,
 ): LegacySidebarClaimResult {
+  const initialContents = legacyPath ? readReadableSidebarSettingsFile(legacyPath) : '{}';
+  if (initialContents === null) {
+    log.warn('failed to initialize sidebar settings owner namespace', {
+      ownerKey,
+      errorCode: 'INVALID_SETTINGS',
+    });
+    return 'blocked';
+  }
+
   const temporaryPath = `${scopedPath}.init-${process.pid}-${randomUUID()}`;
   try {
     fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
-    // File existence is the durable "legacy checked" bit. Keep the object
-    // empty so Renderer localStorage pins may still perform their own migration.
+    // Preserve a root file as the parent release's compatibility state. The
+    // scoped snapshot is the current release's immutable first-upgrade input;
+    // later ownerless root writes are intentionally not re-imported. When no
+    // root exists, an empty object is the durable "legacy checked" bit while
+    // still allowing Renderer localStorage pins to perform their own migration.
+    fs.writeFileSync(temporaryPath, initialContents, {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: 0o600,
+    });
     // Linking a fully written same-directory temporary file publishes it
     // atomically without overwriting a snapshot created by another process.
-    fs.writeFileSync(temporaryPath, '{}', { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
     fs.linkSync(temporaryPath, scopedPath);
-    log.info('sidebar settings owner namespace initialized', { ownerKey });
+    log.info(
+      legacyPath
+        ? 'legacy sidebar settings copied into owner namespace'
+        : 'sidebar settings owner namespace initialized',
+      { ownerKey },
+    );
     return 'snapshot-changed';
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-      return isReadableSidebarSettingsFile(scopedPath) ? 'snapshot-changed' : 'blocked';
+      return readReadableSidebarSettingsFile(scopedPath) !== null ? 'snapshot-changed' : 'blocked';
     }
     log.warn('failed to initialize sidebar settings owner namespace', {
       ownerKey,
@@ -677,19 +699,21 @@ function initializeScopedSidebarSettings(
     try {
       fs.unlinkSync(temporaryPath);
     } catch {
-      // The temporary file contains only an empty object and is never an authority.
+      // The temporary file is never authoritative until its hard link exists.
     }
   }
 }
 
-function isReadableSidebarSettingsFile(file: string): boolean {
+function readReadableSidebarSettingsFile(file: string): string | null {
   try {
     const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.size > MAX_SETTINGS_BYTES) return false;
-    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+    if (!stat.isFile() || stat.size > MAX_SETTINGS_BYTES) return null;
+    const raw = fs.readFileSync(file, 'utf-8');
+    if (Buffer.byteLength(raw, 'utf-8') > MAX_SETTINGS_BYTES) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? raw : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -715,18 +739,7 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
     return initializeScopedSidebarSettings(scopedPath, ownerKey);
   }
   if (legacyPathState === 'blocked') return 'blocked';
-  try {
-    fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
-    fs.renameSync(legacyPath, scopedPath);
-    log.info('legacy sidebar settings moved into owner namespace', { ownerKey });
-    return 'snapshot-changed';
-  } catch (err) {
-    log.warn('failed to migrate legacy sidebar settings', {
-      ownerKey,
-      errorCode: sidebarSettingsErrorCode(err),
-    });
-    return 'blocked';
-  }
+  return initializeScopedSidebarSettings(scopedPath, ownerKey, legacyPath);
 }
 
 export function registerSidebarSettingsIpc(): void {
