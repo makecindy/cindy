@@ -132,6 +132,9 @@ export default defineConfig(({ mode }) => {
         // Externalize it explicitly and ship the package via forge's
         // NATIVE_RUNTIME_DEPS (protobufjs >=7.6 dropped `@protobufjs/inquire`).
         external: [
+          // Electron's unpatched filesystem implementation. The legacy userData
+          // migration needs physical .asar files to remain ordinary files.
+          'original-fs',
           'bufferutil',
           'utf-8-validate',
           'better-sqlite3',

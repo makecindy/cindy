@@ -67,7 +67,7 @@ describe('composer session-link chip presentation', () => {
     expect(chip.getAttribute('title')).toBeNull();
     expect(chip.getAttribute('aria-label')).toBe('First line\n\nsecond line');
     expect(chip.className).toContain('rounded-full');
-    expect(chip.className).toContain('text-[12px]');
+    expect(chip.className).toContain('text-12');
     expect(chip.className).toContain('border-[var(--border-default)]');
     expect(chip.querySelector('path')?.getAttribute('d')).toBe(
       'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',

@@ -14,10 +14,11 @@ import {
   StyleSheet,
   Switch,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Check, ChevronDown, ChevronRight, X } from 'lucide-react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ChevronDown, ChevronRight, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { DeviceView } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
@@ -87,6 +88,11 @@ import {
 } from '@/update/manualUpdateCheck';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
+import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
+import { SheetModal } from '@/session/SheetModal';
+import { SheetSurface } from '@/session/SheetSurface';
+import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
+import type { MobileChoiceOption } from '@/session/agentCapabilities';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -96,8 +102,12 @@ type SelfDeviceNameQueuedWrite =
   | { kind: 'rename'; name: string; options: SelfDeviceNameSaveOptions }
   | { kind: 'reset' };
 const SETTINGS_DEVICE_TIMEOUT_MS = 12_000;
-// 显示语言选项:「跟随系统」在前,4 种具体语言在后(与 desktop LanguageSection 同序)。
-const LANGUAGE_OPTIONS: readonly LocalePreference[] = ['system', ...SUPPORTED_LOCALES];
+// 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列。
+const LANGUAGE_OPTIONS: readonly LocalePreference[] = [
+  'system',
+  'en',
+  ...SUPPORTED_LOCALES.filter((locale) => locale !== 'en'),
+];
 
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
@@ -106,6 +116,8 @@ export default function SettingsScreen() {
   const auth = useAuth();
   const { t } = useTranslation();
   const { locale, setLocale } = useLocale();
+  const windowDimensions = useWindowDimensions();
+  const safeAreaInsets = useSafeAreaInsets();
   const deviceLink = useDeviceLink();
   const { lastPresenceSnapshot, status } = deviceLink;
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
@@ -113,6 +125,8 @@ export default function SettingsScreen() {
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+  const [languagePickerSnap, setLanguagePickerSnap] = useState<ContextSheetSnap>('half');
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -200,6 +214,30 @@ export default function SettingsScreen() {
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
   const debugSection = overview.sections.find((section) => section.id === 'debug');
+  const languagePickerOptions = useMemo<readonly MobileChoiceOption[]>(
+    () => LANGUAGE_OPTIONS.map((option) => ({
+      id: option,
+      label: t(`settings.language.options.${option}`),
+    })),
+    [t],
+  );
+  const languagePickerHeights = useMemo(
+    () => computeContextSheetSnapHeights({
+      safeAreaTopInset: safeAreaInsets.top,
+      screenHeight: windowDimensions.height,
+    }),
+    [safeAreaInsets.top, windowDimensions.height],
+  );
+  const openLanguagePicker = useCallback(() => {
+    setLanguagePickerSnap('half');
+    setLanguagePickerOpen(true);
+  }, []);
+  const selectLanguage = useCallback((next: string) => {
+    const nextLocale = LANGUAGE_OPTIONS.find((option) => option === next);
+    if (!nextLocale) return;
+    setLocale(nextLocale);
+    setLanguagePickerOpen(false);
+  }, [setLocale]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.deviceId) {
@@ -857,15 +895,13 @@ export default function SettingsScreen() {
           footer={t('settings.language.hint')}
           title={t('settings.language.title')}
         >
-          {LANGUAGE_OPTIONS.map((option) => (
-            <LanguageOptionRow
-              key={option}
-              label={t(`settings.language.options.${option}`)}
-              onPress={() => setLocale(option)}
-              selected={locale === option}
-              testID={`settings.language.${option}`}
-            />
-          ))}
+          <LanguagePickerRow
+            expanded={languagePickerOpen}
+            label={t('settings.language.title')}
+            onPress={openLanguagePicker}
+            testID="settings.language.picker"
+            value={t(`settings.language.options.${locale}`)}
+          />
         </SettingsGroup>
 
         {/* 关于这台手机 */}
@@ -1009,6 +1045,29 @@ export default function SettingsScreen() {
           ) : null}
         </View>
       </ScrollView>
+      <SheetModal
+        backdropTestID="settings.languagePicker.backdrop"
+        onBackdropPress={() => setLanguagePickerOpen(false)}
+        onRequestClose={() => setLanguagePickerOpen(false)}
+        visible={languagePickerOpen}
+      >
+        <SheetSurface
+          bottomInset={safeAreaInsets.bottom}
+          heights={languagePickerHeights}
+          onClose={() => setLanguagePickerOpen(false)}
+          onSnapChange={setLanguagePickerSnap}
+          snap={languagePickerSnap}
+          testID="settings.languagePicker"
+          title={t('settings.language.title')}
+        >
+          <MobileChoicePickerList
+            activeId={locale}
+            onSelect={selectLanguage}
+            options={languagePickerOptions}
+            testID="settings.languagePicker.option"
+          />
+        </SheetSurface>
+      </SheetModal>
     </SafeAreaView>
   );
 }
@@ -1076,34 +1135,35 @@ function SettingsGroup({
   );
 }
 
-/** 显示语言单选行:标签左、选中勾右;selected 即当前偏好(含「跟随系统」)。 */
-function LanguageOptionRow({
+/** 显示语言下拉入口:标签左、当前值右;选项在底部 sheet 中单选。 */
+function LanguagePickerRow({
+  expanded,
   label,
   onPress,
-  selected,
   testID,
+  value,
 }: {
+  expanded: boolean;
   label: string;
   onPress(): void;
-  selected: boolean;
   testID?: string;
+  value: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   return (
     <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="radio"
-      accessibilityState={{ checked: selected }}
+      accessibilityLabel={`${label}: ${value}`}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
       onPress={onPress}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
       testID={testID}
     >
       <View style={styles.rowLine}>
-        <Text style={styles.languageOptionLabel}>{label}</Text>
-        {selected ? (
-          <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
-        ) : null}
+        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={styles.rowValue} numberOfLines={1}>{value}</Text>
+        <ChevronDown color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
       </View>
     </Pressable>
   );
@@ -1460,7 +1520,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   rowLabel: { color: colors.textSecondary, flexShrink: 0, fontSize: typeScale.code },
   rowValue: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code, textAlign: 'right' },
   rowDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  languageOptionLabel: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code },
   switchRow: {
     alignItems: 'center',
     flexDirection: 'row',

@@ -98,10 +98,10 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             if (saving) event.preventDefault();
           }}
         >
-          <AlertDialog.Title className="text-[15px] font-medium" style={{ color: 'var(--text-primary)' }}>
+          <AlertDialog.Title className="text-15 font-medium" style={{ color: 'var(--text-primary)' }}>
             {t('goal.newGoalDialog.title')}
           </AlertDialog.Title>
-          <AlertDialog.Description className="text-[12px] leading-5" style={{ color: 'var(--confirm-desc)' }}>
+          <AlertDialog.Description className="text-12 leading-5" style={{ color: 'var(--confirm-desc)' }}>
             {t('goal.newGoalDialog.description')}
           </AlertDialog.Description>
           <ListComposerTextarea
@@ -116,7 +116,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
                 void save();
               }
             }}
-            className="min-h-[112px] w-full resize-none rounded-lg border p-2.5 text-[13px] leading-5 outline-none placeholder:text-[var(--text-placeholder)]"
+            className="min-h-[112px] w-full resize-none rounded-lg border p-2.5 text-13 leading-5 outline-none placeholder:text-[var(--text-placeholder)]"
             style={{
               backgroundColor: 'var(--settings-input-bg)',
               borderColor: 'var(--settings-input-border)',
@@ -125,7 +125,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
           />
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
           {error && (
-            <div className="text-[12px]" style={{ color: 'var(--error-fg)' }}>
+            <div className="text-12" style={{ color: 'var(--error-fg)' }}>
               {error}
             </div>
           )}
@@ -133,7 +133,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             <AlertDialog.Cancel asChild>
               <button
                 type="button"
-                className="h-8 rounded-full border px-3 text-[12px] transition-colors hover:bg-[var(--surface-elevated)]"
+                className="h-8 rounded-full border px-3 text-12 transition-colors hover:bg-[var(--surface-elevated)]"
                 style={{
                   backgroundColor: 'var(--surface-elevated)',
                   borderColor: 'var(--border-default)',
@@ -146,7 +146,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             </AlertDialog.Cancel>
             <button
               type="button"
-              className="h-8 rounded-full px-4 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:opacity-45"
+              className="h-8 rounded-full px-4 text-12 font-medium transition-opacity hover:opacity-85 disabled:opacity-45"
               style={{ backgroundColor: 'var(--accent-cta-bg-pure)', color: 'var(--accent-pure-cta-fg)' }}
               disabled={saving || !trimmed}
               onClick={() => {

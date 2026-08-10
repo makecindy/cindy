@@ -15,8 +15,11 @@ import { app, BrowserWindow } from 'electron';
 import WebSocket from 'ws';
 import {
   DeviceLinkClient,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  MAKER_EVENT_BATCH_CHANNEL,
+  expandMakerEventBatchPayload,
   DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -57,16 +60,19 @@ import {
   writeDeviceLinkSetting,
 } from './settings-store';
 import { keepAwakeController } from './power-blocker';
+import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   dropAllControllers,
+  flushMakerEventBatchesOnReconnect,
   flushRemoteInvokeResultOutboxOnReconnect,
   forgetControllerInvokeState,
   handleControllerOffline,
   purgeRevokedController,
+  setDispatchPresenceOfflineCheck,
 } from './dispatch';
 import {
   clearControllerPlatforms,
@@ -91,6 +97,7 @@ import {
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
 } from './mobileNotify';
+import { getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
   handleContactsDeviceLinkStatusChanged,
@@ -243,7 +250,37 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * 词典同步的对端选择只看「在线 + 是桌面」,不看 remoteControlEnabled ——
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
  */
+/**
+ * 本机**作为控制端**声明的端到端能力(append-only)。`openLink` 与 `subscribe` 两处
+ * 必须用同一份 —— 只在一处声明会让另一条路径静默降级(mobile 侧 review 实测过这个坑)。
+ */
+const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  // 桌面控制桌面时同样收微批:批的收益是**relay 帧数**,只要有一个控制端不支持,
+  // 被控端就得为它保留逐帧流,聚合出站速率照旧能招来 1013 并连带踢掉已启用微批的
+  // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
+  // maker:event 订阅者零改动。
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+] as const;
+
 const presenceOnlineByDevice = new Map<string, boolean>();
+
+/**
+ * 发送门禁判据:**当代 presence 已明确宣告**该设备离线(供 dispatch 的
+ * invoke-result outbox 全量轮跳过盲发,见 setDispatchPresenceOfflineCheck)。
+ *
+ * 刻意只读当代视图、不做任何跨连接代的记忆:
+ * - presence-changed 是**只发给当时在线设备的增量广播,新连接没有全量重放**
+ *   (mobile 侧同一结论已固化在 presenceRecovery.resetPresenceAvailabilityForConnection
+ *   的注释里)。断线期间恢复上线的设备,重连后不会有任何 presence 帧来纠正一条
+ *   转存下来的 offline 结论——跨代保留会把它永久挡在门外,拿不到订阅与在途回包。
+ * - 因此门禁的作用域被限定为「同一连接代内、presence 已明说离线」这一段:视图为空
+ *   (刚重连、尚无首帧 presence)一律 fail-open。它是减量优化,不是安全边界。
+ */
+function isPresenceExplicitlyOffline(deviceId: string): boolean {
+  return presenceOnlineByDevice.get(deviceId) === false;
+}
 
 const presenceNameByDevice = new Map<string, string>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
@@ -471,6 +508,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     handleContactsDeviceLinkStatusChanged(status === 'online');
     if (status === 'online') {
+      // 断线前攒的 maker:event 批最先出去:它在时间上早于离线积压与重连后的
+      // 一切新推送,晚发会让控制端在终态之后又收到旧文本(见 dispatch 注释)。
+      flushMakerEventBatchesOnReconnect();
       replayActiveSubscriptions('ws-online');
       // 重连即投递被控端积压的 invoke-result:离线期间 outbox 只做慢速 TTL 出清,
       // 不再自旋重试,上线事件是它的主投递触发点。
@@ -563,6 +603,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
   wireInboundDispatch(client);
+  // outbox flush 的 presence 显式离线门禁(运行期接线,模块顶层会撞 import 环 TDZ)
+  setDispatchPresenceOfflineCheck(isPresenceExplicitlyOffline);
 
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)
   startBusyReporting();
@@ -617,6 +659,21 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         })
       ) {
         handleIncomingContactsRelayFrame(env.src, p.payload);
+      }
+      return;
+    }
+    // 微批拆包放在 main:renderer 侧有多个按 channel 过滤的 onRemotePush 订阅者
+    // (会话视图 / 草稿路由 / learn / 文件浏览),在这里展开成原样的 maker:event
+    // 事件流,它们全都零改动。批内条目的 sessionId 与顶层不一致即跳过(topic 隔离
+    // fail-closed,与 mobile 拆包同判据)。
+    if (p.channel === MAKER_EVENT_BATCH_CHANNEL) {
+      for (const event of expandMakerEventBatchPayload(p.payload)) {
+        broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, {
+          deviceId: env.src,
+          channel: MAKER_PUSH.EVENT,
+          payload: event,
+          ...(p.ownerStamp ? { ownerStamp: p.ownerStamp } : {}),
+        });
       }
       return;
     }
@@ -904,6 +961,15 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
     `device-link replay subscriptions (${reason}): devices=${refs.length} topics=${topicCount}`,
   );
   for (const { deviceId, topics } of refs) {
+    // 这里**不套** presence 离线门禁(2026-08-08 review 的收敛结论,别再加回来):
+    //  - 唯一的广播型调用者是 ws-online,而它跑在「非 online 时清空视图」之后、
+    //    本代首帧 presence 之前,当代 presence 必然为空 → 门禁在此恒不成立,是死码;
+    //  - 其余三个调用者都是定向的(link-reopen / responsiveness-recovered /
+    //    presence-online),各自的触发证据(收到 link-accept、探测 invoke 刚成功、
+    //    presence 刚翻成 online)都比 presence 视图更新更强,拿更旧的 presence 去
+    //    拦它们只会把恢复事件拦死——与 dispatch 侧「定向 flush 不受门禁约束」同构。
+    // 已知离线目标的无效 subscribe 由 replayDeviceSubscription 的重试前置门
+    // (presenceAvailableByDevice !== true)在当代内收敛,首发放行一帧即可。
     replayDeviceSubscription(deviceId, topics, reason, 0);
   }
 }
@@ -1334,10 +1400,7 @@ export async function openRemoteLink(
       controllerName: deviceName(),
       protocolVersion: 1,
       appVersion: app.getVersion(),
-      capabilities: [
-        CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
-        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-      ],
+      capabilities: [...CONTROLLER_CAPABILITIES],
     });
   };
   // 结算所有权由 tracker.guardInvoke 统一声明(第一个 settle 的 guard 打标,
@@ -1492,10 +1555,7 @@ export async function remoteSubscribe(
         {
           topics: liveTopics,
           controllerName: deviceName(),
-          capabilities: [
-            CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
-            CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
-          ],
+          capabilities: [...CONTROLLER_CAPABILITIES],
         },
       ],
     });
@@ -1564,6 +1624,7 @@ export function sendMobileSessionNotify(payload: {
       title: payload.title,
       kind: payload.kind,
       selfDeviceId,
+      fallbackBody: getSessionNotificationBody(payload.kind),
       detail: payload.detail,
     }),
   );

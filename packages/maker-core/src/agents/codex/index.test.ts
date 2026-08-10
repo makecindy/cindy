@@ -379,6 +379,8 @@ function installFakeHost(
         data: cwds.map((cwd) => ({ cwd, skills: [], errors: [] })),
       };
     }
+    if (method === Method.ConfigRead) return { config: {} };
+    if (method === Method.McpServerStatusList) return { data: [], nextCursor: null };
     if (method === Method.ThreadFork) {
       return {
         thread: { id: 'fork-thread-id' },
@@ -465,6 +467,243 @@ describe('CodexAgent permissions', () => {
       supported: { supported: true },
       unsupportedPermissionModes: ['bypassPermissions'],
     });
+  });
+
+  it('starts Review on an isolated memory-free host with an immutable read-only sandbox', async () => {
+    const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-artifact-'));
+    tempRoots.push(artifactDir);
+    const artifactPath = path.join(artifactDir, 'artifact.txt');
+    const markdownPath = path.join(artifactDir, 'launch.md');
+    const pdfPath = path.join(artifactDir, 'contract.pdf');
+    const imagePath = path.join(artifactDir, 'poster.png');
+    const dotenvPath = path.join(artifactDir, '.env.local');
+    const gitConfigPath = path.join(artifactDir, '.git', 'config');
+    await fs.writeFile(artifactPath, 'review me');
+    await fs.writeFile(markdownPath, '# Launch\nBudget: 100 vs 80 + 50');
+    await fs.writeFile(pdfPath, '%PDF-1.4\n% review transport fixture');
+    await fs.writeFile(
+      imagePath,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+        'base64',
+      ),
+    );
+    await fs.writeFile(dotenvPath, 'TOKEN=secret');
+    await fs.mkdir(path.dirname(gitConfigPath));
+    await fs.writeFile(gitConfigPath, 'url=https://token@example.invalid/repo');
+    const realArtifactDir = await fs.realpath(artifactDir);
+    const realArtifactPath = await fs.realpath(artifactPath);
+    const realMarkdownPath = await fs.realpath(markdownPath);
+    const realPdfPath = await fs.realpath(pdfPath);
+    const realImagePath = await fs.realpath(imagePath);
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) return {};
+        if (method === Method.SkillsList) {
+          return {
+            data: [{
+              cwd: '/repo',
+              skills: [{
+                name: 'unsafe-review',
+                description: 'must not load',
+                path: '/home/test/.codex/plugins/cache/personal/unsafe-plugin/1.0.0/skills/review/SKILL.md',
+                scope: 'user',
+                enabled: true,
+              }],
+              errors: [],
+            }],
+          };
+        }
+        if (method === Method.ConfigRead) {
+          return {
+            config: {
+              mcp_servers: { local_docs: { enabled: true } },
+              plugins: {
+                'configured@personal': {
+                  mcp_servers: { configured_server: { enabled: true } },
+                },
+              },
+            },
+          };
+        }
+        if (method === Method.McpServerStatusList) {
+          return { data: [{ name: 'runtime-mcp', tools: {} }], nextCursor: null };
+        }
+        if (method === Method.TurnStart) return { turn: { id: 'turn-review' } };
+        return undefined;
+      },
+      {
+        buildSessionMcpConfig: () => ({ 'mcp_servers.should_not_exist': { command: 'write' } }),
+        userAgent: 'mock-codex/0.145.0',
+      },
+    );
+
+    const handle = await agent.startSession({
+      sessionId: 'session-review',
+      model: 'gpt-5.5',
+      workingDir: artifactDir,
+      permissionMode: 'bypassPermissions',
+      planMode: true,
+      makerMemoryEnabled: true,
+      userPrompt: 'PRIVATE USER PROMPT',
+      reviewMode: true,
+      reviewReadPaths: [artifactPath, artifactDir],
+    });
+
+    expect(host.getHost).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      expect.objectContaining({
+        hostPurpose: 'review',
+        keyOverride: 'local-review:session-review',
+      }),
+    );
+    expect(host.request).toHaveBeenCalledWith(Method.ExperimentalFeatureEnablementSet, {
+      enablement: { memories: false },
+    });
+
+    const threadStart = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as Record<string, unknown>;
+    expect(threadStart).toMatchObject({
+      approvalPolicy: 'never',
+      permissions: 'cindy-review-readonly',
+      config: {
+        web_search: 'disabled',
+        'features.apps': false,
+        'features.goals': false,
+        'features.hooks': false,
+        'features.multi_agent': false,
+        'features.remote_plugin': false,
+        'mcp_servers.local_docs.enabled': false,
+        'mcp_servers.runtime-mcp.enabled': false,
+        'plugins."unsafe-plugin@personal".enabled': false,
+        'plugins."configured@personal".enabled': false,
+        'plugins."configured@personal".mcp_servers.configured_server.enabled': false,
+        'permissions.cindy-review-readonly': {
+          filesystem: {
+            ':root': 'deny',
+            ':minimal': 'read',
+            ':tmpdir': 'deny',
+            ':slash_tmp': 'deny',
+            ':workspace_roots': {
+              '.': 'read',
+              '**/.git': 'deny',
+              '**/.git/**': 'deny',
+            },
+            [realArtifactPath]: 'read',
+            [realArtifactDir]: {
+              '.': 'read',
+              '**/.env': 'deny',
+              '**/credentials.json': 'deny',
+            },
+          },
+          network: { enabled: false },
+        },
+      },
+    });
+    expect(threadStart).not.toHaveProperty('sandbox');
+    expect(threadStart).not.toHaveProperty('dynamicTools');
+    expect((threadStart.config as Record<string, unknown>)['skills.config']).toEqual([
+      {
+        path: '/home/test/.codex/plugins/cache/personal/unsafe-plugin/1.0.0/skills/review/SKILL.md',
+        enabled: false,
+      },
+    ]);
+    expect(threadStart.config).not.toHaveProperty('mcp_servers.should_not_exist');
+    expect(handle.getPlanMode?.()).toBe(false);
+
+    await expect(
+      handle.send({
+        type: 'user',
+        content: [{ type: 'image', path: dotenvPath, mimeType: 'image/png' }],
+      }),
+    ).rejects.toThrow(/refused/i);
+    await expect(
+      handle.send({
+        type: 'user',
+        content: [{ type: 'file', path: gitConfigPath, mimeType: 'text/plain' }],
+      }),
+    ).rejects.toThrow(/refused/i);
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+
+    await handle.send({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'Review this Markdown, PDF, and image in one turn.' },
+        { type: 'file', path: markdownPath, mimeType: 'text/markdown' },
+        { type: 'file', path: pdfPath, mimeType: 'application/pdf' },
+        { type: 'image', path: imagePath, mimeType: 'image/png' },
+      ],
+    });
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as Record<string, unknown>;
+    expect(turnStart).toMatchObject({
+      approvalPolicy: 'never',
+    });
+    expect(turnStart).not.toHaveProperty('sandboxPolicy');
+    const reviewText = (turnStart.input as Array<{ type?: string; text?: string }>).find(
+      (item) => item.type === 'text',
+    )?.text;
+    expect(reviewText).toContain(realMarkdownPath);
+    expect(reviewText).toContain(realPdfPath);
+    expect(turnStart.input).toEqual(
+      expect.arrayContaining([{ type: 'localImage', path: realImagePath }]),
+    );
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected Review thread handlers');
+    await expect(
+      handlers.commandExecutionApproval?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-review',
+        itemId: 'cmd-1',
+        command: 'touch forbidden',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    await expect(
+      handlers.fileChangeApproval?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-review',
+        itemId: 'file-1',
+        changes: [],
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+
+    if (!handle.setPermissionMode) throw new Error('expected permission control');
+    await handle.setPermissionMode('bypassPermissions');
+    await handle.setPlanMode?.(true);
+    expect(handle.getPlanMode?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('refuses to start Review when Codex native memory cannot be disabled', async () => {
+    const reviewDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-memory-'));
+    tempRoots.push(reviewDir);
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) {
+          throw new Error('memory control unavailable');
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    await expect(
+      agent.startSession({
+        sessionId: 'session-review-memory-failure',
+        model: 'gpt-5.5',
+        workingDir: reviewDir,
+        reviewMode: true,
+      }),
+    ).rejects.toThrow('review was not started');
   });
 
   it('makes policy turns host-observable and only prompts for forced Auto actions', async () => {
@@ -3271,12 +3510,16 @@ describe('CodexAgent.startSession developerInstructions', () => {
       sessionId: 'session-child-route',
       workingDir: '/repo',
       vendorOptions: {},
+      mcpCallerKind: 'descendant',
+      mcpCallerAttested: true,
     });
     expect(registerCodexMcpThreadContext).toHaveBeenNthCalledWith(3, {
       threadId: 'grandchild-thread-id',
       sessionId: 'session-child-route',
       workingDir: '/repo',
       vendorOptions: {},
+      mcpCallerKind: 'descendant',
+      mcpCallerAttested: true,
     });
 
     await handle.close();
@@ -4537,6 +4780,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const iterator = handle.events()[Symbol.asyncIterator]();
     const transport = createdTransports[0];
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
 
     transport.emitMockLine({
       method: 'turn/started',
@@ -4548,6 +4792,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     await agent.forceDisposeLocalHostForAuthChange('test forced retire');
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(handle.isTurnRunning?.()).toBe(false);
     expect(transport.closed).toBe(true);
     await expect(nextEvent(iterator)).resolves.toMatchObject({
@@ -6050,6 +6295,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       sessionInstanceId: 'instance-codex-mcp-context',
       workingDir: '/repo',
       vendorOptions: { orcaRole: 'lead' },
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
     });
 
     await handle.close();
@@ -6114,9 +6361,18 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const transport = createdTransports[0];
     expect(transport).toBeDefined();
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    transport!.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-close-heartbeat' } },
+    });
+    await waitForExpectation(() => {
+      expect(handle.isTurnRunning?.()).toBe(true);
+    });
 
     await handle.close();
 
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
     const unsubscribe = transport!.lines
       .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
       .find((request) => request.method === Method.ThreadUnsubscribe);
@@ -10704,6 +10960,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       // ssh:<hostId>:<path> 的独立 store。
       remoteHostId: 'remote-host-1',
       vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
     });
     await handle.close();
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
@@ -12424,6 +12682,284 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     expect(result).toEqual({ decision: 'accept' });
     await handle.close();
+  });
+
+  it('excludes a server-resolved approval wait from the completed turn duration', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-approval-generation-timing',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.commandExecutionApproval ||
+        !handlers.serverRequestResolved ||
+        !handlers.turnStarted ||
+        !handlers.turnCompleted
+      ) {
+        throw new Error('expected approval timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+      handle.setInteractionResolver(interactionResolver);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      const approvalPromise = handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        itemId: 'approval-item-1',
+        command: 'pwd',
+        cwd: '/repo',
+      });
+      await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+
+      now = 10_000;
+      handlers.serverRequestResolved({
+        threadId: 'start-thread-id',
+        requestId: 'approval-item-1',
+      });
+      await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
+
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keeps descendant approval waits out of the root generation timer', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-descendant-approval-generation-timing',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'ask',
+      });
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.commandExecutionApproval
+        || !handlers.itemStarted
+        || !handlers.itemCompleted
+        || !handlers.turnStarted
+        || !handlers.turnCompleted
+      ) {
+        throw new Error('expected descendant approval timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const decision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(() => decision.promise);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'root-turn' } });
+      now = 2_000;
+      const collabItem = {
+        id: 'root-collab-item',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        agentsStates: {},
+      };
+      handlers.itemStarted({
+        threadId: 'start-thread-id',
+        turnId: 'root-turn',
+        item: collabItem,
+      } as never);
+
+      now = 3_000;
+      const approvalPromise = handlers.commandExecutionApproval({
+        threadId: 'child-thread',
+        turnId: 'child-turn',
+        itemId: 'child-command',
+        command: 'pwd',
+        cwd: '/repo',
+      });
+      now = 9_000;
+      decision.resolve({ kind: 'permission', behavior: 'allow' });
+      await expect(approvalPromise).resolves.toEqual({ decision: 'accept' });
+
+      now = 10_000;
+      handlers.itemCompleted({
+        threadId: 'start-thread-id',
+        turnId: 'root-turn',
+        item: { ...collabItem, status: 'completed' },
+      } as never);
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'root-turn', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each(['answered', 'server-resolved', 'resolver-failed'] as const)(
+    'excludes a native requestUserInput wait when it is %s',
+    async (outcome) => {
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installFakeHost(agent);
+        const handle = await agent.startSession({
+          sessionId: `session-native-user-input-timing-${outcome}`,
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const handlers = host.getThreadHandlers();
+        if (
+          !handlers?.requestUserInput
+          || !handlers.serverRequestResolved
+          || !handlers.turnStarted
+          || !handlers.turnCompleted
+        ) {
+          throw new Error('expected native user-input timing handlers');
+        }
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        const decision = deferred<InteractionDecision>();
+        const interactionResolver = vi.fn(() => decision.promise);
+        handle.setInteractionResolver(interactionResolver);
+
+        handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+        now = 2_000;
+        const responsePromise = handlers.requestUserInput({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          itemId: 'native-question-1',
+          questions: [{
+            id: 'q1',
+            header: 'Question',
+            question: 'Pick one',
+            isOther: false,
+            isSecret: false,
+            options: null,
+          }],
+        }, { requestId: `native-question-${outcome}` });
+        await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+
+        now = 10_000;
+        if (outcome === 'answered') {
+          decision.resolve({
+            kind: 'ask_user_question',
+            answers: { 'Pick one': 'yes' },
+          });
+        } else if (outcome === 'server-resolved') {
+          handlers.serverRequestResolved({
+            threadId: 'start-thread-id',
+            requestId: `native-question-${outcome}`,
+          });
+        } else {
+          decision.reject(new Error('interaction resolver failed'));
+        }
+        await responsePromise;
+
+        now = 12_000;
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+        });
+        await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+        const done = events.find((event) => event.type === 'done');
+        expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(3_000);
+
+        if (outcome === 'server-resolved') {
+          decision.resolve({ kind: 'ask_user_question', answers: {} });
+        }
+        await handle.close();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it('omits native requestUserInput timing when the turn id is missing', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-native-user-input-missing-turn-id',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.requestUserInput || !handlers.turnStarted || !handlers.turnCompleted) {
+        throw new Error('expected native user-input timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const decision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(() => decision.promise);
+
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 2_000;
+      const responsePromise = handlers.requestUserInput({
+        threadId: 'start-thread-id',
+        turnId: null as never,
+        itemId: 'native-question-without-turn',
+        questions: [{
+          id: 'q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          isSecret: false,
+          options: null,
+        }],
+      }, { requestId: 'native-question-without-turn' });
+      now = 10_000;
+      decision.resolve({ kind: 'ask_user_question', answers: { 'Pick one': 'yes' } });
+      await responsePromise;
+
+      now = 12_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+      });
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBeUndefined();
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('routes dynamic ask_user_question tool calls through ask_user_question', async () => {
@@ -16357,6 +16893,607 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('REPRO: preserves a late collab-agent terminal update after the parent turn completes', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-terminal-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'spawnAgent running...', isRunning: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_use',
+      data: { toolUseId: 'collab-1', toolName: 'collab:spawnAgent' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.descendantNotification?.('child-thread', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      tokenUsage: { total: { totalTokens: 21 } },
+    });
+    const activeTurnUpdate = await nextEvent(iterator);
+    expect(activeTurnUpdate).toMatchObject({
+      type: 'agent_task_update',
+      data: {
+        taskId: 'collab-1',
+        status: 'running',
+        usage: { totalTokens: 21 },
+      },
+    });
+    expect(activeTurnUpdate).not.toHaveProperty('turnScope');
+    expect(activeTurnUpdate).not.toHaveProperty('backgroundTurnStartedAt');
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-1', fullText: 'child-thread: completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-1'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-1', status: 'completed' },
+    });
+
+    // The carve-out is one-shot: a retried late item must not duplicate the
+    // tool result or terminal task update.
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('does not replay a normally handled collab terminal after the parent turn completes', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-normal-collab-terminal-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-normal',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'finish before the parent turn',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-normal', status: 'running' },
+    });
+
+    const completedItem = {
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-normal',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'finish before the parent turn',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as const;
+    handlers!.itemCompleted?.(completedItem as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      data: { toolUseId: 'collab-normal' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      data: { toolUseIds: ['collab-normal'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-normal', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-normal', status: 'running' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Generating...', isRunning: true },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.(completedItem as never);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('REPRO: reconstructs a late completed-only collab tool call', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-completed-only-collab',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const turnStartedWindowStart = Date.now();
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    const turnStartedWindowEnd = Date.now();
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-completed-only',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'finish after the parent turn',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    const reconstructedToolUse = await nextEvent(iterator);
+    expect(reconstructedToolUse).toMatchObject({
+      type: 'tool_use',
+      turnScope: 'background',
+      data: {
+        toolUseId: 'collab-completed-only',
+        toolName: 'collab:spawnAgent',
+      },
+    });
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toEqual(expect.any(Number));
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toBeGreaterThanOrEqual(turnStartedWindowStart);
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toBeLessThanOrEqual(turnStartedWindowEnd);
+    const reconstructedFullResult = await nextEvent(iterator);
+    expect(reconstructedFullResult).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: {
+        toolUseId: 'collab-completed-only',
+        fullText: 'child-thread: completed',
+      },
+    });
+    const reconstructedResult = await nextEvent(iterator);
+    expect(reconstructedResult).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-completed-only'] },
+    });
+    const reconstructedTaskUpdate = await nextEvent(iterator);
+    expect(reconstructedTaskUpdate).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: {
+        taskId: 'collab-completed-only',
+        status: 'completed',
+        subagentObservation: {
+          kind: 'spawn',
+          logicalSubagentId: 'collab-completed-only',
+          parentToolUseId: 'collab-completed-only',
+          providerRunIds: ['child-thread'],
+        },
+      },
+    });
+    expect([
+      reconstructedFullResult.backgroundTurnStartedAt,
+      reconstructedResult.backgroundTurnStartedAt,
+      reconstructedTaskUpdate.backgroundTurnStartedAt,
+    ]).toEqual([
+      reconstructedToolUse.backgroundTurnStartedAt,
+      reconstructedToolUse.backgroundTurnStartedAt,
+      reconstructedToolUse.backgroundTurnStartedAt,
+    ]);
+
+    await handle.close();
+  });
+
+  it('REPRO: preserves a late collab-agent terminal update after a terminal error', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-terminal-error-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.error?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      willRetry: false,
+      error: { message: 'terminal error' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-1', fullText: 'child-thread: completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-1'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-1', status: 'completed' },
+    });
+
+    // The terminal notification still performs the normal authoritative cleanup.
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'failed', error: { message: 'terminal error' } },
+    });
+    await handle.close();
+  });
+
+  it('REPRO: scopes descendant updates from a completed parent turn as background', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-descendant-background-scope',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const parentTurnStartedWindowStart = Date.now();
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    const parentTurnStartedWindowEnd = Date.now();
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working after the parent turn',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-next' },
+    });
+
+    handlers!.descendantNotification?.('child-thread', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      tokenUsage: { total: { totalTokens: 42 } },
+    });
+    const lateDescendantUpdate = await nextEvent(iterator);
+    expect(lateDescendantUpdate).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: {
+        taskId: 'collab-1',
+        status: 'running',
+        usage: { totalTokens: 42 },
+      },
+    });
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toEqual(expect.any(Number));
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toBeGreaterThanOrEqual(
+      parentTurnStartedWindowStart,
+    );
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toBeLessThanOrEqual(
+      parentTurnStartedWindowEnd,
+    );
+
+    await handle.close();
+  });
+
+  it('REPRO: reasserts the live running state for a late V1 spawn completion', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-running-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const parentTurnStartedWindowStart = Date.now();
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    const parentTurnStartedWindowEnd = Date.now();
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-running',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'spawnAgent running...', isRunning: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_use',
+      data: { toolUseId: 'collab-running', toolName: 'collab:spawnAgent' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-running', status: 'running' },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-running',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+
+    const lateFullResult = await nextEvent(iterator);
+    expect(lateFullResult).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-running', fullText: 'child-thread: running' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-running'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-running', status: 'completed' },
+    });
+    const replayedRunningUpdate = await nextEvent(iterator);
+    expect(replayedRunningUpdate).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-running', status: 'running' },
+    });
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBe(
+      lateFullResult.backgroundTurnStartedAt,
+    );
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBeGreaterThanOrEqual(
+      parentTurnStartedWindowStart,
+    );
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBeLessThanOrEqual(
+      parentTurnStartedWindowEnd,
+    );
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-running',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
   it('emits the terminal boundary only once for duplicate turnCompleted notifications', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -17906,6 +19043,80 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 
+  it('迟到的旧 turn collab 收口不重启新 turn idle 计时或注入前台状态', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-late-collab-terminal');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'start background child' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'inProgress',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish after the parent turn',
+          agentsStates: { 'child-thread': { status: 'running' } },
+        },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      } as never);
+
+      await handle.send({ type: 'user', content: 'new active turn' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+
+      const beforeLate = seen.length;
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish after the parent turn',
+          agentsStates: { 'child-thread': { status: 'completed' } },
+        },
+      } as never);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const lateEvents = seen.slice(beforeLate);
+      expect(lateEvents).toContainEqual(expect.objectContaining({
+        type: 'tool_result',
+        turnScope: 'background',
+      }));
+      expect(lateEvents).not.toContainEqual(expect.objectContaining({
+        type: 'status',
+        data: expect.objectContaining({ status: 'Generating...' }),
+      }));
+
+      // 新 turn 从启动起静默满原始额度就必须收口；旧 turn 的 completed
+      // 不能把已经消耗的一半 idle 配额重置成完整一轮。
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2 + 1);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('interrupt 两次都超时也要收干净本地 turn 状态,会话保持可发(review 第二轮)', async () => {
     // app-server 彻底哑火时 interruptTurnForPermissionTighten 会两次 ack 超时后放弃,
     // 而它按设计不动 isTurnInFlight —— 若 watchdog 只依赖它,会话 isTurnRunning() 恒 true,
@@ -18394,6 +19605,71 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       expect(seen.filter((e) => e.type === 'agent_task_update').length).toBeGreaterThan(0);
       // 关键:deadline 不被子代理帧续命,照旧到点收口。
       await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('迟到的 background terminal 不重置新 turn 的 reconnect deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-late-background-terminal',
+      );
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'inProgress',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish later',
+          agentsStates: { 'child-thread': { status: 'running' } },
+        },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      } as never);
+      await handle.send({ type: 'user', content: 'next' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      handlers.error?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        error: { message: 'Reconnecting... 1/5' },
+        willRetry: true,
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish later',
+          agentsStates: { 'child-thread': { status: 'completed' } },
+        },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(60_001);
       expect(seen).toContainEqual(expect.objectContaining({
         type: 'error',
         data: expect.objectContaining({

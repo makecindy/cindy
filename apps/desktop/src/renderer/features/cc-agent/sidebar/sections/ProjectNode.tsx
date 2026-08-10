@@ -343,7 +343,7 @@ export function ProjectNode({
           {!isEditingName && remoteIdentity ? (
             <span
               title={remoteIdentity.displayLabel}
-              className="max-w-[45%] shrink truncate text-[11px] text-[var(--cmd-palette-item-meta)]"
+              className="max-w-[45%] shrink truncate text-11 text-[var(--cmd-palette-item-meta)]"
             >
               {remoteIdentity.displayLabel}
             </span>

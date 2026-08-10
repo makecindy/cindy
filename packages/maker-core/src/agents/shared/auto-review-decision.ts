@@ -104,7 +104,20 @@ export type AutoReviewDelegate = (
 
 export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
 const MAX_AUTO_REVIEW_REASON_CHARS = 240;
-const AUTO_REVIEW_DELEGATE_TIMEOUT_MS = 8_000;
+/**
+ * Auto-review is deliberately bounded: a reviewer outage must still deny a
+ * gray action. Keep the host request deadline below the core guard so a valid
+ * answer at the request deadline can return before the outer guard fires.
+ */
+export interface AutoReviewTimeoutPolicy {
+  requestTimeoutMs: number;
+  delegateTimeoutMs: number;
+}
+
+export const DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY: Readonly<AutoReviewTimeoutPolicy> = Object.freeze({
+  requestTimeoutMs: 12_000,
+  delegateTimeoutMs: 13_000,
+});
 const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 export function getAutoReviewActionTextLength(action: ReviewableAction): number {
@@ -213,7 +226,7 @@ export async function resolveAutoReviewDecision(
       new Promise<typeof AUTO_REVIEW_TIMEOUT>((resolve) => {
         timeout = setTimeout(
           () => resolve(AUTO_REVIEW_TIMEOUT),
-          AUTO_REVIEW_DELEGATE_TIMEOUT_MS,
+          DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs,
         );
       }),
     ]);

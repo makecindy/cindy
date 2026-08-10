@@ -73,6 +73,7 @@
     "mobile:sim:rebuild": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-rebuild.mjs",
     "mobile:sim:start": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs",
     "mobile:sim:whoami": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-whoami.mjs",
+    "sync:mobile-rich-content-assets": "node apps/mobile/scripts/sync-rich-content-assets.mjs",
     "mobile:release:check": "node apps/mobile/scripts/release-with-env.mjs check",
     "mobile:release:prod": "node apps/mobile/scripts/release-with-env.mjs prod",
     "mobile:build:ios": "node apps/mobile/scripts/build-ios.mjs",

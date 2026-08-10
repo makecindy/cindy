@@ -1,4 +1,11 @@
-import { GHOST_MANIFEST_SUMMARY_MAX_CHARS, GHOST_OAUTH_SCOPES_MAX, isValidCindyVersion } from '@cindy/plugin-protocol';
+import {
+  GHOST_LOCALES,
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
+  GHOST_OAUTH_SCOPES_MAX,
+  isValidCindyVersion,
+  type GhostLocale,
+  type GhostManifestLocales,
+} from '@cindy/plugin-protocol';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
@@ -1278,7 +1285,7 @@ export interface GhostManifest {
    * 本地化资源路径。声明后必须至少提供英文；宿主按当前应用语言读取，
    * 当前语言未提供时固定回退英文。路径均位于插件安装目录内。
    */
-  locales?: Partial<Record<SupportedLocale, string>> & { en: string };
+  locales?: GhostManifestLocales;
   /**
    * 宿主解析清单后附加的当前语言，只用于运行时视图与 webview 刷新。
    * 不属于 ghost.json 作者字段；validateGhostManifest 会忽略包内同名输入。
@@ -2203,10 +2210,17 @@ export function ghostLocalePathFor(
   locale: string | undefined | null,
 ): string | null {
   if (!manifest.locales) return null;
-  const supported = (SUPPORTED_LOCALES as readonly string[]).includes(locale ?? '')
-    ? locale as SupportedLocale
-    : DEFAULT_LOCALE;
-  return manifest.locales[supported] ?? manifest.locales[DEFAULT_LOCALE] ?? null;
+  const manifestLocale = (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
+    ? locale as GhostLocale
+    : null;
+  return (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null;
+}
+
+/** 插件 app-context 只暴露协议旧四语；宿主新增语言固定回退英文以兼容存量插件。 */
+export function ghostAppContextLocale(locale: string | undefined | null): GhostLocale {
+  return (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
+    ? locale as GhostLocale
+    : 'en';
 }
 
 /** 把当前宿主语言附到运行时清单视图；不支持的输入固定归一到英文。 */
@@ -2766,18 +2780,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: 'locales 必须是语言到 locale JSON 路径的对象' };
     }
     const unknownLocale = Object.keys(raw.locales).find(
-      (locale) => !(SUPPORTED_LOCALES as readonly string[]).includes(locale),
+      (locale) => !(GHOST_LOCALES as readonly string[]).includes(locale),
     );
     if (unknownLocale) {
       return {
         ok: false,
-        reason: `locales 含宿主不支持的语言 ${JSON.stringify(unknownLocale)}(可用:${SUPPORTED_LOCALES.join(' / ')})`,
+        reason: `locales 含宿主不支持的语言 ${JSON.stringify(unknownLocale)}(可用:${GHOST_LOCALES.join(' / ')})`,
       };
     }
     if (raw.locales.en === undefined) {
       return { ok: false, reason: 'locales 必须提供 en，作为所有不支持语言的固定回退' };
     }
-    const normalized: Partial<Record<SupportedLocale, string>> = {};
+    const normalized: Partial<Record<GhostLocale, string>> = {};
     const seenPaths = new Set<string>();
     const nonLocalePaths = [
       GHOST_MANIFEST_FILE,
@@ -2789,7 +2803,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
     ].filter((value): value is string => typeof value === 'string');
     const nonLocalePathFolds = new Set(nonLocalePaths.map((value) => value.toLowerCase()));
-    for (const locale of SUPPORTED_LOCALES) {
+    for (const locale of GHOST_LOCALES) {
       const localePath = raw.locales[locale];
       if (localePath === undefined) continue;
       if (
@@ -2812,7 +2826,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       seenPaths.add(normalizedLocalePath);
       normalized[locale] = localePath;
     }
-    locales = normalized as GhostManifest['locales'];
+    locales = normalized as GhostManifestLocales;
   }
   if (
     raw.description !== undefined &&
@@ -5109,8 +5123,8 @@ export interface GhostAppContextResult {
   ok: true;
   context: {
     region: GhostAppRegion;
-    /** 当前宿主应用语言；插件只使用本值，不读取 navigator.language。 */
-    locale: SupportedLocale;
+    /** 插件协议语言；宿主新增语言会在边界回退英文。 */
+    locale: GhostLocale;
   };
 }
 
@@ -6183,6 +6197,8 @@ export type GhostDidEventData =
   | GhostEventSessionData
   | GhostEventActivityData;
 
+export type GhostMessageHookData = { sessionId: string; text: string; model?: string };
+
 /**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。
  * did- 分支带 topic/seq(每意识单调递增,可自查漏收;dropped = 上一段
@@ -6204,7 +6220,7 @@ export type GhostPipeEventPush =
       name: 'will-user-message';
       hookId: string;
       ts: number;
-      data: { sessionId: string; text: string };
+      data: GhostMessageHookData;
     }
   | {
       type: 'event';
@@ -6212,7 +6228,7 @@ export type GhostPipeEventPush =
       hookId: string;
       ts: number;
       /** text = 本轮 AI 回复全文;意识可放行/改写/自绘(见 GhostPipeEventVerdict)。 */
-      data: { sessionId: string; text: string };
+      data: GhostMessageHookData;
     }
   | {
       /** 随包 Node 进程发来的 JSON-RPC notification / MCP 进度事件。 */

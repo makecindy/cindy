@@ -1356,6 +1356,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/reviewer/reviewPdfUtilityProcess.ts',
+          config: 'vite.review-pdf-process.config.ts',
+          // 正式包关闭 RunAsNode；PDF.js 在一次性 utility process 中执行，
+          // 超时直接 kill，不阻塞 Electron main。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/watcher-host/watcherHostProcess.ts',
           config: 'vite.watcher-host.config.ts',
           // 同 dbWorker:借 preload target 出 CJS 单文件；运行时是 Electron

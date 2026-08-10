@@ -60,6 +60,66 @@ export interface SessionActivityPayload {
 export const SESSION_ACTIVITY_CHANNEL = 'local-db:sessions:activity';
 
 /**
+ * `maker:event` 的**微批**转发 channel(同一会话的连续事件合并成一帧)。
+ *
+ * 为什么要它:agent 长思考期间 `maker:event` 逐帧直冲 per-peer 可靠传输窗口
+ * (64 槽单 FIFO),2026-08-08 线上单毫秒 119 帧、8-07 单小时 5168 次
+ * `BACKPRESSURE`,聚合出站速率还会招来 relay 的 1013 拥塞断连。批把「每事件
+ * 一帧」压成「每窗口一帧」,是本条链路上唯一的**出站帧数**削减手段(#2167 的
+ * latest-wins 只改拥塞时的取舍,#2185 只推迟重连,都不减少帧数)。
+ *
+ * payload 顶层带 `sessionId`,因此 topicForPush 的 session-scoped 兜底分支
+ * 自动把它路由到 `session:<id>`——批**不得**跨会话合并,否则 topic 算不出。
+ * 批内 `events` 是原 `maker:event` payload 的**原样**序列,顺序即产生顺序;
+ * 控制端拆开后逐条按原路消费,语义与逐帧完全一致。
+ *
+ * 兼容:被控端只对声明了
+ * CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 的控制端发批,其余照旧逐帧,
+ * 因此旧控制端永远收不到本 channel。
+ */
+export const MAKER_EVENT_BATCH_CHANNEL = 'maker:event:batch';
+
+/** 微批帧 payload:同一会话的连续 `maker:event` payload 原样序列。 */
+export interface MakerEventBatchPayload {
+  sessionId: string;
+  /** 原 `maker:event` payload 序列(至少 1 条),顺序即产生顺序。 */
+  events: unknown[];
+}
+
+/** 解析微批帧;形状不符返回 null(旧/坏帧一律不当批处理)。 */
+export function parseMakerEventBatchPayload(
+  payload: unknown,
+): MakerEventBatchPayload | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const sessionId = (payload as { sessionId?: unknown }).sessionId;
+  const events = (payload as { events?: unknown }).events;
+  if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
+  if (!Array.isArray(events) || events.length === 0) return null;
+  return { sessionId, events };
+}
+
+/**
+ * 拆开微批帧,返回**可安全消费**的原 `maker:event` payload 序列(形状不符 / 无条目
+ * 返回空数组)。
+ *
+ * 只保留 `sessionId` 与批顶层一致的条目:topic 隔离是按**顶层** sessionId 路由的,
+ * 批内混入其它会话的事件会绕过隔离,把接收端未订阅的会话数据投进来(坏帧 / 恶意帧
+ * 场景)。fail-closed 逐条跳过,不整批丢。
+ *
+ * 放在共享包里是因为**两个控制端都要拆**:mobile 直接喂自己的 store,desktop 作为
+ * 控制端时在 main 里展开成原样的 `maker:event` 广播(renderer 的多个按 channel 过滤
+ * 的订阅者因此零改动)。同一条 fail-closed 判据只能有一份。
+ */
+export function expandMakerEventBatchPayload(payload: unknown): unknown[] {
+  const batch = parseMakerEventBatchPayload(payload);
+  if (!batch) return [];
+  return batch.events.filter((event) => {
+    if (!event || typeof event !== 'object') return false;
+    return (event as { sessionId?: unknown }).sessionId === batch.sessionId;
+  });
+}
+
+/**
  * 会话**列表级**读模型 channel:会话行的增 / 改。归 `sessions` topic。
  * `sessions:created` 只带 {sessionId}(无 row 数据)→ 控制端据此重拉列表;
  * `sessions:patched` 带 {sessionId, patch} → 控制端可直接 apply。

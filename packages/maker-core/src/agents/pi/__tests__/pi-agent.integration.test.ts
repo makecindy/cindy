@@ -31,13 +31,18 @@ import type { Logger } from '../../../interfaces/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const PI_BINARY = path.join(
-  REPO_ROOT,
-  'apps',
-  'pi-bin',
-  `${process.platform}-${process.arch}`,
-  process.platform === 'win32' ? 'pi.exe' : 'pi',
-);
+// Local installs keep the same versioned binary outside the worktree. The
+// override lets a lightweight harness smoke use that binary without copying it
+// into apps/pi-bin or starting Desktop; CI keeps the repository-managed path.
+const PI_BINARY =
+  process.env.CINDY_TEST_PI_BINARY ||
+  path.join(
+    REPO_ROOT,
+    'apps',
+    'pi-bin',
+    `${process.platform}-${process.arch}`,
+    process.platform === 'win32' ? 'pi.exe' : 'pi',
+  );
 const RIPGREP_DIR = path.join(
   REPO_ROOT,
   'apps',
@@ -728,6 +733,60 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'forwards one review turn with Markdown/PDF excerpts and image bytes',
+    { timeout: 60_000 },
+    async () => {
+      const pngBase64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+      const agent = new PiAgent(buildDeps());
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-formats-'));
+      const markdownPath = path.join(workingDir, 'launch.md');
+      const pdfPath = path.join(workingDir, 'contract.pdf');
+      const imagePath = path.join(workingDir, 'poster.png');
+      writeFileSync(markdownPath, '# Launch\nBudget: 100 vs 80 + 50');
+      writeFileSync(pdfPath, '%PDF-1.4\n% transport fixture');
+      writeFileSync(imagePath, Buffer.from(pngBase64, 'base64'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'review-format-session',
+          workingDir,
+          model: 'pi-test-model',
+          reviewMode: true,
+          reviewReadPaths: [markdownPath, pdfPath, imagePath],
+        });
+        const before = seenRequests.length;
+        const done = (async () => {
+          for await (const event of handle!.events()) if (event.type === 'done') break;
+        })();
+        await handle.send({
+          type: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Markdown budget: 100 vs 80 + 50. PDF payment: 30 days vs 60 days.',
+            },
+            { type: 'file', path: markdownPath, mimeType: 'text/markdown' },
+            { type: 'file', path: pdfPath, mimeType: 'application/pdf' },
+            { type: 'image', path: imagePath, mimeType: 'image/png' },
+          ],
+        });
+        await done;
+
+        const bodies = seenRequests.slice(before).map((request) => request.body).join('\n');
+        expect(bodies).toContain('Markdown budget: 100 vs 80 + 50');
+        expect(bodies).toContain('PDF payment: 30 days vs 60 days');
+        expect(bodies).toContain(jsonStringContent(markdownPath));
+        expect(bodies).toContain(jsonStringContent(pdfPath));
+        expect(bodies).toContain(pngBase64);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
     'sends file attachments and hot-updated Extra Dirs as read-only references',
     { timeout: 60_000 },
     async () => {
@@ -1130,6 +1189,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     permissionMode: 'ask' | 'auto' | 'bypassPermissions';
     resolverBehavior: 'allow' | 'deny';
     deps?: AgentDeps;
+    reviewMode?: boolean;
+    reviewReadPaths?: string[];
   }): Promise<{ resolverTools: string[]; finalText: string }> {
     const agent = new PiAgent(opts.deps ?? buildDeps());
     const resolverTools: string[] = [];
@@ -1140,6 +1201,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         workingDir: opts.workingDir,
         model: 'pi-test-model',
         permissionMode: opts.permissionMode,
+        ...(opts.reviewMode ? { reviewMode: true } : {}),
+        ...(opts.reviewReadPaths ? { reviewReadPaths: opts.reviewReadPaths } : {}),
       });
       handle.setInteractionResolver?.(async (req) => {
         resolverTools.push((req as { toolName?: string }).toolName ?? '?');
@@ -1190,6 +1253,41 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
         expect(followUp.some((body) => body.includes('tool-target.ts:1: needle-line'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'Review directory grep returns safe matches without credential-file contents',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-safe-grep-'));
+      writeFileSync(path.join(workingDir, 'source.ts'), 'needle-safe\n');
+      writeFileSync(path.join(workingDir, 'credentials.json'), 'needle-credentials-secret\n');
+      writeFileSync(path.join(workingDir, 'cert.pem'), 'needle-private-key-secret\n');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('grep', { pattern: 'needle', path: '.', literal: true }),
+          anthropicStreamBody('review grep finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-review-safe-grep',
+          workingDir,
+          permissionMode: 'ask',
+          resolverBehavior: 'deny',
+          reviewMode: true,
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body).join('\n');
+        expect(followUp).toContain('source.ts:1: needle-safe');
+        expect(followUp).not.toContain('credentials.json');
+        expect(followUp).not.toContain('needle-credentials-secret');
+        expect(followUp).not.toContain('cert.pem');
+        expect(followUp).not.toContain('needle-private-key-secret');
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;

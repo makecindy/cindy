@@ -937,9 +937,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 同步读不卡启动,与 app-shortcuts:get 同模式。
   layout: {
     getStateSync: (): { layout: unknown } => ipcRenderer.sendSync('layout:get'),
-    set: (layout: unknown): Promise<{ layout: unknown }> =>
+    set: (layout: unknown): Promise<{ layout: unknown; persisted: boolean }> =>
       ipcRenderer.invoke('layout:set', layout),
-    reset: (): Promise<{ layout: unknown }> => ipcRenderer.invoke('layout:reset'),
+    reset: (): Promise<{ layout: unknown; persisted: boolean }> =>
+      ipcRenderer.invoke('layout:reset'),
     onChanged: fanOutLayoutChanged,
   },
 
@@ -1198,6 +1199,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:snapshot'),
     detail: (pluginId: string): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
       ipcRenderer.invoke('plugin-market:detail', pluginId),
+    localIcons: (
+      requests: import('../shared/pluginMarket').PluginMarketLocalIconRequest[],
+    ): Promise<import('../shared/pluginMarket').PluginMarketLocalIconResult[]> =>
+      ipcRenderer.invoke('plugin-market:local-icons', requests),
     install: (
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
@@ -1777,7 +1782,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { kind: 'conflict'; appId: string }
         | { kind: 'error'; reason: string };
     }> => ipcRenderer.invoke('discordBot:disconnect'),
-    setLifecycleAnnouncement: (enabled: boolean): Promise<{
+    setLifecycleAnnouncement: (
+      enabled: boolean,
+    ): Promise<{
       ok: boolean;
       lifecycleAnnouncement: boolean;
     }> => ipcRenderer.invoke('discordBot:set-lifecycle-announcement', { enabled }),
@@ -2068,10 +2075,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /**
    * 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」,
    * renderer 收到后 patchDraft 写真实草稿。仅被控端进程消费。
-  */
+   */
   onMakerWorktreePrefApply: fanOutMakerWorktreePrefApply,
   /** 读取工作端 canonical baseRepo 对应的 live 源分支选择；未选择返回 null。 */
-  getNewMakerWorktreeBranchPreference: (baseRepo: string): Promise<{
+  getNewMakerWorktreeBranchPreference: (
+    baseRepo: string,
+  ): Promise<{
     baseRepo: string;
     sourceBranch: string;
     revision: number;
@@ -4474,6 +4483,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** 按 sessionId 拉 tab 列表 + activeTabId。 */
       list: (input: { sessionId: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:right-sidebar-tabs:list', input),
+      /** Atomically creates or returns one canonical tab for a singleton kind. */
+      ensureSingleton: (input: {
+        sessionId: string;
+        kind: string;
+        state?: unknown;
+      }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:right-sidebar-tabs:ensure-singleton', input),
       /** 新增 / 更新单个 tab(state JSON / position / kind)。state 缺省 → '{}'。 */
       upsert: (input: {
         id: string;
@@ -4491,6 +4507,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** 一次性重写 session 内 tab position(orderedIds 数组下标 = 新 position)。 */
       reorder: (input: { sessionId: string; orderedIds: string[] }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:right-sidebar-tabs:reorder', input),
+    },
+    subagentRuns: {
+      /** Durable Cindy-owned Subagent records for one parent task. */
+      list: (input: { sessionId: string }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:subagent-runs:list', input),
+      /** Activity and returned result for one durable Subagent record. */
+      detail: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
+      ): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:detail', input),
+      /** Small invalidation push; consumers re-read through list/detail. */
+      onChanged: createIpcFanOut('local-db:subagent-runs:changed'),
     },
     projectAliases: {
       list: (): Promise<unknown> => ipcRenderer.invoke('local-db:project-aliases:list'),
@@ -5013,6 +5040,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('maker:execute-desktop-command', name, ctx),
 
+    startReview: (input: {
+      sourceSessionId: string;
+      focus?: string;
+      attachments?: Array<{
+        id: string;
+        name: string;
+        path: string;
+        ext: string;
+        size: number;
+        category: 'image' | 'pdf' | 'text' | 'office' | 'file';
+        mimeType: string;
+        url?: string;
+        originalName?: string;
+        base64?: string;
+      }>;
+    }): Promise<{ ok: true; runId: string; reviewerSessionId: string }> =>
+      ipcRenderer.invoke('maker:review:start', input),
+
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',
     ): Promise<{
@@ -5023,7 +5068,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean },
+      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
     ): Promise<{
       success: boolean;
       error?: string;
@@ -5035,6 +5080,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         path?: string;
         scope?: string;
         enabled?: boolean;
+        runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+        runtimeCommandName?: string;
       }>;
     }> => ipcRenderer.invoke('maker:list-agent-skills', agentKind, params),
 
@@ -5227,8 +5274,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workerSessionId: string;
       workerId: string;
       workerPermissionMode: 'auto' | 'bypassPermissions';
-    }> =>
-      ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
+    }> => ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
 
     /**
      * F-COLLAB: 关闭 lead session 的当前协同 workflow。

@@ -11,7 +11,15 @@
  *      `set_model` id(都是用户选中的目录 id)。
  */
 
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -287,6 +295,75 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(noProxy).toContain(entry);
     }
     expect(captured.env.no_proxy).toBeUndefined();
+  });
+
+  it('locks Review sessions to the local read-only tool surface without memory, MCP, or subagents', async () => {
+    const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.getGhostRosterPrompt = vi.fn(() => 'PRIVATE ROSTER');
+    const explicitArtifact = path.join(agentHome, 'explicit-artifact.txt');
+    const dotenvPath = path.join(cwd, '.env.local');
+    writeFileSync(explicitArtifact, 'review me');
+    writeFileSync(dotenvPath, 'TOKEN=secret');
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'review-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+      planMode: true,
+      makerMemoryEnabled: true,
+      userPrompt: 'PRIVATE USER PROMPT',
+      reviewMode: true,
+      reviewReadPaths: [explicitArtifact],
+    });
+    try {
+      const toolsIndex = captured.args.indexOf('--tools');
+      expect(toolsIndex).toBeGreaterThan(-1);
+      expect(captured.args[toolsIndex + 1]).toBe('read,grep,find,ls');
+      expect(captured.mcpVendorOptions).toBeUndefined();
+      expect(deps.getGhostRosterPrompt).not.toHaveBeenCalled();
+
+      const promptIndex = captured.args.indexOf('--append-system-prompt');
+      const appendedPrompt = promptIndex >= 0 ? captured.args[promptIndex + 1] : '';
+      expect(appendedPrompt).not.toContain('PRIVATE ROSTER');
+      expect(appendedPrompt).not.toContain('PRIVATE USER PROMPT');
+
+      const configHome = captured.env.PI_CODING_AGENT_DIR;
+      expect(configHome).toBeTruthy();
+      expect(readdirSync(path.join(configHome!, 'extensions')).sort()).toEqual(['cindy-bridge.ts']);
+
+      const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
+      expect(permissionFile).toBeTruthy();
+      const reviewPermission = JSON.parse(readFileSync(permissionFile!, 'utf8')) as {
+        mode: string;
+        reviewOnly: boolean;
+        reviewReadPaths: string[];
+      };
+      expect(reviewPermission).toMatchObject({
+        mode: 'ask',
+        reviewOnly: true,
+      });
+      expect(reviewPermission.reviewReadPaths.map((item) => realpathSync.native(item))).toEqual([
+        realpathSync.native(cwd),
+        realpathSync.native(explicitArtifact),
+      ]);
+
+      await expect(
+        handle.send({
+          type: 'user',
+          content: [{ type: 'image', path: dotenvPath, mimeType: 'image/png' }],
+        }),
+      ).rejects.toThrow(/refused/i);
+      expect(captured.requests.some((request) => request.type === 'prompt')).toBe(false);
+
+      await handle.setPermissionMode?.('bypassPermissions');
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'ask',
+        reviewOnly: true,
+      });
+      expect(handle.getPlanMode?.()).toBe(false);
+    } finally {
+      await handle.close();
+    }
   });
 
   it('把 session 花名册快照追加到 Pi system prompt', async () => {

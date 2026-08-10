@@ -7,7 +7,7 @@ vi.mock('../useSkillSync', () => ({
   invalidateSkillSyncRequests: vi.fn(),
 }));
 
-import { bootstrapSkillhub, setSkillhubDataOwner } from '../useSkillhub';
+import { bootstrapSkillhub, refresh, reset, setSkillhubDataOwner } from '../useSkillhub';
 
 describe('SkillHub data-owner bootstrap', () => {
   const scan = vi.fn();
@@ -30,5 +30,28 @@ describe('SkillHub data-owner bootstrap', () => {
     await vi.waitFor(() => expect(scan).toHaveBeenCalledTimes(2));
 
     expect(scan).toHaveBeenLastCalledWith({ projects: [] });
+  });
+
+  it('makes a stale refresh wait for and return the newest scan result', async () => {
+    reset();
+    let resolveFirst!: (value: { success: true; skills: SkillhubSkill[]; sources: [] }) => void;
+    let resolveSecond!: (value: { success: true; skills: SkillhubSkill[]; sources: [] }) => void;
+    scan
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+    const latestSkill = { id: 'skill:global:latest', name: 'latest' } as SkillhubSkill;
+
+    const first = refresh();
+    const second = refresh();
+    let firstSettled = false;
+    void first.then(() => { firstSettled = true; });
+
+    resolveFirst({ success: true, skills: [], sources: [] });
+    await Promise.resolve();
+    expect(firstSettled).toBe(false);
+
+    resolveSecond({ success: true, skills: [latestSkill], sources: [] });
+    await expect(second).resolves.toEqual([latestSkill]);
+    await expect(first).resolves.toEqual([latestSkill]);
   });
 });

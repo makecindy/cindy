@@ -119,6 +119,25 @@ describe('DesktopSessionStorage.create workspaceKind', () => {
   });
 });
 
+describe('DesktopSessionStorage.create Review purpose', () => {
+  beforeEach(() => {
+    h.captured = null;
+  });
+
+  it('persists Review source in the same insert that creates the session', async () => {
+    const storage = new DesktopSessionStorage();
+    await storage.create({
+      id: 'review-session',
+      title: 'Review',
+      workDir: '/repo',
+      model: 'gpt-5.5',
+      agentKind: 'codex',
+      reviewMode: true,
+    });
+    expect(h.captured?.source).toBe('review');
+  });
+});
+
 describe('DesktopSessionStorage.create workingDir 规范化', () => {
   beforeEach(() => {
     h.captured = null;

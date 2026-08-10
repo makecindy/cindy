@@ -11,6 +11,7 @@ private let trackingInterval: TimeInterval = 0.16
 
 private enum GuideLocale: String {
     case zhCN = "zh-CN"
+    case zhTW = "zh-TW"
     case en
     case ja
     case ko
@@ -51,6 +52,21 @@ private struct GuideCopy {
                 waiting: "等待你开启",
                 dragTitle: "将 CuaDriver 拖入「{{permission}}」",
                 dragHint: "拖拽"
+            )
+        case .zhTW:
+            return GuideCopy(
+                close: "關閉",
+                turnThisOn: "開啟此項目",
+                pointsToSwitch: "指向切換開關",
+                accessibility: "輔助使用",
+                screenRecording: "螢幕錄製",
+                completeEyebrow: "權限設定完成",
+                readyTitle: "Computer Use 已準備就緒",
+                step: "開啟電腦自動操作",
+                turnOnAppTitle: "在「{{permission}}」中開啟 CuaDriver",
+                waiting: "等待你開啟",
+                dragTitle: "將 CuaDriver 拖曳至「{{permission}}」",
+                dragHint: "拖曳"
             )
         case .ja:
             return GuideCopy(

@@ -130,11 +130,13 @@ export function SkillhubFeatureLayout() {
   const skillhubProjects = useMemo<SkillhubProject[] | null>(() => {
     if (sessionsLoading) return null;
     const { projects } = groupSessions(sessions);
-    return projects.map((p) => ({
-      projectRoot: p.workingDir,
-      hash: projectHash(p.workingDir),
-      displayName: p.displayName,
-    }));
+    return projects
+      .filter((p) => p.scope === 'local')
+      .map((p) => ({
+        projectRoot: p.workingDir,
+        hash: projectHash(p.workingDir),
+        displayName: p.displayName,
+      }));
   }, [sessions, sessionsLoading]);
 
   useEffect(() => {

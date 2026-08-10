@@ -65,6 +65,26 @@ describe('maker session SEND IPC handler', () => {
     );
   });
 
+  it('does not reach the send transaction when the Main input boundary rejects Review', async () => {
+    const harness = new IpcHarness();
+    const sendToAgentAccepted = vi.fn();
+    const assertRemoteInputControlBoundary = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('Review input rejected'), { code: 'UNSUPPORTED_CAPABILITY' }),
+      );
+
+    registerMakerSessionSendHandler(harness, {
+      sendToAgentAccepted,
+      assertRemoteInputControlBoundary,
+    });
+
+    await expect(harness.invoke(MAKER_INVOKE.SEND, 'review-1', 'hello')).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CAPABILITY',
+    });
+    expect(sendToAgentAccepted).not.toHaveBeenCalled();
+  });
+
   it('keeps a validated clear token when the optional boundary hook is absent', async () => {
     const harness = new IpcHarness();
     const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });

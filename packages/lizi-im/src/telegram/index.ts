@@ -126,7 +126,15 @@ const OWNER_NOTICE_TIMEOUT_MS = 4_500;
  */
 const TYPING_REFRESH_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMs;
 const TYPING_LOOP_MAX_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMaxMs;
-/** link preview 关闭:全档出站/编辑共用,取自能力契约单一出处(见 linkPreviewDisabled)。 */
+/**
+ * link preview 关闭,取自能力契约单一出处(见 `linkPreviewDisabled`)。
+ *
+ * **覆盖面是答案这条路,不是全部出站**(原注释写的"全档出站/编辑共用"不准确):
+ * 正文/过程消息的 `sendMessage`、400 回落的纯文本 `sendMessage`、分段
+ * `sendPlainChunked`、`editMessageText` 及其 HTML 解析失败后的纯文本回落 —— 只有
+ * 这五处带它。**卡片消息、rich 主路径(`rich_message` payload)、陌生人提示、主人
+ * 通知都不带**。新增出站路径时自己决定挂不挂, 不会被这个常量自动覆盖。
+ */
 const LINK_PREVIEW_OPTIONS = {
   is_disabled: TELEGRAM_PERSONAL_CAPABILITIES.linkPreviewDisabled,
 } as const;
@@ -1212,7 +1220,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 相册成员先入群窗口(逐条, 幂等), turn 触发交给聚合器合并处理。
     if (m.media_group_id) {
       if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
-        this.emitGroupWindow(groupWindowEntryOf(m));
+        this.emitGroupWindow(groupWindowEntryOf(m), m);
       }
       this.bufferAlbumMessage(m, update.update_id);
       return;
@@ -1360,7 +1368,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // 每条群消息(触发与否)都进本地窗口 — 群上下文的数据面。相册成员在
       // 缓冲入口已逐条入窗, 这里跳过避免重复(入窗本身幂等, 跳过纯省一次写)。
       if (!opts.skipGroupWindow) {
-        this.emitGroupWindow(groupWindowEntryOf(m));
+        this.emitGroupWindow(groupWindowEntryOf(m), m);
       }
       // 群消息的历史价值与「该不该现在回答」是两件事: 上面照常入窗(数据面),
       // 这里只拦 turn 触发 —— 隔夜的 @ 不再唤起一轮回答。
@@ -1499,7 +1507,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  private emitGroupWindow(entry: Omit<TelegramGroupWindowEntry, 'botId'>): void {
+  /**
+   * 群窗口入窗的**唯一出口**, 也是受保护内容的唯一执行点。
+   *
+   * source 传原始 Telegram 消息(入站)或 send 返回的消息(自回流): 只要它带
+   * has_protected_content, 该群开了「禁止保存内容」, 这条就一个字都不落本地池
+   * —— 与官方 bot 服务端「has_protected_content 的消息不中继」同一语义。判据放
+   * 在这里而不是各调用点, 是为了让将来新增的入窗路径默认受同一条边界约束。
+   */
+  private emitGroupWindow(
+    entry: Omit<TelegramGroupWindowEntry, 'botId'>,
+    source?: Pick<TgMessage, 'has_protected_content'>,
+  ): void {
+    if (source?.has_protected_content === true) return;
     // botId 统一在此注入 — 窗口存储按 bot 命名空间隔离(换绑不串史)。
     const full: TelegramGroupWindowEntry = { ...entry, botId: String(this.botId) };
     for (const h of this.groupWindowHandlers) {
@@ -2128,7 +2148,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       text,
       ...(fileNames && fileNames.length > 0 ? { fileNames } : {}),
       sentAt: sent.date * 1000,
-    });
+    }, sent);
   }
 
   // ── owner notices / secrets ────────────────────────────────────────────────

@@ -1701,6 +1701,64 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
+  it('官方 Telegram 运行中累计多段正文，done 立即冲刷节流窗里的最后答案', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          source: { im: 'telegram', userText: 'hi' },
+          onProgress: (text: string) => emitted.push(text),
+        }),
+      );
+      await flush();
+
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'text', data: { text: '先说第一段。', isFinal: true }, source: 'codex' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted.at(-1)).toContain('先说第一段。');
+
+      // 对齐 Hermes 的事件流思路：thinking / tool 先作为结构化事件
+      // 进入共享 presenter，Telegram whole 模式再投影过程区与累计正文。
+      cb({
+        type: 'thinking',
+        data: { stage: 'final', blockId: 'check-final', text: '核对收口链路' },
+      });
+      cb({
+        type: 'tool_use',
+        data: {
+          toolUseId: 'read-final',
+          toolName: 'Read',
+          input: { file_path: '/repo/final.ts' },
+        },
+      });
+
+      // 第二段还在 1.5s trailing 窗口内就结束。旧逻辑 teardown 会清 timer，
+      // 导致这段正文从未进入 turn.progress；Telegram 路径必须立刻发累计快照。
+      cb({ type: 'text', data: { text: '最后答案。', isFinal: true }, source: 'codex' });
+      cb({ type: 'done', data: null });
+      const outcome = await p;
+
+      expect(outcome.status).toBe('ok');
+      // 工具前的短旁白只属于运行过程：进度快照要保留，正式终稿
+      // 仍按桌面消息流规则折叠它，不把过程旁白混进答案。
+      expect(outcome.finalText).toBe('最后答案。');
+      expect(emitted.at(-1)).toContain('先说第一段。\n\n最后答案。');
+      expect(emitted.at(-1)).toContain('工作中 · 2 项');
+      expect(emitted.at(-1)).toContain('核对收口链路');
+      expect(emitted.at(-1)).toContain('读取 final.ts');
+      const countAfterDone = emitted.length;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(emitted).toHaveLength(countAfterDone);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('未注入 onProgress 时零开销路径: 正常收口无异常', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),

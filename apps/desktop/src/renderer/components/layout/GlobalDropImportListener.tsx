@@ -225,7 +225,7 @@ export function GlobalDropImportListener({
           }}
         >
           <div
-            className="rounded-full border px-4 py-2 text-[13px]"
+            className="rounded-full border px-4 py-2 text-13"
             style={{
               backgroundColor: 'var(--surface-elevated)',
               borderColor: 'var(--border-default)',

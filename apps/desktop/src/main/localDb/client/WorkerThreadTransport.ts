@@ -419,10 +419,29 @@ function messageDelete(readyDb, args) {
   const markerContent = expectString(marker.content, 'contextMarker.content');
   const markerCreatedAt = expectNumber(marker.createdAt, 'contextMarker.createdAt');
   const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const rawSubagentTurnWindow = payload.subagentTurnWindow;
+  const subagentTurnWindow = rawSubagentTurnWindow === undefined
+    ? null
+    : (() => {
+        const window = asRecord(rawSubagentTurnWindow, 'subagentTurnWindow');
+        const startedAtInclusive = expectNumber(window.startedAtInclusive, 'subagentTurnWindow.startedAtInclusive');
+        const startedAtExclusive = window.startedAtExclusive === undefined
+          ? undefined
+          : expectNumber(window.startedAtExclusive, 'subagentTurnWindow.startedAtExclusive');
+        if (
+          !Number.isSafeInteger(startedAtInclusive)
+          || startedAtInclusive < 0
+          || (startedAtExclusive !== undefined
+            && (!Number.isSafeInteger(startedAtExclusive) || startedAtExclusive < 0))
+        ) {
+          throw invalidArgs('subagentTurnWindow must contain non-negative integer timestamps');
+        }
+        return { startedAtInclusive, startedAtExclusive };
+      })();
 
   return readyDb.transaction(() => {
     const selectTarget = readyDb.prepare(
-      "SELECT id, client_id AS clientId FROM messages WHERE session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL LIMIT 1",
+      "SELECT id, client_id AS clientId, tool_use_id AS toolUseId FROM messages WHERE session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL LIMIT 1",
     );
     const targets = clientIds.map((clientId) => {
       const target = selectTarget.get(sessionId, clientId);
@@ -456,6 +475,44 @@ function messageDelete(readyDb, args) {
       readyDb.prepare("DELETE FROM embedding_jobs WHERE source = 'chat' AND source_id = ?").run(target.id);
     }
 
+    const subagentRunIds = new Set();
+    const hasSubagentRuns = Boolean(
+      readyDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+    );
+    if (hasSubagentRuns) {
+      const selectLinkedSubagents = readyDb.prepare(
+        'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id = ? AND rewind_at IS NULL AND deleted_at IS NULL',
+      );
+      const parentToolUseIds = new Set(
+        targets.flatMap((target) => target.toolUseId ? [target.toolUseId] : []),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        const linkedRows = selectLinkedSubagents.all(sessionId, toolUseId);
+        for (const row of linkedRows) subagentRunIds.add(row.id);
+      }
+      if (subagentTurnWindow) {
+        const parentlessRows = subagentTurnWindow.startedAtExclusive === undefined
+          ? readyDb.prepare(
+              'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ?',
+            ).all(sessionId, subagentTurnWindow.startedAtInclusive)
+          : readyDb.prepare(
+              'SELECT id FROM subagent_runs WHERE session_id = ? AND parent_tool_use_id IS NULL AND rewind_at IS NULL AND deleted_at IS NULL AND started_at >= ? AND started_at < ?',
+            ).all(sessionId, subagentTurnWindow.startedAtInclusive, subagentTurnWindow.startedAtExclusive);
+        for (const row of parentlessRows) subagentRunIds.add(row.id);
+      }
+      const scrubSubagent = readyDb.prepare(
+        "UPDATE subagent_runs SET title = NULL, description = NULL, summary = NULL, activity = '[]', updated_at = MAX(updated_at, ?), deleted_at = ? WHERE id = ? AND session_id = ? AND rewind_at IS NULL AND deleted_at IS NULL",
+      );
+      for (const runId of subagentRunIds) {
+        const scrubbed = scrubSubagent.run(updatedAt, updatedAt, runId, sessionId);
+        if (scrubbed.changes !== 1) {
+          throw Object.assign(new Error('Subagent 删除竞态: ' + runId), {
+            code: 'PRECONDITION_FAILED',
+          });
+        }
+      }
+    }
+
     readyDb.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(sessionId);
     // 保留不含正文/元数据的最小 tombstone，阻止外部 Claude/Codex transcript
     // importer 下次 messages:list 时把同一 clientId 重新导入；本地有效记录中
@@ -485,6 +542,7 @@ function messageDelete(readyDb, args) {
         messageId: target.id,
         clientId: target.clientId,
       })),
+      subagentRunIds: [...subagentRunIds].sort(),
     };
   })();
 }
@@ -978,7 +1036,7 @@ function rewindCommit(readyDb, args) {
   const requireLatestUser = payload.requireLatestUser === true;
   const now = expectNumber(payload.now, 'now');
   const rows = readyDb.prepare(
-    'SELECT id, client_id, role, created_at, agent_meta FROM messages WHERE session_id = ? AND rewind_at IS NULL',
+    'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
   ).all(sessionId);
   // edit-last-message 原子守卫(与 worker/opHandlers/tx.ts 镜像同步):软删同一
   // 临界区内断言 target 之后没有更新的可见 user 消息,命中 → 抛错,软删不发生。
@@ -1002,8 +1060,29 @@ function rewindCommit(readyDb, args) {
     preserveMessageUuid,
   });
   const updateMessage = readyDb.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
+  const hasSubagentRuns = Boolean(
+    readyDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+  );
+  const rewindSubagentByParent = hasSubagentRuns
+    ? readyDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE session_id = ? AND rewind_at IS NULL AND parent_tool_use_id = ?')
+    : null;
+  const rewindParentlessSubagentTail = hasSubagentRuns
+    ? readyDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE session_id = ? AND rewind_at IS NULL AND parent_tool_use_id IS NULL AND started_at >= ?')
+    : null;
   readyDb.transaction(() => {
     for (const id of idsToRewind) updateMessage.run(now, id);
+    if (rewindSubagentByParent && rewindParentlessSubagentTail) {
+      const rewoundIds = new Set(idsToRewind);
+      const parentToolUseIds = new Set(
+        rows.flatMap((row) => rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : []),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        rewindSubagentByParent.run(now, sessionId, toolUseId);
+      }
+      // Mirror worker/opHandlers/tx.ts: parentless same-ms rows are ambiguous,
+      // so fail closed rather than expose work from a withdrawn branch.
+      rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
+    }
     if (sdkSessionId) {
       readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, sdk_session_id = ? WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {

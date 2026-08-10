@@ -56,6 +56,104 @@ describe('Responses → Anthropic request translation', () => {
     })).toThrowError('instructions[0].input_image');
   });
 
+  it('replays collab agent messages as Anthropic assistant text', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { role: 'user', content: 'delegate this' },
+        {
+          type: 'agent_message',
+          author: '/root/\r\n researcher',
+          content: [
+            { type: 'input_text', text: 'first finding' },
+            { type: 'encrypted_content', data: 'provider-secret' },
+            { type: 'output_text', text: 'second finding' },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,abc' }],
+        },
+      ],
+    });
+
+    expect(result.request.messages[1]).toEqual({
+      role: 'assistant',
+      content: [{
+        type: 'text',
+        text: '[collab /root/ researcher]\nfirst finding\nsecond finding',
+      }],
+    });
+    expect(result.request.messages[2].content).toEqual([{
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'abc' },
+    }]);
+    expect(JSON.stringify(result.request)).not.toContain('agent_message');
+    expect(JSON.stringify(result.request)).not.toContain('encrypted_content');
+    expect(JSON.stringify(result.request)).not.toContain('provider-secret');
+  });
+
+  it('keeps collab string, empty, and encrypted-only history distinguishable', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { role: 'user', content: 'delegate this' },
+        { type: 'agent_message', content: 'plain result' },
+        { type: 'agent_message', author: '', content: [] },
+        {
+          type: 'agent_message',
+          author: 'worker',
+          content: [{ type: 'encrypted_content', data: 'opaque' }],
+        },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+
+    expect(result.request.messages[1].content).toEqual([
+      { type: 'text', text: '[collab agent]\nplain result' },
+      { type: 'text', text: '[collab message from agent; empty content]' },
+      { type: 'text', text: '[collab message from worker; encrypted payload omitted]' },
+    ]);
+  });
+
+  it('rejects malformed collab content with its input path', () => {
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'agent_message', content: [{ type: 'image_url' }] }],
+    })).toThrowError('input[0].content.image_url');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'agent_message', content: [{ type: 'text' }] }],
+    })).toThrowError('input[0].content.text');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'agent_message', content: null }],
+    })).toThrowError('input[0].content');
+  });
+
+  it('keeps collab text inside a valid tool-use round', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { role: 'user', content: 'run it' },
+        { type: 'function_call', call_id: 'c1', name: 'run', arguments: '{}' },
+        { type: 'agent_message', author: 'worker', content: 'working result' },
+        { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+      ],
+      tools: [{ type: 'function', name: 'run', parameters: { type: 'object' } }],
+    });
+
+    expect(result.request.messages[1].content).toEqual([
+      expect.objectContaining({ type: 'tool_use', id: 'c1', name: 'run' }),
+      { type: 'text', text: '[collab worker]\nworking result' },
+    ]);
+    expect(result.request.messages[2].content).toEqual([
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'c1' }),
+    ]);
+  });
+
   it('rejects structured-output constraints instead of silently dropping them', () => {
     expect(() => translateResponsesRequest({
       model: 'claude',

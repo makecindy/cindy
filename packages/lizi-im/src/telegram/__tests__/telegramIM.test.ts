@@ -166,6 +166,7 @@ function groupMessage(args: {
   messageId: number;
   mentionBot?: boolean;
   threadId?: number;
+  hasProtectedContent?: boolean;
   ageSec?: number;
 }): TgUpdate {
   const text = args.mentionBot ? `@${BOT.username} ${args.text}` : args.text;
@@ -177,6 +178,7 @@ function groupMessage(args: {
       chat: { id: -100200, type: 'supergroup', title: 'Ops' },
       date: nowSec(args.ageSec),
       text,
+      ...(args.hasProtectedContent ? { has_protected_content: true } : {}),
       ...(args.mentionBot
         ? { entities: [{ type: 'mention', offset: 0, length: BOT.username.length + 1 }] }
         : {}),
@@ -331,6 +333,34 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(events).toHaveLength(2));
     expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '你在?' });
     expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '帮我看看这个' });
+  });
+
+  it('受保护群的消息一个字都不落本地窗口, 但仍可照常触发一轮', async () => {
+    // 「禁止保存内容」的群: 与官方 bot 服务端「has_protected_content 的消息
+    // 不中继」同一条边界 —— 本地池是个人 bot 的记忆, 不能成为绕过它的通道。
+    // 触发判定不受影响: owner @ 机器人照常起 turn, 只是不留历史。
+    const events: IMMessageEvent[] = [];
+    const windowEntries: TelegramGroupWindowEntry[] = [];
+    im.onMessage((e) => events.push(e));
+    im.onGroupWindowMessage((e) => windowEntries.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '机密闲聊', fromId: 222, messageId: 40, hasProtectedContent: true }),
+      groupMessage({
+        text: '看一下',
+        fromId: 111,
+        messageId: 41,
+        mentionBot: true,
+        hasProtectedContent: true,
+      }),
+      // 同一用例里放一条未保护消息, 证明判据只挡带标的那些。
+      groupMessage({ text: '普通闲聊', fromId: 222, messageId: 42 }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    await vi.waitFor(() => expect(windowEntries).toHaveLength(1));
+    expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '看一下' });
+    expect(windowEntries[0]).toMatchObject({ messageId: '42', text: '普通闲聊' });
+    expect(windowEntries.some((e) => e.text.includes('机密'))).toBe(false);
   });
 
   it('群多人: 全员 @bot 可触发且共享同一条群 lane; 命令仍 owner 专属', async () => {

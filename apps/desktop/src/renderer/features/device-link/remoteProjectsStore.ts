@@ -9,11 +9,12 @@
  *    DB 才是数据真相)。断链 / 设备下线时保留最近一次快照并标成 disconnected,
  *    让 All Sessions 稳定;明确撤销 / 关闭控制 / 删除才移除。**不做任何乐观预测 / 本地覆盖**——
  *    视图 = f(bootstrap snapshot + 被控端 push 流):
- *      · snapshot(`setDeviceSessions`):listing tier 订阅后拉一次有界列表 / reconnect 重拉。
+ *      · snapshot(`setDeviceSessions`):active 常驻同步；archived 由侧栏筛选按需同步，
+ *        两个状态桶只替换自身、互不覆盖。
  *      · anti-entropy(`mergeDeviceSessions`):周期满窗口列表先更新命中行并保留窗口外会话，
  *        再由 refresh 层有界补查缺席 id 的终态；未满窗口则可直接安全替换。
  *      · 增量(`applyPatch`):收到被控端 `local-db:sessions:patched` push 时就地幂等合并;
- *        status=deleted/archived → 移出分片;落到未知 session → 丢弃(后续 snapshot 带最终态)。
+ *        status=deleted → 移出分片；active/archived → 在状态桶间迁移。
  *      · 新建(`requestRemoteReseed`):`sessions:created` push 无 row 数据 → 触发该设备重拉。
  *    唯一例外是**投影层**的标题预览(`setPendingTitlePreview`):它不写分片、只在权威
  *    标题仍是系统占位(默认名 / fork 占位 / 本端登记过的合成占位)时顶替显示,被控端
@@ -24,8 +25,8 @@
  *  - **冷启动首屏借冷缓存**(`hydrateFromCache`):列表快照落在 main 的 userData
  *    (`main/device-link/mirrorCacheStore.ts`),冷启动时先画上次看到的行,免得侧边栏
  *    等一次 bootstrap 往返才出现远程项目。这不动摇「零权威状态」:种入的分片一律标
- *    **disconnected**(缓存不是 live 设备)、只在该设备还没有分片时种入,bootstrap 的
- *    `setDeviceSessions` 一到就整片替换;设备已不合格时由既有
+ *    **disconnected**(缓存不是 live 设备)、只在该设备还没有分片时种入；缓存不标记任何
+ *    状态桶已权威加载，active bootstrap 与 archived 按需请求仍会分别校准。设备已不合格时由既有
  *    `resolveIneligibleRemoteProjectAction`(它的 `hasCachedShard` 判据)收敛为
  *    disconnect / remove。缓存永不参与写路径。
  *
@@ -36,7 +37,10 @@
 import { useSyncExternalStore } from 'react';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
+import type { ListStatusFilter } from '@/lib/sessionService';
 import { clearCachedMessages } from './mirrorCacheClient';
+
+export type RemoteSessionStatus = Exclude<ListStatusFilter, 'all'>;
 
 /** 单台被控设备的内存分片。 */
 interface DeviceShard {
@@ -45,6 +49,8 @@ interface DeviceShard {
   connectionStatus: DeviceLinkConnectionStatus;
   /** 已打 device-link origin 标记的远端会话(可直接进 groupSessions)。 */
   sessions: Session[];
+  /** 已拿到过权威列表的状态桶；空数组同样需要被记住，避免每次渲染都重复拉取。 */
+  loadedStatuses: Set<RemoteSessionStatus>;
 }
 
 const shards = new Map<string, DeviceShard>();
@@ -54,6 +60,8 @@ const subs = new Set<() => void>();
  * 一边保留旧快照、一边明确告知用户「正在重新读取」。
  */
 let bootstrapLoadingDeviceIds: ReadonlySet<string> = new Set();
+/** 按需读取归档桶的设备；与 active bootstrap 分开，避免并发请求互相提前清 loading。 */
+let archivedLoadingDeviceIds: ReadonlySet<string> = new Set();
 /**
  * 最新一轮 bootstrap 以永久错误或重试耗尽告终的设备。这不是「权威空列表」；
  * 即使还保留旧 shard，UI 也必须标明读取失败。下一轮 bootstrap 开始时转 loading，
@@ -62,6 +70,8 @@ let bootstrapLoadingDeviceIds: ReadonlySet<string> = new Set();
  * 两个集合都用不可变 Set 快照，保证 useSyncExternalStore 在内容不变时引用稳定。
  */
 let bootstrapFailedDeviceIds: ReadonlySet<string> = new Set();
+/** 最新一次 archived 按需读取失败的设备；独立于 active bootstrap failure。 */
+let archivedFailedDeviceIds: ReadonlySet<string> = new Set();
 /**
  * 设备改名通知订阅(deviceId → 新名)。设备名走 REST PATCH(Device.name,不进 sessions 表),
  * 服务端不广播 presence;listing tier 把设备名缓存在自己的 eligible 表,改名时同步通知接入器
@@ -81,12 +91,23 @@ const renameSubs = new Set<(deviceId: string, name: string) => void>();
  */
 const snapshotEpoch = new Map<string, number>();
 
+function snapshotEpochKey(deviceId: string, status: RemoteSessionStatus): string {
+  return `${deviceId}\u0000${status}`;
+}
+
+function invalidateDeviceSnapshotEpochs(deviceId: string): void {
+  for (const status of ['active', 'archived'] as const) {
+    const key = snapshotEpochKey(deviceId, status);
+    snapshotEpoch.set(key, (snapshotEpoch.get(key) ?? 0) + 1);
+  }
+}
+
 /**
  * 重拉实现注入点:listing tier(useDeviceLinkRemoteProjects)挂载时注册一个「(防抖)重拉该
  * 设备会话列表」的实现,卸载时清。`requestRemoteReseed` 供 push 消费侧(makerChatStore 的
  * sessions:created 路由、applyPatch 的 unarchive 兜底)调用,不直接依赖 hook。
  */
-let reseedImpl: ((deviceId: string) => void) | null = null;
+let reseedImpl: ((deviceId: string, status: RemoteSessionStatus) => void) | null = null;
 /**
  * 首次 sessions bootstrap 的显式重试实现。与普通 reseed 分开：普通 reseed 只做一次
  * merge snapshot；用户点击「重新读取任务」必须重新 subscribe，并让失败设备重新进入
@@ -130,6 +151,8 @@ export interface RemoteDeviceSummary {
 /** 设备列表快照(缓存引用,内容不变时不换引用 → 满足 useSyncExternalStore getSnapshot 引用稳定性)。 */
 let deviceListSnapshot: RemoteDeviceSummary[] = [];
 const EMPTY_DEVICES: RemoteDeviceSummary[] = [];
+/** 已成功拿到 archived 权威列表的设备（空列表也算）；供 UI 判断 active 前置状态是否仍相关。 */
+let archivedLoadedDeviceIds: ReadonlySet<string> = new Set();
 
 /** 设备列表结构相等(顺序敏感):用于 deviceListSnapshot 引用稳定性判定。 */
 function sameDeviceList(a: RemoteDeviceSummary[], b: RemoteDeviceSummary[]): boolean {
@@ -145,6 +168,20 @@ function sameDeviceList(a: RemoteDeviceSummary[], b: RemoteDeviceSummary[]): boo
     }
   }
   return true;
+}
+
+function recomputeArchivedLoadedDeviceIds(): void {
+  const next = new Set<string>();
+  for (const shard of shards.values()) {
+    if (shard.loadedStatuses.has('archived')) next.add(shard.deviceId);
+  }
+  if (
+    next.size === archivedLoadedDeviceIds.size &&
+    [...next].every((deviceId) => archivedLoadedDeviceIds.has(deviceId))
+  ) {
+    return;
+  }
+  archivedLoadedDeviceIds = next;
 }
 
 /**
@@ -290,7 +327,42 @@ function recompute(): void {
       );
     if (!sameDeviceList(deviceListSnapshot, nextDevices)) deviceListSnapshot = nextDevices;
   }
+  recomputeArchivedLoadedDeviceIds();
   subs.forEach((fn) => fn());
+}
+
+/** 更新某个状态桶的读取态但不通知；调用方与其它 mutation 合并成一次通知。 */
+function setSessionStatusLoading(
+  deviceId: string,
+  status: RemoteSessionStatus,
+  loading: boolean,
+): boolean {
+  const source = status === 'active' ? bootstrapLoadingDeviceIds : archivedLoadingDeviceIds;
+  const had = source.has(deviceId);
+  if (had === loading) return false;
+  const next = new Set(source);
+  if (loading) next.add(deviceId);
+  else next.delete(deviceId);
+  if (status === 'active') bootstrapLoadingDeviceIds = next;
+  else archivedLoadingDeviceIds = next;
+  return true;
+}
+
+/** 更新某个状态桶的失败态但不通知；调用方与其它 mutation 合并成一次通知。 */
+function setSessionStatusFailed(
+  deviceId: string,
+  status: RemoteSessionStatus,
+  failed: boolean,
+): boolean {
+  const source = status === 'active' ? bootstrapFailedDeviceIds : archivedFailedDeviceIds;
+  const had = source.has(deviceId);
+  if (had === failed) return false;
+  const next = new Set(source);
+  if (failed) next.add(deviceId);
+  else next.delete(deviceId);
+  if (status === 'active') bootstrapFailedDeviceIds = next;
+  else archivedFailedDeviceIds = next;
+  return true;
 }
 
 /** 更新 bootstrap 状态但不通知；调用方与其它 mutation 合并成一次通知。 */
@@ -301,18 +373,8 @@ function setBootstrapState(deviceId: string, state: 'idle' | 'loading' | 'failed
   const failed = state === 'failed';
   if (wasLoading === loading && wasFailed === failed) return false;
 
-  if (wasLoading !== loading) {
-    const next = new Set(bootstrapLoadingDeviceIds);
-    if (loading) next.add(deviceId);
-    else next.delete(deviceId);
-    bootstrapLoadingDeviceIds = next;
-  }
-  if (wasFailed !== failed) {
-    const next = new Set(bootstrapFailedDeviceIds);
-    if (failed) next.add(deviceId);
-    else next.delete(deviceId);
-    bootstrapFailedDeviceIds = next;
-  }
+  if (wasLoading !== loading) setSessionStatusLoading(deviceId, 'active', loading);
+  if (wasFailed !== failed) setSessionStatusFailed(deviceId, 'active', failed);
   return true;
 }
 
@@ -338,33 +400,72 @@ const actions = {
    * 逐字节不变时跳过(避免无谓重渲染);epoch 乱序保护在调用方(listing tier)用
    * nextSnapshotEpoch/isLatestSnapshotEpoch 完成,本函数无条件替换。
    */
-  setDeviceSessions(deviceId: string, deviceName: string, rawSessions: readonly Session[]): void {
+  setDeviceSessions(
+    deviceId: string,
+    deviceName: string,
+    rawSessions: readonly Session[],
+    status: RemoteSessionStatus = 'active',
+  ): void {
     const connectionStatus: DeviceLinkConnectionStatus = 'connected';
-    const stamped = rawSessions.map((s) => stamp(s, deviceId, deviceName, connectionStatus));
+    // 状态桶本身是权威筛选条件：跨版本兼容行 / 测试夹具可能缺 status，统一按本次
+    // 请求桶补齐；refresh 层已在到达这里之前拒绝混入其它状态的协议损坏响应。
+    const stamped = rawSessions.map((session) =>
+      stamp({ ...session, status }, deviceId, deviceName, connectionStatus),
+    );
     const existing = shards.get(deviceId);
-    const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
+    const loadingStateCleared =
+      status === 'active'
+        ? setBootstrapState(deviceId, 'idle')
+        : setSessionStatusLoading(deviceId, 'archived', false);
+    const failedStateCleared =
+      status === 'active' ? false : setSessionStatusFailed(deviceId, 'archived', false);
+    const statusWasLoaded = existing?.loadedStatuses.has(status) ?? false;
+    const incomingIds = new Set(stamped.map((session) => session.id));
+    const preserved =
+      existing?.sessions
+        .filter((session) => session.status !== status && !incomingIds.has(session.id))
+        .map((session) =>
+          session.deviceLinkDeviceName === deviceName &&
+          session.deviceLinkConnectionStatus === connectionStatus
+            ? session
+            : stamp(session, deviceId, deviceName, connectionStatus),
+        ) ?? [];
+    const nextSessions =
+      status === 'active' ? [...stamped, ...preserved] : [...preserved, ...stamped];
     if (
       existing &&
       existing.connectionStatus === connectionStatus &&
-      JSON.stringify(existing.sessions) === JSON.stringify(stamped)
+      existing.deviceName === deviceName &&
+      JSON.stringify(existing.sessions) === JSON.stringify(nextSessions)
     ) {
-      // 内容不变但设备名可能变了(改名走 renameDevice,不经这里);保持引用不动。
-      if (bootstrapStateCleared) subs.forEach((fn) => fn());
+      if (!statusWasLoaded) {
+        existing.loadedStatuses.add(status);
+        recomputeArchivedLoadedDeviceIds();
+      }
+      if (loadingStateCleared || failedStateCleared || !statusWasLoaded) {
+        subs.forEach((fn) => fn());
+      }
       return;
     }
-    // 权威快照会整片替换分片:此前在片里、这次没回来的会话(patch 丢失期间被归档 /
-    // 删除)就此离场,它们的叠加层必须在这里回收 —— 之后 removeDevice 只遍历片里
-    // 还在的会话,再也够不着它们,unarchive/reseed 同一个仍是系统占位的会话时旧
-    // 预览会复活(PR #510 review P1)。
+    // 权威快照只替换同状态桶，保留另一状态桶。此前在该桶、这次没回来的会话
+    // (patch 丢失期间删除 / 跨桶迁移)就此离场；只有最终不在任一桶时才回收叠加层。
     // mergeDeviceSessions(anti-entropy 半窗口)先把窗口外的会话并回 stamped 才
     // 调到这里,不会被误判成离场。
     if (existing) {
-      const kept = new Set(stamped.map((session) => session.id));
+      const kept = new Set(nextSessions.map((session) => session.id));
       for (const session of existing.sessions) {
         if (!kept.has(session.id)) dropTitleOverlay(session.id);
       }
     }
-    shards.set(deviceId, { deviceId, deviceName, connectionStatus, sessions: stamped });
+    const loadedStatuses = new Set(existing?.loadedStatuses ?? []);
+    loadedStatuses.add(status);
+    shards.set(deviceId, {
+      deviceId,
+      deviceName,
+      connectionStatus,
+      sessions: nextSessions,
+      loadedStatuses,
+    });
     recompute();
   },
 
@@ -386,11 +487,19 @@ const actions = {
       if (!deviceId || shards.has(deviceId)) continue;
       if (device.sessions.length === 0) continue;
       const deviceName = device.deviceName?.trim() || deviceId;
+      const cachedSessions: Session[] = device.sessions.map((session) => ({
+        ...session,
+        // 历史缓存 / 测试夹具若缺 status，按旧版镜像语义视为 active；否则 active
+        // bootstrap 会把它误当成另一个状态桶永久保留下来。
+        status: session.status === 'archived' ? 'archived' : 'active',
+      }));
       shards.set(deviceId, {
         deviceId,
         deviceName,
         connectionStatus: 'disconnected',
-        sessions: device.sessions.map((s) => stamp(s, deviceId, deviceName, 'disconnected')),
+        sessions: cachedSessions.map((s) => stamp(s, deviceId, deviceName, 'disconnected')),
+        // 冷缓存只用于首屏，不是本轮权威结果；重连后 active / archived 仍要分别校准。
+        loadedStatuses: new Set(),
       });
       changed = true;
     }
@@ -411,19 +520,13 @@ const actions = {
 
   /** 清除已被更新请求抢占的 loading 状态；不把它误报成一次终态失败。 */
   clearBootstrapLoading(deviceId: string): void {
-    if (!bootstrapLoadingDeviceIds.has(deviceId)) return;
-    const next = new Set(bootstrapLoadingDeviceIds);
-    next.delete(deviceId);
-    bootstrapLoadingDeviceIds = next;
+    if (!setSessionStatusLoading(deviceId, 'active', false)) return;
     subs.forEach((fn) => fn());
   },
 
   /** 只清失败标记的兼容入口；snapshot 成功会由 setDeviceSessions 清掉全部 bootstrap 状态。 */
   clearBootstrapFailure(deviceId: string): void {
-    if (!bootstrapFailedDeviceIds.has(deviceId)) return;
-    const next = new Set(bootstrapFailedDeviceIds);
-    next.delete(deviceId);
-    bootstrapFailedDeviceIds = next;
+    if (!setSessionStatusFailed(deviceId, 'active', false)) return;
     subs.forEach((fn) => fn());
   },
 
@@ -432,42 +535,57 @@ const actions = {
    * 不能证明窗口外会话已归档/删除；因此命中行用权威值替换，未命中行先保留，再由 refresh
    * 层有界补查终态。首次无分片时等价于 setDeviceSessions。
    */
-  mergeDeviceSessions(deviceId: string, deviceName: string, rawSessions: readonly Session[]): void {
+  mergeDeviceSessions(
+    deviceId: string,
+    deviceName: string,
+    rawSessions: readonly Session[],
+    status: RemoteSessionStatus = 'active',
+  ): void {
     const existing = shards.get(deviceId);
     if (!existing) {
-      actions.setDeviceSessions(deviceId, deviceName, rawSessions);
+      actions.setDeviceSessions(deviceId, deviceName, rawSessions, status);
       return;
     }
     const incomingIds = new Set(rawSessions.map((session) => session.id));
-    actions.setDeviceSessions(deviceId, deviceName, [
-      ...rawSessions,
-      ...existing.sessions.filter((session) => !incomingIds.has(session.id)),
-    ]);
+    actions.setDeviceSessions(
+      deviceId,
+      deviceName,
+      [
+        ...rawSessions,
+        ...existing.sessions.filter(
+          (session) => session.status === status && !incomingIds.has(session.id),
+        ),
+      ],
+      status,
+    );
   },
 
   /**
    * 应用一条被控端 `local-db:sessions:patched` 增量(push 驱动镜像核心)。幂等:
-   *  - status ∈ {deleted, archived} → 从分片移除该会话(active 视图不含)。
+   *  - status=deleted → 从分片移除；active/archived → 在两个已加载状态桶间迁移。
    *  - 其它字段(title/pinnedAt/model/effort/...)→ 就地合并。
-   *  - 落到未知 session:若 status=active(unarchive 应重新出现)→ 触发 reseed 拉回;否则丢弃
-   *    (后续 snapshot 自带最终态;对不在 active 视图的会话的改动控制端不关心)。
+   *  - 落到未知 session:active 一律重拉；archived 仅在归档桶已加载时重拉，避免后台
+   *    为用户尚未查看的历史记录额外取数。
    */
   applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
-    const terminal = patch.status === 'deleted' || patch.status === 'archived';
-    // 终态清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
+    const deleted = patch.status === 'deleted';
+    // 删除清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
     // 还没有分片,但它完全可能有一份上次打开时留下的消息缓存文件 —— 那时早退就等于把
     // 「别的控制端刚删掉的会话」的正文一直留在盘上,直到 LRU 逐出 / 设备移除 / 登出
-    // (review: codex P1)。缓存是纯优化,多清一次无害。
-    if (terminal) clearCachedMessages(deviceId, sessionId);
+    // (review: codex P1)。归档仍可从 Archived / All 打开，必须保留缓存供离线查看。
+    if (deleted) clearCachedMessages(deviceId, sessionId);
     const shard = shards.get(deviceId);
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
     if (idx === -1) {
-      if (patch.status === 'active') requestRemoteReseed(deviceId);
+      if (patch.status === 'active') requestRemoteReseed(deviceId, 'active');
+      if (patch.status === 'archived' && shard.loadedStatuses.has('archived')) {
+        requestRemoteReseed(deviceId, 'archived');
+      }
       return;
     }
     const status = patch.status;
-    if (status === 'deleted' || status === 'archived') {
+    if (status === 'deleted') {
       // 叠加层随会话一起离场:留着的话 removeDevice 也回收不到(它只遍历分片里还在的
       // 会话),之后 unarchive / reseed 会把边界前的旧预览顶回一个仍是系统占位的
       // 会话上(PR #510 review)。
@@ -476,6 +594,10 @@ const actions = {
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       recompute();
       return;
+    }
+    if (status === 'archived') {
+      // 归档后仍保留完整行，供已归档 / 全部筛选直接展示；标题即时预览不跨归档边界。
+      dropTitleOverlay(sessionId);
     }
     const wasPinned = shard.sessions[idx]?.pinnedAt != null;
     const unpinned =
@@ -492,7 +614,7 @@ const actions = {
         : s,
     );
     recompute();
-    if (wasPinned && unpinned) requestRemoteReseed(deviceId);
+    if (wasPinned && unpinned) requestRemoteReseed(deviceId, 'active');
   },
 
   /**
@@ -518,11 +640,24 @@ const actions = {
    * connecting 等瞬态断线,避免 All Sessions 因网络抖动反复增删远程会话。
    */
   markDeviceDisconnected(deviceId: string): void {
-    snapshotEpoch.set(deviceId, (snapshotEpoch.get(deviceId) ?? 0) + 1);
+    invalidateDeviceSnapshotEpochs(deviceId);
     const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
+    const archivedLoadingCleared = setSessionStatusLoading(deviceId, 'archived', false);
+    const archivedFailureCleared = setSessionStatusFailed(deviceId, 'archived', false);
     const shard = shards.get(deviceId);
+    // 旧 archived 行可继续作断线缓存，但断线期间的 push 不会补播；重连后必须重新拉取，
+    // 不能让「曾加载过」永久挡住按需校准。
+    const archivedLoadedCleared = shard?.loadedStatuses.delete('archived') ?? false;
     if (!shard || shard.connectionStatus === 'disconnected') {
-      if (bootstrapStateCleared) subs.forEach((fn) => fn());
+      if (archivedLoadedCleared) recomputeArchivedLoadedDeviceIds();
+      if (
+        bootstrapStateCleared ||
+        archivedLoadingCleared ||
+        archivedFailureCleared ||
+        archivedLoadedCleared
+      ) {
+        subs.forEach((fn) => fn());
+      }
       return;
     }
     shard.connectionStatus = 'disconnected';
@@ -537,12 +672,22 @@ const actions = {
   markAllDisconnected(): void {
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
     const bootstrapStateChanged =
-      bootstrapLoadingDeviceIds.size > 0 || bootstrapFailedDeviceIds.size > 0;
+      bootstrapLoadingDeviceIds.size > 0 ||
+      archivedLoadingDeviceIds.size > 0 ||
+      bootstrapFailedDeviceIds.size > 0 ||
+      archivedFailedDeviceIds.size > 0;
     if (bootstrapLoadingDeviceIds.size > 0) bootstrapLoadingDeviceIds = new Set();
+    if (archivedLoadingDeviceIds.size > 0) archivedLoadingDeviceIds = new Set();
     if (bootstrapFailedDeviceIds.size > 0) bootstrapFailedDeviceIds = new Set();
+    if (archivedFailedDeviceIds.size > 0) archivedFailedDeviceIds = new Set();
     let shardChanged = false;
+    let archivedLoadedChanged = false;
     for (const shard of shards.values()) {
-      if (!snapshotEpoch.has(shard.deviceId)) snapshotEpoch.set(shard.deviceId, 1);
+      for (const status of ['active', 'archived'] as const) {
+        const key = snapshotEpochKey(shard.deviceId, status);
+        if (!snapshotEpoch.has(key)) snapshotEpoch.set(key, 1);
+      }
+      if (shard.loadedStatuses.delete('archived')) archivedLoadedChanged = true;
       if (shard.connectionStatus === 'disconnected') continue;
       shardChanged = true;
       shard.connectionStatus = 'disconnected';
@@ -552,7 +697,10 @@ const actions = {
       }));
     }
     if (shardChanged) recompute();
-    else if (bootstrapStateChanged) subs.forEach((fn) => fn());
+    else {
+      if (archivedLoadedChanged) recomputeArchivedLoadedDeviceIds();
+      if (bootstrapStateChanged || archivedLoadedChanged) subs.forEach((fn) => fn());
+    }
   },
 
   /** 移除某台设备的所有远端会话(访问撤销 / 关被控 / 本机禁用控制 / 删除)。 */
@@ -560,7 +708,7 @@ const actions = {
     // **自增**该设备 epoch(不 delete,见 snapshotEpoch 注释的 ABA):在途 refreshRemoteDeviceSessions
     // 的 epoch 立即失效,且下次 bootstrap 拿到更高 epoch,不会与断连前在途的 epoch 撞值。即使尚未建
     // shard(首拉未完成就被移除)也要 bump,否则在途首拉 await 回来仍能通过 isLatestSnapshotEpoch 加回。
-    snapshotEpoch.set(deviceId, (snapshotEpoch.get(deviceId) ?? 0) + 1);
+    invalidateDeviceSnapshotEpochs(deviceId);
     // 标题叠加层随分片一起丢弃:撤销授权 / 关闭控制后该设备的会话已不在视图里,
     // 留着会在下次重新接入时把边界前的旧预览顶回一个仍是系统占位的会话上。
     for (const session of shards.get(deviceId)?.sessions ?? []) {
@@ -568,8 +716,12 @@ const actions = {
     }
     const shardDeleted = shards.delete(deviceId);
     const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
+    const archivedLoadingCleared = setSessionStatusLoading(deviceId, 'archived', false);
+    const archivedFailureCleared = setSessionStatusFailed(deviceId, 'archived', false);
     if (shardDeleted) recompute();
-    else if (bootstrapStateCleared) subs.forEach((fn) => fn());
+    else if (bootstrapStateCleared || archivedLoadingCleared || archivedFailureCleared) {
+      subs.forEach((fn) => fn());
+    }
   },
 
   /** 清空所有远端项目(登出 / device-link stopped / 卸载)。 */
@@ -583,9 +735,14 @@ const actions = {
     landedSystemTitles.clear();
     synthesizedPreviewSessions.clear();
     const bootstrapStateChanged =
-      bootstrapLoadingDeviceIds.size > 0 || bootstrapFailedDeviceIds.size > 0;
+      bootstrapLoadingDeviceIds.size > 0 ||
+      archivedLoadingDeviceIds.size > 0 ||
+      bootstrapFailedDeviceIds.size > 0 ||
+      archivedFailedDeviceIds.size > 0;
     if (bootstrapLoadingDeviceIds.size > 0) bootstrapLoadingDeviceIds = new Set();
+    if (archivedLoadingDeviceIds.size > 0) archivedLoadingDeviceIds = new Set();
     if (bootstrapFailedDeviceIds.size > 0) bootstrapFailedDeviceIds = new Set();
+    if (archivedFailedDeviceIds.size > 0) archivedFailedDeviceIds = new Set();
     if (shards.size === 0) {
       if (bootstrapStateChanged) subs.forEach((fn) => fn());
       return;
@@ -652,8 +809,43 @@ const actions = {
   },
 
   /** refresh anti-entropy 用:取某设备当前缓存分片，调用方只读。 */
-  getDeviceSessions(deviceId: string): readonly Session[] {
-    return shards.get(deviceId)?.sessions ?? EMPTY;
+  getDeviceSessions(deviceId: string, status?: RemoteSessionStatus): readonly Session[] {
+    const sessions = shards.get(deviceId)?.sessions ?? EMPTY;
+    return status ? sessions.filter((session) => session.status === status) : sessions;
+  },
+
+  /** 该设备的指定状态桶是否已成功拿到过权威列表（权威空数组也算）。 */
+  hasLoadedSessionStatus(deviceId: string, status: RemoteSessionStatus): boolean {
+    return shards.get(deviceId)?.loadedStatuses.has(status) ?? false;
+  },
+
+  /** 按需状态桶开始读取；重复调用保持幂等。 */
+  markSessionStatusLoading(deviceId: string, status: RemoteSessionStatus): void {
+    const loadingChanged = setSessionStatusLoading(deviceId, status, true);
+    const failureCleared = setSessionStatusFailed(deviceId, status, false);
+    if (!loadingChanged && !failureCleared) return;
+    subs.forEach((fn) => fn());
+  },
+
+  /** 指定状态桶当前是否在读取；供按 device+status 单飞判断。 */
+  isSessionStatusLoading(deviceId: string, status: RemoteSessionStatus): boolean {
+    return (status === 'active' ? bootstrapLoadingDeviceIds : archivedLoadingDeviceIds).has(
+      deviceId,
+    );
+  },
+
+  /** 按需状态桶读取失败 / 被抢占时清 loading，不影响另一个状态桶的请求。 */
+  clearSessionStatusLoading(deviceId: string, status: RemoteSessionStatus): void {
+    if (!setSessionStatusLoading(deviceId, status, false)) return;
+    subs.forEach((fn) => fn());
+  },
+
+  /** 指定状态桶读取终态失败：清 loading 并保留可见失败态。 */
+  markSessionStatusFailed(deviceId: string, status: RemoteSessionStatus): void {
+    const loadingCleared = setSessionStatusLoading(deviceId, status, false);
+    const failureChanged = setSessionStatusFailed(deviceId, status, true);
+    if (!loadingCleared && !failureChanged) return;
+    subs.forEach((fn) => fn());
   },
 
   /**
@@ -719,16 +911,36 @@ const actions = {
     return bootstrapFailedDeviceIds;
   },
 
+  /** 正在按需读取 archived 桶的设备；不得污染 active bootstrap 的全局就绪信号。 */
+  getArchivedLoadingDeviceIds(): ReadonlySet<string> {
+    return archivedLoadingDeviceIds;
+  },
+
+  /** archived 桶最新一次读取失败的设备；只由 archived/all 侧栏筛选消费。 */
+  getArchivedFailedDeviceIds(): ReadonlySet<string> {
+    return archivedFailedDeviceIds;
+  },
+
+  /** 已成功加载 archived 权威列表的设备；用于隔离尚未完成的 active 前置 bootstrap。 */
+  getArchivedLoadedDeviceIds(): ReadonlySet<string> {
+    return archivedLoadedDeviceIds;
+  },
+
   /** snapshot 乱序保护:发起一次全量拉取前取新 epoch。 */
-  nextSnapshotEpoch(deviceId: string): number {
-    const n = (snapshotEpoch.get(deviceId) ?? 0) + 1;
-    snapshotEpoch.set(deviceId, n);
+  nextSnapshotEpoch(deviceId: string, status: RemoteSessionStatus = 'active'): number {
+    const key = snapshotEpochKey(deviceId, status);
+    const n = (snapshotEpoch.get(key) ?? 0) + 1;
+    snapshotEpoch.set(key, n);
     return n;
   },
 
   /** snapshot 乱序保护:await 回来后判断本次拉取是否仍是最新一次(否则丢弃结果)。 */
-  isLatestSnapshotEpoch(deviceId: string, epoch: number): boolean {
-    return snapshotEpoch.get(deviceId) === epoch;
+  isLatestSnapshotEpoch(
+    deviceId: string,
+    epoch: number,
+    status: RemoteSessionStatus = 'active',
+  ): boolean {
+    return snapshotEpoch.get(snapshotEpochKey(deviceId, status)) === epoch;
   },
 };
 
@@ -748,7 +960,9 @@ function subscribeRename(fn: (deviceId: string, name: string) => void): () => vo
 }
 
 /** listing tier 挂载时注册「重拉某设备」的实现;卸载时传 null 清。 */
-export function setRemoteReseedImpl(fn: ((deviceId: string) => void) | null): void {
+export function setRemoteReseedImpl(
+  fn: ((deviceId: string, status: RemoteSessionStatus) => void) | null,
+): void {
   reseedImpl = fn;
 }
 
@@ -763,8 +977,28 @@ export function setRemoteSessionBootstrapRetryImpl(fn: ((deviceId: string) => vo
  *  - applyPatch 收到未知 session 的 status=active(unarchive)→ 重拉补回。
  * 实现(含防抖)由 listing tier 注入;未挂载时 no-op。
  */
-export function requestRemoteReseed(deviceId: string): void {
-  reseedImpl?.(deviceId);
+export function requestRemoteReseed(
+  deviceId: string,
+  status: RemoteSessionStatus = 'active',
+): void {
+  reseedImpl?.(deviceId, status);
+}
+
+/**
+ * 侧栏状态筛选按需确保远程状态桶已加载。active 由 listing tier 常驻同步；archived
+ * 仅在用户查看「已归档 / 全部」时调用。请求在途或桶已权威落地时 no-op。
+ */
+export function requestRemoteSessionStatus(deviceId: string, status: RemoteSessionStatus): void {
+  if (actions.hasLoadedSessionStatus(deviceId, status)) return;
+  retryRemoteSessionStatus(deviceId, status);
+}
+
+/** 失败恢复入口：忽略“曾成功加载”标记，强制按 device+status 重新拉取。 */
+export function retryRemoteSessionStatus(deviceId: string, status: RemoteSessionStatus): void {
+  if (actions.isSessionStatusLoading(deviceId, status)) return;
+  if (!reseedImpl) return;
+  actions.markSessionStatusLoading(deviceId, status);
+  reseedImpl(deviceId, status);
 }
 
 /** 用户可见错误态的重试入口：重新订阅并拉取该设备的首次任务快照。 */
@@ -785,6 +1019,21 @@ export function useRemoteDevices(): RemoteDeviceSummary[] {
 /** 组件内订阅：bootstrap 已终态失败、下一次重试尚未开始的设备集合。 */
 export function useRemoteBootstrapFailedDeviceIds(): ReadonlySet<string> {
   return useSyncExternalStore(subscribe, actions.getBootstrapFailedDeviceIds);
+}
+
+/** 归档状态按需读取中的设备；与 active bootstrap loading 严格隔离。 */
+export function useRemoteArchivedLoadingDeviceIds(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, actions.getArchivedLoadingDeviceIds);
+}
+
+/** 归档状态按需读取失败的设备；与 active bootstrap failure 严格隔离。 */
+export function useRemoteArchivedFailedDeviceIds(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, actions.getArchivedFailedDeviceIds);
+}
+
+/** 已成功拿到 archived 权威列表的设备（权威空数组也算）。 */
+export function useRemoteArchivedLoadedDeviceIds(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, actions.getArchivedLoadedDeviceIds);
 }
 
 /** 组件内订阅：当前正在重新读取任务快照的设备集合。 */

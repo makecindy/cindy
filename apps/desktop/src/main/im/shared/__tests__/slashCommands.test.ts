@@ -29,6 +29,7 @@ vi.mock('../sessionRepo', async (importOriginal) => ({
 vi.mock('../../binding', () => ({
   bindingStore: {
     get: vi.fn(),
+    detach: vi.fn(),
     listByIdentity: vi.fn(() => []),
   },
   executeDetach: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock('../controlState', () => ({
 import type { ChannelIM, TextChannelIM } from '@cindy/im';
 
 import { ui } from '../../feishu/uiText';
+import { ui as telegramUi } from '../../telegram/uiText';
 import { createSlashHandlers } from '../slashCommands';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
@@ -69,6 +71,8 @@ function makeRepo(overrides: Partial<ImSessionRepo> = {}): ImSessionRepo {
   return {
     sessionIdFor: vi.fn(() => 'feishu-session'),
     findActiveSession: vi.fn(async () => defaultRow),
+    peekSession: vi.fn(async () => defaultRow),
+    peekSessionById: vi.fn(async () => null),
     prepareNewSession: vi.fn(async () => defaultRow),
     createSession: vi.fn(async () => defaultRow),
     getDefaultEffortFor: vi.fn(() => 'high' as const),
@@ -411,6 +415,220 @@ describe('IM slash commands', () => {
     expect(cards.buildControlPickerCard).not.toHaveBeenCalled();
     expect(cards.buildProjectPickerCard).not.toHaveBeenCalled();
     expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
+  });
+
+  const SLASH_CTX = { botContextId: 'bot', userId: 'ou_user' };
+
+  describe('/settings', () => {
+    it('Telegram: 按官方 bot 的同一结构给出五项配置', async () => {
+      // 官方 bot 的 /settings 是服务端渲染的固定五行(项目 / Agent / 模型 /
+      // 强度 / 权限)。个人侧照同一结构给, 两个 bot 的用户看到的是同一份东西。
+      // 固件的托管目录恰好等于 defaultRow.workingDir, 这里换一个真项目目录,
+      // 才验得到「显示目录名」这条路径。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({ ...defaultRow, workingDir: 'D:\\work\\XDMaker' })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：XDMaker'); // 目录名, 不是绝对路径
+      expect(text).toContain('Agent：claude-code');
+      expect(text).toContain('模型：claude-opus-4-8');
+      expect(text).toContain('推理强度：xhigh');
+      expect(text).toContain('权限：auto');
+    });
+
+    it('没有该文案的渠道回未知命令 —— 不硬造一个配置概念', async () => {
+      const { handlers } = makeHarness(); // 飞书 ui 没有 settings 文案
+      expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('/settings');
+      expect(text).not.toContain('claude-opus-4-8');
+    });
+
+    it('只读: 不建会话、不复活软删行', async () => {
+      // resolveRouteTarget 没有现成会话时会建一条, 其内部的 findActiveSession
+      // 还会把软删行翻回 active 并广播 —— 问一句「我现在什么配置」不该有这些
+      // 副作用。
+      const repo = makeRepo();
+      const turnRunner = makeTurnRunner();
+      const { handlers } = makeHarness({ repo, turnRunner, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.peekSession).toHaveBeenCalledOnce();
+      expect(repo.createSession).not.toHaveBeenCalled();
+      expect(repo.prepareNewSession).not.toHaveBeenCalled();
+      expect(repo.findActiveSession).not.toHaveBeenCalled();
+      expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
+    });
+
+    it('还没有会话行时报渠道默认值, 项目名不是空串', async () => {
+      const repo = makeRepo({ peekSession: vi.fn(async () => null) });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：对话（托管目录）');
+      expect(text).toContain('Agent：claude-code');
+      expect(text).not.toContain('项目：\n');
+    });
+
+    it('无会话时的默认值走建会话那条解析, 不读静态 adapter.config', async () => {
+      // 用户在设置页把新会话默认值改成别的 agent/模型后, adapter.config 还是
+      // 出厂那份 —— 照它报就等于告诉用户一个他下一条消息根本得不到的配置, 甚至
+      // 可能是已下架的模型。prepareNewSession 走的正是建会话那条默认值解析
+      // (readImDefaultSettings + 供应商目录 reconcile), 且只算不写库。
+      const prepared: ImSessionRow = {
+        ...defaultRow,
+        agentKind: 'codex',
+        model: 'gpt-5.6-sol',
+        effort: 'medium',
+        permissionMode: 'plan',
+      };
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => null),
+        prepareNewSession: vi.fn(async () => prepared),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.prepareNewSession).toHaveBeenCalledOnce();
+      expect(repo.createSession).not.toHaveBeenCalled();
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('Agent：codex');
+      expect(text).toContain('模型：gpt-5.6-sol');
+      expect(text).toContain('推理强度：medium');
+      expect(text).toContain('权限：plan');
+    });
+
+    it('/ctr 接管中: 报的是被接管那条会话, 不是接管前的配置', async () => {
+      // 接管期间下一条消息、/model、/permission 走的都是 binding 命中的 desktop
+      // 会话。总览无条件读 Telegram 自己那行, 就会和同一屏里的其它命令打架。
+      const { bindingStore } = await import('../../binding');
+      (bindingStore.get as ReturnType<typeof vi.fn>).mockReturnValueOnce('attached-session');
+      const attached: ImSessionRow = {
+        ...defaultRow,
+        id: 'attached-session',
+        workingDir: 'D:\\work\\Attached',
+        model: 'claude-sonnet-5',
+        permissionMode: 'plan',
+      };
+      const repo = makeRepo({ peekSessionById: vi.fn(async () => attached) });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.peekSessionById).toHaveBeenCalledWith('attached-session');
+      expect(repo.peekSession).not.toHaveBeenCalled();
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：Attached');
+      expect(text).toContain('模型：claude-sonnet-5');
+      expect(text).toContain('权限：plan');
+    });
+
+    it('POSIX 根目录的项目仍显示成项目, 不被改判成「对话」', async () => {
+      // '/' 按分隔符切完一段不剩。取不到末段就回落到「对话」的话, 一个货真价实
+      // 的项目会被报成对话 —— listProjectsForControl 并不排除根目录, 它在选择器
+      // 里就显示成 '/'。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({
+          ...defaultRow,
+          workingDir: '/',
+          workspaceKind: 'project' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：/');
+      expect(text).not.toContain('项目：对话');
+    });
+
+    it('Windows 盘符根目录显示成 C:/, 不缩成 C:', async () => {
+      // 切完只剩 `C:` —— 它在 Windows 里指「该盘的当前目录」, 不是根目录, 拿它
+      // 当项目名会指向另一个地方。远程控制下一条 Windows 会话完全可能由 macOS
+      // 上的主进程渲染, 所以这条不能靠 path.win32 或运行平台兜。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({
+          ...defaultRow,
+          workingDir: 'C:/',
+          workspaceKind: 'project' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：C:/');
+      expect(text).not.toContain('项目：对话');
+    });
+
+    it('Windows 项目目录仍取末段, 不受盘符段影响', async () => {
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({
+          ...defaultRow,
+          workingDir: 'C:\\Users\\chris\\cindy',
+          workspaceKind: 'project' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：cindy');
+    });
+
+    it('接管的是 desktop 对话会话 → 显示「对话」, 不把内部 UUID 当项目名', async () => {
+      // workspaceKind 与路径在 schema 里是解耦的: 一条 dialogue 会话的目录既不是
+      // 项目、也不等于本渠道的托管目录(末段常是内部 UUID), 只比对路径判不出来。
+      const { bindingStore } = await import('../../binding');
+      (bindingStore.get as ReturnType<typeof vi.fn>).mockReturnValueOnce('attached-dialogue');
+      const repo = makeRepo({
+        peekSessionById: vi.fn(async () => ({
+          ...defaultRow,
+          id: 'attached-dialogue',
+          workingDir: 'D:\\dialogues\\9f1c2b7e-0a44-4c1d-9b3e-77d0f2a1c8e5',
+          workspaceKind: 'dialogue' as const,
+        })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：对话（托管目录）');
+      expect(text).not.toContain('9f1c2b7e');
+    });
+
+    it('binding 指向的会话已失效 → 回落到渠道自己那行, 只读不 detach', async () => {
+      const { bindingStore } = await import('../../binding');
+      (bindingStore.get as ReturnType<typeof vi.fn>).mockReturnValueOnce('gone-session');
+      const repo = makeRepo({
+        peekSessionById: vi.fn(async () => null),
+        peekSession: vi.fn(async () => ({ ...defaultRow, workingDir: 'D:\\work\\XDMaker' })),
+      });
+      const { handlers } = makeHarness({ repo, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      expect(repo.peekSession).toHaveBeenCalledOnce();
+      expect(bindingStore.detach).not.toHaveBeenCalled();
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：XDMaker');
+    });
+
+    it('目录是渠道托管目录时显示「对话」, 不露内部路径名', async () => {
+      // ensureWorkingDir 造的是 `telegram-<botId>` 这种内部目录, 它不是项目名。
+      const repo = makeRepo({
+        peekSession: vi.fn(async () => ({ ...defaultRow, workingDir: 'F:\\XDMaker' })),
+      });
+      const { handlers } = makeHarness({
+        repo,
+        adapterOverrides: {
+          ui: telegramUi,
+          sessions: {
+            source: 'feishu',
+            sessionIdFor: () => 'feishu-session',
+            defaultTitle: () => 'Feishu',
+            ensureWorkingDir: () => 'F:\\XDMaker',
+            extraInsertColumns: () => ({}),
+          },
+        },
+      });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('项目：对话（托管目录）');
+      expect(text).not.toContain('XDMaker');
+    });
   });
 
   describe('/project (projectSwitching channels)', () => {

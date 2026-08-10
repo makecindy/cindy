@@ -506,6 +506,7 @@ export function RightSidebarShell({
           <EmptyState
             onAddFileTab={() => handleAdd('file-browser')}
             onAddReviewTab={() => handleAdd('review')}
+            onAddSubagentsTab={() => handleAdd('subagents')}
             onAddBackgroundTasksTab={() => handleAdd('background-tasks')}
             onAddResourceUsageTab={() => handleAdd('resource-usage')}
             onAddBrowserTab={() => handleAdd('web-browser')}
@@ -642,7 +643,7 @@ function PluginBodyHost({
 /** Plugin 未注册的兜底。 */
 function PlaceholderBody({ tab, t }: { tab: TabState; t: ReturnType<typeof useTranslation>['t'] }) {
   return (
-    <div className="flex flex-1 items-center justify-center text-[12px] text-[var(--text-tertiary)]">
+    <div className="flex flex-1 items-center justify-center text-12 text-[var(--text-tertiary)]">
       <span>{t('rightSidebar.tabs.placeholderHint', { kind: tab.kind })}</span>
     </div>
   );
