@@ -33,12 +33,13 @@ export interface SessionStatusChangeItem {
 }
 
 /**
- * host 回调结果。NOT_FOUND 表示批次里至少有一个 id 不存在 —— host 不做任何写入
- * (全有才写,避免半应用),message 里带上缺失的 id 方便 LLM 自纠。
+ * host 回调结果。NOT_FOUND 表示批次里至少有一个 id 不存在；
+ * PRECONDITION_FAILED 表示目标已经删除，通用状态工具不能将其复活。
+ * 两种情况 host 都不做任何写入（全有且可变更才写，避免半应用）。
  */
 export type SetSessionsStatusResult = ControlResult<
   { changed: SessionStatusChangeItem[] },
-  'NOT_FOUND'
+  'NOT_FOUND' | 'PRECONDITION_FAILED'
 >;
 
 export interface ArchiveSessionsDeps {
@@ -51,13 +52,15 @@ export interface ArchiveSessionsDeps {
 
 const ARCHIVE_DESCRIPTION =
   `批量归档 ${BRAND_NAME} 历史对话/session(把 status 置为 archived,从侧栏 active 列表移出)。` +
-  '归档可逆、不删数据,要恢复用 unarchive_sessions。适合"清理已完成/过期会话"。' +
+  '归档可逆、不删数据,要恢复用 unarchive_sessions；已删除的 session 不能归档或恢复。' +
+  '适合"清理已完成/过期会话"。' +
   '建议先用 history/list_sessions 找到目标 session_id。' +
-  '失败码: NOT_FOUND(某些 id 不存在,整批不写) / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
+  '失败码: NOT_FOUND(某些 id 不存在,整批不写) / PRECONDITION_FAILED(目标已删除) / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
 
 const UNARCHIVE_DESCRIPTION =
   `批量取消归档 ${BRAND_NAME} 历史对话/session(把 status 置回 active,恢复到侧栏 active 列表)。` +
-  '是 archive_sessions 的逆操作。失败码: NOT_FOUND / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
+  '是 archive_sessions 的逆操作；已删除的 session 不能通过此工具复活。' +
+  '失败码: NOT_FOUND / PRECONDITION_FAILED(目标已删除) / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
 
 function dedupe(ids: string[]): { ids: string[]; duplicate: string | null } {
   const seen = new Set<string>();

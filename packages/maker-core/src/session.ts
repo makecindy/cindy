@@ -262,6 +262,19 @@ export interface SessionSendOptions extends SendOptions {
   onDispatching?: () => void;
 }
 
+export interface SessionTurnLifecycleObserver {
+  /** Awaited after option validation and before any provider-owned start hook or send. */
+  beforeProviderStart(turnGeneration: number): void | Promise<void>;
+  /** Called when a prepared generation never crosses the provider dispatch boundary. */
+  onUndispatched(turnGeneration: number): void | Promise<void>;
+  /** Called before event listeners for a foreground unclaimed done or terminal error. */
+  onTerminal(input: {
+    turnGeneration: number;
+    event: AgentEvent;
+    isCurrentGeneration: boolean;
+  }): void | Promise<void>;
+}
+
 /**
  * Session.send 的产品层结果。
  * accepted=true 表示 vendor handle.send 已经跨过 dispatch 边界；onAccepted 只表示
@@ -300,6 +313,7 @@ export class Session {
   private readonly eventListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
+  private turnLifecycleObserver: SessionTurnLifecycleObserver | null = null;
   private status: SessionStatus = 'active';
   /**
    * 同一 Session 的并发 close 共享一次底层关闭过程。renderer 与 main 生命周期钩子可能
@@ -459,6 +473,7 @@ export class Session {
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     const previousTurnGeneration = this.turnGeneration;
     this.turnGeneration += 1;
+    const reservedTurnGeneration = this.turnGeneration;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
@@ -466,6 +481,8 @@ export class Session {
     let turnDispatched = false;
     let previousTurnOrigin: SendOrigin | null = null;
     let previousTurnAttemptToken: number | null = null;
+    const turnLifecycleObserver = this.turnLifecycleObserver;
+    let turnLifecyclePrepared = false;
     const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
       if (!reservation.cancelled && this.sendReservation === reservation) return null;
       if (this.sendReservation === reservation) this.sendReservation = null;
@@ -478,6 +495,10 @@ export class Session {
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
+      if (turnLifecycleObserver) {
+        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration);
+        turnLifecyclePrepared = true;
+      }
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
       if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
@@ -558,6 +579,16 @@ export class Session {
         // an old terminal event releases it; no tail closes the ambiguous
         // Session so Maker can rebuild before the next send.
         this.armTerminalErrorDrain(previousTurnGeneration);
+      }
+      if (turnLifecyclePrepared && !turnDispatched) {
+        try {
+          await turnLifecycleObserver?.onUndispatched(reservedTurnGeneration);
+        } catch (error) {
+          this.logger.warn('turn lifecycle undispatched cleanup failed', {
+            turnGeneration: reservedTurnGeneration,
+            error: String(error),
+          });
+        }
       }
     }
   }
@@ -1144,6 +1175,10 @@ export class Session {
     this.interactionListener = listener;
   }
 
+  setTurnLifecycleObserver(observer: SessionTurnLifecycleObserver | null): void {
+    this.turnLifecycleObserver = observer;
+  }
+
   // ── 内部 ──────────────────────────────────────────────────────────────────
 
   private ensureActive(): void {
@@ -1182,15 +1217,17 @@ export class Session {
    * (review #944 第二轮)。
    */
   private fanOutEvent(event: AgentEvent, observedGeneration = this.turnGeneration): void {
-    this.lastEventAt = Date.now();
+    const isBackgroundEvent = event.turnScope === 'background';
+    if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     const isCurrentGeneration = observedGeneration === this.turnGeneration;
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
-    if (isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
+    if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
       event.turnOrigin = this.currentTurnOrigin;
     }
     if (
+      !isBackgroundEvent &&
       isCurrentGeneration &&
       this.currentTurnAttemptToken !== null &&
       event.turnAttemptToken === undefined
@@ -1237,9 +1274,35 @@ export class Session {
       this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
+    if (isTerminal && !isBackgroundEvent) {
+      try {
+        const pending = this.turnLifecycleObserver?.onTerminal({
+          turnGeneration: observedGeneration,
+          event: listenerEvent,
+          isCurrentGeneration,
+        });
+        if (pending) {
+          void Promise.resolve(pending).catch((error) => {
+            this.logger.warn('turn lifecycle terminal cleanup failed', {
+              turnGeneration: observedGeneration,
+              error: String(error),
+            });
+          });
+        }
+      } catch (error) {
+        this.logger.warn('turn lifecycle terminal cleanup failed', {
+          turnGeneration: observedGeneration,
+          error: String(error),
+        });
+      }
+    }
     for (const listener of this.eventListeners) {
       try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
     }
+    // A late child update belongs to the completed parent turn. It remains
+    // visible to listeners, but must not clear/adopt the current turn or keep
+    // its zero-event watchdog alive.
+    if (isBackgroundEvent) return;
     // turn 真正结束后清 origin,下一轮无 origin 的 turn 不被污染。
     // 关键:**只**在 done / 终止型 error 上清,**不要**在 status(isRunning=false)
     // 上清 —— translator 收尾是先 push end-status(isRunning=false)、紧接着 push

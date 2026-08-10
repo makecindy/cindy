@@ -58,6 +58,7 @@ import {
 import {
   onToolUseEvent,
   persistCodexPlanOnDone,
+  persistCodexPlanOnTerminalError,
   onToolResultEvent,
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
@@ -69,6 +70,7 @@ import {
   isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
   resetTurnPersistState,
+  clearCodexPlanRowsForSession,
   clearSessionPersistState,
   consumeLastAssistantPersistId,
   consumeLastTopLevelAssistantPersistId,
@@ -76,9 +78,11 @@ import {
   markAssistantTurnFailed,
   noteSessionClearBoundary,
   noteSessionAgentKind,
+  noteAgentMeta,
   enqueueDurableWrite,
   noteTurnStarted,
   saveTurnStartedAtForDeferred,
+  preserveTurnPersistStateForBackground,
 } from '../messagePersistBroadcaster.js';
 
 const SESSION = 'sess-tr';
@@ -186,7 +190,7 @@ describe('update_plan tool_use persistence', () => {
     );
   });
 
-  it('persists a successful turn plan as completed so reload cannot resurrect progress', async () => {
+  it('seals a successful turn plan as-is so reload cannot resurrect it', async () => {
     const persistId = onToolUseEvent(
       SESSION,
       {
@@ -215,23 +219,198 @@ describe('update_plan tool_use persistence', () => {
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       persistId,
-      {
+      expect.objectContaining({
         toolUseId: 'plan:turn-1',
         toolName: 'update_plan',
+        // 步骤原样落库(Codex 报的就是 in_progress),退场靠下面这枚章,
+        // 不靠把没干完的步骤改成 completed。
         input: {
           explanation: 'keep this field',
           plan: [
             { step: 'Inspect', status: 'completed' },
-            { step: 'Start dev', status: 'completed' },
+            { step: 'Start dev', status: 'in_progress' },
           ],
         },
         terminalPlanSnapshot: true,
-      },
+        terminalPlanAtMs: expect.any(Number),
+      }),
     );
     expect(broadcastMessageRow).toHaveBeenCalledWith(
       SESSION,
       expect.any(Object),
       ownerScopeState.scope,
+    );
+  });
+
+  /**
+   * 现场 bug 的确切形态:活儿干完了,Codex 收尾时没有再发一次 plan 更新,
+   * 于是 done 上压根没有 plan 快照,库里那份仍停在 in_progress/pending。
+   * 必须只靠章收口——胶囊据此退场,步骤事实一个不动。
+   */
+  it('seals a successful turn that ended without any final plan snapshot', async () => {
+    const openPlan = [
+      { step: 'Find the capsule', status: 'completed' },
+      { step: 'Reopen the task', status: 'in_progress' },
+      { step: 'Confirm it stays gone', status: 'pending' },
+    ];
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'plan:turn-no-snapshot', toolName: 'update_plan', input: { plan: openPlan } },
+      null,
+    );
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-no-snapshot', status: 'completed' },
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, {
+      toolUseId: 'plan:turn-no-snapshot',
+      toolName: 'update_plan',
+      input: { plan: openPlan },
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: expect.any(Number),
+    });
+  });
+
+  it('still seals after a continuation boundary cleared the per-segment maps', async () => {
+    // 分段 turn:S1 产出计划 → continuation done(reset 清空 per-segment 映射)
+    // → S2 最终 done。计划行的引用按 turnId 存活,最终 done 仍找得到它并盖章;
+    // 否则重载后胶囊无章无失败印记 → 走旧版全勾完兜底 → 永久钉住(review P1-1)。
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-seg',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Segmented work', status: 'in_progress' }] },
+      },
+      null,
+    );
+
+    // continuation boundary 上 register 只跑 resetTurnPersistState(不 persist)。
+    resetTurnPersistState(SESSION);
+
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-seg', status: 'completed' },
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        toolUseId: 'plan:turn-seg',
+        toolName: 'update_plan',
+        terminalPlanSnapshot: true,
+      }),
+    );
+  });
+
+  it('scopes a terminal-error failure stamp to the owning turn', async () => {
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-old',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Old turn work', status: 'in_progress' }] },
+      },
+      null,
+    );
+    const currentPersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-current',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Current work', status: 'in_progress' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnTerminalError(SESSION, 'turn-current')).toBe(true);
+    await flushWrites();
+
+    expect(updateMessageContent).toHaveBeenCalledWith(
+      SESSION,
+      currentPersistId,
+      expect.objectContaining({ toolUseId: 'plan:turn-current', turnCompleted: false }),
+    );
+    // 同会话里其它 turn 的计划行不得被顺手盖失败印记。
+    expect(updateMessageContent).not.toHaveBeenCalledWith(
+      SESSION,
+      expect.anything(),
+      expect.objectContaining({ toolUseId: 'plan:turn-old' }),
+    );
+  });
+
+  it('carries repeated update_plan snapshots into the terminal write', async () => {
+    // 同一 turn 的第二次 update_plan 走 persistId 复用分支。按-turn 缓存若只在
+    // 首次记录,终态写入会拿首版快照整行覆盖,已勾完的进度在重载/远端同步后
+    // 倒退回第一版(review P1)。
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'in_progress' }, { step: 'Patch', status: 'pending' }] },
+      },
+      null,
+    );
+    const secondPersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'completed' }, { step: 'Patch', status: 'in_progress' }] },
+      },
+      null,
+    );
+    expect(secondPersistId).toBe(persistId);
+
+    // done 不带 plan(常见):内容只能来自缓存,必须是最新那一版。
+    expect(persistCodexPlanOnDone(SESSION, {
+      raw: { id: 'turn-multi', status: 'completed' },
+    })).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenLastCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        input: { plan: [{ step: 'Inspect', status: 'completed' }, { step: 'Patch', status: 'in_progress' }] },
+        terminalPlanSnapshot: true,
+      }),
+    );
+  });
+
+  it('stamps a terminal-error failure onto the latest repeated plan snapshot', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'in_progress' }] },
+      },
+      null,
+    );
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-multi-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'completed' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnTerminalError(SESSION, 'turn-multi-err')).toBe(true);
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenLastCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({
+        input: { plan: [{ step: 'Inspect', status: 'completed' }] },
+        turnCompleted: false,
+      }),
     );
   });
 
@@ -260,6 +439,7 @@ describe('update_plan tool_use persistence', () => {
         toolName: 'update_plan',
         input: { plan: [{ step: 'Ship', status: 'completed' }] },
         terminalPlanSnapshot: true,
+        terminalPlanAtMs: expect.any(Number),
       },
     );
     expect(broadcastMessageRow).toHaveBeenCalledWith(
@@ -302,6 +482,60 @@ describe('update_plan tool_use persistence', () => {
         turnCompleted: false,
       },
     );
+  });
+
+  it('stamps the current turn plan as failed at a terminal error without a done', async () => {
+    // Codex 在 terminal error 后显式压掉迟到的 turnCompleted,该 turn 永远等不到
+    // done → persistCodexPlanOnDone 不会跑。此时必须由 error 边界补 turnCompleted:false,
+    // 否则全勾完的失败计划没有任何存活印记,面板会当旧数据兜底退场。
+    const persistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+      null,
+    );
+
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, {
+      toolUseId: 'plan:turn-err',
+      toolName: 'update_plan',
+      // 只盖存活标记,步骤状态一个不动——失败不是把勾去掉的理由。
+      input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      turnCompleted: false,
+    });
+    expect(broadcastMessageRow).toHaveBeenCalledWith(
+      SESSION,
+      expect.any(Object),
+      ownerScopeState.scope,
+    );
+  });
+
+  it('terminal error stamping is a no-op when the turn has no plan row', () => {
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(false);
+  });
+
+  it('does not carry a reconciled turn plan into a later id-less terminal error', () => {
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-reconciled',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Old turn work', status: 'completed' }] },
+      },
+      null,
+    );
+
+    // reconcileSessionTurnIdle treats the lost-terminal path as a logical turn
+    // boundary and clears this cross-segment ownership before the next turn.
+    clearCodexPlanRowsForSession(SESSION);
+    resetTurnPersistState(SESSION);
+
+    expect(persistCodexPlanOnTerminalError(SESSION)).toBe(false);
   });
 
   it('does not dedupe ordinary repeated tool_use ids', async () => {
@@ -375,6 +609,281 @@ describe('tool_result 顺序:先 tool_result(摘要)后 tool_result_full(全文)
       broadcastGuard(),
     );
     expect(updateMessageContent).toHaveBeenCalledWith(SESSION, r1!.persistId, r2!.content);
+  });
+});
+
+describe('background tool_result persistence', () => {
+  it('reconstructs a completed-only background collab tool context', async () => {
+    const lateMeta = { uuid: 'late-completed-only-turn' };
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      lateMeta,
+      'background',
+    );
+
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-child'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: toolUsePersistId,
+        role: 'tool_use',
+        toolUseId: 'late-completed-only-child',
+        agentMeta: lateMeta,
+      }),
+      broadcastGuard(),
+    );
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: FULL,
+        toolUseId: 'late-completed-only-child',
+        agentMeta: lateMeta,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('drops a completed-only background collab context owned by a pre-clear turn', async () => {
+    const turnStartedAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const clearAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateItemAt = Date.parse('2026-06-20T10:05:10.000Z');
+    noteSessionClearBoundary(SESSION, clearAt);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(lateItemAt);
+
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-cleared-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      null,
+      'background',
+      turnStartedAt,
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-cleared-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-cleared-child'] },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(toolUsePersistId).toBeUndefined();
+    expect(fullResult).toBeNull();
+    expect(result).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a completed-only background collab context owned by a post-clear turn', async () => {
+    const clearAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const turnStartedAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateItemAt = Date.parse('2026-06-20T10:05:10.000Z');
+    noteSessionClearBoundary(SESSION, clearAt);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(lateItemAt);
+
+    const toolUsePersistId = onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'late-completed-only-post-clear-child',
+        toolName: 'collab:spawnAgent',
+        input: { receiverThreadIds: ['child-thread'] },
+      },
+      null,
+      'background',
+      turnStartedAt,
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-completed-only-post-clear-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-completed-only-post-clear-child'] },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(toolUsePersistId).toEqual(expect.any(String));
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: toolUsePersistId,
+        role: 'tool_use',
+        toolUseId: 'late-completed-only-post-clear-child',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('keeps the completed turn context after the next turn resets live state', async () => {
+    const oldMeta = { uuid: 'old-turn' };
+    const nextMeta = { uuid: 'new-turn' };
+    noteAgentMeta(SESSION, oldMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-child', toolName: 'collab:spawnAgent', input: {} },
+      oldMeta,
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+    // Simulate the next turn repopulating the live fallback before the old
+    // child result arrives.
+    noteAgentMeta(SESSION, nextMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'next-turn-tool', toolName: 'Read', input: {} },
+      nextMeta,
+    );
+
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-child', fullText: FULL },
+      null,
+      'background',
+    );
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-child'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: FULL,
+        agentMeta: oldMeta,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('retains an in-flight background context beyond four later turns', async () => {
+    const oldMeta = { uuid: 'old-in-flight-turn' };
+    noteAgentMeta(SESSION, oldMeta);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-child-long', toolName: 'collab:spawnAgent', input: {} },
+      oldMeta,
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+
+    for (let i = 0; i < 5; i += 1) {
+      const meta = { uuid: `later-turn-${i}` };
+      noteAgentMeta(SESSION, meta);
+      onToolUseEvent(
+        SESSION,
+        { toolUseId: `later-child-${i}`, toolName: 'collab:spawnAgent', input: {} },
+        meta,
+      );
+      preserveTurnPersistStateForBackground(SESSION);
+      resetTurnPersistState(SESSION);
+    }
+
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-child-long'] },
+      null,
+      'background',
+    );
+
+    await flushWrites();
+
+    expect(result).toEqual({ persistId: expect.any(String), content: SUMMARY });
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'tool_result', agentMeta: oldMeta }),
+      broadcastGuard(),
+    );
+  });
+
+  it('drops a late background result whose parent tool_use predates session clear', async () => {
+    const toolUseAt = Date.parse('2026-06-20T10:05:00.000Z');
+    const clearAt = Date.parse('2026-06-20T10:05:05.000Z');
+    const lateResultAt = Date.parse('2026-06-20T10:05:10.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(toolUseAt);
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'late-cleared-child', toolName: 'collab:spawnAgent', input: {} },
+      { uuid: 'old-turn' },
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+    await flushWrites();
+    vi.clearAllMocks();
+    noteSessionClearBoundary(SESSION, clearAt);
+    nowSpy.mockReturnValue(lateResultAt);
+
+    const result = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['late-cleared-child'] },
+      null,
+      'background',
+    );
+    const fullResult = onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'late-cleared-child', fullText: FULL },
+      null,
+      'background',
+    );
+    try {
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(result).toBeNull();
+    expect(fullResult).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -962,6 +1471,114 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
       .filter((c) => (c[1] as { role?: string }).role === 'assistant');
     expect(assistantCreates).toHaveLength(2);
+  });
+});
+
+describe('streamed assistant final calibration', () => {
+  it('persists the authoritative final text even when it is shorter than accumulated deltas', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello worxderful', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello wonderful', isFinal: true, isFullText: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'assistant',
+        content: 'Hello wonderful',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('drops stale streamed deltas when the authoritative final text is empty', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: '撤回前的流式内容', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: '', isFinal: true, isFullText: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a shorter unmarked isFinal tail as a complete replacement', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello ', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'world', isFinal: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ content: 'Hello ' }),
+      broadcastGuard(),
+    );
+  });
+
+  it('accepts a longer unmarked final prefix when Claude deltas missed the tail', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello ', isFinal: false },
+      null,
+    );
+    expect(onAssistantTextEvent(
+      SESSION,
+      { text: 'Hello world', isFinal: true },
+      null,
+    )).toBe(persistId);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ clientId: persistId, content: 'Hello world' }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not replace a streamed block with a longer unrelated local text block', async () => {
+    const persistId = onAssistantTextEvent(
+      SESSION,
+      { text: 'first', isFinal: false },
+      null,
+    );
+    onAssistantTextEvent(SESSION, { text: 'second block', isFinal: true }, null);
+
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ clientId: persistId, content: 'first' }),
+      broadcastGuard(),
+    );
   });
 });
 

@@ -99,6 +99,7 @@ export function renderOrcaWorkerSystemPrompt(meta: OrcaWorkerPromptMeta): string
     '1. Execute the task assigned by the lead.',
     '2. Implement, run /review, fix issues, and repeat until clean. Build/test when applicable.',
     '3. ALWAYS call send_to_lead when complete or blocked. Do not only reply in the worker pane; the lead cannot see it unless you call send_to_lead.',
+    '3a. If you use native subagents, have them return findings only to you. Never tell them to contact the Lead or call send_to_lead; aggregate their results and report to the Lead yourself.',
     '4. Report once; do not send progress updates.',
     '5. Do not poll read_lead/lead_status. Wait for the lead to send_to_worker when it has a response.',
     '6. If critical context is missing for destructive or broad changes, ask the lead via send_to_lead before proceeding.',

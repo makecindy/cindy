@@ -19,7 +19,7 @@
  *
  * 这里不做纠正: 把 output 挪到别处需要知道"本轮真实输出是多少", 而两个可用数据源都
  * 还没结算; 猜一个值会把"归属错位"升级成"金额算错"。detectOutputLag 只把可疑轮次标出
- * 来供日志定位, 不参与任何计费。
+ * 来供日志定位与 TPS 可靠性门禁，不参与任何计费或 token 纠正。
  *
  * 纯函数、零 Electron 依赖 — 可直接单测。
  */
@@ -129,9 +129,15 @@ export function computeModelUsageDeltas(
  * 报回来的 output 却只有个位到几十 —— 真实回复不可能这么短。阈值取得很松，只求把
  * "长回复被记成 7 个 token" 这种量级的异常捞出来，不追求精确。
  *
- * 纯诊断：调用方只应拿它打日志。不参与计费，也不改任何金额。
+ * 只判异常：调用方可据此打日志或隐藏不可靠 TPS，但不得改计费、token 或金额。
  */
-export function detectOutputLag(deltas: readonly ModelUsageDeltaEntry[]): boolean {
+export function detectOutputLag(
+  deltas: readonly ModelUsageDeltaEntry[],
+  requestId?: string,
+): boolean {
+  // A concise high-context reply is legitimate. Only the known Vertex request
+  // family is evidence that this shape means deferred output settlement.
+  if (!requestId?.startsWith('msg_vrtx_')) return false;
   const OUTPUT_FLOOR = 64;
   const INPUT_SIGNIFICANT = 10_000;
   return deltas.some((delta) => {
@@ -139,4 +145,45 @@ export function detectOutputLag(deltas: readonly ModelUsageDeltaEntry[]): boolea
       delta.inputTokensDelta + delta.cacheReadTokensDelta + delta.cacheCreateTokensDelta;
     return inputSide >= INPUT_SIGNIFICANT && delta.outputTokensDelta < OUTPUT_FLOOR;
   });
+}
+
+/**
+ * Suppresses generation timing for both the turn where output settlement is
+ * visibly late and the following turn where the missing output is expected to
+ * be backfilled. Token/cost accounting remains untouched.
+ */
+export class ClaudeOutputLagTimingGuard {
+  private readonly suppressCurrentTurnBySession = new Set<string>();
+  private readonly detectedInCurrentTurnBySession = new Set<string>();
+
+  evaluate(
+    sessionId: string,
+    deltas: readonly ModelUsageDeltaEntry[],
+    isProductTurnFinal: boolean,
+    requestId?: string,
+    allowDetection = true,
+  ): { detected: boolean; suppressTiming: boolean } {
+    const detected = allowDetection && detectOutputLag(deltas, requestId);
+    if (detected) this.detectedInCurrentTurnBySession.add(sessionId);
+    const suppressTiming =
+      this.suppressCurrentTurnBySession.has(sessionId) ||
+      this.detectedInCurrentTurnBySession.has(sessionId);
+    if (isProductTurnFinal) {
+      if (this.detectedInCurrentTurnBySession.has(sessionId)) {
+        this.suppressCurrentTurnBySession.add(sessionId);
+      } else {
+        this.suppressCurrentTurnBySession.delete(sessionId);
+      }
+      this.detectedInCurrentTurnBySession.delete(sessionId);
+    }
+    return {
+      detected,
+      suppressTiming,
+    };
+  }
+
+  clear(sessionId: string): void {
+    this.suppressCurrentTurnBySession.delete(sessionId);
+    this.detectedInCurrentTurnBySession.delete(sessionId);
+  }
 }

@@ -1373,7 +1373,7 @@ function CachedFileBody({
             </div>
           </div>
         )}
-        <pre className="whitespace-pre-wrap break-words px-6 py-4 font-mono text-[12.5px] leading-relaxed text-foreground">
+        <pre className="whitespace-pre-wrap break-words px-6 py-4 font-mono text-12 leading-relaxed text-foreground">
           {text}
         </pre>
       </div>

@@ -13,6 +13,7 @@ import type { MakerMemoryManager } from '@cindy/maker-core';
 import { getCindyGhostsMcpDeps, type GhostGrantLiveSessionState } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { getAndroidMcpDeps } from './android.js';
+import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
 import { feishuIm, wechatIm } from '../im';
@@ -86,6 +87,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Keep that snapshot for a busy turn when a disable refresh is deferred;
         // a successfully rebuilt bridge omits this provider via the outer gate.
         context?.agentKind === 'codex' || pluginRegistry.isEnabled('android'),
+    }),
+    iosSimulator: getIOSSimulatorMcpDeps({
+      // Project-scoped gating is applied by the provider wrapper below using
+      // the live MCP session context. This host-level check preserves the
+      // existing global fallback for non-session callers.
+      isIOSSimulatorEnabled: (context) =>
+        pluginRegistry.isEnabled('ios-simulator', context?.workingDir),
     }),
     browser: getBrowserMcpDeps(),
     computer: getComputerMcpDeps({
@@ -287,7 +295,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           if (isIpcError(err) && err.code === 'NOT_FOUND') {
-            return { ok: false, errorCode: 'NOT_FOUND', message };
+            return { ok: false, errorCode: err.code, message };
           }
           return { ok: false, errorCode: 'INTERNAL', message };
         }
@@ -321,8 +329,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: true, changed };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          if (isIpcError(err) && err.code === 'NOT_FOUND') {
-            return { ok: false, errorCode: 'NOT_FOUND', message };
+          if (isIpcError(err)) {
+            if (err.code === 'NOT_FOUND' || err.code === 'PRECONDITION_FAILED') {
+              return { ok: false, errorCode: err.code, message };
+            }
           }
           return { ok: false, errorCode: 'INTERNAL', message };
         }

@@ -14,7 +14,7 @@ export function parseIssueEnvRegion(raw: unknown): CindyRegion | undefined {
   return raw === 'cn' || raw === 'global' || raw === 'dev' ? raw : undefined;
 }
 
-/** issue_confirm IPC 中的真实 GitHub 提交身份；renderer 只展示，不参与选择。 */
+/** issue_confirm IPC 中可由用户在确认卡选择的实际提交身份。 */
 export type IssueSubmissionIdentity =
   { kind: 'github-user'; login: string } | { kind: 'platform'; login: string };
 
@@ -30,6 +30,14 @@ export function parseIssueSubmissionIdentity(raw: unknown): IssueSubmissionIdent
     return null;
   }
   return { kind: obj.kind, login: obj.login.trim() };
+}
+
+/** 可选 GitHub 用户身份无效时只隐藏该选项，不影响平台确认卡。 */
+export function parseOptionalGithubUserIdentity(
+  raw: unknown,
+): Extract<IssueSubmissionIdentity, { kind: 'github-user' }> | undefined {
+  const identity = parseIssueSubmissionIdentity(raw);
+  return identity?.kind === 'github-user' ? identity : undefined;
 }
 
 /** Main 提供的平台代发建议署名；非法值按缺失处理，由卡片回退为“匿名”。 */

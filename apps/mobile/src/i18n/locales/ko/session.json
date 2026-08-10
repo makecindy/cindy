@@ -44,6 +44,7 @@
     "locateMessageNotFound": "이동할 메시지를 찾을 수 없습니다.",
     "shareNoLocalImage": "로컬 이미지 파일을 가져올 수 없습니다",
     "shareFailedTitle": "공유 실패",
+    "shareImageFailed": "공유 이미지를 만들거나 열 수 없습니다. 다시 시도해 주세요.",
     "shareUnsupported": "현재 앱 버전은 아직 공유를 지원하지 않습니다. 최신 버전으로 업데이트한 후 다시 시도하세요.",
     "downloadFailed": "다운로드 실패",
     "voiceNoRemoteDevice": "원격 기기가 없어 음성 입력을 시작할 수 없습니다.",
@@ -105,6 +106,17 @@
     "forkConfirmDescription": "이 지점의 대화 맥락을 사용해 독립된 새 세션을 만듭니다. 원래 세션은 변경되지 않으며, 이후 두 세션의 메시지는 서로에게 영향을 주지 않습니다.",
     "forkConfirm": "새 세션 시작",
     "forkCancel": "취소"
+  },
+  "shareImage": {
+    "title": "대화 공유",
+    "selectedCount": "{{count}}개 선택됨",
+    "selectAll": "전체 선택",
+    "clearAll": "선택 해제",
+    "cancel": "공유 취소",
+    "share": "이미지 공유",
+    "generating": "준비 중…",
+    "checkboxLabel": "공유할 메시지 선택",
+    "shareMessage": "이 메시지 공유"
   },
   "new": {
     "selectDevice": "기기 선택",

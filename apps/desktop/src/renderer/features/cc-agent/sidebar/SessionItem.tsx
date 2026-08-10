@@ -94,7 +94,14 @@ import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionAc
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
-import { isSplitGroupDragSource, writeSplitGroupSessionDragData } from '../splitGroupDnd';
+import {
+  SPLIT_GROUP_DRAG_HANDLE_SELECTOR,
+  SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR,
+  isSplitGroupDragSource,
+  needsDedicatedSplitGroupDragHandle,
+  shouldStartSplitGroupDrag,
+  writeSplitGroupSessionDragData,
+} from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import { OpenInSplitMenu } from './OpenInSplitMenu';
 
@@ -497,6 +504,7 @@ export const SessionItem = memo(function SessionItem({
   //      也不会触发。这种"用户明确想再看一眼"的语义由调用方通过
   //      imperative 路径(querySelector + scrollIntoNearestView)补一刀
   const rowRef = useRef<HTMLDivElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
 
   // ── Double-click rename ──
   const [isEditing, setIsEditing] = useState(false);
@@ -553,45 +561,63 @@ export const SessionItem = memo(function SessionItem({
     [displayTitle, isEditing, remoteWritesBlocked, t],
   );
 
-  // SortableJS（置顶/项目手动排序，forceFallback 指针手势）与原生 HTML5 拖拽会争抢
-  // 同一次手势：普通 Sortable 行保持原有排序拖拽；但 ProjectNode 的子任务区已经由
-  // data-no-drag 祖先拦截了项目级 Sortable 起手，因此这类行可以安全地作为分屏拖拽源。
-  // 首帧先按 Sortable 容器处理，避免 ref effect 运行前短暂开启原生分屏拖拽。
+  // 置顶段使用原生 Sortable DnD：Sortable 负责侧栏内排序，原生 dragstart 同时写入
+  // 分屏 MIME，因此同一整行可以根据落点完成排序或拖入右侧。普通 forceFallback
+  // 列表仍保留原来的专用标题起手区，项目子任务则继续由 data-no-drag 隔离。
+  // 首帧先按 Sortable 容器处理，避免 ref effect 运行前短暂开启原生拖拽。
   const [dragContainerState, setDragContainerState] = useState({
     inSortableContainer: true,
     sortableDragBlocked: false,
+    nativeSortable: false,
   });
   useEffect(() => {
     const row = rowRef.current;
     setDragContainerState({
       inSortableContainer: Boolean(row?.closest('[data-sortable-id]')),
       sortableDragBlocked: Boolean(row?.closest('[data-no-drag]')),
+      nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]')),
     });
   }, []);
+  const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
   const splitDragEnabled = isSplitGroupDragSource({
     editing: isEditing,
     orcaRole: session.orcaRole,
     ...dragContainerState,
+    hasDedicatedHandle: true,
   });
+  const splitDragHandleActive = splitDragEnabled && needsSplitDragHandle;
 
   const handleDragStart = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
-      const target = event.target instanceof Element ? event.target : null;
+      const target =
+        dragStartTargetRef.current ?? (event.target instanceof Element ? event.target : null);
+      dragStartTargetRef.current = null;
+      const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
+      const startedOnInteractiveElement = Boolean(
+        target !== event.currentTarget && target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
+      );
       if (
-        !splitDragEnabled ||
-        (target !== event.currentTarget &&
-          target?.closest('button, input, textarea, select, a[href], [role="menuitem"]'))
+        !shouldStartSplitGroupDrag({
+          enabled: splitDragEnabled,
+          needsDedicatedHandle: needsSplitDragHandle,
+          startedOnDedicatedHandle,
+          startedOnInteractiveElement,
+        })
       ) {
         event.preventDefault();
         return;
       }
-      if (!writeSplitGroupSessionDragData(event.dataTransfer, session.id)) {
+      if (
+        !writeSplitGroupSessionDragData(event.dataTransfer, session.id, {
+          deviceId: session.deviceLinkDeviceId,
+        })
+      ) {
         event.preventDefault();
         return;
       }
       event.currentTarget.dataset.sessionDragging = 'true';
     },
-    [splitDragEnabled, session.id],
+    [needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
   );
 
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
@@ -784,11 +810,21 @@ export const SessionItem = memo(function SessionItem({
       data-session-id={session.id}
       data-sidebar-session-row="true"
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
-      draggable={splitDragEnabled}
+      draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerDownCapture={(event) => {
+        dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+      }}
+      onPointerUpCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onPointerCancelCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
       onDragStart={handleDragStart}
       onDragEnd={(event) => {
+        dragStartTargetRef.current = null;
         delete event.currentTarget.dataset.sessionDragging;
       }}
       onPointerDown={(e) => {
@@ -885,7 +921,15 @@ export const SessionItem = memo(function SessionItem({
         //   也会直接返回原 string,所以两路渲染最终都走 truncate 容器。
         // 远程项目 icon 跟项目标题同口径:直接贴在标题右侧。标题过长时标题截断,
         // icon shrink-0 保持可见;右侧槽位只保留 worktree + 时间 + hover action。
-        <span className="min-w-0 flex flex-1 items-center gap-1.5">
+        <span
+          data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+          data-no-drag={splitDragHandleActive ? 'true' : undefined}
+          draggable={splitDragHandleActive}
+          className={cn(
+            'min-w-0 flex flex-1 items-center gap-1.5',
+            splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
+          )}
+        >
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
           {boundSchedules.length > 0 ? (

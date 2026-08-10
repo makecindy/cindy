@@ -122,6 +122,38 @@ describe('listSessionTasks 配对', () => {
     expect(running[0]).toMatchObject({ kind: 'agent', provider: 'codex', title: 'review it' });
   });
 
+  it('uses the shared result status derivation and keeps V1 running receipts running', () => {
+    const runningUpdate = makeUpdate({ taskId: 'task-running', parentToolUseId: 'toolu-running' });
+    const completedUpdate = makeUpdate({ taskId: 'task-completed', parentToolUseId: 'toolu-completed' });
+    const failedUpdate = makeUpdate({
+      taskId: 'task-failed',
+      parentToolUseId: 'toolu-failed',
+      status: 'failed',
+    });
+    const { running, completed } = listSessionTasks({
+      messages: [
+        toolUse('c1', 'toolu-running', 'collab:spawnAgent'),
+        toolResult('r1', 'toolu-running', 'child-thread: running'),
+        toolUse('c2', 'toolu-completed', 'collab:spawnAgent'),
+        toolResult('r2', 'toolu-completed', 'child-thread: completed'),
+        toolUse('c3', 'toolu-failed', 'collab:spawnAgent'),
+        toolResult('r3', 'toolu-failed', 'child-thread: failed'),
+      ],
+      taskUpdates: new Map([
+        ...aliasedMap(runningUpdate),
+        ...aliasedMap(completedUpdate),
+        ...aliasedMap(failedUpdate),
+      ]),
+      isSessionStreaming: false,
+    });
+
+    expect(running).toMatchObject([{ taskId: 'task-running', status: 'running' }]);
+    expect(completed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'task-completed', status: 'completed' }),
+      expect.objectContaining({ taskId: 'task-failed', status: 'failed' }),
+    ]));
+  });
+
   it('历史 workflow(无 update):从结果文本「Task ID: xxx」提取 taskId(详情读 wf 文件用)', () => {
     const { completed } = listSessionTasks({
       messages: [

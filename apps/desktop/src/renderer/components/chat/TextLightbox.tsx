@@ -443,7 +443,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                 <span
                   className={cn(
-                    'font-semibold text-[14px]',
+                    'font-semibold text-14',
                     'text-[var(--msg-tool-card-text)]',
                     'truncate',
                   )}

@@ -140,12 +140,12 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
 一种语言。本节管“文案怎么落地进 i18n”，文案的语气／措辞见 `DESIGN.md` 的 Voice & Content。
 
 - 资源在 `renderer/i18n/locales/<locale>/common.json`，语言由 `shared/locale.ts` 的
-  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `en` / `ja` / `ko`），组件通过 `react-i18next` 的
+  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `zh-TW` / `en` / `ja` / `ko`），组件通过 `react-i18next` 的
   `t('<嵌套.key>')` 消费，单 namespace `common`。
 - **新增**：复用已有嵌套分组选 key，组件用 `t('key')`，绝不写 `<div>保存</div>` 裸文案。
-- **修改**：改某 key 文案时 4 种语言同步更新，不要只改中文留其它语言旧值。
+- **修改**：改某 key 文案时 5 种语言同步更新，不要只改中文留其它语言旧值。
 - **删除**：删 UI 时把对应 key 从全部 locale 一起删掉，不留孤儿 key。
-- **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。4 种语言都必须补齐并给出
+- **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。5 种语言都必须补齐并给出
   **准确**翻译，不留空、占位或“待校对”；ja / ko 没把握时先查证再写。
 - **术语一致性**：写任何术语前先查 `i18n/GLOSSARY.md`。同一个概念在不同界面译法不一致
   是用户直接可见的质量问题（引入术语表时实测：162 个英文短语存在多种中文译法，反向
@@ -172,7 +172,7 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
   - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
   - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
     i18n 后两个都要跑（CI 已强制）。
-- **影子 catalog**：有几批不走 i18next 的手写四语 catalog，根脚本只扫 locale JSON、扫不到
+- **影子 catalog**：有几批不走 i18next 的手写五语 catalog，根脚本只扫 locale JSON、扫不到
   这些 `.ts`。它们由 vitest 直接 import 运行时对象覆盖，复用
   `scripts/shared/glossary-rules.mjs` 的同一套判定，随 `test:unit` 阻断：
   - mobile：`src/auth/loginMessages.ts`、`src/session/newSessionMessages.ts`、
@@ -274,7 +274,7 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
    tier，并保留了低成本默认 smoke？
 5. 路径、子进程、FS、性能、快捷键是否在 macOS / Windows 两端都成立？未实测平台是否
    标注？
-6. UI 文案是否全部走 `t()`、4 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
+6. UI 文案是否全部走 `t()`、5 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
    写、没有自造译法？是否跑过 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`？
 7. 新增类／核心逻辑是否有职责注释？
 8. 新增常驻动画是否 compositor-only（HTML 元素 + `transform`/`opacity` + wrapper）、

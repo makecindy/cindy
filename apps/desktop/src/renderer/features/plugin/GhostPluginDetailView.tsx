@@ -34,6 +34,7 @@ import {
   PanelLeft,
   PanelRight,
   Radio,
+  Smartphone,
   Sparkles,
   Terminal,
   Trash2,
@@ -78,7 +79,7 @@ interface GhostPluginDetailViewProps {
   enabledOverride?: boolean;
   onBack: () => void;
   onToggle: (enabled: boolean) => void;
-  /** 主动作:面板型「使用」(打开面板)/ 指令型「对话」;纯工具型不渲染主按钮。 */
+  /** 主动作:面板型「使用」/ 指令或 Host 能力型「对话」;纯工具型不渲染主按钮。 */
   onUse: () => void;
   /** 头部更新 CTA:市场有新版本时走市场更新确认流。 */
   onUpdate: () => void;
@@ -112,6 +113,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   pick: FolderOpen,
   preview: AppWindow,
   skill: GraduationCap,
+  'ios-simulator': Smartphone,
   workspace: FolderPlus,
 };
 
@@ -131,7 +133,7 @@ function permissionItemIcon(item: GhostPermissionItem): LucideIcon {
 
 const DETAIL_SECTION_CLASS = 'mt-10';
 const DETAIL_SECTION_HEADING_CLASS =
-  'text-18 font-medium leading-[26px] text-[var(--text-primary)]';
+  'text-18 font-medium leading-[1.444] text-[var(--text-primary)]';
 const DETAIL_SECTION_CONTENT_CLASS = 'mt-5 max-w-[760px]';
 const DETAIL_SURFACE_CLASS =
   'border border-[color-mix(in_srgb,var(--border-default)_72%,transparent)] bg-[color-mix(in_srgb,var(--surface-elevated)_82%,var(--surface))]';
@@ -164,7 +166,10 @@ export function GhostPluginDetailView({
   const enabled = enabledOverride ?? detail.enabled;
   const primaryAction = ghostPrimaryAction(detail);
   const primaryEnabled =
-    enabled && (primaryAction === 'panel' || (primaryAction === 'command' && detail.canUse));
+    enabled &&
+    (primaryAction === 'panel' ||
+      primaryAction === 'capability' ||
+      (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
   const hasConfiguration = detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
@@ -245,7 +250,7 @@ export function GhostPluginDetailView({
               onIconLoadError={onIconLoadError}
             />
             <div className="min-w-0">
-              <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">
+              <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
               <GhostPluginMetadata author={detail.author} version={detail.version} />
@@ -291,7 +296,7 @@ export function GhostPluginDetailView({
                     'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
                   )}
                 >
-                  {primaryAction === 'command' ? (
+                  {primaryAction === 'command' || primaryAction === 'capability' ? (
                     <MessageCircle size={14} aria-hidden="true" />
                   ) : null}
                   {t(
@@ -388,7 +393,7 @@ export function GhostPluginDetailView({
             <p
               ref={descriptionRef}
               className={cn(
-                'text-14 leading-[22px] text-[var(--text-secondary)]',
+                'text-14 leading-[1.571] text-[var(--text-secondary)]',
                 !descriptionExpanded && 'line-clamp-3',
               )}
             >
@@ -441,7 +446,7 @@ export function GhostPluginDetailView({
                       aria-hidden="true"
                     />
                     <div className="min-w-0">
-                      <p className="text-14 font-medium leading-[22px] text-[var(--text-primary)]">
+                      <p className="text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
                         {t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
                       </p>
                       <p className="mt-0.5 text-13 leading-5 text-[var(--text-secondary)]">
@@ -612,7 +617,7 @@ export function ToolDescriptionChip({ tool }: { tool: GhostToolDecl }) {
             'inline-flex h-8 max-w-full items-center rounded-full px-3 text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
           )}
         >
-          <code className="truncate font-mono text-13 leading-[18px]">{tool.name}</code>
+          <code className="truncate font-mono text-13 leading-[1.385]">{tool.name}</code>
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -703,7 +708,7 @@ function PermissionDetailRow({ item }: { item: GhostPermissionItem }) {
         aria-hidden="true"
       />
       <div className="min-w-0 flex-1">
-        <p className="break-words text-14 font-medium leading-[22px] text-[var(--text-primary)]">
+        <p className="break-words text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
           {t(`settings.ghosts.perm.${item.labelKey}`, item.labelArgs)}
         </p>
         {hostDescription ? (
@@ -906,7 +911,7 @@ function ExpandableDetailValue({
       <div
         ref={valueRef}
         className={cn(
-          'min-w-0 flex-1 text-14 leading-[22px] text-[var(--text-primary)]',
+          'min-w-0 flex-1 text-14 leading-[1.571] text-[var(--text-primary)]',
           expanded ? 'whitespace-pre-wrap break-words' : 'truncate whitespace-nowrap',
           monospace && 'font-mono text-13',
         )}

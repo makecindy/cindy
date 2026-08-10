@@ -125,6 +125,7 @@ import {
 import { AddMarketplaceDialog } from './AddMarketplaceDialog';
 import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
 import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
+import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import { usePluginMarketLocaleRefresh } from './lib/usePluginMarketLocaleRefresh';
 import './plugin-motion.css';
@@ -957,7 +958,10 @@ export function GhostPluginPage() {
   const handleUseGhost = useCallback(
     async (id: string, displayName: string) => {
       const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
-      if (!ghost?.manifest.command) return;
+      if (!ghost) return;
+      const opensIOSSimulator = ghost.manifest.slots.includes('ios-simulator');
+      if (!ghost.manifest.command && !opensIOSSimulator) return;
+      const usesHostCapabilityEntry = !ghost.manifest.command && opensIOSSimulator;
       // 使用前置门:点击时现查配置就绪度(main 侧确定性判定),未就绪先
       // 弹窗引导去配置。查询失败不拦——运行期 networkSlot 仍会兜底报错,
       // 这里拦不住只是少了一次前置提醒,不能因此把能用的插件挡在门外。
@@ -985,7 +989,9 @@ export function GhostPluginPage() {
         attachments: existing?.attachments ?? [],
         quotes: existing?.quotes ?? [],
         browserComments: existing?.browserComments ?? [],
-        pendingGhostId: ghost.manifest.id,
+        ...(ghost.manifest.command ? { pendingGhostId: ghost.manifest.id } : {}),
+        ...(usesHostCapabilityEntry ? { pendingHostCapabilityGhostId: ghost.manifest.id } : {}),
+        focusAtEnd: existing?.focusAtEnd === true,
       });
       resetDraftWorkspaceTargets();
       navigate('/cc-agent/new');
@@ -993,15 +999,15 @@ export function GhostPluginPage() {
     [confirm, ghosts, navigate, openGhostConfiguration, t],
   );
 
-  /** 卡片/详情主动作分发:面板型开页面内面板,指令型起对话,工具型进管理。 */
+  /** 卡片/详情主动作分发:面板型开页面内面板,指令/Host 能力型起对话,工具型进管理。 */
   const handlePrimaryAction = useCallback(
-    (item: Pick<GhostPluginListItem, 'id' | 'name' | 'tabPanel' | 'canUse'>) => {
+    (item: Pick<GhostPluginListItem, 'id' | 'name' | 'tabPanel' | 'canUse' | 'hostCapability'>) => {
       const action = ghostPrimaryAction(item);
       if (action === 'panel') {
         setOpenPanelId(item.id);
         return;
       }
-      if (action === 'command') {
+      if (action === 'command' || action === 'capability') {
         void handleUseGhost(item.id, item.name);
         return;
       }
@@ -1716,12 +1722,11 @@ export function MarketPluginCard({
   onIconLoadError: () => void;
 }) {
   const { t } = useTranslation();
+  const marketIcon = usePluginMarketIcon(item, { deferUntilVisible: true });
   const unavailable = busy || item.installState === 'conflict';
   const conflictDescriptionId = useId();
   const conflictDescription =
-    item.installState === 'conflict'
-      ? t('settings.ghosts.market.conflictDescription')
-      : undefined;
+    item.installState === 'conflict' ? t('settings.ghosts.market.conflictDescription') : undefined;
   return (
     <article
       className={cn(
@@ -1748,10 +1753,12 @@ export function MarketPluginCard({
         )}
       >
         <GhostPluginIcon
-          iconDataUrl={item.icon?.url}
+          iconContainerRef={marketIcon.containerRef}
+          iconDataUrl={marketIcon.iconDataUrl}
           iconId={item.ghostId}
           iconName={item.name}
-          onIconLoadError={onIconLoadError}
+          onIconLoad={marketIcon.onIconLoad}
+          onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
         />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
           <span className="truncate text-15 font-medium text-[var(--text-primary)]">
@@ -1985,7 +1992,7 @@ export function GhostPluginCard({
         ariaLabel={t('settings.ghosts.page.useAria', { name: item.name })}
       />
     );
-  } else if (primary === 'command') {
+  } else if (primary === 'command' || primary === 'capability') {
     primaryControl = (
       <CardPillButton
         onClick={onPrimary}

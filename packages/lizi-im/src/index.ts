@@ -42,6 +42,13 @@ export { DiscordIM, createDiscordIM } from './discord/index.js';
 export type { DiscordIMOptions } from './discord/index.js';
 
 export { TelegramIM, createTelegramIM } from './telegram/index.js';
+// expressive 档变体池 —— 官方 bot 的 ack 表情复用同一份, 两个 bot 的表情语义
+// 不该各说各话(#1855)。
+export {
+  EXPRESSIVE_DONE_POOL,
+  EXPRESSIVE_ERROR_POOL,
+  pickExpressiveReaction,
+} from './telegram/reactionPool.js';
 export type { TelegramIMOptions, TelegramGroupWindowEntry } from './telegram/index.js';
 export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
 export type { TelegramBehaviorConfig } from './telegram/index.js';

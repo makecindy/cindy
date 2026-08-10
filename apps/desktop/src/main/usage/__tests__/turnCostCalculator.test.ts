@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import {
+  LEDGER_CURRENCY_FALLBACK,
   __resetActiveLedgerCurrencyForTesting,
   setActiveLedgerCurrency,
 } from '../ledgerCurrency';
@@ -317,6 +318,7 @@ describe('resolveTurnCost', () => {
       context: XD_GATEWAY,
     });
     expect(result.source).toBe('sdk-fallback');
+    expect(LEDGER_CURRENCY_FALLBACK).toBe('USD');
     expect(result.money).toEqual({
       amount: 1.23,
       currency: 'USD',
@@ -930,5 +932,17 @@ describe('subscription value and usage details', () => {
       { model: 'claude-opus-4-8', money: usdMoney(0.94) },
       { model: 'claude-haiku-4-5', money: usdMoney(0.8) },
     ]);
+  });
+
+  it('keeps generation and full-turn durations separate', () => {
+    const details = buildClaudeTurnUsageDetails(
+      { input_tokens: 10, output_tokens: 25 },
+      undefined,
+      'claude-opus-4-8',
+      undefined,
+      1_250,
+      8_500,
+    );
+    expect(details).toMatchObject({ durationMs: 1_250, turnDurationMs: 8_500 });
   });
 });

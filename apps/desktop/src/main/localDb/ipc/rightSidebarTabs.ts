@@ -1,8 +1,9 @@
 /**
  * 右侧栏 Tab 持久化 IPC —— per-session 的多 Tab 容器(对标 Codex in-app browser sidebar)。
  *
- * 5 个 channel(全部 `local-db:right-sidebar-tabs:*`):
+ * 6 个 channel(全部 `local-db:right-sidebar-tabs:*`):
  *   - `:list`        按 session 拉 tab 列表 + activeTabId
+ *   - `:ensure-singleton` 原子创建/读取声明为单例的 tab kind
  *   - `:upsert`      新增 / 更新单个 tab(state JSON / position 等)
  *   - `:close`       删除单个 tab
  *   - `:setActive`   切换激活 tab(先清同 session 旧 active 再设新 active)
@@ -20,16 +21,14 @@
  */
 
 import { ipcMain } from 'electron';
+import { createId } from '@paralleldrive/cuid2';
 import { and, asc, eq } from 'drizzle-orm';
 
-import { getDbClient } from '../client/current';
-import { rightSidebarTabs, sessions } from '../schema';
-import {
-  requireObject,
-  requireString,
-  throwIpcError,
-} from '../../utils/ipcValidate';
-import { createLogger } from '../../logger';
+import { getDbClient } from '../client/current.js';
+import { rightSidebarTabs, sessions } from '../schema.js';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
+import { createLogger } from '../../logger.js';
 
 const log = createLogger('rightSidebarTabs');
 
@@ -39,6 +38,7 @@ const MAX_TABS_PER_SESSION = 20;
     16KB 已远超浏览器 tab(url + title + favicon URL ~400B)/ 文件 tab(~500B)实际需要,
     够防 plugin 误塞 dataURL / 大对象。 */
 const MAX_STATE_JSON_BYTES = 16 * 1024;
+const SINGLETON_TAB_KINDS = new Set(['subagents']);
 
 export interface TabRow {
   id: string;
@@ -95,7 +95,8 @@ function serializeState(value: unknown): string {
 }
 
 export function registerRightSidebarTabsIpc(): void {
-  ipcMain.handle('local-db:right-sidebar-tabs:list', async (_e, payload: unknown) => {
+  ipcMain.handle('local-db:right-sidebar-tabs:list', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const obj = requireObject(payload, 'list payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const db = getDbClient().drizzle;
@@ -124,9 +125,78 @@ export function registerRightSidebarTabsIpc(): void {
     };
   });
 
+  // Renderer caches are per window, so find-then-add there cannot enforce a
+  // singleton while attached/detached hosts overlap. The partial unique index
+  // is the authority; INSERT OR IGNORE + re-read returns one canonical row to
+  // every caller without changing the user's active tab.
+  ipcMain.handle('local-db:right-sidebar-tabs:ensure-singleton', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const obj = requireObject(payload, 'ensure singleton payload');
+    const sessionId = requireString(obj.sessionId, 'sessionId');
+    const kind = requireString(obj.kind, 'kind');
+    if (!SINGLETON_TAB_KINDS.has(kind)) {
+      throwIpcError('INVALID_PARAMS', `${kind} is not a singleton tab kind`);
+    }
+    const stateJson = serializeState(obj.state);
+    const db = getDbClient().drizzle;
+    const sessionExists = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (sessionExists.length === 0) {
+      return { tab: null, created: false, persistable: false };
+    }
+    const [existing] = await db
+      .select()
+      .from(rightSidebarTabs)
+      .where(and(eq(rightSidebarTabs.sessionId, sessionId), eq(rightSidebarTabs.kind, kind)))
+      .limit(1);
+    if (existing) {
+      return { tab: rowToTab(existing), created: false, persistable: true };
+    }
+    const current = await db
+      .select({ id: rightSidebarTabs.id })
+      .from(rightSidebarTabs)
+      .where(eq(rightSidebarTabs.sessionId, sessionId));
+    if (current.length >= MAX_TABS_PER_SESSION) {
+      throwIpcError(
+        'RIGHT_SIDEBAR_TOO_MANY_TABS',
+        `session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`,
+      );
+    }
+    const now = Date.now();
+    const id = `t_${createId()}`;
+    await db
+      .insert(rightSidebarTabs)
+      .values({
+        id,
+        sessionId,
+        kind,
+        position: current.length,
+        state: stateJson,
+        isActive: false,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing();
+    const [canonical] = await db
+      .select()
+      .from(rightSidebarTabs)
+      .where(and(eq(rightSidebarTabs.sessionId, sessionId), eq(rightSidebarTabs.kind, kind)))
+      .limit(1);
+    if (!canonical) throw new Error(`failed to ensure ${kind} tab for session ${sessionId}`);
+    return {
+      tab: rowToTab(canonical),
+      created: canonical.id === id,
+      persistable: true,
+    };
+  });
+
   // upsert: 新增或更新 tab(state / position / kind)。kind 不变(新 tab 注册时定),
   // 但接口允许传以保持 IPC 形态对称(renderer 拿到 unknown kind 时可以 fallback)。
-  ipcMain.handle('local-db:right-sidebar-tabs:upsert', async (_e, payload: unknown) => {
+  ipcMain.handle('local-db:right-sidebar-tabs:upsert', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const obj = requireObject(payload, 'upsert payload');
     const id = requireString(obj.id, 'id');
     const sessionId = requireString(obj.sessionId, 'sessionId');
@@ -166,7 +236,8 @@ export function registerRightSidebarTabsIpc(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('local-db:right-sidebar-tabs:close', async (_e, payload: unknown) => {
+  ipcMain.handle('local-db:right-sidebar-tabs:close', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const obj = requireObject(payload, 'close payload');
     const id = requireString(obj.id, 'id');
     const db = getDbClient().drizzle;
@@ -187,7 +258,8 @@ export function registerRightSidebarTabsIpc(): void {
   // setActive: 先把 session 内所有 tab 设 inactive,再设 target 为 active(targetId=null
   // 表示无激活态,close last tab 时使用)。两步操作不在事务里 —— 单 session 内 tab 数 ≤ 20,
   // 失败概率极低;真出现中间态 next list 时 UI 会展示"无激活 tab",用户重新点一下就好。
-  ipcMain.handle('local-db:right-sidebar-tabs:setActive', async (_e, payload: unknown) => {
+  ipcMain.handle('local-db:right-sidebar-tabs:setActive', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const obj = requireObject(payload, 'setActive payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const targetId = obj.id === null ? null : requireString(obj.id, 'id');
@@ -205,9 +277,7 @@ export function registerRightSidebarTabsIpc(): void {
       const exists = await db
         .select({ id: rightSidebarTabs.id })
         .from(rightSidebarTabs)
-        .where(
-          and(eq(rightSidebarTabs.id, targetId), eq(rightSidebarTabs.sessionId, sessionId)),
-        )
+        .where(and(eq(rightSidebarTabs.id, targetId), eq(rightSidebarTabs.sessionId, sessionId)))
         .limit(1);
       if (exists.length === 0) {
         throwIpcError('NOT_FOUND', `tab ${targetId} not found in session ${sessionId}`);
@@ -215,16 +285,15 @@ export function registerRightSidebarTabsIpc(): void {
       await db
         .update(rightSidebarTabs)
         .set({ isActive: true, updatedAt: now })
-        .where(
-          and(eq(rightSidebarTabs.id, targetId), eq(rightSidebarTabs.sessionId, sessionId)),
-        );
+        .where(and(eq(rightSidebarTabs.id, targetId), eq(rightSidebarTabs.sessionId, sessionId)));
     }
     return { ok: true };
   });
 
   // reorder: 一次性重写 same session 内全部 tab 的 position;orderedIds 数组下标 = 新 position。
   // 数组里漏的 id 不会被改动 —— renderer 端调用时应该传完整 orderedIds(同 session 当前全部 tab id)。
-  ipcMain.handle('local-db:right-sidebar-tabs:reorder', async (_e, payload: unknown) => {
+  ipcMain.handle('local-db:right-sidebar-tabs:reorder', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const obj = requireObject(payload, 'reorder payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     if (!Array.isArray(obj.orderedIds)) {
@@ -243,10 +312,7 @@ export function registerRightSidebarTabsIpc(): void {
         .update(rightSidebarTabs)
         .set({ position: i, updatedAt: now })
         .where(
-          and(
-            eq(rightSidebarTabs.id, orderedIds[i]),
-            eq(rightSidebarTabs.sessionId, sessionId),
-          ),
+          and(eq(rightSidebarTabs.id, orderedIds[i]), eq(rightSidebarTabs.sessionId, sessionId)),
         );
     }
     return { ok: true };

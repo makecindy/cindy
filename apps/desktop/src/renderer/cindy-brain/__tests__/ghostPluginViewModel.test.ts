@@ -11,6 +11,7 @@ import {
   filterGhostPluginItems,
   ghostFallbackIconKind,
   ghostPanelOwnerKey,
+  ghostPrimaryAction,
   marketPresentationForInstalledGhost,
   nextOpenPanelIdForOwner,
   sortGhostPluginItemsByRecentUse,
@@ -108,6 +109,7 @@ describe('ghostPluginViewModel', () => {
         enabled: true,
         canUse: true,
         tabPanel: false,
+        hostCapability: null,
       },
       {
         id: 'lizi-mivo',
@@ -117,6 +119,7 @@ describe('ghostPluginViewModel', () => {
         enabled: true,
         canUse: true,
         tabPanel: false,
+        hostCapability: null,
       },
       {
         id: 'slack',
@@ -126,6 +129,7 @@ describe('ghostPluginViewModel', () => {
         enabled: true,
         canUse: true,
         tabPanel: false,
+        hostCapability: null,
       },
     ] satisfies GhostPluginListItem[];
 
@@ -216,8 +220,25 @@ describe('ghostPluginViewModel', () => {
       name: 'XD Mivo',
       enabled: true,
       canUse: true,
+      hostCapability: null,
       version: '1.5.10',
     });
+  });
+
+  it('projects the iOS Simulator slot as an explicit Host capability action', () => {
+    const item = toGhostPluginListItem(
+      installed({
+        manifest: manifest({
+          command: undefined,
+          slots: ['skill', 'ios-simulator'],
+          tools: undefined,
+          network: undefined,
+        }),
+      }),
+    );
+
+    expect(item.hostCapability).toBe('ios-simulator');
+    expect(ghostPrimaryAction(item)).toBe('capability');
   });
 
   it('overlays exact installed market presentation without changing runtime facts', () => {
@@ -249,12 +270,31 @@ describe('ghostPluginViewModel', () => {
     ]);
   });
 
-  it('treats a market null icon as an explicit presentation override', () => {
+  it('treats a server market null icon as an explicit presentation override', () => {
     const ghost = installed({ iconDataUrl: 'data:image/png;base64,OLD' });
     const presentation = marketPresentationForInstalledGhost(ghost, marketItem({ icon: null }));
 
     expect(presentation).not.toBeNull();
     expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+  });
+
+  it('uses the installed package icon for an exact Git market mapping', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const presentation = marketPresentationForInstalledGhost(
+      ghost,
+      marketItem({
+        sourceType: 'git-market',
+        sourceMarketName: 'community-plugins',
+        icon: null,
+      }),
+    );
+
+    expect(toGhostPluginListItem(ghost, presentation)).toMatchObject({
+      iconDataUrl: 'data:image/png;base64,LOCAL',
+    });
+    expect(toGhostPluginDetail(ghost, presentation)).toMatchObject({
+      iconDataUrl: 'data:image/png;base64,LOCAL',
+    });
   });
 
   it.each([
@@ -364,7 +404,9 @@ describe('plugin panel owner isolation', () => {
     // A 打开着面板 → 切到 B:必须关掉,不许因为 B 也装了同 id 的插件就留着。
     expect(nextOpenPanelIdForOwner(a, b, 'ghost-shared')).toBeNull();
     // 云 → 本地同样算换身份。
-    expect(nextOpenPanelIdForOwner(a, ghostPanelOwnerKey('local', null), 'ghost-shared')).toBeNull();
+    expect(
+      nextOpenPanelIdForOwner(a, ghostPanelOwnerKey('local', null), 'ghost-shared'),
+    ).toBeNull();
     // 身份没变则原样保留(别把用户正在用的面板关掉)。
     expect(nextOpenPanelIdForOwner(a, a, 'ghost-shared')).toBe('ghost-shared');
     expect(nextOpenPanelIdForOwner(a, a, null)).toBeNull();

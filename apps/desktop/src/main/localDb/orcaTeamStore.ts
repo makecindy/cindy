@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
@@ -246,20 +246,12 @@ export async function markTeamEnded(
  * orca_role 字段保留 'worker' 不动 — 历史上下文识别需要它。
  */
 export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
-  const db = getDbClient().drizzle;
-  const rows = await db
-    .select({ sessionId: orcaWorkers.sessionId })
-    .from(orcaWorkers)
-    .where(eq(orcaWorkers.teamId, teamId));
-  const ids = rows.map((r) => r.sessionId);
-  if (ids.length === 0) return [];
-  const now = Date.now();
-  await db
-    .update(sessions)
-    .set({ status: 'archived', updatedAt: now })
-    .where(sql`${sessions.id} IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
-  for (const id of ids) broadcastSessionPatch(id, { status: 'archived' });
-  return ids;
+  const updatedIds = await getDbClient().tx('orca.archiveWorkersByTeam', {
+    teamId,
+    now: Date.now(),
+  });
+  for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
+  return updatedIds;
 }
 
 /**
@@ -291,37 +283,12 @@ export async function markWorkersStatusByTeam(
 export async function reconcileInactiveTeamWorkersForLead(
   leadSessionId: string,
 ): Promise<string[]> {
-  const db = getDbClient().drizzle;
-  const teamRows = await db
-    .select({ id: orcaTeams.id })
-    .from(orcaTeams)
-    .where(and(eq(orcaTeams.leadSessionId, leadSessionId), ne(orcaTeams.status, 'active')));
-  const teamIds = teamRows.map((r) => r.id);
-  if (teamIds.length === 0) return [];
-
-  // 这些非 active team 下仍 active 的孤儿 worker session。只取 status='active':已 archived 的
-  // 无需再动,已被用户软删除的 status='deleted' 必须原样保留(不能借 reconcile 复活)。
-  const workerRows = await db
-    .select({ sessionId: orcaWorkers.sessionId })
-    .from(orcaWorkers)
-    .innerJoin(sessions, eq(orcaWorkers.sessionId, sessions.id))
-    .where(and(inArray(orcaWorkers.teamId, teamIds), eq(sessions.status, 'active')));
-  const ids = workerRows.map((r) => r.sessionId);
-
-  const now = Date.now();
-  // orca_workers 收敛 done(对齐 markWorkersStatusByTeam;已 done 的重写无副作用)。
-  await db
-    .update(orcaWorkers)
-    .set({ status: 'done', updatedAt: now })
-    .where(inArray(orcaWorkers.teamId, teamIds));
-
-  if (ids.length === 0) return [];
-  await db
-    .update(sessions)
-    .set({ status: 'archived', updatedAt: now })
-    .where(inArray(sessions.id, ids));
-  for (const id of ids) broadcastSessionPatch(id, { status: 'archived' });
-  return ids;
+  const updatedIds = await getDbClient().tx('orca.reconcileInactiveTeamWorkersForLead', {
+    leadSessionId,
+    now: Date.now(),
+  });
+  for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
+  return updatedIds;
 }
 
 export async function getTeamByWorkerSession(
@@ -545,8 +512,12 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
 export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
   const db = getDbClient().drizzle;
   const now = Date.now();
-  await db.update(sessions).set({ status: 'archived', updatedAt: now }).where(eq(sessions.id, sessionId));
-  broadcastSessionPatch(sessionId, { status: 'archived' });
+  const result = await db
+    .update(sessions)
+    .set({ status: 'archived', updatedAt: now })
+    .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
+    .run();
+  if (result.changes > 0) broadcastSessionPatch(sessionId, { status: 'archived' });
 }
 
 export async function setSessionOrcaRole(

@@ -148,7 +148,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
-  it('opens the ChatGPT App for an invalidated system-shared login', async () => {
+  it('starts Cindy login for an invalidated system-shared login', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'token_revoked',
@@ -166,11 +166,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     );
 
     expect(await screen.findByText('chatgptAuthRecovery.systemSharedInvalidated')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
 
-    await waitFor(() => expect(mocks.openChatGPTApp).toHaveBeenCalledOnce());
-    expect(mocks.triggerLogin).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledOnce());
+    expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
+    expect(await screen.findByText('chatgptAuthRecovery.recovered')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
 
   it('keeps the recovery action disabled until the credential source is known', async () => {
@@ -204,7 +205,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       });
       await initialState.promise;
     });
-    expect(await screen.findByRole('button', { name: 'chatgptAuthRecovery.openApp' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeTruthy();
   });
 
   it('does not restore retry on a fresh mount until the replacement account probe succeeds', async () => {
@@ -247,13 +248,16 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
 
-  it('keeps the recovery action available when the ChatGPT App cannot be opened', async () => {
+  it('keeps the system-shared recovery action after user cancellation', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'token_revoked',
       credentialScope: 'system-shared',
     });
-    mocks.openChatGPTApp.mockResolvedValueOnce({ success: false });
+    mocks.triggerLogin.mockResolvedValueOnce({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
     render(
       <ErrorBanner
         error="token_revoked"
@@ -265,23 +269,25 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
 
-    await waitFor(() => {
-      expect(mocks.toastError).toHaveBeenCalledWith('chatgptAuthRecovery.openAppFailed');
-    });
-    expect(mocks.triggerLogin).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' })).toBeTruthy();
+    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledOnce());
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
   });
 
-  it('keeps the recovery action available when opening the ChatGPT App rejects', async () => {
+  it('keeps the system-shared recovery action after login failure', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'token_revoked',
       credentialScope: 'system-shared',
     });
-    mocks.openChatGPTApp.mockRejectedValueOnce(new Error('bridge unavailable'));
+    mocks.triggerLogin.mockResolvedValueOnce({
+      authenticated: false,
+      errorReason: 'login_timeout',
+    });
     render(
       <ErrorBanner
         error="token_revoked"
@@ -293,13 +299,14 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
 
     await waitFor(() => {
-      expect(mocks.toastError).toHaveBeenCalledWith('chatgptAuthRecovery.openAppFailed');
+      expect(mocks.toastError).toHaveBeenCalledWith('settings.connections.codex.toast.loginFailed');
     });
-    expect(mocks.triggerLogin).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' })).toBeTruthy();
+    expect(mocks.triggerLogin).toHaveBeenCalledOnce();
+    expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
   });
 
@@ -728,7 +735,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(mocks.cancelLogin).not.toHaveBeenCalled();
   });
 
-  it('uses the system-shared voice recovery copy and opens the ChatGPT App', async () => {
+  it('uses the system-shared voice recovery copy and starts Cindy login', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: false,
       errorReason: 'token_revoked',
@@ -745,16 +752,16 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       expect(mocks.confirm).toHaveBeenCalledWith({
         title: 'chatgptAuthRecovery.title',
         description: 'chatgptAuthRecovery.systemSharedInvalidated',
-        confirmText: 'chatgptAuthRecovery.openApp',
+        confirmText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
         autoFocusConfirm: true,
       }),
     );
-    await waitFor(() => expect(mocks.openChatGPTApp).toHaveBeenCalledOnce());
-    expect(mocks.triggerLogin).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledOnce());
+    expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
   });
 
-  it('keeps the original shared recovery flow when an authenticated hint cannot be verified', async () => {
+  it('starts Cindy login when an authenticated system-shared hint cannot be verified', async () => {
     mocks.getState.mockResolvedValue({
       authenticated: true,
       identity: 'user@example.com',
@@ -773,14 +780,16 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       expect(mocks.confirm).toHaveBeenCalledWith({
         title: 'chatgptAuthRecovery.title',
         description: 'chatgptAuthRecovery.systemSharedInvalidated',
-        confirmText: 'chatgptAuthRecovery.openApp',
+        confirmText: 'chatgptAuthRecovery.relogin',
         cancelText: 'chatgptAuthRecovery.later',
         autoFocusConfirm: true,
       }),
     );
-    await waitFor(() => expect(mocks.openChatGPTApp).toHaveBeenCalledOnce());
-    expect(mocks.toastSuccess).not.toHaveBeenCalled();
-    expect(mocks.triggerLogin).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.triggerLogin).toHaveBeenCalledOnce());
+    expect(mocks.openChatGPTApp).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('logic.toasts.codexConnected'),
+    );
   });
 
   it('localizes event-loop terminal errors from the stable reason key', () => {

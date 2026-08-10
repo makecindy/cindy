@@ -137,13 +137,13 @@ function GoalEditor({
             textareaRef.current?.focus();
           }}
         >
-          <AlertDialog.Title className="text-[15px] font-medium" style={{ color: 'var(--text-primary)' }}>
+          <AlertDialog.Title className="text-15 font-medium" style={{ color: 'var(--text-primary)' }}>
             {t('goal.editGoal.title')}
           </AlertDialog.Title>
           <div className="flex flex-col gap-1.5">
             <label
               htmlFor="goal-objective"
-              className="text-[12px] font-medium"
+              className="text-12 font-medium"
               style={{ color: 'var(--text-primary)' }}
             >
               {t('goal.editGoal.objectiveLabel')}
@@ -161,7 +161,7 @@ function GoalEditor({
                   void save();
                 }
               }}
-              className="min-h-[112px] w-full resize-none rounded-lg border p-2.5 text-[13px] leading-5 outline-none placeholder:text-[var(--text-placeholder)]"
+              className="min-h-[112px] w-full resize-none rounded-lg border p-2.5 text-13 leading-5 outline-none placeholder:text-[var(--text-placeholder)]"
               style={{
                 backgroundColor: 'var(--settings-input-bg)',
                 borderColor: 'var(--settings-input-border)',
@@ -171,7 +171,7 @@ function GoalEditor({
           </div>
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
           {error && (
-            <div className="text-[12px]" style={{ color: 'var(--error-fg)' }}>
+            <div className="text-12" style={{ color: 'var(--error-fg)' }}>
               {error}
             </div>
           )}
@@ -179,7 +179,7 @@ function GoalEditor({
             <AlertDialog.Cancel asChild>
               <button
                 type="button"
-                className="h-8 rounded-full border px-3 text-[12px] transition-colors hover:bg-[var(--surface-elevated)]"
+                className="h-8 rounded-full border px-3 text-12 transition-colors hover:bg-[var(--surface-elevated)]"
                 style={{
                   backgroundColor: 'var(--surface-elevated)',
                   borderColor: 'var(--border-default)',
@@ -192,7 +192,7 @@ function GoalEditor({
             </AlertDialog.Cancel>
             <button
               type="button"
-              className="h-8 rounded-full px-4 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:opacity-45"
+              className="h-8 rounded-full px-4 text-12 font-medium transition-opacity hover:opacity-85 disabled:opacity-45"
               style={{ backgroundColor: 'var(--accent-cta-bg-pure)', color: 'var(--accent-pure-cta-fg)' }}
               disabled={saving || !isValid}
               onClick={() => {
@@ -237,7 +237,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
 
   return (
     <div
-      className="mx-auto mb-1.5 flex max-w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px]"
+      className="mx-auto mb-1.5 flex max-w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-12"
       style={{
         backgroundColor: 'var(--surface-chip)',
         border: `1px solid ${attention ? 'var(--error-border)' : 'var(--border-default)'}`,

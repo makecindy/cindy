@@ -16,7 +16,13 @@ const ENV = {
   osVersion: '25.5.0',
   region: 'cn' as const,
 };
-const IDENTITY = { kind: 'github-user', login: 'octocat' } as const;
+const PLATFORM_IDENTITY = { kind: 'platform', login: 'cindy-issue' } as const;
+const GITHUB_IDENTITY = { kind: 'github-user', login: 'octocat' } as const;
+const PLATFORM_CHOICES = { platform: PLATFORM_IDENTITY } as const;
+const SUBMISSION_CHOICES = {
+  platform: PLATFORM_IDENTITY,
+  githubUser: GITHUB_IDENTITY,
+} as const;
 
 function lastRequestId(broadcast: ReturnType<typeof vi.fn>): string {
   const call = broadcast.mock.calls.findLast(
@@ -37,7 +43,7 @@ describe('IssueConfirmBridge', () => {
   it('request → broadcast kind=issue_confirm 的 INTERACTION_REQUEST payload', () => {
     const broadcast = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast });
-    void bridge.request('sess-1', DRAFT, ENV, IDENTITY);
+    void bridge.request('sess-1', DRAFT, ENV, SUBMISSION_CHOICES);
     expect(broadcast).toHaveBeenCalledTimes(1);
     const [channel, payload] = broadcast.mock.calls[0];
     expect(channel).toBe(MAKER_PUSH.INTERACTION_REQUEST);
@@ -47,7 +53,8 @@ describe('IssueConfirmBridge', () => {
         kind: 'issue_confirm',
         draft: DRAFT,
         env: ENV,
-        submissionIdentity: IDENTITY,
+        submissionIdentity: PLATFORM_IDENTITY,
+        githubUserIdentity: GITHUB_IDENTITY,
       },
     });
     expect((payload as { request: { requestId: string } }).request.requestId).toBeTruthy();
@@ -60,13 +67,14 @@ describe('IssueConfirmBridge', () => {
   it('resolve 确认 decision → promise settle 为 confirmed,值取卡片当前版', async () => {
     const broadcast = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast });
-    const promise = bridge.request('sess-1', DRAFT, ENV, IDENTITY);
+    const promise = bridge.request('sess-1', DRAFT, ENV, SUBMISSION_CHOICES);
     const requestId = lastRequestId(broadcast);
     const hit = bridge.resolve(requestId, {
       confirmed: true,
       title: '  用户改过的标题  ',
       body: '用户改过的正文',
       type: 'feature',
+      submissionIdentity: GITHUB_IDENTITY,
       uiLanguage: 'ja',
     });
     expect(hit).toBe(true);
@@ -75,6 +83,7 @@ describe('IssueConfirmBridge', () => {
       title: '用户改过的标题',
       body: '用户改过的正文',
       type: 'feature',
+      submissionIdentity: GITHUB_IDENTITY,
       uiLanguage: 'ja',
     });
     // 多窗口同会话:resolve 后必须广播 DISMISSED 让其它窗口收掉僵尸卡片。
@@ -90,14 +99,13 @@ describe('IssueConfirmBridge', () => {
     const broadcast = vi.fn();
     const warn = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
-    const platformIdentity = { kind: 'platform', login: 'cindy-issue' } as const;
-    const promise = bridge.request('sess-1', DRAFT, ENV, platformIdentity, '当前昵称');
+    const promise = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES, '当前昵称');
     const requestId = lastRequestId(broadcast);
     expect(broadcast).toHaveBeenCalledWith(
       MAKER_PUSH.INTERACTION_REQUEST,
       expect.objectContaining({
         request: expect.objectContaining({
-          submissionIdentity: platformIdentity,
+          submissionIdentity: PLATFORM_IDENTITY,
           suggestedPublicName: '当前昵称',
         }),
       }),
@@ -109,11 +117,13 @@ describe('IssueConfirmBridge', () => {
         title: DRAFT.title,
         body: DRAFT.body,
         type: DRAFT.type,
+        submissionIdentity: PLATFORM_IDENTITY,
         publicName: '  匿名  ',
       }),
     ).toBe(true);
     await expect(promise).resolves.toMatchObject({
       confirmed: true,
+      submissionIdentity: PLATFORM_IDENTITY,
       publicName: '匿名',
     });
     expect(warn).not.toHaveBeenCalled();
@@ -124,13 +134,7 @@ describe('IssueConfirmBridge', () => {
       const broadcast = vi.fn();
       const warn = vi.fn();
       const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
-      const promise = bridge.request(
-        'sess-1',
-        DRAFT,
-        ENV,
-        { kind: 'platform', login: 'cindy-issue' },
-        '当前昵称',
-      );
+      const promise = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES, '当前昵称');
       const requestId = lastRequestId(broadcast);
       expect(
         bridge.resolve(requestId, {
@@ -138,6 +142,7 @@ describe('IssueConfirmBridge', () => {
           title: DRAFT.title,
           body: DRAFT.body,
           type: DRAFT.type,
+          submissionIdentity: PLATFORM_IDENTITY,
           publicName,
         }),
       ).toBe(true);
@@ -146,10 +151,50 @@ describe('IssueConfirmBridge', () => {
     }
   });
 
+  it('旧 renderer 未回传身份时安全回退到平台默认身份', async () => {
+    const broadcast = vi.fn();
+    const bridge = new IssueConfirmBridge({ broadcast });
+    const promise = bridge.request('sess-1', DRAFT, ENV, SUBMISSION_CHOICES, 'Carol');
+    const requestId = lastRequestId(broadcast);
+    expect(
+      bridge.resolve(requestId, {
+        confirmed: true,
+        title: DRAFT.title,
+        body: DRAFT.body,
+        type: DRAFT.type,
+        publicName: 'Carol',
+      }),
+    ).toBe(true);
+    await expect(promise).resolves.toMatchObject({
+      confirmed: true,
+      submissionIdentity: PLATFORM_IDENTITY,
+      publicName: 'Carol',
+    });
+  });
+
+  it('拒绝 renderer 选择本次未提供的 GitHub 身份', async () => {
+    const broadcast = vi.fn();
+    const warn = vi.fn();
+    const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
+    const promise = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES, 'Carol');
+    const requestId = lastRequestId(broadcast);
+    expect(
+      bridge.resolve(requestId, {
+        confirmed: true,
+        title: DRAFT.title,
+        body: DRAFT.body,
+        type: DRAFT.type,
+        submissionIdentity: GITHUB_IDENTITY,
+      }),
+    ).toBe(true);
+    await expect(promise).resolves.toEqual({ confirmed: false, reason: 'cancelled' });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it('resolve 取消 decision → cancelled;未知 requestId → 返 false', async () => {
     const broadcast = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast });
-    const promise = bridge.request('sess-1', DRAFT, ENV, IDENTITY);
+    const promise = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES);
     const requestId = lastRequestId(broadcast);
     expect(bridge.resolve('nope', { confirmed: false })).toBe(false);
     expect(bridge.resolve(requestId, { confirmed: false })).toBe(true);
@@ -174,7 +219,7 @@ describe('IssueConfirmBridge', () => {
     const broadcast = vi.fn();
     const warn = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast, logger: { warn } });
-    const promise = bridge.request('sess-1', DRAFT, ENV, IDENTITY);
+    const promise = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES);
     const requestId = lastRequestId(broadcast);
     expect(bridge.resolve(requestId, { confirmed: true, title: '' })).toBe(true);
     await expect(promise).resolves.toEqual({ confirmed: false, reason: 'cancelled' });
@@ -184,7 +229,7 @@ describe('IssueConfirmBridge', () => {
   it('超时 → timeout decision + 广播 INTERACTION_DISMISSED', async () => {
     const broadcast = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast, timeoutMs: 1000 });
-    const promise = bridge.request('sess-1', DRAFT, ENV, IDENTITY);
+    const promise = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES);
     const requestId = lastRequestId(broadcast);
     vi.advanceTimersByTime(1001);
     await expect(promise).resolves.toEqual({ confirmed: false, reason: 'timeout' });
@@ -199,7 +244,7 @@ describe('IssueConfirmBridge', () => {
 
   it('默认确认超时早于 600 秒 MCP deadline', async () => {
     const bridge = new IssueConfirmBridge({ broadcast: vi.fn() });
-    const promise = bridge.request('sess-1', DRAFT, ENV, IDENTITY);
+    const promise = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES);
 
     vi.advanceTimersByTime(9 * 60 * 1000 - 1);
     expect(bridge.pendingSnapshots('sess-1')).toHaveLength(1);
@@ -212,8 +257,8 @@ describe('IssueConfirmBridge', () => {
   it('cleanupForSession 只清目标会话的 pending,并广播收卡', async () => {
     const broadcast = vi.fn();
     const bridge = new IssueConfirmBridge({ broadcast });
-    const p1 = bridge.request('sess-1', DRAFT, ENV, IDENTITY);
-    const p2 = bridge.request('sess-2', DRAFT, ENV, IDENTITY);
+    const p1 = bridge.request('sess-1', DRAFT, ENV, PLATFORM_CHOICES);
+    const p2 = bridge.request('sess-2', DRAFT, ENV, PLATFORM_CHOICES);
     bridge.cleanupForSession('sess-1', 'session_aborted');
     await expect(p1).resolves.toEqual({ confirmed: false, reason: 'session_aborted' });
     expect(bridge.pendingSnapshots('sess-1')).toEqual([]);
@@ -243,7 +288,7 @@ describe('onDesktopOnlyConfirmPending(#926)', () => {
       'feishu_bot_ou_1',
       { title: 't', body: 'b', type: 'bug' },
       { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
-      { kind: 'platform', login: 'cindy' },
+      { platform: { kind: 'platform', login: 'cindy' } },
     );
     expect(onPending).toHaveBeenCalledWith('feishu_bot_ou_1');
     await p; // 超时收口,不留挂起 promise
@@ -255,7 +300,10 @@ describe('onDesktopOnlyConfirmPending(#926)', () => {
       's1',
       { title: 't', body: 'b', type: 'bug' },
       { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
-      { kind: 'github-user', login: 'u' },
+      {
+        platform: PLATFORM_IDENTITY,
+        githubUser: { kind: 'github-user', login: 'u' },
+      },
     );
     expect(decision.confirmed).toBe(false);
   });
@@ -276,7 +324,10 @@ describe('onDesktopOnlyConfirmPending 抛错防护(#1059 review)', () => {
       's-throw',
       { title: 't', body: 'b', type: 'bug' },
       { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
-      { kind: 'github-user', login: 'u' },
+      {
+        platform: PLATFORM_IDENTITY,
+        githubUser: { kind: 'github-user', login: 'u' },
+      },
     );
     expect(decision.confirmed).toBe(false);
     expect(warn).toHaveBeenCalledWith(

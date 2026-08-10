@@ -7,13 +7,13 @@ import { CONSENT_DIALOG } from '../loginDesignTokens';
 
 /**
  * 协议文案 catalog 严校验(codex 审查 P2):parseLegalSegments 对坏标记 fail-open
- * (嵌套/未闭合时原样显示尖括号)——法律文案不许依赖这种降级。本测试把全部 4 语
+ * (嵌套/未闭合时原样显示尖括号)——法律文案不许依赖这种降级。本测试把全部 5 语
  * catalog 的 consent 文案过 parser 严校验,翻译误改标记时在 CI 就地拦截。
  * 手机端镜像:apps/mobile/src/auth/__tests__/loginConsent.test.ts「catalog 过 parser
  * 严校验」用例(双端 parser 同源语义,修改任一侧必须同步另一侧)。
  */
 
-const LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
+const LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
 
 function loadLogin(locale: string): Record<string, unknown> {
   const raw = readFileSync(
@@ -23,7 +23,7 @@ function loadLogin(locale: string): Record<string, unknown> {
   return (JSON.parse(raw) as { login: Record<string, unknown> }).login;
 }
 
-describe('consent 文案 catalog 严校验(4 语 × statement/body)', () => {
+describe('consent 文案 catalog 严校验(5 语 × statement/body)', () => {
   it.each(LOCALES)('%s:恰一 terms + 恰一 privacy,文本段无残留尖括号', (locale) => {
     const login = loadLogin(locale);
     const dialog = login.consentDialog as { body: string };
@@ -54,13 +54,10 @@ describe('consent 文案 catalog 严校验(4 语 × statement/body)', () => {
 });
 
 describe('区域确认文案排版预算(标准 26/40，最多 3 行)', () => {
-  const maxEstimatedUnits =
-    (CONSENT_DIALOG.body.width * 0.95 * 3) /
-    CONSENT_DIALOG.body.fontSize;
+  const maxEstimatedUnits = (CONSENT_DIALOG.body.width * 0.95 * 3) / CONSENT_DIALOG.body.fontSize;
   const estimatedUnits = (value: string) =>
     [...value].reduce(
-      (sum, character) =>
-        sum + ((character.codePointAt(0) ?? 0) <= 0xff ? 0.5 : 1),
+      (sum, character) => sum + ((character.codePointAt(0) ?? 0) <= 0xff ? 0.5 : 1),
       0,
     );
 
@@ -73,10 +70,9 @@ describe('区域确认文案排版预算(标准 26/40，最多 3 行)', () => {
       const lines = body.split('\n');
       expect(lines, `${locale}: ${body}`).toHaveLength(2);
       for (const line of lines) {
-        expect(
-          estimatedUnits(line),
-          `${locale}: ${line}`,
-        ).toBeLessThanOrEqual(maxEstimatedUnits / 3);
+        expect(estimatedUnits(line), `${locale}: ${line}`).toBeLessThanOrEqual(
+          maxEstimatedUnits / 3,
+        );
       }
     }
   });

@@ -126,7 +126,15 @@ const OWNER_NOTICE_TIMEOUT_MS = 4_500;
  */
 const TYPING_REFRESH_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMs;
 const TYPING_LOOP_MAX_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMaxMs;
-/** link preview 关闭:全档出站/编辑共用,取自能力契约单一出处(见 linkPreviewDisabled)。 */
+/**
+ * link preview 关闭,取自能力契约单一出处(见 `linkPreviewDisabled`)。
+ *
+ * **覆盖面是答案这条路,不是全部出站**(原注释写的"全档出站/编辑共用"不准确):
+ * 正文/过程消息的 `sendMessage`、400 回落的纯文本 `sendMessage`、分段
+ * `sendPlainChunked`、`editMessageText` 及其 HTML 解析失败后的纯文本回落 —— 只有
+ * 这五处带它。**卡片消息、rich 主路径(`rich_message` payload)、陌生人提示、主人
+ * 通知都不带**。新增出站路径时自己决定挂不挂, 不会被这个常量自动覆盖。
+ */
 const LINK_PREVIEW_OPTIONS = {
   is_disabled: TELEGRAM_PERSONAL_CAPABILITIES.linkPreviewDisabled,
 } as const;
@@ -1212,7 +1220,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 相册成员先入群窗口(逐条, 幂等), turn 触发交给聚合器合并处理。
     if (m.media_group_id) {
       if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
-        this.emitGroupWindow(groupWindowEntryOf(m));
+        this.emitGroupWindow(groupWindowEntryOf(m), m);
       }
       this.bufferAlbumMessage(m, update.update_id);
       return;
@@ -1360,7 +1368,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // 每条群消息(触发与否)都进本地窗口 — 群上下文的数据面。相册成员在
       // 缓冲入口已逐条入窗, 这里跳过避免重复(入窗本身幂等, 跳过纯省一次写)。
       if (!opts.skipGroupWindow) {
-        this.emitGroupWindow(groupWindowEntryOf(m));
+        this.emitGroupWindow(groupWindowEntryOf(m), m);
       }
       // 群消息的历史价值与「该不该现在回答」是两件事: 上面照常入窗(数据面),
       // 这里只拦 turn 触发 —— 隔夜的 @ 不再唤起一轮回答。
@@ -1499,7 +1507,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  private emitGroupWindow(entry: Omit<TelegramGroupWindowEntry, 'botId'>): void {
+  /**
+   * 群窗口入窗的**唯一出口**, 也是受保护内容的唯一执行点。
+   *
+   * source 传原始 Telegram 消息(入站)或 send 返回的消息(自回流): 只要它带
+   * has_protected_content, 该群开了「禁止保存内容」, 这条就一个字都不落本地池
+   * —— 与官方 bot 服务端「has_protected_content 的消息不中继」同一语义。判据放
+   * 在这里而不是各调用点, 是为了让将来新增的入窗路径默认受同一条边界约束。
+   */
+  private emitGroupWindow(
+    entry: Omit<TelegramGroupWindowEntry, 'botId'>,
+    source?: Pick<TgMessage, 'has_protected_content'>,
+  ): void {
+    if (source?.has_protected_content === true) return;
     // botId 统一在此注入 — 窗口存储按 bot 命名空间隔离(换绑不串史)。
     const full: TelegramGroupWindowEntry = { ...entry, botId: String(this.botId) };
     for (const h of this.groupWindowHandlers) {
@@ -1954,8 +1974,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     for (let i = 0; i < absPaths.length; i += 10) {
       const group = absPaths.slice(i, i + 10);
       assertLive?.();
-      const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group, anchorReply));
-      if (!albumSent) {
+      // 单张不成相册, 直接走单发 —— 这条是正常路径, 不是相册失败。
+      const outcome =
+        group.length > 1 ? await this.sendPhotoAlbum(chatId, group, anchorReply) : 'rejected';
+      if (outcome === 'uncertain') continue; // 可能已经发出去了, 不补发
+      if (outcome === 'rejected') {
         for (const absPath of group) {
           assertLive?.();
           await this.sendSinglePhoto(chatId, absPath, anchorReply);
@@ -2048,16 +2071,30 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  /** 多图原生相册(attach:// 多部分上传)。返回 false = 整组失败, 调用方回落逐张。 */
+  /**
+   * 多图原生相册(attach:// 多部分上传)的结果。
+   *
+   * `rejected` 与 `uncertain` 的区别决定了能不能逐张重发:
+   * Telegram 没有发送端幂等键, 一次 sendMediaGroup 只要被服务端接受, 图片就
+   * 已经出现在聊天里 —— 哪怕响应在网络上丢了。此时逐张补发会让用户看到**两套**
+   * 同样的图, 而且无法分辨哪些是重复。只有 Telegram 明确回 400(确定性拒绝相册
+   * 形状, 一张都没接受)时, 逐张回落才是安全的 —— 与官方 bot 服务端同一判据。
+   */
   private async sendPhotoAlbum(
     chatId: string,
     absPaths: string[],
     anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
-  ): Promise<boolean> {
+  ): Promise<'sent' | 'rejected' | 'uncertain'> {
     const api = this.api;
-    if (!api) return false;
+    if (!api) return 'uncertain';
+
+    // 组装(含本地读盘)与发送分开 catch。两者都会抛, 但含义相反: 组装失败时请求
+    // 根本没发出, 一张都没进聊天 —— 这跟 Telegram 回 400 是同一类确定性失败,
+    // 逐张回落安全, 而且能把同组其余可读的图片救回来。混在一个 catch 里判成
+    // uncertain, 一张图丢失就会连累整组静默消失。
+    let form: FormData;
     try {
-      const form = new FormData();
+      form = new FormData();
       form.set('chat_id', chatId);
       if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set(
@@ -2067,12 +2104,26 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       absPaths.forEach((absPath, i) => {
         form.set(`photo${i}`, new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
       });
-      await api.callForm('sendMediaGroup', form);
-      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`telegram album upload failed, fallback to singles: ${msg}`);
-      return false;
+      this.log.warn(`telegram album assembly failed before send, fallback to singles: ${msg}`);
+      return 'rejected';
+    }
+
+    try {
+      await api.callForm('sendMediaGroup', form);
+      return 'sent';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 400 = Telegram 读懂了请求并拒绝了相册形状(比如某张图不合法), 可以确定
+      // 一张都没进聊天; 逐张重发安全。网络错误 / 5xx / 429 都可能是「已被接受,
+      // 只是响应没回来」, 重发会造成重复相册 —— 宁可这一组丢失也不重复。
+      if (err instanceof TelegramApiError && err.errorCode === 400) {
+        this.log.warn(`telegram album rejected (400), fallback to singles: ${msg}`);
+        return 'rejected';
+      }
+      this.log.warn(`telegram album upload outcome unknown, not resending: ${msg}`);
+      return 'uncertain';
     }
   }
 
@@ -2097,7 +2148,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       text,
       ...(fileNames && fileNames.length > 0 ? { fileNames } : {}),
       sentAt: sent.date * 1000,
-    });
+    }, sent);
   }
 
   // ── owner notices / secrets ────────────────────────────────────────────────

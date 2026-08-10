@@ -12,6 +12,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { deriveAgentTaskStatus } from '@cindy/maker-shared/agent-task';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
@@ -19,6 +20,7 @@ import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
+import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
 import { WorkflowAgentStrip } from '@/features/right-sidebar/plugins/background-tasks/WorkflowAgentStrip';
 import {
@@ -29,7 +31,12 @@ import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNav
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
-import { PI_SUBAGENT_TOOL_NAME, subagentSpawnReceiptName } from '@cindy/maker-shared/agent-task';
+import {
+  isSubagentSpawnToolName,
+  PI_SUBAGENT_TOOL_NAME,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
+} from '@cindy/maker-shared/agent-task';
 
 // 徽标可显示的思考强度档:协议全部合法档(效果词表 effortLevels 四语齐)。
 const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
@@ -199,9 +206,13 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
     };
   }, [isWorkflow, update?.status, sessionId, workflowTaskId]);
 
-  const status =
-    update?.status ??
-    (isWorkflow ? (historyFileStatus ?? (result ? 'completed' : 'running')) : result ? 'completed' : 'running');
+  const status = isWorkflow
+    ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
+    : deriveAgentTaskStatus(update?.status, result, {
+        resultIsLaunchReceipt:
+          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
+          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
+      });
   const StatusIcon = statusIcon(status);
   const statusIconClassName = cn(
     'text-[var(--text-secondary)]',
@@ -211,6 +222,10 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // 是「后台命令」—— 终端图标 + shell provider 标签,避免用户把跑测试的 bash
   // 误读成一个子 Agent。
   const isBash = update?.taskType === 'local_bash';
+  const isSubagent =
+    !isWorkflow &&
+    !isBash &&
+    (!toolCall?.toolName || isSubagentSpawnToolName(toolCall.toolName));
   const AvatarIcon = isWorkflow ? Workflow : isBash ? SquareTerminal : Bot;
   const title = compactText(
     (isWorkflow ? update?.workflowName : undefined) ??
@@ -278,19 +293,39 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
       .finally(() => setStopping(false));
   }, [sessionId, update?.taskId]);
 
-  // workflow 卡整卡点击 → 打开右栏后台任务面板并定位本任务(workflowTaskId 在
-  // 组件顶部与状态修正共用同一次推导)。三者缺一就退回传统展开交互,让
-  // description/summary 就地可读,不做「点了没反应」的假入口。
+  // workflow / Subagent 卡整卡点击 → 打开对应 Cindy 右栏工作区并定位本任务。
+  // Subagent 使用 Cindy 逻辑 id、父 toolUseId 等任一已知别名；工作区会把别名
+  // 解析成持久 run id，因此三种 harness 不需要共享原生 thread/session 形态。
+  // 定位信息不全时退回传统展开交互，让 description/summary 就地可读，不做
+  // 「点了没反应」的假入口。
   //
   // panelReachable:内嵌宿主(协同 worker 面板 / workdir-browse 窄 rail / Orca
   // split)里右栏显示的是别的会话(或压根没在场),往本会话 bucket 写 tab 用户看
   // 不到 —— 那里必须退回展开区,否则卡片既点不动、又因面板入口化丢掉了展开区。
   const panelReachable = useSidebarPanelReachable(sessionId);
-  const canOpenInPanel = Boolean(sessionId) && Boolean(workflowTaskId) && panelReachable;
-  const openInPanel = useCallback(() => {
+  const subagentFocusId =
+    update?.taskId ?? update?.parentToolUseId ?? toolCall?.toolUseId ?? toolCall?.clientId;
+  const canOpenWorkflowPanel =
+    isWorkflow && Boolean(sessionId) && Boolean(workflowTaskId) && panelReachable;
+  const canOpenSubagentPanel =
+    isSubagent && Boolean(sessionId) && Boolean(subagentFocusId) && panelReachable;
+  const canOpenInPanel = canOpenWorkflowPanel || canOpenSubagentPanel;
+  const openWorkflowPanel = useCallback(() => {
     if (!sessionId || !workflowTaskId) return;
     void openBackgroundTasksTab(sessionId, { focusTaskId: workflowTaskId });
   }, [sessionId, workflowTaskId]);
+  const openSubagentPanel = useCallback(() => {
+    if (!sessionId || !subagentFocusId) return;
+    void openSubagentsTab(sessionId, {
+      focusRunId: subagentFocusId,
+      focusProvider: provider,
+    });
+  }, [provider, sessionId, subagentFocusId]);
+  const handleHeaderClick = canOpenWorkflowPanel
+    ? openWorkflowPanel
+    : canOpenSubagentPanel
+      ? openSubagentPanel
+      : toggle;
 
   // workflow 摘要行:当前运行中 agent 的 phaseTitle + 已收口/总数。收口判定走
   // workflowAgentVisualState 归一(与方块条 / 面板同一词表源,done 与 failed 都算收口)。
@@ -349,14 +384,14 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
       {...(toolCall?.clientId ? { 'data-message-client-id': toolCall.clientId } : {})}
     >
       <div className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2">
-        {/* 头部按钮:普通卡 = 展开 toggle;workflow 卡 = 打开后台任务面板入口。
+        {/* 头部按钮:可达的 workflow/Subagent 卡 = 右栏详情入口；其余 = 展开 toggle。
             button 不能嵌套,停止按钮以兄弟节点挂在右侧(仅 running 时出现)。 */}
         <div className="flex w-full items-start gap-2">
         <button
           type="button"
-          onClick={isWorkflow && canOpenInPanel ? openInPanel : toggle}
+          onClick={handleHeaderClick}
           className="flex min-w-0 flex-1 items-start gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          {...(isWorkflow && canOpenInPanel
+          {...(canOpenInPanel
             ? { 'aria-label': t('chat.agentTask.openInPanel') }
             : {
                 'aria-expanded': expanded,
@@ -423,7 +458,7 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
               </span>
             )}
           </span>
-          {isWorkflow && canOpenInPanel ? (
+          {canOpenInPanel ? (
             <PanelRight
               size={14}
               className="mt-1 shrink-0 text-[var(--text-tertiary)]"
@@ -461,9 +496,9 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
         )}
         </div>
 
-        {/* live workflow 卡不渲染展开区(详情在后台任务面板);历史 workflow 卡
-            (无 live taskId,面板无数据)保留展开区兜底展示 description/summary。 */}
-        {!(isWorkflow && canOpenInPanel) && (
+        {/* 能进入右栏的 workflow/Subagent 卡不再重复渲染就地展开区；
+            不可达的嵌入宿主/历史降级路径仍保留 description/summary。 */}
+        {!canOpenInPanel && (
           <Collapse open={expanded}>
             <div className="mt-2 border-l-2 border-[var(--agent-actions-rail)] pl-3 text-13 leading-5 text-[var(--text-secondary)]">
               {description && <p className="mb-1">{description}</p>}

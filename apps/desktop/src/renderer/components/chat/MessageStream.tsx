@@ -31,7 +31,15 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import { isAgentPlanToolName, isDeliveryProseText } from '@cindy/maker-shared/message-render';
+import {
+  deriveAgentTaskStatus,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
+} from '@cindy/maker-shared/agent-task';
+import {
+  isAgentPlanToolName,
+  isDeliveryProseText,
+} from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
 import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
@@ -434,7 +442,7 @@ function ForkOriginMarker({ onClick }: { onClick?: () => void }) {
         type="button"
         onClick={onClick}
         disabled={!onClick}
-        className="group inline-flex shrink-0 items-center gap-2 bg-transparent p-0 text-[13px] font-medium leading-5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default disabled:text-[var(--text-tertiary)] disabled:hover:no-underline"
+        className="group inline-flex shrink-0 items-center gap-2 bg-transparent p-0 text-13 font-medium leading-5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default disabled:text-[var(--text-tertiary)] disabled:hover:no-underline"
       >
         <GitFork size={15} strokeWidth={2} className="shrink-0" aria-hidden="true" />
         <span>{t('chat.forkOrigin.label')}</span>
@@ -767,6 +775,20 @@ export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKe
 }
 
 /**
+ * Whether a restored viewport anchor still belongs to the bounded default tail.
+ * This is intentionally limited to the restore path; user-created anchored
+ * windows remain unbounded until the separate bidirectional-window change.
+ */
+export function isViewportAnchorWithinDefaultTail(
+  items: RenderItem[],
+  viewportTopKey: string,
+  windowSize = RENDER_WINDOW_INITIAL_ITEMS,
+): boolean {
+  const idx = findRestorableViewportItemIdx(items, viewportTopKey);
+  return idx >= Math.max(0, items.length - windowSize);
+}
+
+/**
  * 从全量 render items 里按渲染顺序抽出会话内所有图片的 src,作为 lightbox 翻图
  * 的数据源(全量,不受渲染窗口裁剪影响)。只收**结构化、确定会渲染成图**的三类:
  *   - tool-output 图(art 出图 / 飞书拉图等)→ tool_media item 的 image 项
@@ -1074,8 +1096,8 @@ export function buildRenderItems(
       }
     }
     for (const changeSet of changeSets) {
-      // Zero-file entries without change evidence (e.g. only opaque tools ran)
-      // would render a card whose review pane is empty — skip the dead end.
+      // Zero-file entries have nothing the user can inspect or act on. Keep their
+      // diagnostic sidecars in Main, but do not add a warning-only chat card.
       if (!hasReviewableTurnChanges(changeSet)) continue;
       items.push({
         type: 'turn_changes',
@@ -1499,11 +1521,17 @@ function isWorkChild(it: RenderItem): it is WorkChildItem {
 /** 运行中(未到终态)的子 Agent 卡片 —— 折叠时视为"可见锚点",绝不折进
  *  「已工作 Xs」工作组:任务没完成就归档会谎报终态时长(典型:后台 workflow
  *  子 Agent 仍在跑,父 turn 却已产出最终正文)。status 派生口径与 AgentTaskCard
- *  完全一致(update.status 优先,否则有 result 视为 completed、无则 running),
- *  保证"卡片显示运行中"与"是否折叠"永远同步。终态 = completed/failed/stopped。 */
+ *  完全一致:配对的最终 result 会把 stale running 收敛为 completed,但不覆盖
+ *  failed/stopped 等明确终态,
+ *  保证"卡片显示运行中"与"是否折叠"永远同步。 */
+// A paired final result closes a stale running update; this must match AgentTaskCard.
 function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
-  const status = it.update?.status ?? (it.result ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(it.update?.status, it.result, {
+    resultIsLaunchReceipt:
+      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined
+      || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
+  });
   return status === 'running';
 }
 
@@ -2373,20 +2401,37 @@ export function MessageStream({
   // null = 默认窗口(取末尾 RENDER_WINDOW_INITIAL_ITEMS 个 item);非 null = 锚定到
   // 具体的 RenderItem.key,从那个 item 开始 slice 到末尾。expand 时把锚点往前挪
   // RENDER_WINDOW_GROWTH_ITEMS 个 item。
-  const [firstVisibleItemKey, setFirstVisibleItemKey] = useState<string | null>(() =>
-    restoringRef.current ? (restoreSnapshotRef.current?.windowAnchorKey ?? null) : null,
+  //
+  // 还原快照是"默认窗口 + 非贴底"(windowAnchorKey=null 且 isNearBottom=false)
+  // 时,直接把窗口锚定到 viewportTopKey(视口顶端那条 item):applyRestore 需要
+  // 的锚点必然在窗口内(就是第一条),位置恢复不漂;窗口 = 视口位置 → 末尾,
+  // 必然有界(该快照态意味着用户仍在末尾 INITIAL 窗口内,≤80 条、典型只有一半)。
+  // 此前(codex review P2)这种快照走"全量 INITIAL 默认窗口"保锚点命中,几万字
+  // 会话切回要全量渲染 73+ 条、首帧 ~400ms(2026-08-09 沙盒 perf 日志实测),
+  // 锚定后回落到与贴底切换同阶。viewportTopKey 缺失(老快照)才退回全量窗口。
+  const [firstVisibleItemKey, setFirstVisibleItemKey] = useState<string | null>(() => {
+    if (!restoringRef.current) return null;
+    const snap = restoreSnapshotRef.current;
+    if (!snap) return null;
+    if (snap.windowAnchorKey !== null) return snap.windowAnchorKey;
+    if (!snap.isNearBottom && snap.viewportTopKey) return snap.viewportTopKey;
+    return null;
+  });
+  const restoreDefaultViewportRef = useRef(
+    Boolean(
+      restoringRef.current &&
+        restoreSnapshotRef.current?.windowAnchorKey === null &&
+        restoreSnapshotRef.current?.isNearBottom === false &&
+        restoreSnapshotRef.current?.viewportTopKey,
+    ),
   );
   // 两段式默认窗口的当前尺寸(FIRST_PAINT → 空闲期扩到 INITIAL)。只影响
   // firstVisibleItemKey === null 的"默认窗口"分支;锚点窗口不看它。
-  //
-  // 还原例外(codex review P2):快照是"默认窗口 + 非贴底"(windowAnchorKey=null
-  // 且 isNearBottom=false)时,saved viewportTopKey 可能落在末尾第 31-80 条 —— 若首帧
-  // 只画 30 条,applyRestore 找不到锚点,会话回开位置漂移;且还原态 isNearBottomRef
-  // 为 false,空闲扩窗也不会补。这种快照首帧直接用全量 INITIAL 窗口(放弃两段式);
-  // 贴底快照 / 无快照 / 锚点快照(锚点分支不看本值)仍走 FIRST_PAINT 两段式。
+  // "默认窗口 + 非贴底"快照已在上面转为锚点窗口,不再进本分支;仅
+  // viewportTopKey 缺失的降级路径仍需全量 INITIAL 保命中率。
   const [defaultWindowItems, setDefaultWindowItems] = useState(() => {
     const snap = restoringRef.current ? restoreSnapshotRef.current : null;
-    if (snap && snap.windowAnchorKey === null && !snap.isNearBottom) {
+    if (snap && snap.windowAnchorKey === null && !snap.isNearBottom && !snap.viewportTopKey) {
       return RENDER_WINDOW_INITIAL_ITEMS;
     }
     return RENDER_WINDOW_FIRST_PAINT_ITEMS;
@@ -2553,8 +2598,48 @@ export function MessageStream({
         return allRenderItems.slice(defaultStartIdx);
       }
     }
+
+    // A default-tail snapshot can become stale while the session is in the
+    // background. If enough messages arrive, the saved viewport anchor is no
+    // longer in the bounded tail; prefer a bounded tail first paint over
+    // mounting the entire anchor-to-end range. The layout effect below clears
+    // the stale anchor state before the next paint.
+    if (
+      restoreDefaultViewportRef.current &&
+      restoringRef.current &&
+      idx < Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS)
+    ) {
+      const defaultStartIdx = snapRenderWindowStartIdx(
+        allRenderItems,
+        Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS),
+      );
+      return allRenderItems.slice(defaultStartIdx);
+    }
+
     return allRenderItems.slice(snapRenderWindowStartIdx(allRenderItems, idx));
   }, [allRenderItems, firstVisibleItemKey, defaultWindowItems]);
+
+  // If a restored default-tail anchor fell out of the tail while this session
+  // was backgrounded, permanently fall back to the bounded default window for
+  // this mount. This also prevents expandWindow from treating the stale key as
+  // a user-created anchored window.
+  useLayoutEffect(() => {
+    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null) return;
+    const snap = restoreSnapshotRef.current;
+    if (!snap?.viewportTopKey) return;
+    if (allRenderItems.length === 0) return;
+    const anchorIdx = findRestorableViewportItemIdx(allRenderItems, snap.viewportTopKey);
+    // History hydration can temporarily omit the anchor; retain restore mode
+    // until a later render can locate it instead of treating it as deleted.
+    if (anchorIdx < 0) return;
+    if (isViewportAnchorWithinDefaultTail(allRenderItems, snap.viewportTopKey)) return;
+    restoreDefaultViewportRef.current = false;
+    restoringRef.current = false;
+    isNearBottomRef.current = false;
+    setIsNearBottom(false);
+    setFirstVisibleItemKey(null);
+    setDefaultWindowItems(RENDER_WINDOW_INITIAL_ITEMS);
+  }, [allRenderItems, firstVisibleItemKey]);
 
   // 两段式默认窗口第二段:首帧(非空)提交后,空闲期把默认窗口扩回 INITIAL。
   // 只在仍钉底时扩(prepend 在视口上方,pin-to-bottom layout effect 同帧重钉,
@@ -3790,7 +3875,12 @@ export function MessageStream({
                 <div
                   ref={itemsRef}
                   className={cn(
-                    'flex flex-col gap-3.5',
+                    // msg-stream-items:直接子元素(每条 render item 的根节点)带
+                    // content-visibility:auto(globals.css)—— 视口外条目跳过布局
+                    // 与绘制,切入长 session 的首帧成本从「整个窗口 80 条」降到
+                    // 「一屏」。滚动恢复按条目锚定 + ResizeObserver 纠偏,估高
+                    // (240px)与真实高度的偏差在条目进入视口后被自动纠正。
+                    'msg-stream-items flex flex-col gap-3.5',
                     // 分享选择模式:整列内容右移,左侧让出复选框那一列。缩进加在
                     // 容器上(不是逐条消息),工具卡等不可选的 item 也跟着移,
                     // 左边缘保持对齐。
@@ -4190,6 +4280,7 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
+        workingDir={workingDir}
         // 「这条自愈记录此刻真的在飞吗」：main 持有 vendor-turn owner，只有旧端缺省该字段时
         // 才回落到兼容启发式；supported / unknown 不再依赖 Renderer 的 sticky memory。
         autoResumeInFlight={isAutoResumeRowInFlight({
@@ -4239,6 +4330,7 @@ const MessageItem = memo(function MessageItem({
             cardType={message.systemCardType}
             data={message.systemCardData}
             sessionId={sessionId}
+            workingDir={workingDir}
           />
         );
       }

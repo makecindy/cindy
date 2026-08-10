@@ -40,6 +40,12 @@ const newMakerDraftRouteSource = readFileSync(
   'utf8',
 );
 
+function extractHandlerBlock(source: string, name: string): string {
+  const match = source.match(new RegExp(`const ${name}\\s*=\\s*[\\s\\S]*?(?:\\}, \\[|\\};)`));
+  expect(match, `expected to find handler ${name}`).not.toBeNull();
+  return match![0];
+}
+
 const remoteProjectsHookSource = readFileSync(
   resolve(__dirname, '..', 'features', 'device-link', 'useDeviceLinkRemoteProjects.ts'),
   'utf8',
@@ -82,6 +88,16 @@ describe('Dialogue sidebar section', () => {
     );
   });
 
+  it('loads archived sessions on demand for the selected connected remote devices', () => {
+    expect(sidebarSource).toContain("if (filter.status === 'active') return;");
+    expect(sidebarSource).toContain("requestRemoteSessionStatus(device.deviceId, 'archived')");
+    expect(sidebarSource).toContain('if (!device.connected) continue;');
+    expect(sidebarSource).toContain('selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)');
+    // 折叠 rail 与展开态必须共用同一状态过滤结果，不能在「已归档」下继续露出 active。
+    expect(sidebarSource).toContain('statusFilteredSessionsWithRemote');
+    expect(sidebarSource).toContain('matchesSidebarSessionStatus');
+  });
+
   it('shows remote directory/task loading and failures before connecting or authoritative empty states', () => {
     const failureIndex = sidebarSource.indexOf(
       'remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent',
@@ -104,14 +120,20 @@ describe('Dialogue sidebar section', () => {
     expect(remoteProjectsHookSource).not.toContain(
       "result === 'gave-up' && !remoteProjectsStore.hasDevice(deviceId)",
     );
+    expect(remoteProjectsHookSource).toContain(
+      'remoteProjectsStore.markSessionStatusFailed(deviceId, status)',
+    );
+    expect(remoteProjectsHookSource).toContain('scheduleArchivedSessionRetry(deviceId)');
+    expect(remoteProjectsHookSource).toContain("retryRemoteSessionStatus(deviceId, 'archived')");
+    expect(sidebarSource).toContain('useRemoteArchivedFailedDeviceIds()');
+    expect(sidebarSource).toContain('useRemoteArchivedLoadedDeviceIds()');
+    expect(sidebarSource).toContain("if (filter.status === 'archived')");
   });
 
   it('keeps remote background loading from changing the sidebar layout', () => {
     // Existing local/cached rows must stay in place while remote bootstrap runs in the background.
     // A partial loading notice in the scroll flow makes every row jump when it mounts/unmounts.
-    expect(sidebarSource).toContain(
-      '远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示',
-    );
+    expect(sidebarSource).toContain('远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示');
     expect(sidebarSource).not.toMatch(
       /remoteDeviceDirectoryStatus === 'loading'\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\/\>\s*\)/,
     );
@@ -178,12 +200,38 @@ describe('Dialogue sidebar section', () => {
     expect(dialogueSectionSource).toContain('className={HEADER_ACTIONS_CLASS}');
   });
 
-  it('creates a standalone dialogue without inheriting a project draft directory', () => {
-    expect(sidebarSource).toContain('resetDraftWorkspaceTargets();');
-    expect(sidebarSource).toMatch(
-      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/,
+  it('routes standalone dialogue targets through the mounted draft page transition', () => {
+    const handler = extractHandlerBlock(sidebarSource, 'handleCreateDialogue');
+    expect(sidebarSource).toContain(
+      'resolveDialogueDeviceTarget(selectedMachineId, switcherDevices, deviceListSettled)',
     );
-    expect(sidebarSource).toContain('onCreateDialogue={handleCreateDialogue}');
+    expect(handler).toContain("selectedDialogueDeviceResolution.status === 'pending'");
+    expect(handler).toContain(
+      'state: makeDialogueNewMakerRouteState(selectedDialogueDeviceResolution.target)',
+    );
+    expect(handler).not.toContain('resetDraftWorkspaceTargets');
+    expect(handler).not.toContain('patchNewMakerDraft');
+    expect(newMakerDraftRouteSource).toContain(
+      'readNewMakerDialogueTargetRequest(location.state)',
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      'handledDialogueTargetRequestRef.current === dialogueTargetRequest.requestId',
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      'patchCollab({ enabled: false });',
+    );
+    expect(newMakerDraftRouteSource).toMatch(
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      'state: consumeNewMakerDialogueTargetRequest(location.state)',
+    );
+    expect(newMakerDraftRouteSource).toContain('replace: true');
+    expect(handler).toContain("navigate('/cc-agent/new'");
+    expect((sidebarSource.match(/onCreateDialogue={handleCreateDialogue}/g) ?? []).length).toBe(2);
+    expect(sidebarSource).toContain('createDisabled={dialogueCreatePending}');
+    expect(sidebarSource).toContain('isCreateDialogueDisabled={dialogueCreatePending}');
+    expect(dialogueSectionSource).toContain('disabled={createDisabled}');
   });
 
   it('allows the shared create route to send a standalone dialogue without picking a project', () => {
