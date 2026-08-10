@@ -1525,7 +1525,7 @@
           "nothingToFill": "현재 runtime에 재사용 가능한 필드를 먼저 입력하세요",
           "alreadySame": "다른 runtime과 이미 일치합니다",
           "loadingKeys": "저장된 API 키를 모두 불러온 후 다른 runtime을 채우세요",
-          "keysUnavailable": "저장된 API 키를 불러오지 못해 비밀 정보가 아닌 필드만 채웁니다",
+          "keysUnavailable": "저장된 API 키를 불러오지 못해 다른 runtime을 채울 수 없습니다",
           "modelsBusy": "모델 목록 가져오기 또는 선택을 완료한 후 다른 runtime을 채우세요",
           "noCompatibleFields": "현재 runtime의 재사용 가능한 필드를 다른 runtime에서 지원하지 않습니다",
           "filledToast": "{{targets}}에 채웠습니다"

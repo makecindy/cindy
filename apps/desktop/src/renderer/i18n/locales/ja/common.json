@@ -1525,7 +1525,7 @@
           "nothingToFill": "現在の runtime に再利用可能な項目を入力してください",
           "alreadySame": "他の runtime と同じです",
           "loadingKeys": "保存済み API キーの読み込み完了後に、他の runtime へ入力してください",
-          "keysUnavailable": "保存済み API キーを読み込めなかったため、秘密情報以外の項目のみ入力します",
+          "keysUnavailable": "保存済み API キーを読み込めなかったため、ほかの runtime には入力できません",
           "modelsBusy": "モデル一覧の取得または選択を完了してから、他の runtime へ入力してください",
           "noCompatibleFields": "現在の runtime の再利用可能な項目は、他の runtime でサポートされていません",
           "filledToast": "{{targets}} に入力しました"

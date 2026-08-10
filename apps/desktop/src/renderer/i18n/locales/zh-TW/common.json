@@ -1497,7 +1497,7 @@
           "nothingToFill": "請先填寫目前 Runtime 的可重用欄位",
           "alreadySame": "其他 Runtime 中可填入的欄位已經一致",
           "loadingKeys": "請等待已儲存的 API 金鑰載入完成，再填入其他 Runtime",
-          "keysUnavailable": "無法讀取已儲存的 API 金鑰，本次只填入非金鑰欄位",
+          "keysUnavailable": "無法讀取已儲存的 API 金鑰，暫時無法填入其他 runtime",
           "modelsBusy": "請先完成正在進行的模型列表獲取或選擇，再填入其他 Runtime",
           "noCompatibleFields": "其他 Runtime 不支援目前 Runtime 中可重用的欄位",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍保持獨立"
