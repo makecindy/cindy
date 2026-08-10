@@ -401,6 +401,7 @@ async function tryCustomProviderTitle(
       authStrategy: routing.authStrategy as 'api-key-header' | 'oauth-token' | 'none',
       model: model.id,
       prompt: args.prompt,
+      instructions: CODEX_TITLE_INSTRUCTIONS,
       maxTokens: TITLE_MAX_TOKENS,
       timeoutMs: TITLE_TIMEOUT_MS,
       fetchImpl,

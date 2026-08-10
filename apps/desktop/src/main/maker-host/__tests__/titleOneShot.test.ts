@@ -906,6 +906,62 @@ describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱
     }
   });
 
+  it('自定义 Codex 省略 wireProtocol → Responses 请求保留标题 instructions', async () => {
+    const customResponses: Provider = {
+      id: 'custom-responses',
+      name: 'Custom Responses',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'https://custom.example/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: {
+        codex: [{
+          id: 'custom-mini',
+          name: 'Custom Mini',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        }],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== customResponses.id), customResponses];
+    setActiveCatalog(catalog);
+    mockReadCustomProviderKey.mockReturnValueOnce('custom-key');
+
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: { output_text: '自定义 Responses 标题' } }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 'custom-responses-session', agentKind: 'codex', prompt: '起个标题' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'custom-responses',
+          listConnectedProviders: async () => [providerStub('custom-responses')],
+        },
+      );
+
+      expect(title).toBe('自定义 Responses 标题');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [string, { body: string }];
+      expect(url).toBe('https://custom.example/v1/responses');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'custom-mini',
+        instructions:
+          'Output only the short conversation title requested by the user message, without quotation marks or ending punctuation.',
+        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: '起个标题' }] }],
+      });
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it('有 key + anthropic wire → 成功起名(不再落 default: null)', async () => {
     await withDeepSeekCatalog(async () => {
       mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
