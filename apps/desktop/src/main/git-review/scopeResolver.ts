@@ -113,6 +113,11 @@ async function readRepoRoot(workdir: string, git: typeof runGit, remote = false)
     }
     return { repoRoot: path.resolve(root), disabledReason: null };
   } catch (err) {
+    // A remote Git probe can fail before Git runs (SSH channel closure,
+    // timeout, or remote service failure). Preserve that transport error so
+    // the caller can surface a retryable connection failure instead of
+    // misreporting the workspace as a non-Git directory.
+    if (remote && !(err instanceof GitRunError)) throw err;
     return { repoRoot: null, disabledReason: isGitUnavailable(err) ? 'git-unavailable' : 'non-git' };
   }
 }

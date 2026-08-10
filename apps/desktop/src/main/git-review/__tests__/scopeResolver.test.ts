@@ -143,6 +143,21 @@ describe('git-review scopeResolver', () => {
     expect(scope.disabledMessage).toBe('Git is not available on the SSH host');
   });
 
+  it('propagates SSH transport failures during the remote repository probe', async () => {
+    const failure = new Error('SSH channel closed while probing Git');
+    const d = deps({
+      getSessionRow: vi.fn().mockResolvedValue({
+        id: 's1',
+        workingDir: '/remote/project',
+        worktreePath: null,
+        remoteHostId: 'host-1',
+      }),
+      git: vi.fn().mockRejectedValue(failure),
+    });
+
+    await expect(resolveReviewScope('s1', d)).rejects.toBe(failure);
+  });
+
   it('falls back to non-git disabled scope when no workdir resolves', async () => {
     const d = deps({
       resolveSessionDir: vi.fn().mockResolvedValue({ workdir: null, head: null, source: null }),
