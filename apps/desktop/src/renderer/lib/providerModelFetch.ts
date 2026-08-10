@@ -141,6 +141,17 @@ export function canSendHydratedApiKey(
   );
 }
 
+/** Model discovery only targets baseUrl/modelsUrl, so requestPath must not block key reuse. */
+export function canSendHydratedModelFetchApiKey(
+  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'>,
+  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode'>,
+  authMode: CustomProviderAuthMode,
+  keyEditRevision: number,
+): boolean {
+  if (keyEditRevision > 0) return true;
+  return modelFetchCanReuseSavedCredentials(form, baseline, authMode);
+}
+
 /**
  * 测试连接是否走「已存供应商」受控探测(kind:'saved')。saved 探测整体按已存 spec 发起,
  * 能带上不回读进表单的 main-only 密文头;但它用的是已存端点/模型/凭证,所以只有当编辑态

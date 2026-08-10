@@ -12,6 +12,7 @@ import {
   runtimeFillHeaderCount,
   runtimeFillHasUnreviewedConflict,
   runtimeFillModelCount,
+  runtimeFillEndpointUrlsChanged,
   runtimeFillSelectedTargetChanged,
   runtimeFillTargetAgents,
   type RuntimeFillDraft,
@@ -33,6 +34,27 @@ function draft(
 }
 
 describe('custom provider runtime fill', () => {
+  it('only treats base or model-list URL changes as endpoint changes for key retention', () => {
+    const previous = draft({
+      baseUrl: 'https://same.example/v1',
+      requestPath: '/old-path',
+      modelsUrl: 'https://same.example/v1/models',
+    });
+    expect(
+      runtimeFillEndpointUrlsChanged(previous, {
+        ...previous,
+        requestPath: '/new-path',
+        wireProtocol: 'openai-responses',
+      }),
+    ).toBe(false);
+    expect(
+      runtimeFillEndpointUrlsChanged(previous, {
+        ...previous,
+        baseUrl: 'https://new.example/v1',
+      }),
+    ).toBe(true);
+  });
+
   it('excludes Pi as a target when the provider uses OAuth', () => {
     expect(runtimeFillTargetAgents('codex', { includePi: false })).toEqual(['claude-code']);
     expect(runtimeFillTargetAgents('codex', { includePi: true })).toEqual(['claude-code', 'pi']);

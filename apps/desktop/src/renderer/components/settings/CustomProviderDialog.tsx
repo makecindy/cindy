@@ -52,6 +52,7 @@ import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
+  canSendHydratedModelFetchApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
@@ -70,6 +71,7 @@ import {
   cloneRuntimeFillDraft,
   mergeHydratedRuntimeKeys,
   normalizeRuntimeFillSelection,
+  runtimeFillEndpointUrlsChanged,
   runtimeFillFieldsForToggle,
   runtimeFillHasUnreviewedConflict,
   runtimeFillSelectedTargetChanged,
@@ -809,8 +811,7 @@ export function CustomProviderDialog({
           selectedFields,
           { sourceAgent: runtimeFill.source, targetAgent: target.agent },
         );
-        const endpointChanged = (['baseUrl', 'requestPath', 'wireProtocol', 'modelsUrl'] as const)
-          .some((field) => selectedFields.includes(field));
+        const endpointChanged = runtimeFillEndpointUrlsChanged(prev[target.agent], filled);
         next[target.agent] =
           endpointChanged &&
           !selectedFields.includes('apiKey') &&
@@ -1027,7 +1028,7 @@ export function CustomProviderDialog({
     const canSendApiKey =
       authMode !== 'apiKey' ||
       !savedBaseline ||
-      canSendHydratedApiKey(
+      canSendHydratedModelFetchApiKey(
         rf,
         savedBaseline,
         authMode,

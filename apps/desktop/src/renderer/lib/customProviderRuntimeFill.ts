@@ -257,6 +257,16 @@ export function runtimeFillHeaderCount(draft: RuntimeFillDraft): number {
   return canonicalHeaders(draft.headers).length;
 }
 
+export function runtimeFillEndpointUrlsChanged(
+  previous: RuntimeFillDraft,
+  next: RuntimeFillDraft,
+): boolean {
+  return (
+    previous.baseUrl.trim() !== next.baseUrl.trim() ||
+    previous.modelsUrl.trim() !== next.modelsUrl.trim()
+  );
+}
+
 export function cloneRuntimeFillDraft(draft: RuntimeFillDraft): RuntimeFillDraft {
   return {
     ...draft,
