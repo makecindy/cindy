@@ -1403,6 +1403,7 @@ function stringLiteralPieces(value: string): string[] {
         braces += 1;
         if (piece) {
           pieces.push(piece);
+          if (/['"]/.test(piece)) pieces.push(...stringLiteralPieces(piece));
           piece = '';
         }
         cursor += 1;
@@ -1411,7 +1412,12 @@ function stringLiteralPieces(value: string): string[] {
       piece += char;
       cursor += 1;
     }
-    if (piece) pieces.push(piece);
+    if (piece) {
+      pieces.push(piece);
+      // A quoted payload may wrap further string literals
+      // (`'"xcr" + "un" ...'`); collect those pieces too.
+      if (/['"]/.test(piece)) pieces.push(...stringLiteralPieces(piece));
+    }
     if (!closed) break;
     index = cursor + 1;
   }
@@ -1468,6 +1474,16 @@ function decodedCharCodePieces(value: string): string[] {
     const numbers = body.split(',').map((part) => part.trim());
     if (numbers.every((n) => /^-?(?:\d+|0x[0-9a-f]+)$/i.test(n))) {
       for (const number of numbers) pushNumber(number);
+    }
+  }
+  // Command substitutions emitting a literal (`$(printf xcr)`, `$(echo un)`)
+  // assemble an executor their output is invisible to; decode the literal.
+  for (const match of value.matchAll(/\$\(\s*(?:printf|echo)\s+([^)]+)\)/g)) {
+    const arg = (match[1] ?? '').trim();
+    if (/%[sdif]/.test(arg) || /[$`]/.test(arg)) continue; // format/expanding
+    const literal = arg.replace(/^['"]|['"]$/g, '').replace(/\s+/g, '');
+    for (const char of literal) {
+      if (char.charCodeAt(0) > 0) pieces.push(char);
     }
   }
   // `\xHH` / `\uHHHH` escapes inside string literals; a preceding backslash
@@ -1579,7 +1595,7 @@ function containsInterpreterHereStringBypass(command: string): boolean {
         shellSegments(consumer).some((segment) =>
           consumesStdinAsProgram(tokenizeShellSegment(segment)),
         ) &&
-        containsLiteralSimulatorExecutor(payload)
+        containsAssembledSimulatorExecutor(payload)
       ) {
         return true;
       }
@@ -1599,7 +1615,7 @@ function containsShellConsumedLiteralBypass(command: string): boolean {
     const segments = shellSegments(clause);
     if (
       segments.some((segment) => consumesStdinAsProgram(tokenizeShellSegment(segment))) &&
-      containsLiteralSimulatorExecutor(clause)
+      containsAssembledSimulatorExecutor(clause)
     ) {
       return true;
     }

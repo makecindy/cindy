@@ -332,6 +332,19 @@ bash /tmp/x.sh`,
     `cat <<'EOF'
 xcrun simctl shutdown DEVICE
 EOF`,
+    `cat <<'EOF' | sh
+$(printf xcr) $(printf un) shutdown DEVICE
+EOF`,
+    `cat <<'EOF' | sh
+$(printf xcr) $(printf un) $(printf sim) $(printf ctl) shutdown DEVICE
+EOF`,
+    `cat <<'EOF' > /tmp/x.sh
+$(printf xcr) $(printf un) shutdown DEVICE
+EOF
+sh /tmp/x.sh`,
+    `bash <<< '"xcr" + "un" + " sim" + "ctl shutdown DEVICE"'`,
+    `bash <<< '"xcr" "un" " sim" "ctl shutdown DEVICE"'`,
+    `echo '"xcr" "un" " sim" "ctl shutdown DEVICE"' | sh`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
     `python3 -c 'import subprocess; subprocess.run(["/usr/bin/open","-a","Simulator"])'`,
@@ -510,6 +523,14 @@ line two
 EOF`,
     `cat <<'EOF'
 hello world
+EOF`,
+    `cat <<'EOF' | sh
+echo hello
+EOF`,
+    `bash <<< 'echo hello'`,
+    `echo 'echo hello' | sh`,
+    `cat <<'EOF' | sh
+printf '%s' "$var"
 EOF`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',
