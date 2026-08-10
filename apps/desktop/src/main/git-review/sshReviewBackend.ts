@@ -395,6 +395,31 @@ function statsLike(type: 'file' | 'directory', size: number, mtimeMs: number): S
 type RemoteStatResult = { type: 'file' | 'directory'; size: number; mtimeMs: number };
 type RemoteChunkResult = { dataBase64: string; eof: boolean; size: number; mtimeMs: number };
 
+function decodeRemoteChunk(result: RemoteChunkResult, maxChunkBytes: number): Buffer {
+  if (!Number.isSafeInteger(maxChunkBytes) || maxChunkBytes < 0) {
+    throw new Error('Remote review requested an invalid file chunk length');
+  }
+  if (typeof result.dataBase64 !== 'string') {
+    throw new Error('Remote review file service returned an invalid chunk');
+  }
+  // Check the encoded response before decoding so a compromised or broken
+  // controlled side cannot force Main to allocate an arbitrarily large Buffer.
+  const maxEncodedChars = Math.ceil(maxChunkBytes / 3) * 4;
+  if (
+    result.dataBase64.length > maxEncodedChars ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      result.dataBase64,
+    )
+  ) {
+    throw new Error('Remote review file service returned an oversized or invalid chunk');
+  }
+  const chunk = Buffer.from(result.dataBase64, 'base64');
+  if (chunk.length > maxChunkBytes) {
+    throw new Error('Remote review file service returned an oversized chunk');
+  }
+  return chunk;
+}
+
 async function readRemoteStat(
   context: SshReviewContext,
   repoRoot: string,
@@ -417,18 +442,22 @@ async function readRemoteFile(
   const chunks: Buffer[] = [];
   let offset = 0;
   while (true) {
+    const requestedLength = Math.min(REMOTE_PREVIEW_CHUNK_BYTES, Math.max(0, maxBytes - offset));
     const result = (await context.fileBrowser.request(context.hostId, 'readFileChunk', {
       workdir: repoRoot,
       relPath,
       offset,
-      length: REMOTE_PREVIEW_CHUNK_BYTES,
+      length: requestedLength,
     })) as RemoteChunkResult;
     if (result.size > maxBytes) throw new Error('Remote review file exceeds the read limit');
-    const chunk = Buffer.from(result.dataBase64, 'base64');
+    const chunk = decodeRemoteChunk(result, requestedLength);
+    if (offset + chunk.length > maxBytes) {
+      throw new Error('Remote review file exceeds the read limit');
+    }
     chunks.push(chunk);
     offset += chunk.length;
     if (result.eof) break;
-    if (chunk.length === 0 || offset > maxBytes) {
+    if (chunk.length === 0 || offset >= maxBytes) {
       throw new Error('Remote review file changed while it was being read');
     }
   }
@@ -441,13 +470,14 @@ async function readRemotePrefix(
   filePath: string,
   maxBytes: number,
 ): Promise<Buffer> {
+  const requestedLength = Math.min(maxBytes, REMOTE_PREVIEW_CHUNK_BYTES);
   const result = (await context.fileBrowser.request(context.hostId, 'readFileChunk', {
     workdir: repoRoot,
     relPath: remoteRelativePath(repoRoot, filePath),
     offset: 0,
-    length: Math.min(maxBytes, REMOTE_PREVIEW_CHUNK_BYTES),
+    length: requestedLength,
   })) as RemoteChunkResult;
-  return Buffer.from(result.dataBase64, 'base64');
+  return decodeRemoteChunk(result, requestedLength);
 }
 
 function createFileBackend(context: SshReviewContext): ReviewFileExecutionBackend {

@@ -272,6 +272,42 @@ describe('SSH git-review backend', () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
+  it('rejects oversized decoded chunks even when the controlled side claims eof', async () => {
+    const oversized = Buffer.alloc(9, 1);
+    const request = vi.fn().mockResolvedValue({
+      dataBase64: oversized.toString('base64'),
+      eof: true,
+      size: 1,
+      mtimeMs: 123,
+    });
+
+    await expect(
+      withSessionReviewExecution(
+        's1',
+        () => readReviewWorktreeFile('/srv/project', 'new.txt', 8),
+        remoteDeps({ exec: vi.fn() }, { request }),
+      ),
+    ).rejects.toThrow(/oversized/);
+  });
+
+  it('rejects oversized prefix responses before returning them to preview readers', async () => {
+    const oversized = Buffer.alloc(9, 1);
+    const request = vi.fn().mockResolvedValue({
+      dataBase64: oversized.toString('base64'),
+      eof: true,
+      size: oversized.length,
+      mtimeMs: 123,
+    });
+
+    await expect(
+      withSessionReviewExecution(
+        's1',
+        () => readReviewWorktreePrefix('/srv/project', 'new.txt', 8),
+        remoteDeps({ exec: vi.fn() }, { request }),
+      ),
+    ).rejects.toThrow(/oversized/);
+  });
+
   it('redacts SSH setup details before review errors leave Main', async () => {
     const deps = remoteDeps(
       { exec: vi.fn() },
