@@ -2263,7 +2263,10 @@
         "nestedLabel": "允許 Subagent 再建立 Subagent",
         "nestedHint": "僅舊版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）會忽略此設定。",
         "nestedAria": "允許 Subagent 再建立 Subagent",
-        "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。"
+        "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。",
+        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
+        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃和委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
+        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略"
       },
       "toast": {
         "saved": "Subagent 設定已儲存",
