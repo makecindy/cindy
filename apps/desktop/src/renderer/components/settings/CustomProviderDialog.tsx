@@ -660,7 +660,22 @@ export function CustomProviderDialog({
 
   const patch = useCallback(
     (agent: DialogAgentKind, fn: (f: RuntimeFields) => RuntimeFields) => {
-      setRtSynced((prev) => ({ ...prev, [agent]: fn(prev[agent]) }));
+      setRtSynced((prev) => {
+        const current = prev[agent];
+        const next = fn(current);
+        const endpointChanged =
+          current.baseUrl.trim() !== next.baseUrl.trim() ||
+          current.modelsUrl.trim() !== next.modelsUrl.trim();
+        return {
+          ...prev,
+          [agent]:
+            endpointChanged &&
+            keyEditRevisionRef.current[agent] === 0 &&
+            next.apiKey === current.apiKey
+              ? { ...next, apiKey: '' }
+              : next,
+        };
+      });
       setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
     [setRtSynced],
@@ -787,15 +802,37 @@ export function CustomProviderDialog({
     setRtSynced((prev) => {
       const next = { ...prev };
       for (const target of changedTargets) {
-        next[target.agent] = applyRuntimeFillFields(
+        const selectedFields = runtimeFill.selected[target.agent] ?? [];
+        const filled = applyRuntimeFillFields(
           prev[target.agent],
           runtimeFill.sourceDraft,
-          runtimeFill.selected[target.agent] ?? [],
+          selectedFields,
           { sourceAgent: runtimeFill.source, targetAgent: target.agent },
         );
+        const endpointChanged = (['baseUrl', 'requestPath', 'wireProtocol', 'modelsUrl'] as const)
+          .some((field) => selectedFields.includes(field));
+        next[target.agent] =
+          endpointChanged &&
+          !selectedFields.includes('apiKey') &&
+          keyEditRevisionRef.current[target.agent] === 0
+            ? { ...filled, apiKey: '' }
+            : filled;
       }
       return next;
     });
+    const modelFilledAgents = changedTargets
+      .filter((target) => runtimeFill.selected[target.agent]?.includes('models'))
+      .map((target) => target.agent);
+    if (modelFilledAgents.length > 0) {
+      const modelFilled = new Set(modelFilledAgents);
+      setWindowDrafts((drafts) =>
+        Object.fromEntries(
+          Object.entries(drafts).filter(
+            ([key]) => !modelFilled.has(key.split(':')[0] as DialogAgentKind),
+          ),
+        ),
+      );
+    }
     setTest((prev) => {
       const next = { ...prev };
       for (const target of changedTargets) next[target.agent] = IDLE_TEST;
@@ -1749,7 +1786,7 @@ export function CustomProviderDialog({
                 <div className="flex items-center gap-2">
                   <FieldLabel>{t('settings.providers.custom.fields.apiKey')}</FieldLabel>
                   {/* 已存密钥时给明确徽标 —— 编辑态字段是遮罩空白(留空=不改),无徽标会让人误以为没存上。 */}
-                  {hasKey[activeTab] && (
+                  {hasKey[activeTab] && f.apiKey.trim() && (
                     <span
                       className="flex items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
                       style={{

@@ -136,12 +136,17 @@ describe('CustomProviderDialog accessibility', () => {
     const user = userEvent.setup();
     render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+    const apiKey = screen.getByPlaceholderText(
+      'settings.providers.custom.fields.apiKeyEditPlaceholder',
+    );
+    expect((apiKey as HTMLInputElement).value).toBe('old-secret');
 
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
+    await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
     await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
