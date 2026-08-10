@@ -49,6 +49,40 @@ function isEphemeralTab(tabId: string): boolean {
 }
 
 /**
+ * 提取 tab state 里的 url 字段(web-browser 专用)。patchTabState 的 URL 跨越
+ * 预览边界判定需要它——ephemeral 身份必须随 URL 变化重算,而非只在 addTab
+ * 时用初始 URL 快照定死(codex-connector P2, round 27l XQory)。
+ */
+function extractStateUrl(state: unknown): string {
+  return state && typeof state === 'object' && typeof (state as { url?: unknown }).url === 'string'
+    ? (state as { url: string }).url
+    : '';
+}
+
+/**
+ * 按 URL 重算 ephemeral 身份。URL 跨越预览边界时必须同步 Set 与持久行:
+ *  - 普通 → 预览:标记 ephemeral,并清理此前已落库的普通行(否则 hydrate /
+ *    host 迁移会把它按普通标签复活;cleanupOrphanTabRow 对"本来就没有"的行
+ *    按 NOT_FOUND 视为成功)。
+ *  - 预览 → 普通:摘除 ephemeral 标记,交由 patchTabState 的正常写路径补建
+ *    持久行(此前因 ephemeral 从未落库)。
+ * 返回 true 表示"新 URL 是预览"(调用方据此跳过持久化写)。
+ */
+function syncEphemeralStatus(sessionId: string, tabId: string, newUrl: string): boolean {
+  const isPreview = isSandboxPreviewUrl(newUrl);
+  const wasEphemeral = ephemeralTabIds.has(tabId);
+  if (isPreview && !wasEphemeral) {
+    ephemeralTabIds.add(tabId);
+    void cleanupOrphanTabRow(sessionId, tabId, 'patchTabState->preview').catch(() => {
+      /* 清理失败已留痕,下次 hydrate 仍会过滤;不阻塞本次 patch */
+    });
+  } else if (!isPreview && wasEphemeral) {
+    ephemeralTabIds.delete(tabId);
+  }
+  return isPreview;
+}
+
+/**
  * Sandboxed local-HTML-preview URLs are process-local: a tokenized loopback
  * origin with a 24h TTL that the main process serves. Persisting such a tab
  * row is pointless AND harmful — after a crash/force-quit the main-side
@@ -838,13 +872,23 @@ export async function closeTab(
     try {
       await settleTabStateWrites(sessionId, tabId);
       const ipc = ipcApi();
-      if (ipc && shouldPersist(sessionId) && !isEphemeralTab(tabId)) {
-        await ipc.close({ id: tabId });
+      const persistable = Boolean(ipc && shouldPersist(sessionId));
+      // 关闭 ephemeral(预览)标签本身不落库——但替代 active 若是持久标签,仍须
+      // 同步该 active(codex-connector P2, round 27l XQGws):此前整个块被
+      // `!isEphemeralTab(tabId)` 短路,DB 里 active 会停在被关预览标签的右邻
+      // 之前的值,下次 hydrate/宿主迁移跳回旧 active。
+      if (persistable && !isEphemeralTab(tabId)) {
+        await ipc!.close({ id: tabId });
         // —— close 已落库:从这里起任何失败都不得进入下面的回滚分支(把已删的
         // tab 插回 cache 会与 DB 反向分叉)。active 同步单独 catch 兜底。
         // setActiveTarget:记录我们实际调用 ipc.setActive 时的目标值,供 activeErr catch 判断。
         // 声明在 inner try 外、if 块内——JavaScript let 不跨 try/catch 块,必须在两者共同的
         // 父作用域里声明才能被 catch 看到。
+      }
+      // active 同步与「被关标签是否持久」解耦:即便关闭的是临时预览标签,替代
+      // active 若是持久标签仍须落库(否则 DB 停旧值)。只额外跳过「替代 active
+      // 也是 ephemeral」的情况(临时标签不落库,setActive 到它会撞 NOT_FOUND)。
+      if (persistable) {
         let setActiveTarget: string | null | undefined;
         try {
           // active 落库前重取一次 cache 现值:关闭队列只串行关闭之间的变更,
@@ -858,7 +902,9 @@ export async function closeTab(
           const afterClose = getBucket(sessionId);
           if (afterClose.hydrated) {
             let activeNow = afterClose.activeTabId;
-            if (activeNow !== prev.activeTabId) {
+            // 替代 active 若是临时预览标签,不落库(setActive 会撞 NOT_FOUND);
+            // 只有持久标签才同步(round 27l XQGws)。
+            if (activeNow !== prev.activeTabId && activeNow !== null && !isEphemeralTab(activeNow)) {
               // 并发 addTab 可能刚把新 tab 设为 active 而它的 INSERT 还在途:直接
               // setActive 会撞 [NOT_FOUND](main 端还会先清掉全 session 的 active 位)。
               // 等它的创建落定;等待期间 active 可能又变,落定后重取现值。
@@ -873,9 +919,9 @@ export async function closeTab(
                   activeNow = getBucket(sessionId).activeTabId;
                 }
               }
-              if (cacheStillOwned && activeNow !== prev.activeTabId) {
+              if (cacheStillOwned && activeNow !== prev.activeTabId && activeNow !== null && !isEphemeralTab(activeNow)) {
                 setActiveTarget = activeNow;
-                await ipc.setActive({ sessionId, id: activeNow });
+                await ipc!.setActive({ sessionId, id: activeNow });
               }
             }
           }
@@ -995,6 +1041,13 @@ export function patchTabState(
   const nextTabs = [...prev.tabs];
   nextTabs[idx] = { ...oldTab, state: newState };
   setBucket(sessionId, { tabs: nextTabs });
+  // URL 跨越预览边界时重算 ephemeral 身份(round 27l XQory):ephemeral 身份
+  // 不能在 addTab 时用初始 URL 定死——预览标签导航到普通网页后必须恢复持久化,
+  // 普通标签导航到预览 URL 后必须转 ephemeral 并清旧行,否则 hydrate/宿主迁移
+  // 会把已变身的标签按错误身份恢复。
+  if (oldTab.kind === 'web-browser') {
+    syncEphemeralStatus(sessionId, tabId, extractStateUrl(newState));
+  }
   if (!shouldPersist(sessionId) || isEphemeralTab(tabId)) return Promise.resolve();
   const key = tabStateWriteKey(sessionId, tabId);
   if (!persistedStateBaselines.has(key)) {

@@ -1198,4 +1198,48 @@ describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () =
     expect(store.getBucket('s1').tabs).toHaveLength(0);
     expect(ipc.close).not.toHaveBeenCalled();
   });
+
+  it('preview → normal navigation recomputes identity and persists the row (round 27l XQory)', async () => {
+    // A preview tab navigated to a normal page must STOP being ephemeral and
+    // (re)create its DB row — otherwise hydrate / host migration would drop it.
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    expect(ipc.upsert).not.toHaveBeenCalled(); // created ephemeral
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: 'https://example.com/' }));
+    // identity flipped: subsequent patch writes to the DB
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'X' }));
+    expect(ipc.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: tab.id, sessionId: 's1', state: expect.objectContaining({ url: 'https://example.com/' }) }),
+    );
+  });
+
+  it('normal → preview navigation recomputes identity and clears the stale row (round 27l XQory)', async () => {
+    // A normal tab navigated to a preview URL must become ephemeral AND the
+    // previously-persisted normal row must be deleted (cleanupOrphanTabRow
+    // treats NOT_FOUND as success). Otherwise hydrate would resurrect it.
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://example.com/' });
+    expect(ipc.upsert).toHaveBeenCalled(); // created as a persisted normal row
+    ipc.close.mockClear();
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    await vi.waitFor(() => expect(ipc.close).toHaveBeenCalledWith({ id: tab.id }));
+    // identity flipped: later patches no longer persist
+    ipc.upsert.mockClear();
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'P' }));
+    expect(ipc.upsert).not.toHaveBeenCalled();
+  });
+
+  it('closing an active preview tab syncs the persisted active to the surviving persistent tab (round 27l XQGws)', async () => {
+    // A[active, persisted] / P[preview, active] / B — closing P must write the
+    // new active (B) to the DB even though the closed tab is ephemeral.
+    const a = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    const p = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    const b = await store.addTab('s1', 'web-browser', { url: 'https://b.example/' });
+    await store.setActiveTab('s1', p.id);
+    ipc.close.mockClear();
+    ipc.setActive.mockClear();
+    await store.closeTab('s1', p.id);
+    // close of the preview tab does NOT hit ipc.close (no DB row)
+    expect(ipc.close).not.toHaveBeenCalled();
+    // but the survivor active (b) IS persisted
+    expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: b.id });
+  });
 });
