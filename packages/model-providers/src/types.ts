@@ -175,6 +175,7 @@ export interface RoutingDescriptor {
   headerDelete?: string[];
   /** 额外固定请求头覆盖（少数特例用；多数由 authStrategy 隐含）。 */
   headerOverride?: Record<string, string>;
+  headerOverrideState?: 'configured' | 'unknown';
   /** 可选 quirk 适配钩子名（对齐 OpenCode custom loader，承接无法纯数据表达的特例）。 */
   adapter?: string;
   /**
@@ -594,6 +595,8 @@ export interface CustomProviderRuntimeConfig {
    * custom_providers SQLite，也不通过非可信 / 远程 provider:list 返回。
    */
   headers?: Record<string, string>;
+  /** Transient non-secret state; main normalization strips it before persistence. */
+  headersState?: 'configured' | 'unknown';
   /**
    * 可选的「列模型」端点（「获取模型列表」按钮用；缺省由 baseUrl 推导 `…/v1/models`）。
    * 从预设创建时随 `ProviderPresetRuntime.modelsUrl` 快照进来并持久化，编辑态仍可再拉。

@@ -101,9 +101,7 @@ import {
   useSessionAttentionKinds,
   useSessionAttentionSnapshot,
 } from '@/lib/sessionAttentionStore';
-import {
-  patchDraft as patchNewMakerDraft,
-} from '@/state/newMakerDraft';
+import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
 import { requestConversationSearch } from '@/state/conversationSearchRequest';
 
@@ -393,8 +391,8 @@ export function CCAgentSidebarUpper() {
   usePendingAlertAttention();
   // F-PJ-10：filter.status 决定后端 fetch 时是否带 ?status=archived|all
   const hiddenProjects = useHiddenProjects();
-  const { hiddenProjectKeys } = hiddenProjects;
-  const filter = useSidebarFilter(hiddenProjectKeys);
+  const { hiddenProjectKeys, initialSnapshot: sidebarSettingsSnapshot } = hiddenProjects;
+  const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
   const { sessions: allSessionsForAttention } = useCCSessions({ includeArchived: 'all' });
@@ -606,13 +604,14 @@ export function CCAgentSidebarUpper() {
         filter.manualPinnedOrder,
         pinnedSessionIds,
       );
-      const merged = mergeVisibleReorder(
-        normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds),
-        visibleNewOrder,
-      );
-      filter.setManualPinnedOrder(merged, fullActivePinnedIds);
+      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+        log.warn('failed to persist rail pinned order', err);
+        toast.error(t('ccAgent.sidebar.pinFailed'));
+      });
     },
-    [sessionsHook.sessions, remoteProjectSessions, filter],
+    [sessionsHook.sessions, remoteProjectSessions, filter, t],
   );
 
   return (
@@ -799,7 +798,11 @@ function ExpandedView({
   const { t, i18n } = useTranslation();
   const localPlatform = window.electronAPI.platform;
   const { sessions, refreshSessions, patchLocal, effectiveIncludeArchived } = sessionsHook;
-  const { hiddenProjectKeys, setProjectHidden } = hiddenProjects;
+  const {
+    hiddenProjectKeys,
+    setProjectHidden,
+    initialSnapshot: sidebarSettingsSnapshot,
+  } = hiddenProjects;
   const refreshWorktrees = useRefreshWorktrees();
   const projectPickerOptions = useProjectPickerOptions();
 
@@ -1300,7 +1303,7 @@ function ExpandedView({
     () => allProjectGroups.projects.map((p) => p.projectKey),
     [allProjectGroups.projects],
   );
-  const collapse = useCollapsedProjects(activeWorkingDirs);
+  const collapse = useCollapsedProjects(activeWorkingDirs, sidebarSettingsSnapshot.dataOwnerId);
 
   // 项目过滤 GC 的「宇宙」用**全量**(不按机器过滤)项目键 —— 否则在某机器作用域下 remount,
   // gcProjectsAgainstActive 会把其它机器的项目从已保存的项目过滤里误删(它们只是被切换栏隐藏、
@@ -1623,13 +1626,14 @@ function ExpandedView({
         filter.manualPinnedOrder,
         pinnedSessionIds,
       );
-      const merged = mergeVisibleReorder(
-        normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds),
-        visibleNewOrder,
-      );
-      filter.setManualPinnedOrder(merged, fullActivePinnedIds);
+      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+        log.warn('failed to persist pinned order', err);
+        toast.error(t('ccAgent.sidebar.pinFailed'));
+      });
     },
-    [sessions, remoteProjectSessions, filter],
+    [sessions, remoteProjectSessions, filter, t],
   );
 
   const visibleDateSessions = useMemo(() => {
@@ -2253,7 +2257,12 @@ function ExpandedView({
       patchLocal(sessionId, { pinnedAt: newPinnedAt });
       // pin / re-pin 时把它顶到 manualPinnedOrder 首位，否则带着老 rank 会卡回原位。
       // unpin 不主动从 order 里删（无害,下次 drag 触发的 normalize 会顺手 GC）。
-      if (!currentlyPinned) filter.promotePin(sessionId);
+      if (!currentlyPinned) {
+        void filter.promotePin(sessionId).catch((err) => {
+          log.warn('failed to persist pinned session order', err);
+          toast.error(t('ccAgent.sidebar.pinFailed'));
+        });
+      }
       try {
         // 远程会话:patch-meta → 广播 sessions:patched → applyPatch 更新远程分片(纯镜像)。
         await sessionService.patchMeta(sessionId, { pinnedAt: newPinnedAt });
@@ -2269,16 +2278,21 @@ function ExpandedView({
   );
 
   const handleToggleProjectPin = useCallback(
-    (project: ProjectNode, currentlyPinned: boolean) => {
+    async (project: ProjectNode, currentlyPinned: boolean) => {
       const entryId = pinnedProjectEntryId(project.projectKey);
-      if (currentlyPinned) {
-        filter.removePin(entryId);
-      } else {
-        // New and re-pinned projects lead the unified project/conversation list.
-        filter.promotePin(entryId);
+      try {
+        if (currentlyPinned) {
+          await filter.removePin(entryId);
+        } else {
+          // New and re-pinned projects lead the unified project/conversation list.
+          await filter.promotePin(entryId);
+        }
+      } catch (err) {
+        log.warn('failed to persist project pin', err);
+        toast.error(t('ccAgent.sidebar.pinFailed'));
       }
     },
-    [filter],
+    [filter, t],
   );
 
   const handleMoveSession = useCallback(
@@ -3883,9 +3897,7 @@ function RailPanels({
 
   const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
-      <span className="min-w-0 flex-1 truncate text-12 font-semibold text-foreground">
-        {title}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-12 font-semibold text-foreground">{title}</span>
       <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
         {t('ccAgent.sidebar.railNavCount', { count })}
       </span>

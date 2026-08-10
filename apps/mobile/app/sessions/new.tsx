@@ -1077,11 +1077,12 @@ export default function NewRemoteSessionScreen() {
   );
   const WorkspaceIcon = draft.workspaceKind === 'dialogue' ? MessageCircle : Folder;
   const agentLabel = mobileAgentLabel(draft.agentKind);
-  // effect 在 commit 后才会把旧探测结果重置为 probing；render 期先按设备 + cwd 同步
-  // 对齐 target，切项目/设备后立即创建也拿不到上一仓库的 baseRepo/sourceBranch。
+  // effect 在 commit 后才会把旧探测结果重置为 probing；render 期先按设备 + cwd +
+  // 连接代次同步对齐 target，切项目/设备或同目标重连后立即创建也拿不到旧结果。
   const worktreeTarget = {
     deviceId: selectedDeviceId ?? '',
     workingDir: draft.workspaceKind === 'project' ? draft.workingDir.trim() : '',
+    probeGeneration: `${connectionEpoch}\u0000${presenceVersion}`,
   };
   worktreeBranchTargetRef.current = worktreeTarget;
   const worktreeEligibility = worktreeEligibilityForTarget(worktreeProbe, worktreeTarget);
@@ -1143,12 +1144,16 @@ export default function NewRemoteSessionScreen() {
     && worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId);
   const worktreeApplicable = draft.workspaceKind === 'project'
     && draft.workingDir.trim().length > 0;
+  // ineligible(2026-08-07 裁决):确认目录不合格时无需等偏好就绪——反正不会
+  // 创建 worktree,GET 在途不应卡住普通会话创建。
   const worktreePreferenceCreateBlocked = worktreeApplicable
-    && selectedDeviceId != null && (
-    worktreePreferenceSaving
-    || worktreePreferenceAuthorityUnknown
-    || !worktreePreferenceReady
-  );
+    && selectedDeviceId != null
+    && worktreeEligibility.status !== 'ineligible'
+    && (
+      worktreePreferenceSaving
+      || worktreePreferenceAuthorityUnknown
+      || !worktreePreferenceReady
+    );
   // host preference 虽然持久化，连接代次仍属于权威读取 identity：桌面重启/重连后
   // 即使 deviceId/repo 没变，也重新 GET，不能只相信手机内存里的旧快照。
   const worktreeBranchPreferenceSyncKey = worktreeBranchPreferenceKey
@@ -1321,6 +1326,14 @@ export default function NewRemoteSessionScreen() {
       || currentTarget.deviceId !== intent.target.deviceId
       || currentTarget.workingDir.trim() !== intent.target.workingDir.trim()
     ) return false;
+    // ineligible 目标不创建 worktree,无需等偏好同步/就绪——提前返回,
+    // 避免偏好 GET 在途时被下方偏好守卫拦截;与 enabled 无关(2026-08-07 裁决)。
+    // 但快照不能替代实时状态:await 期间同目标可能被重探回 probing/eligible/
+    // detect-failed,旧 ineligible 快照必须复核 live ref 仍为 ineligible 才放行,
+    // 否则回到 fail closed(探测未定不等于确认不合格)。
+    if (intent.eligibility.status === 'ineligible') {
+      return worktreeEligibilityRef.current.status === 'ineligible';
+    }
     if (
       worktreePreferenceSyncKeyRef.current !== intent.preferenceSyncKey
       || worktreePreferenceReadyKeyRef.current !== intent.preferenceSyncKey
@@ -1331,7 +1344,10 @@ export default function NewRemoteSessionScreen() {
       .getNewMakerWorktreePreference(intent.target.deviceId).enabled;
     if (currentEnabled !== intent.enabled) return false;
     if (!intent.enabled) return true;
+    // ineligible 已在前面提前返回,此处只可能是 eligible(2026-08-07 裁决)。
     if (intent.eligibility.status !== 'eligible') return false;
+    // 与 ineligible 快照同理:eligible 快照也必须复核 live 资格仍是同一 repo 的
+    // eligible,await 期间被重探成别的状态或换了 repo 都不能继续建 worktree。
     const currentEligibility = worktreeEligibilityRef.current;
     if (
       currentEligibility.status !== 'eligible'
@@ -2160,7 +2176,11 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     const cwd = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
     const seq = ++worktreeDetectSeqRef.current;
-    const target = { deviceId: selectedDeviceId ?? '', workingDir: cwd };
+    const target = {
+      deviceId: selectedDeviceId ?? '',
+      workingDir: cwd,
+      probeGeneration: `${connectionEpoch}\u0000${presenceVersion}`,
+    };
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const probingEligibility: NewSessionWorktreeEligibility = { status: 'probing' };
@@ -3817,6 +3837,7 @@ export default function NewRemoteSessionScreen() {
     }
     if (
       worktreeApplicable
+      && worktreeEligibility.status !== 'ineligible'
       && (
         worktreePreferenceWriteTargetRef.current === selectedDeviceId
         || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
@@ -4383,6 +4404,7 @@ export default function NewRemoteSessionScreen() {
     }
     if (
       worktreeApplicable
+      && worktreeEligibility.status !== 'ineligible'
       && (
         worktreePreferenceWriteTargetRef.current === selectedDeviceId
         || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)

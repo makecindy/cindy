@@ -63,6 +63,8 @@ export interface DetectCwdState {
 export interface DetectCwdTarget {
   cwd: string;
   deviceLinkDeviceId: string | null;
+  /** 同设备/目录的重探代次；变化时旧结果也必须同步失效。 */
+  refreshEpoch?: number;
 }
 
 export interface DetectCwdSnapshot extends DetectCwdState {
@@ -70,8 +72,8 @@ export interface DetectCwdSnapshot extends DetectCwdState {
 }
 
 /**
- * 只向当前设备/目录暴露同 target 的探测结果。effect 要到 commit 后才会重置 state；
- * render 阶段先做同步 fence，切项目或设备后的首帧不会复用上一仓库的 repoRoot。
+ * 只向当前设备/目录/重探代次暴露同 target 的探测结果。effect 要到 commit 后才会重置
+ * state；render 阶段先做同步 fence，切项目、设备或同目标重连后的首帧不会复用旧结果。
  */
 export function detectCwdStateForTarget(
   snapshot: DetectCwdSnapshot,
@@ -82,6 +84,7 @@ export function detectCwdStateForTarget(
     !snapshot.target
     || snapshot.target.cwd !== target.cwd
     || snapshot.target.deviceLinkDeviceId !== target.deviceLinkDeviceId
+    || snapshot.target.refreshEpoch !== target.refreshEpoch
   ) {
     return { data: null, loading: true };
   }
@@ -107,7 +110,7 @@ export function useDetectCwd(
     loading: false,
   });
   const target: DetectCwdTarget | null = cwd
-    ? { cwd, deviceLinkDeviceId: deviceLinkDeviceId ?? null }
+    ? { cwd, deviceLinkDeviceId: deviceLinkDeviceId ?? null, refreshEpoch }
     : null;
 
   useEffect(() => {
@@ -118,6 +121,7 @@ export function useDetectCwd(
     const requestTarget: DetectCwdTarget = {
       cwd,
       deviceLinkDeviceId: deviceLinkDeviceId ?? null,
+      refreshEpoch,
     };
     let cancelled = false;
     setSnapshot({ target: requestTarget, data: null, loading: true });

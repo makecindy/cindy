@@ -124,6 +124,12 @@ export function customProviderSecretStorageKey(providerId: string, agent: string
   return `provider_key_${providerId}_${agent}`;
 }
 
+const CUSTOM_PROVIDER_RUNTIME_KEY_RE = /^provider_key_[a-zA-Z0-9_-]+_(?:claude-code|codex|pi)$/;
+
+export function isCustomProviderRuntimeKeyStorageKey(storageKey: unknown): boolean {
+  return typeof storageKey === 'string' && CUSTOM_PROVIDER_RUNTIME_KEY_RE.test(storageKey);
+}
+
 /**
  * Main-only encrypted blob containing all custom headers for one provider runtime.
  * Header values are never persisted in the custom_providers SQLite row.
