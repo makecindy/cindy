@@ -4,7 +4,7 @@
  * 所有内嵌横幅（ErrorBanner、UpgradeBanner、WorktreeRestoreBanner 等）通过
  * useBannerPortal() 将视觉输出渲染到此容器中，从右上角滑入弹出。
  *
- * 定位：right-6 top-32（128px），给上方 Toast（top-6）留出空间。
+ * 定位：inset-0 flex items-center justify-center（屏幕居中）。
  * z-[10050]：低于 Toast(z-[10100])，高于 Dialog(z-[10000])。
  */
 
@@ -30,7 +30,7 @@ export function BannerOverlay() {
     <div
       id={BANNER_OVERLAY_ID}
       aria-label="Banner notifications"
-      className="pointer-events-none fixed right-6 top-32 z-[10050] flex flex-col items-end gap-3"
+      className="pointer-events-none fixed inset-0 z-[10050] flex flex-col items-center justify-center gap-3"
     />
   );
 }
