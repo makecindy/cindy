@@ -76,16 +76,25 @@ async function syncEphemeralStatus(sessionId: string, tabId: string, newUrl: str
   const isPreview = isSandboxPreviewUrl(newUrl);
   const wasEphemeral = ephemeralTabIds.has(tabId);
   if (isPreview && !wasEphemeral) {
+    // 先标 ephemeral:转换期间该 tab 不再持久化,即使后续操作被 await 中断
+    // 也不会把预览 URL 写进 DB。
     ephemeralTabIds.add(tabId);
-    // 排空该 tab 已入队的 state 写,避免 pending upsert 在删除后复活普通行。
+    // 再排空该 tab 已入队的 state 写,避免 pending upsert 在删除后复活普通行。
     try {
       await settleTabStateWrites(sessionId, tabId);
     } catch {
       /* 排空失败仍尝试删行;hydrate 过滤兜底 */
     }
-    await cleanupOrphanTabRow(sessionId, tabId, 'patchTabState->preview').catch(() => {
-      /* 清理失败已留痕,下次 hydrate 仍会过滤;不阻塞本次 patch */
-    });
+    try {
+      await cleanupOrphanTabRow(sessionId, tabId, 'patchTabState->preview');
+    } catch (err) {
+      // 删除失败(重试耗尽):不能"标 ephemeral 却报成功"——残留的普通 URL 行
+      // 不会被 hydrate 的 preview 过滤删掉,宿主迁移/重启会复活旧普通状态
+      // (codex-connector P1, round 27l Xz_39)。回滚身份并传播错误,让
+      // patchTabState 报失败,由调用方决定。
+      ephemeralTabIds.delete(tabId);
+      throw err;
+    }
   } else if (!isPreview && wasEphemeral) {
     ephemeralTabIds.delete(tabId);
     // 转换后若该 tab 是当前 active,补持久化 active(此前因 ephemeral 未落库)。
@@ -1071,6 +1080,14 @@ export async function patchTabState(
     const newUrl = extractStateUrl(newState);
     if (isSandboxPreviewUrl(oldUrl) !== isSandboxPreviewUrl(newUrl)) {
       await syncEphemeralStatus(sessionId, tabId, newUrl);
+      // 竞态防护:syncEphemeralStatus 的 await 期间,后续 patch 可能已把该 tab
+      // 的 URL 再次跨越预览边界(如 normal→preview 排队时又来 preview→ordinary)。
+      // 旧转换恢复后必须重读当前状态,若 URL 已非本次入参则跳过写库——否则
+      // cache 显示新 URL 而 SQLite 写入过期值,宿主迁移/重启恢复错误状态
+      // (codex-connector P1, round 27l Xz_34)。
+      const now = getBucket(sessionId);
+      const currentTab = now.tabs.find((t) => t.id === tabId);
+      if (currentTab && extractStateUrl(currentTab.state) !== newUrl) return;
     }
   }
   if (!shouldPersist(sessionId) || isEphemeralTab(tabId)) return;

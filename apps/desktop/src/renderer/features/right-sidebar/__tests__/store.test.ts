@@ -1288,4 +1288,47 @@ describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () =
     await store.patchTabState('s1', p.id, (s) => ({ ...(s as object), url: 'https://p.example/' }));
     expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: p.id });
   });
+
+  it('rolls back the ephemeral transition and throws when deleting the converted row fails (round 27l Xz_39)', async () => {
+    // normal → preview conversion whose orphan-row delete exhausts retries:
+    // must NOT mark the tab ephemeral and report success — the stale ordinary
+    // row would survive hydrate's preview filter and resurrect on migration.
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.close.mockRejectedValue(new Error('db down')); // delete keeps failing through retries
+    await expect(
+      store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL })),
+    ).rejects.toThrow('db down');
+    // identity rolled back → tab is still persisted as an ordinary tab
+    const bucket = store.getBucket('s1');
+    expect(bucket.tabs[0].state).toMatchObject({ url: PREVIEW_URL });
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'still here' }));
+    expect(ipc.upsert).toHaveBeenCalled(); // still persisted
+  });
+
+  it('skips the stale write when a URL-boundary transition is superseded by a newer one (round 27l Xz_34)', async () => {
+    // normal→preview conversion is in flight (settling/deleting) when a newer
+    // preview→ordinary patch lands. The older transition must NOT enqueue its
+    // stale preview state last — cache would show ordinary while SQLite holds
+    // the obsolete preview URL.
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.upsert.mockClear();
+    // Defer the delete so the first conversion pauses inside syncEphemeralStatus.
+    let releaseClose!: () => void;
+    ipc.close.mockImplementationOnce(
+      () =>
+        new Promise<{ ok: true }>((r) => {
+          releaseClose = () => r({ ok: true });
+        }),
+    );
+    const first = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    await new Promise((r) => setTimeout(r, 0)); // first conversion pauses on delete
+    // Newer patch: preview → ordinary, supersedes the first URL.
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: 'https://new.example/' }));
+    releaseClose();
+    await first;
+    // The stale transition must not have written its preview URL to the DB.
+    expect(ipc.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: expect.objectContaining({ url: PREVIEW_URL }) }),
+    );
+  });
 });
