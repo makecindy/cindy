@@ -178,6 +178,26 @@ PY`,
     `sh -c 'eval "$(cat)"' <<'SH'
 xcrun simctl shutdown DEVICE
 SH`,
+    `python3 - <<'PY'
+import os
+os.system("xcr" + "un" + " sim" + "ctl shutdown DEVICE")
+PY`,
+    `python3 - <<'PY'
+import os
+os.system(f"xcr{'un'} sim{'ctl'} shutdown DEVICE")
+PY`,
+    `python3 - <<'PY'
+import subprocess
+subprocess.run(["xcr" + "un", "sim" + "ctl", "shutdown", "DEVICE"])
+PY`,
+    `python3 -c 'import os; os.system("xcr" + "un" + " sim" + "ctl shutdown DEVICE")'`,
+    `bash <<'SH'
+xcr"un" sim"ctl" shutdown DEVICE
+SH`,
+    `python3 - <<'PY.SH'
+import os
+os.system("xcrun simctl shutdown DEVICE")
+PY.SH`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
     `python3 -c 'import subprocess; subprocess.run(["/usr/bin/open","-a","Simulator"])'`,
@@ -253,6 +273,32 @@ PY`,
 print("ok")
 PY
 )"`,
+    `python3 - <<'PY.SH'
+import json
+print(json.dumps({"ok": True}))
+PY.SH`,
+    `python3 - <<'A' <<'B'
+print("a")
+A
+print("b")
+B`,
+    `python3 - <<-'PY'
+	print("hi")
+	PY`,
+    `python3 - <<PY
+	PY
+print("hi")
+PY`,
+    `python3 - <<'PY'
+print("a")
+PY
+node - <<'JS'
+console.log("b")
+JS`,
+    `python3 - <<'PY'
+print("hello", "world")
+parts = ["a", "b"]
+PY`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',
     'find . -maxdepth 1 -name simctl',

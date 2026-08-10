@@ -603,22 +603,22 @@ function containsLiteralSimulatorExecutor(value: string): boolean {
 
 /**
  * General-purpose interpreters can spawn simctl without making it the shell
- * executable. Treat a literal Simulator executor in their payload/argv as a
- * mutation-capable wrapper; command-text policy cannot safely inspect the
- * language semantics beneath this point.
+ * executable. Treat a literal or quoted-fragment-assembled Simulator executor
+ * in their payload/argv as a mutation-capable wrapper; command-text policy
+ * cannot safely inspect the language semantics beneath this point.
  */
 function containsInterpreterSimulatorPayload(tokens: string[]): boolean {
   const interpreter = executableName(tokens[0]);
   const payload = tokens.slice(1).join('\n');
   if (PROGRAMMABLE_INTERPRETER.test(interpreter)) {
-    return containsLiteralSimulatorExecutor(payload);
+    return containsAssembledSimulatorExecutor(payload);
   }
   if (interpreter === 'osascript') {
     // AppleScript can execute through `do shell script`, while JavaScript for
     // Automation can reach NSTask/NSProcessInfo directly. Once an osascript
     // payload contains a literal Simulator executor, command-text policy cannot
     // safely distinguish an inert reference from executable code.
-    return containsLiteralSimulatorExecutor(payload);
+    return containsAssembledSimulatorExecutor(payload);
   }
   return false;
 }
@@ -1072,26 +1072,88 @@ function consumesStdinAsProgram(tokens: string[]): boolean {
   return positional === undefined || positional === '-';
 }
 
-function containsInterpreterHeredocBypass(command: string): boolean {
+/**
+ * Quoted delimiters may contain punctuation (`<<'END.SH'`); unquoted
+ * delimiters are shell words. `<<-` permits leading tabs on the delimiter
+ * line, a plain `<<` does not.
+ */
+const HEREDOC_MARKER = /<<(-?)\s*(['"]?)([A-Za-z0-9_.-]+)\2/g;
+
+interface HeredocRegion {
+  /** Line index of the line that opens the heredoc. */
+  lineIndex: number;
+  /** Character offset of the `<<` marker within that line. */
+  markerIndex: number;
+  delimiter: string;
+  tabStripped: boolean;
+  /** First line of the body (one past the marker line). */
+  bodyStart: number;
+  /** One past the last body line (the delimiter line). */
+  bodyEnd: number;
+}
+
+/**
+ * Locate every heredoc region. Heredocs are matched FIFO: with several
+ * openings on one line (`cmd <<A <<B`) each opener receives the body lines
+ * between its predecessor's delimiter and its own.
+ */
+function parseHeredocRegions(command: string): HeredocRegion[] {
   const lines = command.split(/\r?\n/);
+  const regions: HeredocRegion[] = [];
+  const pending: Array<Pick<HeredocRegion, 'lineIndex' | 'markerIndex' | 'delimiter' | 'tabStripped'>> =
+    [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? '';
-    const marker = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line);
-    if (!marker) continue;
+    for (const match of line.matchAll(HEREDOC_MARKER)) {
+      pending.push({
+        lineIndex: index,
+        markerIndex: match.index ?? 0,
+        delimiter: match[3] ?? '',
+        tabStripped: match[1] === '-',
+      });
+    }
+    const head = pending[0];
+    if (!head) continue;
+    const isDelimiterLine = head.tabStripped
+      ? line.replace(/^\t+/, '') === head.delimiter
+      : line === head.delimiter;
+    if (!isDelimiterLine) continue;
+    regions.push({
+      lineIndex: head.lineIndex,
+      markerIndex: head.markerIndex,
+      delimiter: head.delimiter,
+      tabStripped: head.tabStripped,
+      bodyStart: head.lineIndex + 1,
+      bodyEnd: index,
+    });
+    pending.shift();
+  }
+  for (const head of pending) {
+    regions.push({
+      lineIndex: head.lineIndex,
+      markerIndex: head.markerIndex,
+      delimiter: head.delimiter,
+      tabStripped: head.tabStripped,
+      bodyStart: head.lineIndex + 1,
+      bodyEnd: lines.length,
+    });
+  }
+  return regions;
+}
+
+function containsInterpreterHeredocBypass(command: string): boolean {
+  const lines = command.split(/\r?\n/);
+  for (const region of parseHeredocRegions(command)) {
+    const line = lines[region.lineIndex] ?? '';
     if (
-      !shellSegments(line.slice(0, marker.index)).some((segment) =>
+      !shellSegments(line.slice(0, region.markerIndex)).some((segment) =>
         consumesStdinAsProgram(tokenizeShellSegment(segment)),
       )
     ) {
       continue;
     }
-    const delimiter = marker[2]!;
-    const body: string[] = [];
-    for (index += 1; index < lines.length; index += 1) {
-      if ((lines[index] ?? '').replace(/^\t+/, '').trim() === delimiter) break;
-      body.push(lines[index] ?? '');
-    }
-    if (containsLiteralSimulatorExecutor(body.join('\n'))) return true;
+    const body = lines.slice(region.bodyStart, region.bodyEnd).join('\n');
+    if (containsAssembledSimulatorExecutor(body)) return true;
   }
   return false;
 }
@@ -1110,28 +1172,112 @@ function heredocConsumerExecutable(prefix: string): string | null {
 }
 
 /**
+ * Static pieces of the string literals in `value`, in source order. Pieces
+ * are split at f-string `{...}` expression boundaries and string literals
+ * inside expressions are collected as their own pieces, so an f-string
+ * assembles to the same pieces the runtime produces.
+ */
+function stringLiteralPieces(value: string): string[] {
+  const pieces: string[] = [];
+  let index = 0;
+  while (index < value.length) {
+    const quote = value[index];
+    if (quote !== '"' && quote !== "'") {
+      index += 1;
+      continue;
+    }
+    let cursor = index + 1;
+    let piece = '';
+    let braces = 0;
+    let closed = false;
+    while (cursor < value.length) {
+      const char = value[cursor]!;
+      if (char === '\\') {
+        if (braces === 0) piece += value[cursor + 1] ?? '';
+        cursor += 2;
+        continue;
+      }
+      if (braces > 0) {
+        if (char === '"' || char === "'") {
+          const innerQuote = char;
+          let innerCursor = cursor + 1;
+          let innerPiece = '';
+          while (innerCursor < value.length && value[innerCursor] !== innerQuote) {
+            if (value[innerCursor] === '\\') {
+              innerPiece += value[innerCursor + 1] ?? '';
+              innerCursor += 2;
+            } else {
+              innerPiece += value[innerCursor]!;
+              innerCursor += 1;
+            }
+          }
+          if (innerPiece) pieces.push(innerPiece);
+          cursor = innerCursor + 1;
+          continue;
+        }
+        if (char === '{') braces += 1;
+        else if (char === '}') braces -= 1;
+        cursor += 1;
+        continue;
+      }
+      if (char === quote) {
+        closed = true;
+        break;
+      }
+      if (char === '{') {
+        braces += 1;
+        if (piece) {
+          pieces.push(piece);
+          piece = '';
+        }
+        cursor += 1;
+        continue;
+      }
+      piece += char;
+      cursor += 1;
+    }
+    if (piece) pieces.push(piece);
+    if (!closed) break;
+    index = cursor + 1;
+  }
+  return pieces;
+}
+
+/**
+ * A literal scan alone cannot see an executor that is assembled at runtime,
+ * e.g. `"xcr" + "un" + " sim" + "ctl"`, an f-string `f"xcr{'un'} sim{'ctl'}"`,
+ * or an argv array `["xcr", "un", " sim", "ctl"]`. Join the string-literal
+ * pieces in source order and scan the assembled text so redacting a heredoc
+ * body cannot hide an assembled Simulator command from the shell-level checks.
+ */
+function containsAssembledSimulatorExecutor(value: string): boolean {
+  if (containsLiteralSimulatorExecutor(value)) return true;
+  const pieces = stringLiteralPieces(value);
+  if (pieces.length < 2) return false;
+  const joined = pieces.join('').replace(/[^A-Za-z0-9]/g, '');
+  return /(?:xcrun|simctl|iphonesimulator|simulatorapp)/i.test(joined);
+}
+
+/**
  * Heredoc bodies consumed by a non-shell program (a code interpreter such as
  * python/node, or a data tool such as cat/grep) are not shell program text.
  * Re-parsing those lines as shell segments trips the fail-closed
  * dynamic-expansion check on ordinary interpreter source (for example
  * `__import__("json")` contains `(`/`)` in command position), denying harmless
- * commands. Blank such bodies before the shell scans below; literal Simulator
- * executors inside bodies are still classified by containsShellConsumedLiteralBypass
- * over the original text, and bodies of shell-consumed heredocs (`bash <<EOF`)
- * stay intact because they are real shell code.
+ * commands. Blank such bodies before the shell scans below; bodies are still
+ * classified by containsShellConsumedLiteralBypass over the original text
+ * (literal and quoted-fragment assembles), and bodies of shell-consumed
+ * heredocs (`bash <<EOF`) stay intact because they are real shell code.
  */
 function redactNonShellHeredocBodies(command: string): string {
-  const lines = command.split('\n');
+  const lines = command.split(/\r?\n/);
   const redacted = [...lines];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
-    const marker = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line);
-    if (!marker) continue;
-    const consumer = heredocConsumerExecutable(line.slice(0, marker.index));
+  for (const region of parseHeredocRegions(command)) {
+    const consumer = heredocConsumerExecutable(
+      (lines[region.lineIndex] ?? '').slice(0, region.markerIndex),
+    );
     if (consumer === null || SHELL_EXECUTABLES.has(consumer)) continue;
-    const delimiter = marker[2]!;
-    for (index += 1; index < lines.length; index += 1) {
-      if ((lines[index] ?? '').replace(/^\t+/, '').trim() === delimiter) break;
+    for (let index = region.bodyStart; index < region.bodyEnd; index += 1) {
       redacted[index] = '';
     }
   }
