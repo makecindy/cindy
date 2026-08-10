@@ -65,6 +65,11 @@ export interface ApprovalMemoryStore {
   load(workspaceKey: string): Promise<ReadonlySet<string>>;
   /** 追加一条签名。宿主负责去重、体量上限与落盘节流。 */
   add(workspaceKey: string, signature: string, origin: ApprovalMemoryOrigin): void;
+  /**
+   * 订阅宿主清除事件。成功清除指定工作区时传该 key；全量清除时不传。
+   * 返回取消订阅函数。旧宿主未实现时，活动会话仍保持本地行为兼容。
+   */
+  subscribeClear?(listener: (workspaceKey?: string) => void): () => void;
 }
 
 export interface ApprovalMemoryOptions {
@@ -78,6 +83,8 @@ export interface ApprovalMemoryOptions {
   platform?: NodeJS.Platform;
   store?: ApprovalMemoryStore;
   logger?: Logger;
+  /** 清除/关闭时让 harness 丢弃自己的异步 reviewer cache。 */
+  onInvalidated?: () => void;
 }
 
 export interface ApprovalMemory {
@@ -94,9 +101,16 @@ export interface ApprovalMemory {
     userIntent: string,
     workspaceRoots: readonly string[],
     reviewerRoute: AutoReviewRouteIdentity,
+    generation?: number,
   ): void;
   /** 载入宿主持久化的签名(会话启动时调用一次;失败静默降级成纯会话内记忆)。 */
   hydrate(): Promise<void>;
+  /** 当前清除代次；异步审阅请求必须把它带回结果快照。 */
+  getGeneration(): number;
+  /** 判断异步审阅结果是否仍属于当前批准记忆代次。 */
+  isGenerationCurrent(generation: number): boolean;
+  /** 会话关闭时取消宿主订阅并清理本地缓存。 */
+  dispose(): void;
   /** 仅供测试/诊断:当前会话可见的签名数量。 */
   size(): number;
 }
@@ -488,6 +502,11 @@ const MUTABLE_INDIRECT_EXECUTABLES: ReadonlySet<string> = new Set([
   // archive readers/extractors: unchanged argv can apply replaced member paths and contents
   'tar', 'gtar', 'bsdtar', 'unzip', '7z', '7zz', '7za', 'unrar', 'unar',
   'cabextract', 'cpio',
+  // file copy/install primitives: an unchanged source pathname can resolve to replaced bytes
+  // (or a different symlink/reparse target) and therefore change the write performed by the call.
+  'cp', 'install', 'mv', 'ln', 'dd',
+  'copy', 'move', 'xcopy', 'robocopy',
+  'copy-item', 'move-item',
   // aliases/extensions/config can redirect these stable-looking commands into project code
   'git', 'gh', 'glab',
   // project task/build/test runners
@@ -681,9 +700,20 @@ export function approvalSignature(
 
 export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemory {
   const {
-    agentKind, workspaceKey, platform = process.platform, store, logger,
+    agentKind, workspaceKey, platform = process.platform, store, logger, onInvalidated,
   } = opts;
   const remembered = new Set<string>();
+  let generation = 0;
+  let disposed = false;
+  const unsubscribeClear = store?.subscribeClear?.((clearedWorkspaceKey) => {
+    if (clearedWorkspaceKey !== undefined && clearedWorkspaceKey !== workspaceKey) return;
+    // Clear is a revocation boundary, not just a disk maintenance operation. Invalidate the
+    // private session cache synchronously so an already-running harness cannot keep hitting an
+    // approval the user just removed.
+    remembered.clear();
+    generation += 1;
+    onInvalidated?.();
+  });
   const currentTier = (
     action: ReviewableAction,
     userIntent: string,
@@ -711,7 +741,12 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
     platform,
   );
 
-  const recordRaw = (signature: string, origin: ApprovalMemoryOrigin): void => {
+  const recordRaw = (
+    signature: string,
+    origin: ApprovalMemoryOrigin,
+    expectedGeneration: number,
+  ): void => {
+    if (disposed || expectedGeneration !== generation) return;
     if (remembered.has(signature)) return;
     if (remembered.size >= MAX_SESSION_SIGNATURES) {
       const oldest = remembered.values().next().value as string | undefined;
@@ -733,10 +768,11 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
     workspaceRoots: readonly string[],
     reviewerRoute: AutoReviewRouteIdentity,
     origin: ApprovalMemoryOrigin,
+    expectedGeneration: number,
   ): void => {
     const signature = signatureOf(action, userIntent, workspaceRoots, reviewerRoute);
     if (signature === null) return;
-    recordRaw(signature, origin);
+    recordRaw(signature, origin, expectedGeneration);
   };
 
   return {
@@ -746,15 +782,33 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
       if (signature === null) return false;
       return remembered.has(signature);
     },
-    rememberReviewerAllow(action, userIntent, workspaceRoots, reviewerRoute) {
+    rememberReviewerAllow(
+      action,
+      userIntent,
+      workspaceRoots,
+      reviewerRoute,
+      expectedGeneration = generation,
+    ) {
+      if (disposed || expectedGeneration !== generation) return;
       // 静态 auto-approve 不需要记忆；只有真的经过轻量审阅器的灰区 allow 才持久化。
       if (currentTier(action, userIntent, workspaceRoots) !== 'needs-review') return;
-      record(action, userIntent, workspaceRoots, reviewerRoute, 'reviewer');
+      record(
+        action,
+        userIntent,
+        workspaceRoots,
+        reviewerRoute,
+        'reviewer',
+        expectedGeneration,
+      );
     },
     async hydrate() {
-      if (!store) return;
+      if (!store || disposed) return;
+      const hydrateGeneration = generation;
       try {
         const persisted = await store.load(workspaceKey);
+        // A clear may arrive while the file is loading. Never merge a pre-clear snapshot back
+        // into the session cache after the revocation boundary.
+        if (disposed || hydrateGeneration !== generation) return;
         for (const signature of persisted) {
           if (remembered.size >= MAX_SESSION_SIGNATURES) break;
           remembered.add(signature);
@@ -765,6 +819,20 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
           message: err instanceof Error ? err.message : String(err),
         });
       }
+    },
+    getGeneration() {
+      return generation;
+    },
+    isGenerationCurrent(candidateGeneration: number) {
+      return !disposed && candidateGeneration === generation;
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      unsubscribeClear?.();
+      remembered.clear();
+      generation += 1;
+      onInvalidated?.();
     },
     size() {
       return remembered.size;

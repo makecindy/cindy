@@ -268,8 +268,23 @@ export function createApprovalMemoryFileStore(
   const flushDelayMs = options.flushDelayMs ?? FLUSH_DELAY_MS;
   const now = options.now ?? Date.now;
   const pendingAdds: PendingAdd[] = [];
+  const clearListeners = new Set<(workspaceKey?: string) => void>();
   let flushTimer: NodeJS.Timeout | null = null;
   let queue: Promise<unknown> = Promise.resolve();
+
+  const notifyClear = (workspaceKey?: string): void => {
+    for (const listener of clearListeners) {
+      try {
+        listener(workspaceKey);
+      } catch (error) {
+        // A stale/closed harness must not make a successful disk revocation look like a failed
+        // clear operation. The listener is best-effort; the file is already durably updated.
+        logger.warn('approval memory clear listener failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
 
   const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
     const result = queue.then(task, task);
@@ -347,6 +362,10 @@ export function createApprovalMemoryFileStore(
       });
       scheduleFlush();
     },
+    subscribeClear(listener): (() => void) {
+      clearListeners.add(listener);
+      return () => clearListeners.delete(listener);
+    },
   };
 
   return {
@@ -397,6 +416,10 @@ export function createApprovalMemoryFileStore(
             state.workspaces = {};
           }
           writeFileState(target, state);
+          // Notify only after the replacement succeeds. This is the revocation point for
+          // active Pi/Claude/Codex session caches; a failed write must not invalidate memory
+          // that is still present on disk.
+          notifyClear(workspaceKey);
           return removed;
         });
       });

@@ -3673,6 +3673,7 @@ export class CodexAgent extends BaseAgent {
       platform: sessionReviewPlatform,
       ...(this.deps.approvalMemoryStore ? { store: this.deps.approvalMemoryStore } : {}),
       logger: this.deps.logger,
+      onInvalidated: () => autoReviewDecisionCache.clear(),
     });
     await approvalMemory.hydrate();
     const reviewAutoAction = async (
@@ -3703,6 +3704,7 @@ export class CodexAgent extends BaseAgent {
         request.providerId = reviewerRouteSnapshot.providerId;
         request.model = reviewerRouteSnapshot.model;
       }
+      const approvalMemoryGeneration = approvalMemory.getGeneration();
       if (approvalMemory.isRemembered(
         action,
         request.userIntent,
@@ -3717,6 +3719,7 @@ export class CodexAgent extends BaseAgent {
           userIntentSnapshot: request.userIntent,
           workspaceRootsSnapshot,
           reviewerRouteSnapshot,
+          approvalMemoryGeneration,
         });
       }
       const key = JSON.stringify(request);
@@ -3739,10 +3742,12 @@ export class CodexAgent extends BaseAgent {
             userIntentSnapshot: request.userIntent,
             workspaceRootsSnapshot,
             reviewerRouteSnapshot,
+            approvalMemoryGeneration,
           };
         });
       autoReviewDecisionCache.set(key, pending);
-      return pending;
+      const decision = await pending;
+      return decision;
     };
     const readonlyReferencesConfig: Record<string, unknown> = {
       [`permissions.${READONLY_REFERENCES_PERMISSION_PROFILE}`]: {
@@ -5210,15 +5215,24 @@ export class CodexAgent extends BaseAgent {
           if (modeAfterReview === 'bypassPermissions') return 'accept';
           if (modeAfterReview !== 'auto') {
             forcePrompt = true;
-          } else if (decision.verdict === 'allow') {
+          } else if (
+            (decision.approvalMemoryGeneration === undefined
+              || approvalMemory.isGenerationCurrent(decision.approvalMemoryGeneration))
+            && decision.verdict === 'allow'
+          ) {
             approvalMemory.rememberReviewerAllow(
               opts.autoReviewAction,
               decision.userIntentSnapshot,
               decision.workspaceRootsSnapshot,
               decision.reviewerRouteSnapshot,
+              decision.approvalMemoryGeneration,
             );
             return 'accept';
-          } else if (decision.verdict === 'block') {
+          } else if (
+            (decision.approvalMemoryGeneration === undefined
+              || approvalMemory.isGenerationCurrent(decision.approvalMemoryGeneration))
+            && decision.verdict === 'block'
+          ) {
             // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
             // 后者按 Auto 本意保持静默。动作两种都仍然 decline。
             if (decision.unavailable) autoReviewUnavailableNotice.notify();
@@ -9102,6 +9116,7 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      approvalMemory.dispose();
       resetCodexGenerationTiming(translatorRt);
       clearReconnectStall();
       resetUpstreamIdleForTurnEnd();

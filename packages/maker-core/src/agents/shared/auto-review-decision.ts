@@ -38,6 +38,8 @@ export type AutoReviewDecisionSnapshot = AutoReviewDecision & {
   workspaceRootsSnapshot: readonly string[];
   /** 实际发起轻量审阅请求时的模型路由；批准摘要必须绑定它，不能跨路由复用。 */
   reviewerRouteSnapshot: AutoReviewRouteIdentity;
+  /** 批准记忆清除代次；过代次的异步 allow 不得重新写回或静默放行。 */
+  approvalMemoryGeneration?: number;
 };
 
 export interface AutoReviewRouteIdentity {

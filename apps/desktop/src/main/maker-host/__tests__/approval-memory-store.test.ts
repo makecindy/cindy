@@ -67,6 +67,24 @@ describe('approval-memory-store', () => {
     expect(await memory.store.load('/repo')).toEqual(new Set());
   });
 
+  it('清除成功后通知活动会话，取消订阅后不再通知', async () => {
+    const { memory } = await fixture();
+    const listener = vi.fn();
+    const unsubscribe = memory.store.subscribeClear?.(listener);
+    const signature = digest('clear-notification');
+    memory.store.add('/repo', signature, 'reviewer');
+    await memory.flush();
+
+    expect(await memory.clear('/repo')).toBe(1);
+    expect(listener).toHaveBeenCalledWith('/repo');
+
+    unsubscribe?.();
+    memory.store.add('/repo', signature, 'reviewer');
+    await memory.flush();
+    await memory.clear();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it('clear 会撤销一次 flush 失败后回队的目标批次，不让已清批准复活', async () => {
     const { target, logger, memory } = await fixture();
     const clearedSignature = digest('cleared-after-failed-flush');

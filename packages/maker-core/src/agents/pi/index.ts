@@ -1146,6 +1146,7 @@ export class PiAgent extends BaseAgent {
       platform: opts.remoteHostId ? 'linux' : process.platform,
       ...(this.deps.approvalMemoryStore ? { store: this.deps.approvalMemoryStore } : {}),
       logger: this.deps.logger,
+      onInvalidated: () => autoReviewDecisionCache.clear(),
     });
     // 载入失败会在记忆层降级为空集；成功时必须在首个工具调用前就绪，避免会话刚开时重复问。
     await approvalMemory.hydrate();
@@ -1174,6 +1175,7 @@ export class PiAgent extends BaseAgent {
         request.providerId = reviewerRouteSnapshot.providerId;
         request.model = reviewerRouteSnapshot.model;
       }
+      const approvalMemoryGeneration = approvalMemory.getGeneration();
       // 记忆必须同时命中逐字动作与创建本次审阅请求时的逐字意图；换意图后重新送审。
       if (approvalMemory.isRemembered(
         action,
@@ -1189,6 +1191,7 @@ export class PiAgent extends BaseAgent {
           userIntentSnapshot: request.userIntent,
           workspaceRootsSnapshot,
           reviewerRouteSnapshot,
+          approvalMemoryGeneration,
         });
       }
       const cacheKey = JSON.stringify(request);
@@ -1213,11 +1216,13 @@ export class PiAgent extends BaseAgent {
               userIntentSnapshot: request.userIntent,
               workspaceRootsSnapshot,
               reviewerRouteSnapshot,
+              approvalMemoryGeneration,
             };
           });
         autoReviewDecisionCache.set(cacheKey, pending);
       }
-      return pending;
+      const decision = await pending;
+      return decision;
     };
     let closed = false;
     // Cindy 侧对 pi plan 模式的镜像态;setPlanMode 经 /plan toggle 驱动,与 pi 内部
@@ -1366,8 +1371,11 @@ export class PiAgent extends BaseAgent {
                   decision.userIntentSnapshot,
                   decision.workspaceRootsSnapshot,
                   decision.reviewerRouteSnapshot,
+                  decision.approvalMemoryGeneration,
                 );
               },
+              isApprovalMemoryGenerationCurrent: (generation: number) =>
+                approvalMemory.isGenerationCurrent(generation),
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
@@ -1942,6 +1950,7 @@ export class PiAgent extends BaseAgent {
 
       async close(): Promise<void> {
         closed = true;
+        approvalMemory.dispose();
         disposePiTranslateContext(ctx);
         runtimeCapabilityGeneration++;
         publishRuntimeCapabilities(undefined);
@@ -2497,6 +2506,7 @@ export class PiAgent extends BaseAgent {
         action: ReviewableAction,
         decision: AutoReviewDecisionSnapshot,
       ) => void;
+      isApprovalMemoryGenerationCurrent: (generation: number) => boolean;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
@@ -2588,6 +2598,7 @@ export class PiAgent extends BaseAgent {
         readRoots,
         reviewAutoAction,
         rememberReviewerAllow,
+        isApprovalMemoryGenerationCurrent,
         notifyAutoReviewUnavailable,
         registeredMcpServerNames,
         registerPendingPrompt,
@@ -2808,6 +2819,21 @@ export class PiAgent extends BaseAgent {
               type: 'extension_ui_response',
               id,
               confirmed: await requestUserConfirmation({ forcePrompt: true }),
+            });
+            return;
+          }
+          if (
+            decision.approvalMemoryGeneration !== undefined
+            && !isApprovalMemoryGenerationCurrent(decision.approvalMemoryGeneration)
+          ) {
+            // clearApprovals() crossed this request while it was being reviewed. Require a fresh
+            // user decision instead of silently executing a verdict from the revoked generation.
+            proc.send({
+              type: 'extension_ui_response',
+              id,
+              confirmed: turnPermissionPolicy
+                ? false
+                : await requestUserConfirmation({ forcePrompt: true }),
             });
             return;
           }

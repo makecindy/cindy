@@ -1682,15 +1682,26 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (modeAfterReview !== 'auto') {
           // 已收紧到 Ask/更严:不吃 auto 裁决,强制走用户确认(下方 forcePrompt 流程)。
           forcePrompt = true;
-        } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+        } else if (
+          !turnPolicyForcePrompt
+          && (autoDecision.approvalMemoryGeneration === undefined
+            || approvalMemory.isGenerationCurrent(autoDecision.approvalMemoryGeneration))
+          && autoDecision.verdict === 'allow'
+        ) {
           approvalMemory.rememberReviewerAllow(
             autoReviewAction,
             autoDecision.userIntentSnapshot,
             autoDecision.workspaceRootsSnapshot,
             autoDecision.reviewerRouteSnapshot,
+            autoDecision.approvalMemoryGeneration,
           );
           return { behavior: 'allow', updatedInput: input };
-        } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
+        } else if (
+          !turnPolicyForcePrompt
+          && (autoDecision.approvalMemoryGeneration === undefined
+            || approvalMemory.isGenerationCurrent(autoDecision.approvalMemoryGeneration))
+          && autoDecision.verdict === 'block'
+        ) {
           // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,用户有权知道并接管,
           // 后者按 Auto 本意保持静默(只把 reason 喂给模型)。动作两种都仍然 deny。
           if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
@@ -1865,6 +1876,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         request.providerId = reviewerRouteSnapshot.providerId;
         request.model = reviewerRouteSnapshot.model;
       }
+      const approvalMemoryGeneration = approvalMemory.getGeneration();
       if (approvalMemory.isRemembered(
         action,
         request.userIntent,
@@ -1879,6 +1891,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           userIntentSnapshot: request.userIntent,
           workspaceRootsSnapshot,
           reviewerRouteSnapshot,
+          approvalMemoryGeneration,
         });
       }
       const key = JSON.stringify(request);
@@ -1901,10 +1914,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             userIntentSnapshot: request.userIntent,
             workspaceRootsSnapshot,
             reviewerRouteSnapshot,
+            approvalMemoryGeneration,
           };
         });
       autoReviewDecisionCache.set(key, pending);
-      return pending;
+      const decision = await pending;
+      return decision;
     };
     let toolLoopGuard: ToolLoopGuard | null = isDeepSeekModel(mutableModel)
       ? new ToolLoopGuard()
@@ -1964,6 +1979,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       platform: opts.remoteHostId ? 'linux' : process.platform,
       ...(this.deps.approvalMemoryStore ? { store: this.deps.approvalMemoryStore } : {}),
       logger: this.deps.logger,
+      onInvalidated: () => autoReviewDecisionCache.clear(),
     });
     await approvalMemory.hydrate();
     const modelContextWindows = new Map(
@@ -2751,15 +2767,26 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               if (remoteModeAfterReview !== 'auto') {
                 remoteForcePrompt = true;
-              } else if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+              } else if (
+                !remoteTurnPolicyForcePrompt
+                && (autoDecision.approvalMemoryGeneration === undefined
+                  || approvalMemory.isGenerationCurrent(autoDecision.approvalMemoryGeneration))
+                && autoDecision.verdict === 'allow'
+              ) {
                 approvalMemory.rememberReviewerAllow(
                   remoteAutoReviewAction,
                   autoDecision.userIntentSnapshot,
                   autoDecision.workspaceRootsSnapshot,
                   autoDecision.reviewerRouteSnapshot,
+                  autoDecision.approvalMemoryGeneration,
                 );
                 return { kind: 'permission', behavior: 'allow' };
-              } else if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
+              } else if (
+                !remoteTurnPolicyForcePrompt
+                && (autoDecision.approvalMemoryGeneration === undefined
+                  || approvalMemory.isGenerationCurrent(autoDecision.approvalMemoryGeneration))
+                && autoDecision.verdict === 'block'
+              ) {
                 // 与本地分支同口径:审阅器故障要提示一次,模型判定保持静默。
                 if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
                 return {
@@ -5365,6 +5392,7 @@ export class ClaudeCodeAgent extends BaseAgent {
 
       async close() {
         if (closed) return;
+        approvalMemory.dispose();
         // Closing/dead sessions settle through Session status (or their queued
         // terminal event), never through the successful task-stop path.
         discardActiveContinuation('session_closed');

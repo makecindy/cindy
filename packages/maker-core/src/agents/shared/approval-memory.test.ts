@@ -411,6 +411,48 @@ describe('approvalSignature — 可记忆判据', () => {
     )).toBe(true);
   });
 
+  it('复制、安装及等价文件写入入口不可记忆', () => {
+    for (const command of [
+      'cp payload.json dist/config.json',
+      'install -m 755 payload.bin bin/app',
+      'mv payload.json dist/config.json',
+      'ln -s payload.json dist/config.json',
+      'dd if=payload.bin of=dist/app.bin',
+      'env cp payload.json dist/config.json',
+      'timeout 30 install payload.bin bin/app',
+      'true && cp payload.json dist/config.json; install payload.bin bin/app',
+      'COPY.EXE payload.json C:\\dist\\config.json',
+      'xcopy payload.json C:\\dist /E',
+      'robocopy payload C:\\dist /E',
+      'Copy-Item payload.json C:\\dist\\config.json',
+      'Move-Item payload.json C:\\dist\\config.json',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'echo cp payload.json dist/config.json',
+      "echo 'install payload.bin bin/app'",
+      'rm -rf dist',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    for (const action of [
+      exec('cp payload.json dist/config.json'),
+      exec('install -m 755 payload.bin bin/app'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    }
+    expect(memory.size()).toBe(0);
+  });
+
   it('输入重定向的紧贴、fd 前缀与 shell 分隔符形式均不可记忆', () => {
     for (const command of [
       'psql < input.sql',
@@ -1091,5 +1133,70 @@ describe('createApprovalMemory — 跨会话持久化', () => {
     expect(memory.isRemembered(
       exec('rm -rf build'), defaultIntent, roots, reviewerRoute,
     )).toBe(true);
+  });
+
+  it('宿主清除事件同步失效本地缓存，并拒绝旧代次的异步 allow', () => {
+    let clearListener: ((workspaceKey?: string) => void) | undefined;
+    const add = vi.fn();
+    const store: ApprovalMemoryStore = {
+      load: async () => new Set(),
+      add,
+      subscribeClear: (listener) => {
+        clearListener = listener;
+        return () => { clearListener = undefined; };
+      },
+    };
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin', store,
+    });
+    const action = exec('rm -rf build');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    const generation = memory.getGeneration();
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(true);
+
+    clearListener?.('/other-repo');
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(true);
+    clearListener?.('/repo');
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
+    expect(memory.isGenerationCurrent(generation)).toBe(false);
+
+    memory.rememberReviewerAllow(
+      action,
+      defaultIntent,
+      roots,
+      reviewerRoute,
+      generation,
+    );
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(memory.size()).toBe(0);
+    memory.dispose();
+  });
+
+  it('hydrate 与清除并发时不把清除前快照合并回来', async () => {
+    let resolveLoad: ((value: ReadonlySet<string>) => void) | undefined;
+    let clearListener: ((workspaceKey?: string) => void) | undefined;
+    const persisted = signature(exec('rm -rf build'))!;
+    const memory = createApprovalMemory({
+      agentKind: 'pi',
+      workspaceKey: '/repo',
+      platform: 'darwin',
+      store: {
+        load: () => new Promise<ReadonlySet<string>>((resolve) => { resolveLoad = resolve; }),
+        add: () => {},
+        subscribeClear: (listener) => {
+          clearListener = listener;
+          return () => { clearListener = undefined; };
+        },
+      },
+    });
+    const hydrate = memory.hydrate();
+    clearListener?.('/repo');
+    resolveLoad?.(new Set([persisted]));
+    await hydrate;
+    expect(memory.isRemembered(
+      exec('rm -rf build'), defaultIntent, roots, reviewerRoute,
+    )).toBe(false);
+    memory.dispose();
   });
 });
