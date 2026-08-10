@@ -895,7 +895,6 @@ export default function SessionScreen() {
     connectionIssue,
     getPresenceAvailability,
     invoke,
-    lastPresenceSnapshot,
     openLink,
     status,
     subscribe,
@@ -1525,11 +1524,11 @@ export default function SessionScreen() {
   const [extraDirBrowseLoading, setExtraDirBrowseLoading] = useState(false);
   const [extraDirBrowseError, setExtraDirBrowseError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // UI 错误可被任意操作清掉；transport hold 独立保留到当前设备完成一次权威同步。
-  // 否则「加载更早 / 刷新用量」的 setError(null) 会误放行仍在断线恢复中的 outbox。
+  // UI 错误可被任意操作清掉；transport hold 独立锁存所有连接恢复来源，直到当前
+  // 设备完成一次权威同步。error 可空：纯 relay / presence 断线未必产生请求错误。
   const [outboxTransportHold, setOutboxTransportHold] = useState<{
     deviceId: string;
-    error: string;
+    error: string | null;
   } | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   // 会话已读回执的同步门槛 key:`${sessionId}:${connectionEpoch}`,由 syncSession 尾部写入。
@@ -1769,45 +1768,73 @@ export default function SessionScreen() {
     isDeviceAccessRevoked ? '[ACCESS_REVOKED] access revoked by target device' : error,
     isDeviceUnresponsive,
   );
-  // dispatch / Stop 只认 Context 内随 connection epoch 重置的三态 verdict。
-  // lastPresenceSnapshot 与下方 ref 只用于 false→true 的 resync edge，不能作为门禁：
-  // 它们会跨 epoch 保留，旧 offline 否则会把新连接永久卡死。
+  // dispatch / Stop 与恢复 edge 共用 Context 内随 connection epoch 重置的三态 verdict，
+  // 不再拿跨 epoch 保留的旧 presence 快照作第二份可用性真源。
   const targetAvailableForDispatch = getPresenceAvailability(deviceId);
   const screenAutoRecoveringError = connectionError && isAutoRecoveringRemoteError(connectionError)
     ? connectionError
     : null;
-  const heldOutboxTransportError = outboxTransportHold?.deviceId === deviceId
+  const hasLatchedOutboxTransportHold = outboxTransportHold?.deviceId === deviceId;
+  const heldOutboxTransportError = hasLatchedOutboxTransportHold
     ? outboxTransportHold.error
     : null;
+  const latchOutboxTransportHold = useCallback((nextError: string | null) => {
+    if (!deviceId) return;
+    setOutboxTransportHold((current) => {
+      const currentError = current?.deviceId === deviceId ? current.error : null;
+      const errorForHold = nextError ?? currentError;
+      if (current?.deviceId === deviceId && current.error === errorForHold) return current;
+      return { deviceId, error: errorForHold };
+    });
+  }, [deviceId]);
   // 当前 error 比旧 hold 更新：确定性错误出现时必须立即压过旧的断线提示；只有
   // 当前 error 已清空，才继续沿用 hold 等权威同步收口。
   const activeOutboxTransportError = connectionError === null
     ? heldOutboxTransportError
     : screenAutoRecoveringError;
-  useEffect(() => {
-    if (!deviceId || !connectionError) return;
-    if (!screenAutoRecoveringError) {
-      setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);
-      return;
-    }
-    setOutboxTransportHold((current) => (
-      current?.deviceId === deviceId && current.error === screenAutoRecoveringError
-        ? current
-        : { deviceId, error: screenAutoRecoveringError }
-    ));
-  }, [connectionError, deviceId, screenAutoRecoveringError]);
+  // 连接阻塞一旦出现就锁存。layout effect 早于下方 passive pump effect，保证同一
+  // commit 的状态翻转也先关门；成功 sync 尾是唯一清门位置，失败（含 NOT_FOUND）
+  // 都不能拿旧 session 行派发。
+  useLayoutEffect(() => {
+    const connectionBlocked = status !== 'online'
+      || targetAvailableForDispatch === false
+      || isDeviceUnresponsive
+      || screenAutoRecoveringError !== null;
+    if (!connectionBlocked) return;
+    latchOutboxTransportHold(screenAutoRecoveringError);
+  }, [
+    isDeviceUnresponsive,
+    latchOutboxTransportHold,
+    screenAutoRecoveringError,
+    status,
+    targetAvailableForDispatch,
+  ]);
+  // 若 offline→online 被 React 合并进单次 render，旧连接代没有机会先锁存；render
+  // 阶段直接比较 epoch / presence edge，挡住本帧 pump。对应 effect 随即锁存 hold
+  // 并启动 sync，后续仍只由成功尾解除。
+  const connectionEpochRecoverySyncPending = status === 'online'
+    && syncedConnectionEpochRef.current !== connectionEpoch;
+  const presenceRecoverySyncPending = status === 'online'
+    && targetAvailableForDispatch === true
+    && (
+      targetAvailableDeviceRef.current !== deviceId
+      || targetAvailableRef.current !== true
+    );
+  const outboxRecoverySyncHeld = hasLatchedOutboxTransportHold
+    || connectionEpochRecoverySyncPending
+    || presenceRecoverySyncPending;
   // 对齐 Desktop：输入与发送仍可排队，但模型、权限、Plan、停止等需要即时访问
   // 被控端的操作在明确断线时禁用。presence unknown 仍允许，避免旧缓存永久锁死入口。
   const remoteRealtimeControlsUnavailable = status !== 'online'
     || targetAvailableForDispatch === false
     || isDeviceUnresponsive
-    || activeOutboxTransportError !== null;
+    || outboxRecoverySyncHeld;
   const remoteStopUnavailable = remoteRealtimeControlsUnavailable;
   const outboxConnectionState: MobileOutboxConnectionState = {
     relayOnline: status === 'online',
     targetAvailable: targetAvailableForDispatch,
     deviceUnresponsive: isDeviceUnresponsive,
-    autoRecoveringError: activeOutboxTransportError !== null,
+    autoRecoveringError: outboxRecoverySyncHeld,
     syncInProgress: loading,
   };
   // pumpOutbox 是跨 render 的 async 循环，每轮必须读最新连接态；只捕获某一帧会在
@@ -3692,24 +3719,27 @@ export default function SessionScreen() {
       if (!syncRun.isStale()) {
         const formatted = formatRemoteError(err);
         setError(formatted);
-        // transient 失败刷新 hold，保证共享 UI error 被其它操作清理时 outbox 仍不
-        // 提前派发；确定性失败则清旧 hold，交给普通错误与手动重试入口处理。
-        setOutboxTransportHold((current) => {
-          if (!isAutoRecoveringRemoteError(err)) {
-            return current?.deviceId === deviceId ? null : current;
-          }
-          return current?.deviceId === deviceId && current.error === formatted
-            ? current
-            : { deviceId, error: formatted };
-        });
+        // 两类失败都写入 hold 且不能清门：瞬态错误继续自动重试，确定性错误保留
+        // 手动同步入口；共享 UI error 被其它操作清掉时也不会变成不可见的永久自锁。
+        latchOutboxTransportHold(formatted);
       }
     } finally {
       if (!syncRun.isStale()) setLoading(false);
     }
-  }, [deviceId, deviceName, maker, openLink, sessionId, subscribe]);
+  }, [deviceId, deviceName, latchOutboxTransportHold, maker, openLink, sessionId, subscribe]);
+  // 任一连接恢复身份变化都会让旧读取失去提交资格。否则断线前启动的同步可能在
+  // 新 hold 锁存后迟到，并从成功尾误清恢复屏障。
+  const remoteSyncContextKey = JSON.stringify([
+    deviceId,
+    sessionId,
+    connectionEpoch,
+    status,
+    targetAvailableForDispatch,
+    isDeviceUnresponsive,
+  ]);
   const requestSync = useRemoteSyncCoordinator(
     (run) => syncSession(run),
-    `${deviceId}:${sessionId}`,
+    remoteSyncContextKey,
   );
   const load = useCallback(
     () => requestSync({ reason: 'passive-refresh' }),
@@ -4043,20 +4073,25 @@ export default function SessionScreen() {
   useEffect(() => {
     if (status !== 'online') return;
     if (syncedConnectionEpochRef.current === connectionEpoch) return;
+    latchOutboxTransportHold(null);
     syncedConnectionEpochRef.current = connectionEpoch;
     void load();
-  }, [connectionEpoch, load, status]);
+  }, [connectionEpoch, latchOutboxTransportHold, load, status]);
 
   useEffect(() => {
-    if (!lastPresenceSnapshot || lastPresenceSnapshot.deviceId !== deviceId) return;
-    const available = lastPresenceSnapshot.online && lastPresenceSnapshot.remoteControlEnabled;
-    const wasAvailable = targetAvailableDeviceRef.current === deviceId
+    const sameDevice = targetAvailableDeviceRef.current === deviceId;
+    const wasAvailable = sameDevice
       ? targetAvailableRef.current
       : null;
     targetAvailableDeviceRef.current = deviceId ?? null;
-    targetAvailableRef.current = available;
-    if (available && wasAvailable === false && status === 'online') void load();
-  }, [deviceId, lastPresenceSnapshot, load, status]);
+    targetAvailableRef.current = targetAvailableForDispatch;
+    if (targetAvailableForDispatch === true && wasAvailable !== true && status === 'online') {
+      latchOutboxTransportHold(null);
+      // 首次进入 / 原地换设备已有 mount effect 负责同步；同设备的 unknown|false→true
+      // 是 context 变化废弃旧轮次后的恢复沿，必须补一轮新 identity 的读取。
+      if (sameDevice) void load();
+    }
+  }, [deviceId, latchOutboxTransportHold, load, status, targetAvailableForDispatch]);
 
   useEffect(() => {
     if (currentSession || !deviceId || !sessionId || loading || status !== 'online') return;

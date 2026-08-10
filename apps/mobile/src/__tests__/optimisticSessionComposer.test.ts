@@ -58,12 +58,10 @@ describe('mobile optimistic composer while session is not ready', () => {
       + '    ? heldOutboxTransportError\n'
       + '    : screenAutoRecoveringError;',
     );
-    expect(source).toContain('if (!deviceId || !connectionError) return;');
-    expect(source).toContain('if (!screenAutoRecoveringError) {');
-    expect(source).toContain(
-      'setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);',
-    );
-    expect(source).toContain('autoRecoveringError: activeOutboxTransportError !== null,');
+    expect(source).toContain('error: string | null;');
+    expect(source).toContain('const latchOutboxTransportHold = useCallback(');
+    expect(source).toContain('const outboxRecoverySyncHeld = hasLatchedOutboxTransportHold');
+    expect(source).toContain('autoRecoveringError: outboxRecoverySyncHeld,');
     expect(source).toContain('setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);');
     expect(source).not.toContain('autoRecoveringError: isAutoRecoveringRemoteError(connectionError),');
     // Desktop 断线时仍允许尝试队列编辑类动作,不把整行切成只读。
@@ -129,6 +127,55 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('if (outboxDispatchBlocked) return;\n    void pumpOutbox();');
     // 即使 blocked boolean 恰好没变化，新的连接 epoch 也要重新唤醒一次。
     expect(source).toContain('}, [connectionEpoch, outboxDispatchBlocked]);');
+  });
+
+  it('latches every connection recovery edge until authoritative sync succeeds', () => {
+    const source = readSource(SCREEN);
+    const latchStart = source.indexOf('// 连接阻塞一旦出现就锁存。');
+    const latch = source.slice(latchStart, source.indexOf('// 对齐 Desktop', latchStart));
+    const syncStart = source.indexOf('const syncSession = useCallback(async');
+    const syncCatchStart = source.indexOf('    } catch (err) {', syncStart);
+    const syncCatchEnd = source.indexOf('    } finally {', syncCatchStart);
+    const syncCatch = source.slice(syncCatchStart, syncCatchEnd);
+    const epochEffectStart = source.indexOf("if (status !== 'online') return;", syncCatchEnd);
+    const epochEffect = source.slice(epochEffectStart, source.indexOf('\n  },', epochEffectStart));
+    const presenceEffectStart = source.indexOf(
+      'const sameDevice = targetAvailableDeviceRef.current === deviceId',
+      epochEffectStart,
+    );
+    const presenceEffect = source.slice(
+      presenceEffectStart,
+      source.indexOf('\n  },', presenceEffectStart),
+    );
+    const syncIdentityStart = source.indexOf('const remoteSyncContextKey = JSON.stringify([');
+    const syncIdentity = source.slice(syncIdentityStart, source.indexOf(']);', syncIdentityStart));
+
+    expect(latch).toContain('useLayoutEffect(() => {');
+    expect(latch).toContain("status !== 'online'");
+    expect(latch).toContain('targetAvailableForDispatch === false');
+    expect(latch).toContain('|| isDeviceUnresponsive');
+    expect(latch).toContain('|| screenAutoRecoveringError !== null');
+    expect(latch).toContain('latchOutboxTransportHold(screenAutoRecoveringError);');
+    expect(latch).toContain('syncedConnectionEpochRef.current !== connectionEpoch');
+    expect(latch).toContain('targetAvailableRef.current !== true');
+    expect(syncIdentity).toMatch(
+      /deviceId[\s\S]*sessionId[\s\S]*connectionEpoch[\s\S]*status[\s\S]*targetAvailableForDispatch[\s\S]*isDeviceUnresponsive/,
+    );
+    expect(source).toContain('(run) => syncSession(run),\n    remoteSyncContextKey,');
+    expect(epochEffect.indexOf('latchOutboxTransportHold(null);'))
+      .toBeLessThan(epochEffect.indexOf('void load();'));
+    expect(presenceEffect.indexOf('latchOutboxTransportHold(null);'))
+      .toBeLessThan(presenceEffect.indexOf('void load();'));
+    expect(presenceEffect).toContain('wasAvailable !== true');
+    expect(presenceEffect).toContain('if (sameDevice) void load();');
+    expect(source).not.toContain('lastPresenceSnapshot');
+    expect((source.match(
+      /setOutboxTransportHold\(\(current\) => current\?\.deviceId === deviceId \? null : current\);/g,
+    ) ?? [])).toHaveLength(1);
+    expect(syncCatch).toContain('latchOutboxTransportHold(formatted);');
+    expect(syncCatch).not.toContain('if (isAutoRecoveringRemoteError(err))');
+    expect(syncCatch).not.toContain('setOutboxTransportHold(');
+    expect(syncCatch).not.toContain('? null : current');
   });
 
   it('routes sends through the outbox while blocked and defers the workingDir check', () => {
@@ -231,9 +278,8 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(retry).toContain('return () => clearTimeout(timer);');
     expect(retry).toContain('targetAvailableForDispatch === false');
     expect(retry).toContain('|| isDeviceUnresponsive');
-    expect(syncCatch).toContain('if (!isAutoRecoveringRemoteError(err)) {');
-    expect(syncCatch).toContain('return current?.deviceId === deviceId ? null : current;');
-    expect(syncCatch).toContain(': { deviceId, error: formatted };');
+    expect(syncCatch).toContain('latchOutboxTransportHold(formatted);');
+    expect(syncCatch).not.toContain('? null : current');
     expect(source).toContain('error={connectionRecoveryError}');
   });
 

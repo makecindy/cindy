@@ -102,9 +102,10 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
     expect(source).toContain('connectionEpoch');
-    expect(source).toContain('lastPresenceSnapshot');
+    expect(source).toContain('getPresenceAvailability(deviceId)');
     expect(source).toContain('targetAvailableRef');
-    expect(source).toContain("lastPresenceSnapshot.deviceId !== deviceId");
+    expect(source).toContain('wasAvailable !== true');
+    expect(source).not.toContain('lastPresenceSnapshot');
     expect(source).not.toContain('presenceVersion');
   });
 
