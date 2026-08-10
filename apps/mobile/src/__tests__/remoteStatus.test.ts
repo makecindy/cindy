@@ -3,8 +3,10 @@ import { DeviceLinkError } from '@cindy/device-link';
 import {
   connectionIssueHint,
   connectionIssueTitle,
+  describeRemoteComposerBlockingError,
   describeRemoteError,
   formatRemoteError,
+  isAutoRecoveringRemoteError,
   relayStatusHint,
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
@@ -39,6 +41,27 @@ describe('remoteStatus', () => {
       '[REMOTE_DISABLED] remote disabled',
     );
     expect(formatRemoteError(new Error('[NOT_CONNECTED] offline'))).toBe('[NOT_CONNECTED] offline');
+  });
+
+  it('keeps the composer writable for automatic recovery, but blocks deterministic failures', () => {
+    for (const error of [
+      '[NOT_CONNECTED] offline',
+      '[LINK_NOT_OPEN] reopening',
+      '[INVOKE_TIMEOUT] timed out',
+      '[DEVICE_UNRESPONSIVE] circuit open',
+      '[SESSION_REFERENCE_OFFLINE] target unavailable',
+    ]) {
+      expect(isAutoRecoveringRemoteError(error), error).toBe(true);
+      expect(describeRemoteComposerBlockingError(error), error).toBeNull();
+    }
+
+    expect(describeRemoteComposerBlockingError('[ACCESS_REVOKED] revoked'))
+      .toContain('撤销手机访问权限');
+    expect(describeRemoteComposerBlockingError('[REMOTE_DISABLED] disabled'))
+      .toContain('关闭允许远程控制');
+    expect(describeRemoteComposerBlockingError("[CHANNEL_NOT_ALLOWED] channel 'x'"))
+      .toContain('版本不支持');
+    expect(describeRemoteComposerBlockingError(null)).toBeNull();
   });
 
   it('localizes every connection issue kind', async () => {

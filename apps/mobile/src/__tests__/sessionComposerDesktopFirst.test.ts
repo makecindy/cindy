@@ -323,7 +323,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const currentTurnStreaming = useMemo(');
     expect(source).toContain('const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)');
     expect(source).toContain('const canStopComposer = canStopQueue || canStopCurrentRun;');
-    expect(source).toContain('canStop: canUseComposer && canStopComposer,');
+    expect(source).toContain('canStop: canUseRemoteSessionControls && canStopComposer,');
     expect(source).not.toContain('canStop: canUseComposer && canStopQueue,');
     expect(source).toContain('const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);');
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
@@ -516,11 +516,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain(': hydrateQuotes(sessionId);');
     expect(source).toContain('quoteHydration,');
     expect(source).toContain('!composerDocumentsEqual(composerDocumentRef.current, immediateDocumentSnapshot)');
-    expect(source).toContain('if (canUseComposer) return;');
+    expect(source).toContain('if (canUseRemoteSessionControls) return;');
     expect(source).toContain('setModelSheetOpen(false);');
-    expect(source).toContain('if (!canUseComposer || !currentSession || !modelSheetSelection) return;');
-    expect(source).toContain('modelSheetOpen && canUseComposer');
-    expect(source).toContain('disabled={controlBusy || !canUseComposer}');
+    expect(source).toContain('if (!canUseRemoteSessionControls || !currentSession || !modelSheetSelection) return;');
+    expect(source).toContain('modelSheetOpen && canUseRemoteSessionControls');
+    expect(source).toContain('disabled={controlBusy || !canUseRemoteSessionControls}');
     expect(source).toContain('createMobileCindyVoiceCredential');
     // Voice startup claims the pressIn-prewarmed ASR connection when one is
     // fresh (credential already resolved, WebSocket already connecting) and

@@ -2,6 +2,7 @@ import {
   describeRemoteError as describeRemoteErrorShared,
   humanizeRemoteError as humanizeRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
+  isTransientRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
 import type { DeviceLinkConnectionIssueKind } from '@cindy/device-link';
 import { i18n } from '@/i18n';
@@ -55,9 +56,34 @@ export function humanizeRemoteError(error: unknown): string {
   return humanizeRemoteErrorShared(error);
 }
 
+/**
+ * 连接恢复中的错误不会转成用户手动处理的失败态。
+ *
+ * DEVICE_UNRESPONSIVE 在通用 retry helper 里故意归为 permanent（避免熔断 open
+ * 时原地重试风暴），但对消息 outbox 来说仍是自动探测可恢复状态，必须留在本地
+ * 等熔断关闭，而不是让用户重发。
+ */
+export function isAutoRecoveringRemoteError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return code === 'SESSION_REFERENCE_OFFLINE'
+    || message.includes('SESSION_REFERENCE_OFFLINE')
+    || isTransientRemoteError(error)
+    || isDeviceUnresponsiveRemoteError(error);
+}
+
 export function describeRemoteError(error: string | null): string | null {
   if (error?.includes('DEVICE_UNRESPONSIVE')) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
   return describeRemoteErrorShared(error);
+}
+
+/**
+ * 只有确定性远端错误才锁 composer；断线、弱网、超时与熔断由本地 outbox 接住，
+ * 恢复后自动派发。返回 null 表示 composer 可以继续收消息。
+ */
+export function describeRemoteComposerBlockingError(error: string | null): string | null {
+  if (!error || isAutoRecoveringRemoteError(error)) return null;
+  return describeRemoteError(error);
 }

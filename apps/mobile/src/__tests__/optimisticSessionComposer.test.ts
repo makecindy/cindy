@@ -1,5 +1,5 @@
 /**
- * 会话参数未就绪(新建在途 / 缓存种入)时 composer 保持正常,发送走 outbox 排队。
+ * 会话参数未就绪或连接自动恢复中时 composer 保持正常,发送走 outbox 排队。
  *
  * 这两种状态原先经 buildSessionOperationLayout 的 readOnlyReason 进来,共享模型据此把
  * 整个输入框换成「只读模式」卡片——每次新建会话都必然经过几秒,观感是「刚发出消息就
@@ -8,7 +8,7 @@
  * sendAtMs 注释)。
  *
  * mobile 没有组件渲染测试设施(惯例见 chatQuoteCrossDevice.test.ts),这里做源码级接线
- * 断言:门在该在的位置、失败路径不放行、设置类 RPC 仍被挡。
+ * 断言:门在该在的位置、失败路径不放行,并且远程控制按 Desktop 的断线分层处理。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -21,20 +21,50 @@ function readSource(relativePath: string): string {
 const SCREEN = 'app/sessions/[sessionId].tsx';
 
 describe('mobile optimistic composer while session is not ready', () => {
-  it('keeps the composer out of the read-only slot and only gates queue rows', () => {
+  it('keeps the composer out of the read-only slot and only gates remote controls until the session exists', () => {
     const source = readSource(SCREEN);
 
     // composer 只认真正的协作只读理由。
     expect(source).toContain('      readOnlyReason: composerReadOnlyReason,\n');
     expect(source).not.toContain('readOnlyReason: cacheSeededReason');
-    // 队列行(取消 / 编辑 / 插队都是打到被控端队列的 RPC)仍然只读。
+    // 断线 / 弱网 / 熔断只锁 outbox 派发；确定性错误仍进共享布局锁 composer。
+    expect(source).toContain('remoteUnavailableReason: composerRemoteUnavailableReason,');
+    expect(source).toContain('describeRemoteComposerBlockingError(connectionError)');
+    // 会话尚未在被控端建成时,队列行(取消 / 编辑 / 插队)仍然只读。
     expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason\n    ?? cacheSeededReason\n    ?? pendingCreationReason');
+  });
+
+  it('matches Desktop control behavior during a transient disconnect', () => {
+    const source = readSource(SCREEN);
+    const queueGateStart = source.indexOf('const queueInlineReadOnlyReason =');
+    const queueGateEnd = source.indexOf(';', queueGateStart);
+    const queueGate = source.slice(queueGateStart, queueGateEnd);
+    const stopStart = source.indexOf('const stopSession = () => {');
+    const stopEnd = source.indexOf('\n  };', stopStart);
+    const stop = source.slice(stopStart, stopEnd);
+
+    // 模型 / effort / fast / 权限 / plan 继续可点;RPC 失败走既有乐观回滚。
+    expect(source).toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession);');
+    expect(source).not.toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession)\n    ||');
+    // 设置与队列动作都不能在尝试 RPC 前清掉连接错误,否则消息 outbox 会被误放行。
+    expect((source.match(/if \(!outboxConnectionDispatchBlocked\) setError\(null\);/g) ?? []))
+      .toHaveLength(4);
+    // Desktop 断线时仍允许尝试队列编辑类动作,不把整行切成只读。
+    expect(queueGate).not.toContain('remoteUnavailableReason');
+    expect(queueGate).not.toContain('outboxConnectionDispatchBlocked');
+    // Stop 保持可见,但明确断线时不发送 RPC,只进入自动恢复提示。
+    expect(source).toContain("status !== 'online' || targetAvailableForDispatch === false");
+    expect(source).toContain('canStop: canUseRemoteSessionControls && canStopComposer,');
+    expect(stop).toContain('if (remoteStopUnavailable) {');
+    expect(stop).toContain("'[DEVICE_OFFLINE] target device unavailable'");
+    expect(stop).toContain("'[NOT_CONNECTED] relay reconnecting'");
   });
 
   it('blocks outbox dispatch until the session row can actually be sent with', () => {
     const source = readSource(SCREEN);
 
     expect(source).toContain('const outboxDispatchBlockedNow = () => {');
+    expect(source).toContain('if (outboxConnectionBlockedNow()) return true;');
     // 「会话在被控端还不存在」走共用判据(见下方的入口收敛测试);派发还额外要求字段
     // 权威(cacheSeeded 行被瘦身截断过)与创建管线已收口。
     expect(source).toContain('if (isRemoteSessionMissing(row)) return true;');
@@ -44,17 +74,55 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('if (outboxDispatchBlockedNow()) return;');
     // 解禁那一帧重新 pump。
     expect(source).toContain('const outboxDispatchBlocked = !currentSession');
+    expect(source).toContain('|| outboxConnectionDispatchBlocked;');
     expect(source).toContain('if (outboxDispatchBlocked) return;\n    void pumpOutbox();');
+    // 即使 blocked boolean 恰好没变化，新的连接 epoch 也要重新唤醒一次。
+    expect(source).toContain('}, [connectionEpoch, outboxDispatchBlocked]);');
   });
 
   it('routes sends through the outbox while blocked and defers the workingDir check', () => {
     const source = readSource(SCREEN);
 
     expect(source).toContain('const dispatchBlockedAtSend = outboxDispatchBlockedNow();');
+    expect(source).toContain('sessionRefsAtSend.length > 0 || uploadsInFlight > 0');
     expect(source).toContain('|| dispatchBlockedAtSend)) {');
     // dialogue 会话的 workingDir 由被控端在创建时分配,合成行此刻为空 —— 校验推迟到
     // dispatch(那时会重读 store 拿权威值),否则新建对话发消息会被误判成缺工作目录。
     expect(source).toContain('if (!dispatchBlockedAtSend && !currentSession.workingDir) {');
+  });
+
+  it('defers disconnect races instead of turning them into failed or falsely delivered messages', () => {
+    const source = readSource(SCREEN);
+
+    expect(source).toContain('const waitForConnection = (error: unknown) => {');
+    expect(source).toContain('outboxItemWaitingForConnection(item)');
+    expect(source).toContain("if (result === 'deferred' || result === 'stopped') return;");
+    expect(source).toContain("return 'stopped' as const;");
+    expect(source).toContain('isSafelyUnsentOutboxEnqueueError(err)');
+    expect((source.match(/按「无法证明已送达」处理。\n\s+return false;/g) ?? [])).toHaveLength(2);
+    expect(source).not.toContain('const authorityAdvanced = remoteSessionStore.captureInputProjectionAuthorityEpoch(');
+    expect(source).toContain('isAutoRecoveringSessionReferencePreparationError(err)');
+    expect(source).toContain('const recoverableItem = buildOutboxItem({');
+    expect(source).toContain('if (outboxSessionAliveRef.current !== sessionId) {');
+    expect(source).toContain('salvageOutboxItem(recoverableItem);\n            return;');
+    expect(source).toContain('setError(formatRemoteError(err));');
+    // enqueue 对账是否已送达只能看刚拉回的权威 projection。即使 store 写入被较新的
+    // turn boundary 拒绝，也不能退回本地乐观 pendingQueue 自证成功。
+    expect((source.match(/return fresh\.pendingQueue\.some/g) ?? [])).toHaveLength(2);
+    expect(source).not.toContain('const current = accepted ? fresh : remoteSessionStore.getInputProjection');
+    expect(source).not.toContain('const accepted = remoteSessionStore.setInputProjectionIfCurrent');
+  });
+
+  it('fences every pre-outbox await against an in-place session switch', () => {
+    const source = readSource(SCREEN);
+
+    expect(source).toContain('const recoverCapturedDraftForScopeExit = () => {');
+    expect(source).toContain('restoreRecoverableItemsToDraft(sessionId, [{');
+    expect(source).toContain('const hydratedDocumentAtSend = await hydrateComposerMessageReferenceBodies(');
+    expect(source).toContain('if (!sendScopeStillAlive()) {\n      recoverCapturedDraftForScopeExit();');
+    expect(source).toContain('await waitForPastePlaceholdersSettled();\n          if (!sendScopeStillAlive()) {');
+    expect(source).toContain('const { failedCount } = await waitForPendingUploads();\n      if (!sendScopeStillAlive()) {');
+    expect(source).toContain('if (outboxSessionAliveRef.current !== item.sessionId) return \'stopped\' as const;');
   });
 
   it('recovers the first message and the follow-ups together, in order', () => {
@@ -185,12 +253,13 @@ describe('mobile optimistic composer while session is not ready', () => {
     const screen = readSource(SCREEN);
     const fnStart = screen.indexOf('const writeSessionAgentSwitchIntent = useCallback(async (');
     expect(fnStart).toBeGreaterThan(-1);
-    const fnEnd = screen.indexOf('  }, [controlBusy, deviceId, maker, sessionId', fnStart);
+    const fnEnd = screen.indexOf('\n\n  // Context 面板', fnStart);
     expect(fnEnd).toBeGreaterThan(fnStart);
     const fn = screen.slice(fnStart, fnEnd);
     expect(fn).toContain('if (sessionSettingsLocked) return false;');
     // 锁进依赖,回调不会停留在「未锁」那一帧。
-    expect(screen).toContain('}, [controlBusy, deviceId, maker, sessionId, sessionSettingsLocked]);');
+    expect(fn).toContain('outboxConnectionDispatchBlocked,');
+    expect(fn).toContain('sessionSettingsLocked,');
   });
 
   it('binds sticky/locked derived state to the thing it belongs to', () => {
