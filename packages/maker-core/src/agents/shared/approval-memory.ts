@@ -306,6 +306,74 @@ function sqliteMayLoadMutableFileState(args: readonly string[]): boolean {
 
 const PSQL_MUTABLE_FILE_META_COMMAND_PATTERN =
   /(?:^|[\r\n])\s*\\+(?:include_relative|include|ir|i)(?=\s|$)/;
+const PSQL_COPY_META_COMMAND_PATTERN = /(?:^|[\r\n])\s*\\+copy\b/gi;
+
+/** 找出 `\copy` 在最外层 query/quote 之外的 from/to 方向。 */
+function psqlCopyDirection(command: string, start: number): 'from' | 'to' | null {
+  let quote: "'" | '"' | null = null;
+  let parenthesisDepth = 0;
+  let word = '';
+
+  const flushWord = (): 'from' | 'to' | null => {
+    const direction = word === 'from' || word === 'to' ? word : null;
+    word = '';
+    return direction;
+  };
+
+  for (let index = start; index < command.length; index++) {
+    const char = command[index]!;
+    if (quote) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === quote) {
+        // SQL/psql quote escaping can double the quote character.
+        if (command[index + 1] === quote) {
+          index += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      const direction = flushWord();
+      if (direction) return direction;
+      quote = char;
+      continue;
+    }
+    if (char === '(') {
+      const direction = flushWord();
+      if (direction) return direction;
+      parenthesisDepth += 1;
+      continue;
+    }
+    if (char === ')') {
+      word = '';
+      parenthesisDepth = Math.max(0, parenthesisDepth - 1);
+      continue;
+    }
+    if (parenthesisDepth === 0 && /[A-Za-z_]/.test(char)) {
+      word += char.toLowerCase();
+      continue;
+    }
+    if (parenthesisDepth === 0) {
+      const direction = flushWord();
+      if (direction) return direction;
+      if (char === '\r' || char === '\n' || char === ';') return null;
+    }
+  }
+  return flushWord();
+}
+
+function psqlCopyMayLoadMutableFile(command: string): boolean {
+  for (const match of command.matchAll(PSQL_COPY_META_COMMAND_PATTERN)) {
+    const start = (match.index ?? 0) + match[0].length;
+    if (psqlCopyDirection(command, start) === 'from') return true;
+  }
+  return false;
+}
 
 function psqlArgumentMayLoadMutableFile(arg: string): boolean {
   let command = arg;
@@ -313,7 +381,8 @@ function psqlArgumentMayLoadMutableFile(arg: string): boolean {
   else if (arg.startsWith('-c') && arg.length > 2) command = arg.slice(2);
   // tokenize 会为 ANSI-C quote 保留 `$'` 标记；去掉标记后仍按同一元命令入口判定。
   if (command.startsWith("$'")) command = command.slice(2);
-  return PSQL_MUTABLE_FILE_META_COMMAND_PATTERN.test(command);
+  return PSQL_MUTABLE_FILE_META_COMMAND_PATTERN.test(command)
+    || psqlCopyMayLoadMutableFile(command);
 }
 
 function psqlMayLoadMutableUserState(args: readonly string[]): boolean {
@@ -341,6 +410,83 @@ function sqlcmdMayLoadMutableFileState(args: readonly string[]): boolean {
     || /^-[^-]*i/.test(arg));
 }
 
+/**
+ * mongo/mongosh `--eval` 中未被字符串或注释包住的全局 `load(...)` 会执行本地脚本。
+ * 排除 `obj.load()`、`preload()` 与仅打印该文本的字符串，避免把普通业务调用当文件入口。
+ */
+function mongoEvalPayloadLoadsFile(payload: string): boolean {
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = 0; index < payload.length; index++) {
+    const char = payload[index]!;
+    const next = payload[index + 1];
+    if (lineComment) {
+      if (char === '\n' || char === '\r') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (payload.slice(index, index + 4) !== 'load') continue;
+    const previous = payload[index - 1];
+    const afterName = payload[index + 4];
+    if ((previous && /[A-Za-z0-9_$.]/.test(previous))
+      || (afterName && /[A-Za-z0-9_$]/.test(afterName))) continue;
+    let cursor = index + 4;
+    while (/\s/.test(payload[cursor] ?? '')) cursor += 1;
+    if (payload[cursor] === '(') return true;
+  }
+  return false;
+}
+
+function mongoEvalMayLoadMutableFile(args: readonly string[]): boolean {
+  const optionTerminator = args.indexOf('--');
+  const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
+  for (let index = 0; index < options.length; index++) {
+    const arg = options[index]!;
+    const payload = arg === '--eval'
+      ? options[index + 1]
+      : arg.startsWith('--eval=')
+        ? arg.slice('--eval='.length)
+        : undefined;
+    if (payload && mongoEvalPayloadLoadsFile(payload)) return true;
+  }
+  return false;
+}
+
 function mongoShellMayLoadMutableUserState(args: readonly string[]): boolean {
   const optionTerminator = args.indexOf('--');
   const options = optionTerminator === -1 ? args : args.slice(0, optionTerminator);
@@ -349,7 +495,7 @@ function mongoShellMayLoadMutableUserState(args: readonly string[]): boolean {
   if (!options.includes('--norc')) return true;
   // --file / -f 会直接执行可替换脚本；旧 mongo 与 mongosh 也都支持把 JavaScript
   // 文件作为位置参数传入。文件选项即使写在 `--` 后，也会由随后的位置脚本兜住。
-  return args.some((arg) =>
+  return mongoEvalMayLoadMutableFile(args) || args.some((arg) =>
     arg === '--file'
     || arg.startsWith('--file=')
     || arg === '-f'
@@ -627,6 +773,8 @@ const PIPELINE_FILE_SINK_NAMES: ReadonlySet<string> = new Set(['tee', 'sponge'])
 const PIPELINE_NETWORK_SINK_NAMES: ReadonlySet<string> = new Set([
   'nc', 'netcat', 'ncat', 'socat',
 ]);
+const MYSQL_STDIN_SQL_CLIENTS: ReadonlySet<string> = new Set(['mysql', 'mariadb']);
+const FIXED_LITERAL_PIPELINE_PRODUCERS: ReadonlySet<string> = new Set(['echo', 'printf']);
 
 function consumesMutableInput(args: readonly string[]): boolean {
   // Help/version output is deterministic and does not consume stdin or a file. Everything else
@@ -710,10 +858,34 @@ function pipelineHasMutableFileSideEffect(command: string): boolean {
   return false;
 }
 
+/**
+ * MySQL/MariaDB batch mode executes stdin. A literal `echo`/`printf` pipeline remains bound to
+ * the command text; every other upstream executable can return replaced file/remote/runtime data
+ * under unchanged argv and therefore remains review-only.
+ */
+function pipelineFeedsMutableInputToMysql(command: string): boolean {
+  const segments = commandExecutableSegments(command);
+  for (let index = 0; index < segments.length;) {
+    let end = index;
+    while (end < segments.length - 1 && segments[end]?.separatorAfter === 'pipe') end++;
+    const pipeline = segments.slice(index, end + 1);
+    for (let sinkIndex = 1; sinkIndex < pipeline.length; sinkIndex++) {
+      if (!MYSQL_STDIN_SQL_CLIENTS.has(pipeline[sinkIndex]!.name)) continue;
+      const upstream = pipeline.slice(0, sinkIndex);
+      if (upstream.length === 1
+        && FIXED_LITERAL_PIPELINE_PRODUCERS.has(upstream[0]!.name)) continue;
+      return true;
+    }
+    index = end + 1;
+  }
+  return false;
+}
+
 export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (MUTABLE_EXECUTION_ENV_PATTERN.test(command)) return true;
   if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
   if (pipelineHasMutableFileSideEffect(command)) return true;
+  if (pipelineFeedsMutableInputToMysql(command)) return true;
   const invocations = commandExecutableInvocations(command);
   if (invocations.some(({ name, args }) =>
     name === 'curl' && curlMayLoadMutableFileState(args))) return true;

@@ -574,6 +574,14 @@ describe('approvalSignature — 可记忆判据', () => {
       "psql -X prod -c '  \\ir ./deploy.sql'",
       "psql -X prod -c $'\\\\i deploy.sql'",
       "psql -X prod -c 'select 1' && psql -X prod -c '\\i deploy.sql'",
+      "psql -X prod -c \"\\\\copy jobs from './payload.csv'\"",
+      "psql -X prod -c'\\copy jobs from ./payload.csv'",
+      "psql --no-psqlrc prod --command '\\copy jobs FROM \"./payload.csv\"'",
+      "psql.exe -X prod --command=\\copy\\ jobs\\ from\\ ./payload.csv",
+      "env psql -X prod -c '\\copy (select * from jobs) from ./payload.csv'",
+      "psql -X prod -c $'\\\\copy jobs from ./payload.csv'",
+      "psql -X prod -c '\\copy jobs to ./audit.csv'"
+        + " && psql -X prod -c '\\copy jobs from ./payload.csv'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -594,6 +602,10 @@ describe('approvalSignature — 可记忆判据', () => {
       "psql -X prod -c \"select '\\i deploy.sql'\"",
       "psql -X prod -c '\\if :enabled'",
       "psql -X prod -c '\\irregular'",
+      "psql -X prod -c '\\copy jobs to ./audit.csv'",
+      "psql -X prod -c \"\\copy (select 'from file' from jobs) to './audit.csv'\"",
+      "psql -X prod -c \"select '\\\\copy jobs from ./payload.csv'\"",
+      "psql -X prod -c \"select 'copy jobs from ./payload.csv'\"",
       "echo psql -X prod -c '\\i deploy.sql'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
@@ -608,6 +620,7 @@ describe('approvalSignature — 可记忆判据', () => {
       exec('psql -X -f ./deploy.sql prod'),
       exec('cat deploy.sql | psql -X prod'),
       exec("psql -X prod -c '\\i deploy.sql'"),
+      exec("psql -X prod -c \"\\\\copy jobs from './payload.csv'\""),
     ]) {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
       // psqlrc、deploy.sql、元命令文件或管道输入被替换时，各入口都不写入摘要。
@@ -642,6 +655,12 @@ describe('approvalSignature — 可记忆判据', () => {
       'mongosh --norc -- ./deploy.js',
       "mongo --norc --eval 'db.jobs.findOne()'"
         + ' && mongosh --norc --file ./deploy.js mongodb://prod',
+      "mongosh --norc --eval 'load(\"./deploy.js\")'",
+      'mongo --norc --eval "load(\'./deploy.js\')"',
+      "mongosh.exe --norc --eval='load ( \"./deploy.js\" )'",
+      "env mongosh --norc --eval 'if (ready) { load(\"./deploy.js\"); }'",
+      "mongo --norc --eval 'db.jobs.findOne()'"
+        + " && mongosh --norc --eval 'load(\"./deploy.js\")'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -659,6 +678,10 @@ describe('approvalSignature — 可记忆判据', () => {
       'mongosh --norc mongodb://prod',
       'mongo --norc prod',
       `mongosh --norc --eval "print('deploy.js')"`,
+      "mongosh --norc --eval 'print(\"load(./deploy.js)\")'",
+      "mongosh --norc --eval 'db.jobs.load(\"./deploy.js\")'",
+      "mongosh --norc --eval 'preload(\"./deploy.js\")'",
+      "mongosh --norc --eval '// load(\"./deploy.js\")\\ndb.jobs.findOne()'",
       'echo mongosh --file ./deploy.js mongodb://prod',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
@@ -672,6 +695,7 @@ describe('approvalSignature — 可记忆判据', () => {
       exec("mongosh --eval 'db.jobs.findOne()'"),
       exec('mongosh --norc --file ./deploy.js mongodb://prod'),
       exec('mongo --norc mongodb://prod ./deploy.js'),
+      exec("mongosh --norc --eval 'load(\"./deploy.js\")'"),
     ]) {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
       expect(memory.isRemembered(
@@ -804,6 +828,12 @@ describe('approvalSignature — 可记忆判据', () => {
       'mariadb-dump app jobs',
       'mysqlbinlog binlog.000001',
       'mariadb-binlog binlog.000001',
+      'cat deploy.sql | mysql --no-defaults --no-login-paths app',
+      'head -n 20 deploy.sql | env mysql --no-defaults --no-login-paths app',
+      'gzip -dc deploy.sql.gz | timeout 30 mysql.exe --no-defaults --no-login-paths app',
+      'curl -q https://example.com/deploy.sql | mariadb --no-defaults app',
+      'cat deploy.sql | tee audit.sql | mysql --no-defaults --no-login-paths app',
+      'true && cat deploy.sql | mysql --no-defaults --no-login-paths app',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -821,6 +851,9 @@ describe('approvalSignature — 可记忆判据', () => {
       "mysql --no-defaults --no-login-paths app -e 'select 1'"
         + " && mariadb --no-defaults app -e 'select 2'",
       "echo mysql app -e 'DELETE FROM jobs'",
+      "printf 'select 1;' | mysql --no-defaults --no-login-paths app",
+      "echo 'select 1;' | mariadb --no-defaults app",
+      "cat deploy.sql | wc -l && mysql --no-defaults --no-login-paths app -e 'select 1'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
@@ -832,6 +865,7 @@ describe('approvalSignature — 可记忆判据', () => {
     for (const action of [
       exec("mysql app -e 'select 1'"),
       exec("mariadb app -e 'select 1'"),
+      exec('cat deploy.sql | mysql --no-defaults --no-login-paths app'),
     ]) {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
       expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
