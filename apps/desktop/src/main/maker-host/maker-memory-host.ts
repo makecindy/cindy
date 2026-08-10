@@ -49,19 +49,41 @@ const sqliteFactory: SqliteFactory = (filePath) => {
  *
  * basePath 直传 userData 根; manager 内部自己拼 'maker-memory/<sanitized-workdir>/'
  * 子结构, host 不应该假设这个细节 (避免之前的双重叠加 bug)。
+ *
+ * 修复 #2341 (owner 静默降级到 %TEMP%\cindy-no-session):
+ *  - basePath 不再在构造时冻结 —— 通过 resolveBasePath 每次访问时按
+ *    getActiveAppSession().dataOwnerId 现取; owner 未就绪 (signed-out / 认证
+ *    未落定) 返回 null, manager 将 fail-closed 抛 MAKER_MEMORY_NOT_READY,
+ *    绝不写临时目录。
+ *  - ownerScopeKey 注入脱敏作用域键 (mode + owner hash + generation), 登录/
+ *    登出/切账号 (commit 使 generation+1) 后 manager 自动关闭旧 store 重建新根。
  */
 export function createDesktopMakerMemoryManager(): MakerMemoryManager {
-  const ownerId = getActiveAppSession().dataOwnerId;
-  const basePath = ownerId
-    ? path.join(app.getPath('userData'), 'owners', dataOwnerStorageKey(ownerId))
-    : path.join(app.getPath('temp'), 'cindy-no-session', String(process.pid));
+  // owner 存储根: 有 owner → userData/owners/<hash>; 无 owner → null (fail-closed,
+  // 不再退到 %TEMP%\cindy-no-session\<pid>\, 那是 #2341 静默丢失的根源)。
+  const resolveBasePath = (): string | null => {
+    const ownerId = getActiveAppSession().dataOwnerId;
+    if (!ownerId) return null;
+    return path.join(app.getPath('userData'), 'owners', dataOwnerStorageKey(ownerId));
+  };
+  // 脱敏作用域键: owner id 经 sha256 前 20 hex 隐藏, 日志可直接记录。
+  const ownerScopeKey = (): string => {
+    const session = getActiveAppSession();
+    const ownerSegment = session.dataOwnerId ? dataOwnerStorageKey(session.dataOwnerId) : 'none';
+    return `${session.mode}:${ownerSegment}:${session.generation}`;
+  };
+  // 构造时快照仅用于 initialEnabled 读取与日志; 运行期以 resolveBasePath 为准。
+  const basePath = resolveBasePath();
   return new MakerMemoryManager({
-    basePath,
+    basePath: basePath ?? app.getPath('userData'),
+    resolveBasePath,
+    ownerScopeKey,
     sqliteFactory,
     agents: {}, // 占位, attachAgents 补上
     logger: desktopMakerLogger.child('maker-memory'),
     // 持久化 store 读 — 重启后保持用户上次设置，新用户默认开启。
-    initialEnabled: readMemorySettings({ rootPath: basePath }).maker,
+    // owner 未就绪时读全局 userData 默认 (不读 temp 一次性目录)。
+    initialEnabled: readMemorySettings({ rootPath: basePath ?? undefined }).maker,
     reviewAgent: 'claude-code', // memory_review 用 claude haiku 最便宜
     // 停用轴:review 的 oneShot 是新的付费调用,默认 one-shot 路由被停用时不派发
     // (PR #744 review 第十六轮)。

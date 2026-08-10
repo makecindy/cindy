@@ -27,6 +27,7 @@ import type Database from 'better-sqlite3';
 
 import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
 import {
+  MemoryError,
   type MemoryConfig,
   type WriteOptions,
 } from './types.js';
@@ -41,6 +42,24 @@ export type SqliteFactory = (filePath: string) => Database.Database;
 export interface MakerMemoryManagerDeps {
   /** Maker memory 文件根目录, host 注入 (e.g. <electron userData>/maker-memory) */
   basePath: string;
+  /**
+   * 动态解析当前 owner 作用域的存储根（desktop: 按 getActiveAppSession().dataOwnerId 现取）。
+   * 返回 null = owner 作用域不可用（signed-out / 认证未就绪 / 边界切换中），此时 manager
+   * 必须 fail-closed（抛 memory:not-ready），绝不降级写临时目录。
+   * 缺席 = 退化为静态 basePath（测试 / 无 owner 概念宿主）。
+   *
+   * 修复 #2341：构造时冻结 basePath 会让冷启动竞态把根锁死在
+   * %TEMP%\cindy-no-session\<pid>\ 且不再重解析 —— 每次访问都重新解析根，
+   * 配合 ownerScopeKey 在作用域变化时清池换根。
+   */
+  resolveBasePath?: () => string | null;
+  /**
+   * 当前 owner 作用域的不透明键（desktop: activeOwnerScopeKey 的脱敏形态，
+   * 含 mode + 脱敏 owner + generation）。每次 commit（登录/登出/切账号，generation+1）
+   * 都会变化：manager 检测到变化时先关闭全部旧 store db 再重建到新根，杜绝旧句柄
+   * 与新 owner 数据混用。缺席 = 不做作用域追踪（静态 basePath 宿主）。
+   */
+  ownerScopeKey?: () => string;
   /** SQLite open 工厂, host 注入 (better-sqlite3 是 native module, 不能在 maker-core require) */
   sqliteFactory: SqliteFactory;
   /** Agent 引用 — 强联动 setMemory(false) 关原生时用 */
@@ -89,6 +108,12 @@ export class MakerMemoryManager {
   private enabled: boolean;
   private readonly stores = new Map<string, PooledEntry>();
   private readonly logger: Logger;
+  /**
+   * 最近一次校验通过的 owner 作用域 key（deps.ownerScopeKey 的快照）。
+   * 变化时清池换根；null = 尚未校验过。仅用于相等性比较，日志已由 host
+   * 注入的 ownerScopeKey 保证脱敏（不落明文 owner id）。
+   */
+  private activeScopeKey: string | null = null;
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -98,6 +123,65 @@ export class MakerMemoryManager {
       basePath: deps.basePath,
       reviewAgent: deps.reviewAgent ?? 'claude-code',
     });
+  }
+
+  /**
+   * 当前生效的存储根: 优先动态 resolveBasePath (可为 null = owner 未就绪),
+   * 缺席时退化为静态 basePath。
+   *
+   * 注意不能用 `deps.resolveBasePath?.() ?? deps.basePath` —— resolveBasePath
+   * 返回 null 是「owner 不可用」的显式信号, `??` 会把 null 误当成未提供而
+   * 回退到静态 basePath, 让 fail-closed 守卫失效 (#2341)。
+   */
+  private get resolvedBasePath(): string | null {
+    return this.deps.resolveBasePath ? this.deps.resolveBasePath() : this.deps.basePath;
+  }
+
+  /**
+   * owner 作用域守卫 (每次 getStore / resetDigests / resetAll 前调用):
+   *  1. ownerScopeKey 变化 → 关闭旧 store 池全部 db, 重解析根 (修复 #2341 的
+   *     「启动期根冻结后不再重解析」);
+   *  2. resolveBasePath 返回 null → 抛 memory:not-ready, 绝不创建/写入临时目录
+   *     (修复「write 返回成功但数据落 %TEMP% 一次性目录」的静默丢失)。
+   *
+   * 抛出的 MemoryError 会被 MCP 层 classifyMemoryError 翻译成
+   * MAKER_MEMORY_NOT_READY, 与「空库返回 ok+[]」可区分。
+   */
+  private ensureOwnerScope(): void {
+    if (this.deps.ownerScopeKey) {
+      const key = this.deps.ownerScopeKey();
+      if (this.activeScopeKey === null) {
+        this.activeScopeKey = key;
+      } else if (key !== this.activeScopeKey) {
+        this.logger.warn('maker memory owner scope changed — closing stores and rebinding root', {
+          fromScope: this.activeScopeKey,
+          toScope: key,
+        });
+        this.closeAllStores();
+        this.activeScopeKey = key;
+      }
+    }
+    if (this.resolvedBasePath === null) {
+      this.logger.warn('maker memory owner scope unavailable — refusing ephemeral fallback', {
+        scopeKey: this.activeScopeKey,
+      });
+      throw new MemoryError(
+        'not-ready',
+        'owner scope unavailable (signed-out or auth not settled); refusing to fall back to ephemeral storage',
+      );
+    }
+  }
+
+  /** 关闭池内全部 db (作用域切换 / dispose / resetAll 共用)。幂等。 */
+  private closeAllStores(): void {
+    for (const [workdir, { db }] of this.stores) {
+      try {
+        db.close();
+      } catch (e) {
+        this.logger.warn('close store db failed', { workdir, error: String(e) });
+      }
+    }
+    this.stores.clear();
   }
 
   /**
@@ -207,13 +291,15 @@ export class MakerMemoryManager {
     if (!absWorkdir || absWorkdir.length === 0) {
       throw new Error('MakerMemoryManager.getStore: absWorkdir required');
     }
+    // owner 作用域守卫: 缺 owner 直接拒绝 (不建临时库), scope 变化则换根。
+    this.ensureOwnerScope();
     const cached = this.stores.get(absWorkdir);
     if (cached) return cached.store;
 
     // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
     // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
     const sanitized = memoryScopeDirName(absWorkdir);
-    const storageDir = path.join(this.deps.basePath, MEMORY_SUBDIR, sanitized);
+    const storageDir = path.join(this.resolvedBasePath!, MEMORY_SUBDIR, sanitized);
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 
     // mkdir 在 storage.init() 里也会做, 但 db open 时父目录必须存在 — 提前 mkdir
@@ -255,6 +341,7 @@ export class MakerMemoryManager {
    * MEMORY.md，因此无需改写用户索引。
    */
   async resetDigests(): Promise<{ removedCount: number }> {
+    this.ensureOwnerScope();
     let total = 0;
     const activeDirs = new Set<string>();
     for (const [workdir, { store }] of this.stores) {
@@ -263,7 +350,7 @@ export class MakerMemoryManager {
     }
 
     const fs = await import('node:fs/promises');
-    const memoryRoot = path.join(this.deps.basePath, MEMORY_SUBDIR);
+    const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
     let entries: string[];
     try {
       entries = await fs.readdir(memoryRoot);
@@ -298,10 +385,11 @@ export class MakerMemoryManager {
 
   /** 清空所有 workdir 全部 memory. 慎用. */
   async resetAll(): Promise<{ removedCount: number }> {
+    this.ensureOwnerScope();
     let total = 0;
     // 还没 open 的 workdir 文件也要清: 扫 basePath/maker-memory 下所有目录
     const fs = await import('node:fs/promises');
-    const memoryRoot = path.join(this.deps.basePath, MEMORY_SUBDIR);
+    const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
     let entries: string[] = [];
     try {
       entries = await fs.readdir(memoryRoot);
@@ -383,14 +471,7 @@ export class MakerMemoryManager {
 
   /** Maker.shutdown 调 (跟 agent.dispose 同时机). 关闭所有 db, 清池. 幂等. */
   dispose(): void {
-    for (const [workdir, { db }] of this.stores) {
-      try {
-        db.close();
-      } catch (e) {
-        this.logger.warn('dispose: db close failed', { workdir, error: String(e) });
-      }
-    }
-    this.stores.clear();
+    this.closeAllStores();
     this.logger.info('MakerMemoryManager disposed');
   }
 }
