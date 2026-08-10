@@ -21,7 +21,7 @@
 
 import { z } from 'zod';
 
-import { withScheduler } from './_shared.js';
+import { resolveSchedulerRunIdCandidates, withScheduler } from './_shared.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 
@@ -46,34 +46,25 @@ export function registerScheduleSilenceCurrentRunTool(
     },
     handler: async ({ runId }) =>
       withScheduler(deps, async (scheduler) => {
-        // 优先按调用方 session 解析本轮 runId(忽略 agent 传入的 runId,杜绝传参漂移);
-        // 拿不到 sessionId(未绑定 session 的 codex 调用)才回退到显式 runId。
-        const sessionId = getSessionContext?.().sessionId;
-        let targetRunId: string | undefined;
-        if (sessionId) {
-          targetRunId = scheduler.resolveInflightRunForSession(sessionId);
-          if (!targetRunId) {
-            // 消息含 "not found" → classifySchedulerError 归为 NOT_FOUND
-            throw new Error(
-              'in-flight run not found for current session — silence can only be called while this session has an automation run executing',
-            );
-          }
-        } else {
-          targetRunId = runId;
-          if (!targetRunId) {
-            throw new Error(
-              'in-flight run not found: cannot resolve current session and no runId provided',
-            );
+        const { sessionId, runIds } = resolveSchedulerRunIdCandidates(
+          scheduler,
+          getSessionContext?.(),
+          runId,
+        );
+        for (const targetRunId of runIds) {
+          if (scheduler.silenceRun(targetRunId)) {
+            return { silenced: true, runId: targetRunId };
           }
         }
-
-        const ok = scheduler.silenceRun(targetRunId);
-        if (!ok) {
+        if (sessionId) {
+          // 消息含 "not found" → classifySchedulerError 归为 NOT_FOUND
           throw new Error(
-            `in-flight run not found: ${targetRunId} — silence can only be called while this run is executing`,
+            'in-flight run not found for current session — silence can only be called while this session has an automation run executing',
           );
         }
-        return { silenced: true, runId: targetRunId };
+        throw new Error(
+          `in-flight run not found: ${runIds[0] ?? 'unknown'} — silence can only be called while this run is executing`,
+        );
       }),
   });
 }

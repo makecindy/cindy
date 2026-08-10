@@ -828,7 +828,12 @@ export class GhostManager {
    */
   async update(
     lizFilePath: string,
-    opts?: { expectedPackageSha256?: string; trustOverride?: GhostHostTrustOverride },
+    opts?: {
+      expectedPackageSha256?: string;
+      trustOverride?: GhostHostTrustOverride;
+      /** 目录换位完成后、任何通知或运行时收尾前触发。 */
+      onPackagePlaced?: () => void;
+    },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
     const parsed = await this.parse(lizFilePath);
     if ('rejection' in parsed) return parsed;
@@ -925,6 +930,7 @@ export class GhostManager {
       trust,
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
     };
+    opts?.onPackagePlaced?.();
     this.options.log?.info('ghost updated', { id: manifest.id, version: manifest.version });
     this.options.onChanged?.(this.list());
     return { ghost };

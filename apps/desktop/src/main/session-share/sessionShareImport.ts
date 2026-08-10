@@ -602,7 +602,6 @@ export async function commitShareImport(
       }
       const baseRepo = detect.repoRoot;
       let wtName = (await guarded(() => suggestWorktreeName(baseRepo).catch(() => ''))).trim();
-      if (!wtName) wtName = `auto-${Date.now().toString(36).slice(-6)}`;
       assertStillValid();
       const resp = await createWorktree({
         sessionId: newId,

@@ -288,17 +288,26 @@ export function handleIncomingShareFile(filePath: string, source: string): void 
 }
 
 /**
- * 把主窗口拉回前台 (show + restore + focus;macOS 额外 app.focus steal——从浏览器
- * 等其它前台应用手里抢焦点,单靠 win.focus() 在 macOS 上不可靠)。
+ * 把主窗口拉回前台 (show + restore + focus)。Windows 的外部协议唤起需要先
+ * 激活应用并提升目标窗口 z-order；macOS 额外使用 app.focus steal——
+ * 从浏览器等其它前台应用手里抢焦点，单靠 win.focus() 不可靠。
  * 窗口不存在 / 已销毁时返回 false,调用方自行决定是否忽略。
  */
-export function focusMainWindow(): boolean {
+export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
   const win = mainWindowRef;
   if (!win || win.isDestroyed()) return false;
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
+  if (platform === 'win32') {
+    // Windows 可以收到 second-instance deep link 但仍把浏览器保留在
+    // 前台。app.focus() 先激活应用，moveTop() 再确保用户主动点击的
+    // OAuth 返回窗口不被原浏览器遮挡。该函数只用于 focus deep link，
+    // 不会把后台 Ghost workspace 请求扩大为强制抢前台。
+    app.focus();
+    win.moveTop();
+  }
   win.focus();
-  if (process.platform === 'darwin') app.focus({ steal: true });
+  if (platform === 'darwin') app.focus({ steal: true });
   return true;
 }
 

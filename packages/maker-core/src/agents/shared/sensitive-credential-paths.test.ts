@@ -37,6 +37,25 @@ describe("Review credential path policy", () => {
     ).toBe(false);
   });
 
+  it("keeps managed harness binaries and local build caches outside Review", () => {
+    for (const denied of [
+      "/repo/apps/claude-code-bin/darwin-arm64/claude",
+      "/repo/apps/codex-bin/win32-x64/codex.exe",
+      "/repo/apps/pi-bin/linux-x64/pi",
+      "/repo/apps/ripgrep-bin/darwin-arm64/rg",
+      "/repo/tools/pi/updates/0.83.0/darwin-arm64/pi",
+      "/repo/apps/desktop/.vite/build/main.js",
+    ]) {
+      expect(isReviewSensitiveCredentialPath(denied)).toBe(true);
+    }
+    expect(
+      isReviewSensitiveCredentialPath("/repo/src/codex-binary-format.ts"),
+    ).toBe(false);
+    expect(
+      isReviewSensitiveCredentialPath("/repo/packages/codex-bin/source.ts"),
+    ).toBe(false);
+  });
+
   it("recognizes credentials hidden behind file selector syntax", () => {
     for (const selector of [
       "**/*.pem",
@@ -57,6 +76,9 @@ describe("Review credential path policy", () => {
         "**/.env.*",
         "**/.git/**",
         "**/node_modules/**",
+        "**/apps/codex-bin/**",
+        "**/tools/pi/updates/**",
+        "**/.vite/**",
         "**/credentials.json",
         "**/auth.json",
         "**/*.pem",

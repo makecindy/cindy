@@ -59,6 +59,51 @@ describe('market Ghost session boundary', () => {
     expect(body).toContain('releaseMutation?.();');
   });
 
+  it('allows explicit local replacement and detaches market routing before landing', () => {
+    const updateStart = source.indexOf(
+      "ipcMain.handle('ghosts:update'",
+    );
+    const updateEnd = source.indexOf(
+      "ipcMain.handle('ghosts:pick-file'",
+      updateStart,
+    );
+    const body = source.slice(updateStart, updateEnd);
+
+    const ledgerReadIndex = body.indexOf(
+      'marketLedger.installationForGhost(inspected.manifest.id)',
+    );
+    const captureIndex = body.indexOf('const mutationOwner = captureGhostMutationOwner();');
+    const ledgerBindIndex = body.indexOf('const marketLedger = getPluginMarketLedger().bind(');
+    const inspectIndex = body.indexOf('await manager.inspect(lizFilePath)');
+    const leaseIndex = body.indexOf('const releaseMutation = beginGhostMutation(mutationOwner);');
+    const detachDecisionIndex = body.indexOf(
+      'const detachMarketRecord = Boolean(marketRecord?.installed)',
+    );
+    const runtimeStopIndex = body.indexOf('runtime.stop(inspected.manifest.id)');
+    const managerUpdateIndex = body.indexOf('result = await manager.update(');
+    const detachIndex = body.indexOf(
+      'marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject)',
+    );
+
+    expect(captureIndex).toBeGreaterThan(-1);
+    expect(ledgerBindIndex).toBeGreaterThan(captureIndex);
+    expect(ledgerBindIndex).toBeLessThan(inspectIndex);
+    expect(leaseIndex).toBeGreaterThan(inspectIndex);
+    expect(ledgerReadIndex).toBeGreaterThan(leaseIndex);
+    expect(detachDecisionIndex).toBeGreaterThan(ledgerReadIndex);
+    expect(detachIndex).toBeGreaterThan(detachDecisionIndex);
+    expect(runtimeStopIndex).toBeGreaterThan(detachIndex);
+    expect(managerUpdateIndex).toBeGreaterThan(runtimeStopIndex);
+    expect(body).toContain('marketLedger.isDefaultInstallSuppressed(');
+    expect(body).toContain('marketLedger.restoreInstallation(');
+    expect(body).toContain('suppressed: marketRecordWasSuppressed');
+    expect(body).toContain('onPackagePlaced: () => {');
+    expect(body).toContain('packagePlaced = true;');
+    expect(body).toContain('if (!packagePlaced) {\n            restoreMarketRecord();');
+    expect(body).toContain('releaseMutation();');
+    expect(body).not.toContain('GHOST_SOURCE_CONFLICT');
+  });
+
   it('runs the final market callback before both initial install and update placement', () => {
     const installStart = source.indexOf(
       'async function installOrUpdateMarketGhostPackageLocked(',

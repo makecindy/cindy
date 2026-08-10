@@ -425,7 +425,7 @@ export async function runReviewPush(
   }
 }
 
-function parseSessionId(payload: unknown): string {
+export function parseSessionId(payload: unknown): string {
   const obj = requireObject(payload);
   return requireString(obj.sessionId, 'sessionId');
 }
@@ -441,7 +441,7 @@ function readDiffOptions(obj: Record<string, unknown>): ReviewDiffReadOptions {
   return { ignoreWhitespace: readOptionalBoolean(obj, 'ignoreWhitespace') === true };
 }
 
-function parseReviewDataPayload(payload: unknown): { sessionId: string; options: ReviewDiffReadOptions } {
+export function parseReviewDataPayload(payload: unknown): { sessionId: string; options: ReviewDiffReadOptions } {
   const obj = requireObject(payload);
   return {
     sessionId: requireString(obj.sessionId, 'sessionId'),
@@ -460,7 +460,7 @@ export function parseCommitDiffPayload(payload: unknown): { sessionId: string; o
   };
 }
 
-function parseCommitsPayload(payload: unknown): { sessionId: string; baseRef: string | null } {
+export function parseCommitsPayload(payload: unknown): { sessionId: string; baseRef: string | null } {
   const obj = requireObject(payload);
   const rawBaseRef = typeof obj.baseRef === 'string' && obj.baseRef.trim() ? obj.baseRef.trim() : null;
   if (rawBaseRef && !isSafeBranchBaseRef(rawBaseRef)) {
@@ -472,7 +472,7 @@ function parseCommitsPayload(payload: unknown): { sessionId: string; baseRef: st
   };
 }
 
-function parseBranchDiffPayload(payload: unknown): { sessionId: string; baseRef: string | null; options: ReviewDiffReadOptions } {
+export function parseBranchDiffPayload(payload: unknown): { sessionId: string; baseRef: string | null; options: ReviewDiffReadOptions } {
   const obj = requireObject(payload);
   const rawBaseRef = typeof obj.baseRef === 'string' && obj.baseRef.trim() ? obj.baseRef.trim() : null;
   if (rawBaseRef && !isSafeBranchBaseRef(rawBaseRef)) {
