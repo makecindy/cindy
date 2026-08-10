@@ -24,7 +24,6 @@ import {
 } from '../shared/sidebarSettings.js';
 import {
   activeOwnerScopeKey,
-  dataOwnerStorageKey,
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
@@ -34,7 +33,6 @@ import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
   hasLegacyOwnerNamespaceClaim,
-  isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
@@ -51,8 +49,7 @@ const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
 const SETTINGS_FILE_NAME = 'sidebar-settings.json';
-// An explicit empty scoped snapshot must remain durable, otherwise a preserved
-// legacy file could become authoritative again after the user clears the list.
+// An explicit empty snapshot must remain durable after the user clears the list.
 const SIDEBAR_WRITE_OPTIONS = { preserveDefaults: true } as const;
 
 const log = createLogger('sidebar-settings');
@@ -92,16 +89,72 @@ function normalizeSettings(raw: unknown): SidebarSettingsShape {
   };
 }
 
-function sidebarSettingsErrorCode(error: unknown): string {
-  const code =
-    error && typeof error === 'object' && 'code' in error
-      ? (error as NodeJS.ErrnoException).code
-      : undefined;
-  return typeof code === 'string' && /^E[A-Z0-9_]{1,31}$/.test(code) ? code : 'INVALID_SETTINGS';
-}
-
 function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+type SidebarPathState = 'missing' | 'regular-file' | 'blocked';
+
+function sidebarPathState(file: string): SidebarPathState {
+  try {
+    const primary = fs.lstatSync(file);
+    return primary.isFile() ? 'regular-file' : 'blocked';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 'blocked';
+  }
+
+  // A leftover atomic-write backup can be the only recoverable snapshot.
+  // Never create a different authority while it remains unresolved.
+  try {
+    fs.lstatSync(`${file}.bak`);
+    return 'blocked';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'blocked';
+  }
+}
+
+type SidebarStoreAccessResult = { status: 'blocked' } | { status: 'ready'; filePath: string };
+
+function sidebarStoreAccessResult(): SidebarStoreAccessResult {
+  const session = getActiveAppSession();
+  if (!session.dataOwnerId) return { status: 'blocked' };
+  if (session.mode !== 'local' && session.mode !== 'cloud') return { status: 'blocked' };
+
+  const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
+  if (session.mode === 'local') {
+    return sidebarPathState(scopedPath) === 'blocked'
+      ? { status: 'blocked' }
+      : { status: 'ready', filePath: scopedPath };
+  }
+
+  // The immutable global claim assigns the pre-owner file to exactly one
+  // verified cloud owner. Keep that owner's file at the legacy path so the
+  // parent release and this release always read and write the same snapshot
+  // across downgrade/re-upgrade. Other owners never inspect or consume it.
+  if (isLegacyOwnerNamespaceClaimedByOtherOwner(session.dataOwnerId)) {
+    return sidebarPathState(scopedPath) === 'blocked'
+      ? { status: 'blocked' }
+      : { status: 'ready', filePath: scopedPath };
+  }
+  // Keep the fixed root route closed until the global claim is complete and
+  // this process is exclusive. We no longer move this file, but an older live
+  // process still writes it without the current cross-process lock.
+  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
+    return { status: 'blocked' };
+  }
+
+  const legacyPath = path.join(app.getPath('userData'), SETTINGS_FILE_NAME);
+  const legacyState = sidebarPathState(legacyPath);
+  if (legacyState === 'blocked') return { status: 'blocked' };
+  return { status: 'ready', filePath: legacyPath };
+}
+
+function requireSidebarStorePath(): string {
+  const result = sidebarStoreAccessResult();
+  if (result.status === 'blocked') {
+    throwIpcError('PRECONDITION_FAILED', 'sidebar settings owner claim is pending');
+  }
+  return result.filePath;
 }
 
 function currentStore() {
@@ -113,7 +166,7 @@ function currentStore() {
   let store = stores.get(ownerRoot);
   if (!store) {
     store = createOverrideSettingsFile<SidebarSettingsShape>({
-      filePath: () => path.join(ownerRoot, SETTINGS_FILE_NAME),
+      filePath: requireSidebarStorePath,
       defaults: DEFAULTS,
       normalize: normalizeSettings,
       log,
@@ -129,33 +182,6 @@ function currentStore() {
   return store;
 }
 
-type SidebarStoreAccessResult = 'blocked' | 'ready' | 'snapshot-changed';
-
-function sidebarStoreAccessResult(): SidebarStoreAccessResult {
-  const session = getActiveAppSession();
-  if (!session.dataOwnerId) return 'blocked';
-  if (session.mode !== 'local' && session.mode !== 'cloud') return 'blocked';
-
-  const scopedPathState = scopedSidebarPathState(ownerScopedUserDataPath(SETTINGS_FILE_NAME));
-  // The old schema cannot express unpin/unhide tombstones. Once scoped state
-  // exists, it is the sole authority; preserve any conflicting legacy bytes.
-  if (scopedPathState === 'regular-file') return 'ready';
-  if (scopedPathState === 'blocked') return 'blocked';
-
-  if (session.mode === 'local') return 'ready';
-  return claimLegacySidebarSettingsResult();
-}
-
-function requireSidebarStoreAccess(options: { rejectSnapshotChange?: boolean } = {}): void {
-  const result = sidebarStoreAccessResult();
-  if (result === 'blocked') {
-    throwIpcError('PRECONDITION_FAILED', 'sidebar settings migration is pending');
-  }
-  if (options.rejectSnapshotChange && result === 'snapshot-changed') {
-    throwIpcError('PRECONDITION_FAILED', 'sidebar settings changed during mutation');
-  }
-}
-
 function hasAuthoritativePinnedOrder(customizedKeys: readonly string[]): boolean {
   // Historical electron-store files may contain an auto-written empty default
   // that is indistinguishable from an explicit clear. Product policy prefers
@@ -168,7 +194,7 @@ function readCurrentSettings(): {
   pinnedOrderIsAuthoritative: boolean;
 } {
   const accessResult = sidebarStoreAccessResult();
-  if (accessResult === 'blocked') {
+  if (accessResult.status === 'blocked') {
     return { settings: { ...DEFAULTS }, pinnedOrderIsAuthoritative: false };
   }
   const store = currentStore();
@@ -378,14 +404,14 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
     dataOwnerId: request.dataOwnerId,
     ownerGeneration: request.ownerGeneration,
   };
-  requireSidebarStoreAccess();
+  requireSidebarStorePath();
   const store = currentStore();
   let changed = false;
   let nextSettings: SidebarSettingsShape;
   try {
     nextSettings = await enqueueWrite(scopeKey, () =>
       store.updateAtomic((current) => {
-        requireSidebarStoreAccess({ rejectSnapshotChange: true });
+        requireSidebarStorePath();
         const nextOrder = applyPinnedMutation(
           current.value.pinnedOrder,
           mutation,
@@ -423,14 +449,14 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
     dataOwnerId: request.dataOwnerId,
     ownerGeneration: request.ownerGeneration,
   };
-  requireSidebarStoreAccess();
+  requireSidebarStorePath();
   const store = currentStore();
   let changed = false;
   let nextSettings: SidebarSettingsShape;
   try {
     nextSettings = await enqueueWrite(scopeKey, () =>
       store.updateAtomic((current) => {
-        requireSidebarStoreAccess({ rejectSnapshotChange: true });
+        requireSidebarStorePath();
         const currentKeys = current.value.hiddenProjectKeys;
         const comparisonKey = projectKeyComparisonKey(projectKey, process.platform) ?? projectKey;
         const alreadyHidden = currentKeys.some(
@@ -463,60 +489,6 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
     broadcastHiddenProjectKeysChanged(nextSettings.hiddenProjectKeys, ownerStamp);
   }
   return changed;
-}
-
-type LegacySidebarPathState = 'missing' | 'regular-file' | 'blocked';
-
-function legacySidebarPathState(file: string): LegacySidebarPathState {
-  try {
-    return fs.lstatSync(file).isFile() ? 'regular-file' : 'blocked';
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'blocked';
-  }
-}
-
-function scopedSidebarPathState(file: string): LegacySidebarPathState {
-  const primaryState = legacySidebarPathState(file);
-  if (primaryState !== 'missing') return primaryState;
-  // A leftover atomic-write backup can be the only recoverable scoped snapshot.
-  // Never replace it with legacy data or an empty mutation.
-  return legacySidebarPathState(`${file}.bak`) === 'missing' ? 'missing' : 'blocked';
-}
-
-type LegacySidebarClaimResult = 'blocked' | 'ready' | 'snapshot-changed';
-
-function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
-  const session = getActiveAppSession();
-  if (session.mode !== 'cloud' || !session.dataOwnerId) return 'blocked';
-
-  const root = app.getPath('userData');
-  const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
-  const legacyPath = path.join(root, SETTINGS_FILE_NAME);
-  const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
-
-  if (isLegacyOwnerNamespaceClaimedByOtherOwner(session.dataOwnerId)) return 'ready';
-  const legacyPathState = legacySidebarPathState(legacyPath);
-
-  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
-    return isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) && legacyPathState === 'missing'
-      ? 'ready'
-      : 'blocked';
-  }
-
-  if (legacyPathState === 'missing') return 'ready';
-  if (legacyPathState === 'blocked') return 'blocked';
-  try {
-    fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
-    fs.renameSync(legacyPath, scopedPath);
-    log.info('legacy sidebar settings moved into owner namespace', { ownerKey });
-    return 'snapshot-changed';
-  } catch (err) {
-    log.warn('failed to migrate legacy sidebar settings', {
-      ownerKey,
-      errorCode: sidebarSettingsErrorCode(err),
-    });
-    return 'blocked';
-  }
 }
 
 export function registerSidebarSettingsIpc(): void {

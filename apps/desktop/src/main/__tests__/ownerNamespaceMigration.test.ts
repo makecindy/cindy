@@ -218,10 +218,9 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
   });
 
-  it('keeps ownership when an earlier path fails after sidebar state moved', async () => {
+  it('keeps rollback-compatible sidebar state at the legacy path after claiming it', async () => {
     const root = await tempRoot();
     const ownerId = 'cloud-a';
-    const failedSource = path.join(root, 'ghost-cindy-prefs.json');
     const legacySidebar = path.join(root, 'sidebar-settings.json');
     const scopedSidebar = path.join(
       root,
@@ -229,23 +228,17 @@ describe('claimLegacyOwnerNamespace', () => {
       dataOwnerStorageKey(ownerId),
       'sidebar-settings.json',
     );
-    await fs.writeFile(failedSource, 'legacy-prefs');
     await fs.writeFile(legacySidebar, JSON.stringify({ pinnedOrder: ['legacy-session'] }));
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
-      realFsDeps(root, {}, {
-        rename: (source: string, target: string) =>
-          source === failedSource
-            ? Promise.reject(Object.assign(new Error('rename failed'), { code: 'EACCES' }))
-            : fs.rename(source, target),
-      }),
+      realFsDeps(root),
     );
 
-    expect(result).toMatchObject({ status: 'partial', moved: 1 });
-    await expect(fs.access(legacySidebar)).rejects.toThrow();
-    await expect(fs.readFile(scopedSidebar, 'utf-8')).resolves.toContain('legacy-session');
-    expect(hasLegacyOwnerNamespaceClaim(ownerId, root)).toBe(false);
+    expect(result).toEqual({ status: 'migrated', moved: 0, conflicts: 0 });
+    await expect(fs.readFile(legacySidebar, 'utf-8')).resolves.toContain('legacy-session');
+    await expect(fs.access(scopedSidebar)).rejects.toThrow();
+    expect(hasLegacyOwnerNamespaceClaim(ownerId, root)).toBe(true);
     expect(isLegacyOwnerNamespaceClaimOwnedBy(ownerId, root)).toBe(true);
   });
 
