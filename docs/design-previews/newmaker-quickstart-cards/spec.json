@@ -5,7 +5,7 @@
     "summary": {
       "what": "New Maker 主界面「快速开始」4 张快捷入口卡片的竖排(icon 左上/文字中下)+ 等比拉伸布局改稿",
       "how": "卡片改为竖排:icon 固定卡片左上(位置不变,距顶=距左=内边距),文字挪到卡片中下方、与 icon 左对齐(flex-col + justify-between);卡片区去掉 800px 封顶,随 useProportionalWidth 的 inputWidth 等比拉伸、与输入框同宽同缘;grid 按 inputWidth 断点 560/700 切 1/2/4 列,高度不变(narrow 84 / 常态 112)",
-      "accept": "A/B/C/D/F 五门:truth 提取自源码带 provenance / 状态覆盖 / 4 语言无截断 / computed-style 绑定(4px·12px·13px·主题 token) / 拉伸几何 oracle 比对(卡片宽随 inputWidth、与输入框同宽、高度恒定)"
+      "accept": "A/B/C/D/F 五门:truth 提取自源码带 provenance / 状态覆盖 / 支持语言全集无截断 / computed-style 绑定(4px·12px·13px·主题 token) / 拉伸几何 oracle 比对(卡片宽随 inputWidth、与输入框同宽、高度恒定)"
     }
   },
 
@@ -14,7 +14,7 @@
     "regions": ["na"],
     "systems": ["desktop"],
     "themes": ["light", "dark"],
-    "langs": ["zh-CN", "en", "ja", "ko"]
+    "langs": ["zh-CN", "zh-TW", "en", "ja", "ko"]
   },
 
   "states": [
@@ -28,6 +28,7 @@
   "verify": {
     "cases": [
       { "id": "zh-light", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "light", "lang": "zh-CN" } },
+      { "id": "zh-tw-dark", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark", "lang": "zh-TW" } },
       { "id": "en-dark",  "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark",  "lang": "en" } },
       { "id": "ja-light", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "light", "lang": "ja" } },
       { "id": "ko-dark",  "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark",  "lang": "ko" } }

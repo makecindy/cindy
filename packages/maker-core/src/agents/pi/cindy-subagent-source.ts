@@ -371,7 +371,9 @@ function runTask(binary, task, runtime, signal, onProgress) {
     // 见文件头),而 bridge 一见到 CINDY_PI_MCP_BRIDGE 就会**逐个 connect 所有 MCP server**
     // 并持有有状态 transport。子代理的 --tools 白名单里根本没有 MCP 工具,所以这些连接纯属
     // 浪费:每个子代理一整套连接、每次派发一轮连接风暴(并发 4、单次最多 8),而且子代理不会
-    // 显式 close,只能等进程退出(review)。剥这一个变量即可 —— 权限门与网关路由不受影响。
+    // 显式 close,只能等进程退出(review)。这也是来源隔离不变量:子代理不能继承 root
+    // bridge；未来若开放 MCP，Host 必须为子进程签发 descendant provenance。
+    // 剥这一个变量即可 —— 权限门与网关路由不受影响。
     delete childEnv[MCP_BRIDGE_ENV];
 
     let child;

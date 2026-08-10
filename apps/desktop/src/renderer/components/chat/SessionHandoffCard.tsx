@@ -127,7 +127,7 @@ export function SessionHandoffCard({
           </span>
           <span
             className={cn(
-              'shrink-0 rounded-full px-2 py-[2px] text-[10px] font-medium uppercase leading-4 tracking-[0.4px]',
+              'shrink-0 rounded-full px-2 py-[2px] text-10 font-medium uppercase leading-4 tracking-[0.4px]',
               solidBadge
                 ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]'
                 : 'border border-[var(--send-btn-bg)] bg-[var(--cmd-palette-bg)] text-[var(--send-btn-bg)]',
@@ -155,7 +155,7 @@ export function SessionHandoffCard({
             </span>
           )}
           <span className="shrink-0 text-12 leading-4 text-[var(--cmd-palette-item-meta)]">·</span>
-          <span className="shrink-0 font-mono text-[11px] leading-4 text-[var(--cmd-palette-item-meta)]">
+          <span className="shrink-0 font-mono text-11 leading-4 text-[var(--cmd-palette-item-meta)]">
             {shortSessionId(sessionId)}
           </span>
         </span>

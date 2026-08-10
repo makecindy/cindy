@@ -4,6 +4,7 @@ import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { GhostManifest } from '../../shared/ghost.js';
+import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';
 import {
   sendToTrustedAppWindows,
   setGhostUninstallLedgerPreparer,
@@ -12,6 +13,7 @@ import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { parseMarketSource } from './sources/parse.js';
+import { LocalIconRequestGate } from './localIconRequestGate.js';
 import { PluginMarketPackagePermissionReviewBridge } from './packagePermissionReviewBridge.js';
 import { PluginMarketService } from './service.js';
 
@@ -23,6 +25,7 @@ const UPGRADE_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:upgrade-notice-available
 const PACKAGE_PERMISSION_REVIEW_CHANNEL = 'plugin-market:package-permission-review';
 const trackedReviewRequesters = new WeakSet<WebContents>();
 const packagePermissionReviewBridge = new PluginMarketPackagePermissionReviewBridge();
+const localIconRequestGate = new LocalIconRequestGate();
 
 function service(): PluginMarketService {
   serviceSingleton ??= new PluginMarketService();
@@ -121,6 +124,28 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() =>
       service().detail(requireString(pluginId, 'pluginId')),
     );
+  });
+  ipcMain.handle('plugin-market:local-icons', (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(raw) || raw.length > 8) {
+      throwIpcError('INVALID_PARAMS', 'local icon requests must contain at most 8 entries');
+    }
+    const requests = raw.map((entry) => {
+      const payload = requireObject(entry);
+      const pluginId = requireString(payload.pluginId, 'pluginId');
+      const expectedIconKey = requireString(payload.expectedIconKey, 'expectedIconKey');
+      if (pluginId.length > 1024 || !isPluginMarketCustomIconKey(expectedIconKey)) {
+        throwIpcError('INVALID_PARAMS', 'Invalid local Plugin icon request');
+      }
+      return { pluginId, expectedIconKey };
+    });
+    return invokePluginMarket(() => {
+      const request = localIconRequestGate.tryRun(() => service().localIcons(requests));
+      if (!request) {
+        throwIpcError('PRECONDITION_FAILED', 'Too many local Plugin icon requests');
+      }
+      return request;
+    });
   });
   ipcMain.handle(
     'plugin-market:install',

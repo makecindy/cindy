@@ -302,6 +302,112 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
 });
 
 describe('anthropic-compat-proxy encrypted content retry', () => {
+  it('preserves readable agent progress when foreign reasoning ciphertext triggers recovery', async () => {
+    const upstream = await startFakeUpstream((_idx, rawBody, res) => {
+      const body = JSON.parse(rawBody) as {
+        input?: Array<{ type?: string; content?: unknown[]; encrypted_content?: unknown }>;
+      };
+      const encryptedParts = (body.input ?? [])
+        .filter((item) => item.type === 'agent_message' && Array.isArray(item.content))
+        .flatMap((item) => item.content ?? [])
+        .filter((part): part is Record<string, unknown> => (
+          typeof part === 'object'
+          && part !== null
+          && 'type' in part
+          && part.type === 'encrypted_content'
+        ));
+      const foreignReasoning = (body.input ?? []).some((item) => (
+        item.type === 'reasoning'
+        && item.encrypted_content === 'gAAAAA-foreign-reasoning'
+      ));
+      if (encryptedParts.some((part) => typeof part.encrypted_content !== 'string')) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            message: "Missing required parameter: 'input[2].content[1].encrypted_content'.",
+            code: 'missing_required_parameter',
+          },
+        }));
+      } else if (foreignReasoning) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    const controller = createThreadStripController();
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [createActiveStripTransform({
+        controller,
+        enabled: () => true,
+        strip: stripEncryptedContentFromBody,
+      })],
+      recoveryRules: [createEncryptedContentRecoveryRule({
+        enabled: () => true,
+        onRetry: (threadId, model) => controller.markActive(threadId, model),
+      })],
+    });
+    const request = {
+      model: 'gpt-5.6-sol',
+      input: [
+        { type: 'message', role: 'user', content: 'go' },
+        {
+          type: 'reasoning',
+          id: 'foreign-reasoning',
+          summary: [],
+          encrypted_content: 'gAAAAA-foreign-reasoning',
+        },
+        {
+          type: 'agent_message',
+          author: '/root/progress_test',
+          recipient: '/root',
+          content: [
+            { type: 'input_text', text: 'progress' },
+            { type: 'encrypted_content', encrypted_content: 'gAAAAA-progress' },
+          ],
+          internal_chat_message_metadata_passthrough: { source: 'send_message' },
+        },
+        {
+          type: 'agent_message',
+          author: '/root/progress_test',
+          recipient: '/root',
+          content: [{ type: 'input_text', text: 'complete' }],
+        },
+        {
+          type: 'agent_message',
+          author: '/root/opaque',
+          content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAA-only' }],
+        },
+      ],
+    };
+
+    expect((await post(proxy.url, request)).status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'message', role: 'user', content: 'go' },
+      {
+        type: 'agent_message',
+        author: '/root/progress_test',
+        recipient: '/root',
+        content: [{ type: 'input_text', text: 'progress' }],
+        internal_chat_message_metadata_passthrough: { source: 'send_message' },
+      },
+      {
+        type: 'agent_message',
+        author: '/root/progress_test',
+        recipient: '/root',
+        content: [{ type: 'input_text', text: 'complete' }],
+      },
+    ]);
+
+    expect((await post(proxy.url, request)).status).toBe(200);
+    expect(upstream.bodies).toHaveLength(3);
+    expect(upstream.bodies[2]).toBe(upstream.bodies[1]);
+  });
+
   it('retries invalid_encrypted_content once when enabled and marks the thread active', async () => {
     const upstream = await startFakeUpstream((idx, _body, res) => {
       if (idx === 0) {

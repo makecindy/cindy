@@ -22,7 +22,10 @@ import {
   prependNoteToWireUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { buildMobileClientPromptNote } from './mobileClientPromptNote.js';
+import {
+  buildMobileClientPromptNote,
+  shouldPrependMobileClientPromptNote,
+} from './mobileClientPromptNote.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -78,6 +81,8 @@ type MakerSendOptions = {
     autoResume?: unknown;
     /** 本次自动续跑的展示信息(合进 agentMeta.autoResumeInfo,供活动行 param 位与展开详情)。 */
     autoResumeInfo?: unknown;
+    /** Manual and automatic retries share the same durable recovery handoff. */
+    recoveryCheckpoint?: unknown;
     /** 队列自动来源(只写入 agentMeta,不传给 maker-core 的 turn origin)。 */
     origin?: unknown;
   };
@@ -250,6 +255,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
   autoResumeInfo?: Record<string, unknown>;
+  recoveryCheckpoint?: Record<string, unknown>;
   origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
@@ -267,6 +273,9 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
     ...(persist.autoResume === true ? { autoResume: true as const } : {}),
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
       ? { autoResumeInfo: persist.autoResumeInfo as Record<string, unknown> }
+      : {}),
+    ...(persist.recoveryCheckpoint && typeof persist.recoveryCheckpoint === 'object'
+      ? { recoveryCheckpoint: persist.recoveryCheckpoint as Record<string, unknown> }
       : {}),
     ...(persist.origin && typeof persist.origin === 'object' && !Array.isArray(persist.origin)
       ? { origin: persist.origin as Record<string, unknown> }
@@ -736,7 +745,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
       // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
       const mobileClientNote =
-        deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true
+        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true)
+        && shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildMobileClientPromptNote()
           : null;
       const outgoing = mobileClientNote
@@ -910,6 +920,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         ...(persistUserMessage.autoResume ? { autoResume: true } : {}),
                         ...(persistUserMessage.autoResumeInfo
                           ? { autoResumeInfo: persistUserMessage.autoResumeInfo }
+                          : {}),
+                        ...(persistUserMessage.recoveryCheckpoint
+                          ? { recoveryCheckpoint: persistUserMessage.recoveryCheckpoint }
                           : {}),
                         ...(persistUserMessage.origin ? { origin: persistUserMessage.origin } : {}),
                         // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin

@@ -14,9 +14,8 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
-import { sortPresetsForLocale } from '@cindy/model-providers';
+import { sortPresetsForRegion } from '@cindy/model-providers';
 import type { ProviderPreset, ProviderView } from '@cindy/model-providers';
-import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { useProviders } from '@/hooks/useProviders';
@@ -88,7 +87,6 @@ interface UseProviderOnboardingOptions {
 export function useProviderOnboarding(
   options?: UseProviderOnboardingOptions,
 ): UseProviderOnboardingReturn {
-  const { i18n } = useTranslation();
   const { mode } = useAuth();
   const { providers, loading } = useProviders();
 
@@ -163,8 +161,8 @@ export function useProviderOnboarding(
   }, [detections, providers]);
 
   const presets = useMemo(
-    () => (rawPresets ? sortPresetsForLocale(rawPresets, i18n.language) : []),
-    [rawPresets, i18n.language],
+    () => (rawPresets ? sortPresetsForRegion(rawPresets, CURRENT_CINDY_REGION) : []),
+    [rawPresets],
   );
 
   // 主列/折叠区装配(区域策略见 UseProviderOnboardingReturn.primaryRows 注释)。

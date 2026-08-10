@@ -93,7 +93,4 @@ export const DEFAULT_DISABLED_PLUGIN_IDS: ReadonlySet<string> = new Set([
  * Direct desktop control installs a local driver and requires OS-level
  * permissions, so tying it to an arbitrary session workingDir makes the MCP
  * disappear for plain dialogue sessions. */
-export const GLOBAL_PLUGIN_IDS: ReadonlySet<string> = new Set([
-  'android',
-  'computer',
-]);
+export const GLOBAL_PLUGIN_IDS: ReadonlySet<string> = new Set(['android', 'computer']);

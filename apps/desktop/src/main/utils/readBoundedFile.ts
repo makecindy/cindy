@@ -29,8 +29,49 @@ export interface ReadBoundedFileOptions {
   /**
    * 已 realpath 的根目录。传入时在 open 之后复核:路径此刻 stat 的 dev/ino
    * 与句柄一致,且 realpath(filePath) 落在该根内;任一不成立返回 null。
+   * 根内复核遇到无法确定的 I/O 错误时可能抛出 BoundedFileReadUncertainError。
    */
   containWithin?: string;
+  /** 特殊文件场景使用非阻塞打开，避免 FIFO 在 Main 中永久等待。 */
+  nonBlocking?: boolean;
+  /** 拒绝链接计数不为 1 的文件，并在读取后再次复核。 */
+  rejectHardLinks?: boolean;
+  /** 复读同一句柄并比较字节；内容或版本变化时抛出可重试错误。 */
+  verifyContentStability?: boolean;
+}
+
+type ReadBoundedFileNoFollowSyncOptions = Pick<
+  ReadBoundedFileOptions,
+  'noFollowFlag' | 'containWithin'
+>;
+
+export interface BoundedFileRead {
+  bytes: Buffer;
+  /** 与 bytes 来自同一已打开句柄，且读取前后版本字段保持不变。 */
+  stat: fs.BigIntStats;
+}
+
+export class BoundedFileReadUncertainError extends Error {
+  readonly code: string;
+
+  constructor(cause?: unknown) {
+    super('File could not be safely verified');
+    this.name = 'BoundedFileReadUncertainError';
+    this.code =
+      typeof (cause as NodeJS.ErrnoException | undefined)?.code === 'string'
+        ? ((cause as NodeJS.ErrnoException).code as string)
+        : 'FILE_READ_UNCERTAIN';
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+export class BoundedFileReadChangedError extends Error {
+  readonly code = 'FILE_CONTENT_CHANGED';
+
+  constructor() {
+    super('File content changed while it was being read');
+    this.name = 'BoundedFileReadChangedError';
+  }
 }
 
 /** realpath 产物是否落在同为 realpath 产物的根内(含根本身)。 */
@@ -52,15 +93,24 @@ function sameInode(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
   return a.dev === b.dev && a.ino === b.ino;
 }
 
+/** 同一打开句柄在读取前后是否仍是同一内容版本。 */
+function sameHandleVersion(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.mode === b.mode &&
+    a.size === b.size &&
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs
+  );
+}
+
 /**
  * 在已打开句柄上循环读满已校验的长度。网络盘/FUSE 上单次 read() 不保证填满
- * 请求区间,单次读会把合法文件截断成解析失败。EOF 早于已校验长度(并发截断)
- * 时按实际读到的字节返回,交由上层解析/校验自然拒绝。
+ * 请求区间,单次读会把合法文件截断成解析失败。EOF 提前时这里只返回实际字节；
+ * 调用方随后用句柄版本复核（及可选复读）拒绝并发截断或改写。
  */
-async function readToLength(
-  handle: fs.promises.FileHandle,
-  size: number,
-): Promise<Buffer> {
+async function readToLength(handle: fs.promises.FileHandle, size: number): Promise<Buffer> {
   const buffer = Buffer.alloc(size);
   let offset = 0;
   while (offset < size) {
@@ -71,7 +121,7 @@ async function readToLength(
   return buffer.subarray(0, offset);
 }
 
-/** open 之后的根内复核(异步侧),失败一律按不可信拒绝。 */
+/** open 后根内复核：确定性路径失败返回 false，无法判定的 I/O 错误抛出。 */
 async function verifyStillWithinRoot(
   handleStat: fs.BigIntStats,
   filePath: string,
@@ -84,7 +134,11 @@ async function verifyStillWithinRoot(
     ]);
     if (!sameInode(pathStat, handleStat)) return false;
     return isWithinRoot(realFilePath, realRoot);
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'ELOOP') {
+      throw new BoundedFileReadUncertainError(error);
+    }
     return false;
   }
 }
@@ -92,7 +146,8 @@ async function verifyStillWithinRoot(
 /**
  * 读取一个"必须是普通文件"的文件,拒绝符号链接,限量读取。
  *
- * - 非普通文件 / 超过 maxBytes / 符号链接或根内复核不过 → 返回 null;
+ * - 非普通文件 / 超过 maxBytes / 符号链接或确定性根内复核不过 → 返回 null;
+ * - 根内复核遇到无法判定的 I/O 错误 → 抛出 BoundedFileReadUncertainError;
  * - open 失败(含 O_NOFOLLOW 平台对 symlink 的 ELOOP 拒绝、ENOENT)→ 抛出,
  *   由调用方决定语义。
  *
@@ -101,28 +156,31 @@ async function verifyStillWithinRoot(
  * 打开的 inode,堵"open 之后换文件"的窗口。语义与 POSIX 侧一致:该文件不允许
  * 是符号链接,无论目标指向哪里。
  */
-export async function readBoundedFileNoFollow(
+export async function readBoundedFileNoFollowWithStat(
   filePath: string,
   maxBytes: number,
   options?: ReadBoundedFileOptions,
-): Promise<Buffer | null> {
+): Promise<BoundedFileRead | null> {
   const noFollow =
-    options?.noFollowFlag !== undefined
-      ? options.noFollowFlag
-      : (fs.constants.O_NOFOLLOW ?? null);
-  const handle = await fs.promises.open(
-    filePath,
-    fs.constants.O_RDONLY | (noFollow ?? 0),
-  );
+    options?.noFollowFlag !== undefined ? options.noFollowFlag : (fs.constants.O_NOFOLLOW ?? null);
+  const openFlags =
+    fs.constants.O_RDONLY |
+    (noFollow ?? 0) |
+    (options?.nonBlocking ? (fs.constants.O_NONBLOCK ?? 0) : 0);
+  const handle = await fs.promises.open(filePath, openFlags);
   try {
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile() || Number(stat.size) > maxBytes) return null;
+    if (options?.rejectHardLinks && stat.nlink !== 1n) return null;
     if (noFollow === null) {
       let linkStat: fs.BigIntStats;
       try {
         linkStat = await fs.promises.lstat(filePath, { bigint: true });
-      } catch {
-        // 路径条目已消失,无从证明句柄对应目录项 → 按不可信拒绝。
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException)?.code;
+        if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'ELOOP') {
+          throw new BoundedFileReadUncertainError(error);
+        }
         return null;
       }
       if (linkStat.isSymbolicLink()) return null;
@@ -131,10 +189,41 @@ export async function readBoundedFileNoFollow(
     if (options?.containWithin !== undefined) {
       if (!(await verifyStillWithinRoot(stat, filePath, options.containWithin))) return null;
     }
-    return await readToLength(handle, Number(stat.size));
+    const bytes = await readToLength(handle, Number(stat.size));
+    const finalStat = await handle.stat({ bigint: true });
+    if (options?.rejectHardLinks && finalStat.nlink !== 1n) {
+      if (options.verifyContentStability) throw new BoundedFileReadChangedError();
+      return null;
+    }
+    if (!sameHandleVersion(stat, finalStat)) {
+      if (options?.verifyContentStability) throw new BoundedFileReadChangedError();
+      return null;
+    }
+    if (options?.verifyContentStability) {
+      const verificationBytes = await readToLength(handle, Number(stat.size));
+      const verificationStat = await handle.stat({ bigint: true });
+      if (
+        (options.rejectHardLinks && verificationStat.nlink !== 1n) ||
+        !sameHandleVersion(finalStat, verificationStat) ||
+        bytes.length !== verificationBytes.length ||
+        !bytes.equals(verificationBytes)
+      ) {
+        throw new BoundedFileReadChangedError();
+      }
+      return { bytes, stat: verificationStat };
+    }
+    return { bytes, stat: finalStat };
   } finally {
     await handle.close();
   }
+}
+
+export async function readBoundedFileNoFollow(
+  filePath: string,
+  maxBytes: number,
+  options?: ReadBoundedFileOptions,
+): Promise<Buffer | null> {
+  return (await readBoundedFileNoFollowWithStat(filePath, maxBytes, options))?.bytes ?? null;
 }
 
 /**
@@ -167,12 +256,10 @@ export async function readBoundedFileFollowLinks(
 export function readBoundedFileNoFollowSync(
   filePath: string,
   maxBytes: number,
-  options?: ReadBoundedFileOptions,
+  options?: ReadBoundedFileNoFollowSyncOptions,
 ): Buffer | null {
   const noFollow =
-    options?.noFollowFlag !== undefined
-      ? options.noFollowFlag
-      : (fs.constants.O_NOFOLLOW ?? null);
+    options?.noFollowFlag !== undefined ? options.noFollowFlag : (fs.constants.O_NOFOLLOW ?? null);
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (noFollow ?? 0));
   try {
     const stat = fs.fstatSync(fd, { bigint: true });

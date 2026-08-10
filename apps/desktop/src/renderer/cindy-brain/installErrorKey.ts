@@ -7,6 +7,8 @@ export function ghostInstallErrorKey(code: string | undefined): string {
   switch (code) {
     case 'GHOST_FILE_INVALID':
       return 'settings.ghosts.errors.fileInvalid';
+    case 'GHOST_HOST_UNSUPPORTED':
+      return 'settings.ghosts.errors.hostUnsupported';
     case 'ALREADY_EXISTS':
       return 'settings.ghosts.errors.alreadyInstalled';
     case 'GHOST_COMMAND_CONFLICT':

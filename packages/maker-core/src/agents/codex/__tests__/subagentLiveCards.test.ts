@@ -98,6 +98,195 @@ describe('createSubagentLiveCardTracker', () => {
     expect(afterUsage?.toolUses).toBe(1);
   });
 
+  it('subtracts forked parent history from the token count shown on a subagent card', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+
+    // app-server attaches the forked child by replaying its restored usage before the
+    // first child turn. That absolute total belongs to the parent history, not this card.
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'restored-parent-turn',
+        tokenUsage: {
+          total: { totalTokens: 10_000 },
+          last: { totalTokens: 900 },
+        },
+      }),
+    ).toBeNull();
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toBeNull();
+
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-1' },
+    });
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: {
+          total: { totalTokens: 10_120 },
+          last: { totalTokens: 120 },
+        },
+      })?.totalTokens,
+    ).toBe(120);
+
+    // Later absolute snapshots remain relative to the same spawn baseline.
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-2' },
+    });
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-2',
+        tokenUsage: {
+          total: { totalTokens: 10_310 },
+          last: { totalTokens: 190 },
+        },
+      })?.totalTokens,
+    ).toBe(310);
+  });
+
+  it('infers the spawn baseline from last-turn usage when no restored snapshot arrives', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    // item 通知也能证明这是 live turn；即使 turn/started 丢失也不能误判成恢复帧。
+    tracker.handleDescendantNotification('t-child', 'item/started', {
+      turnId: 'child-turn-1',
+      item: { id: 'message-1', type: 'agentMessage' },
+    });
+
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: {
+          total: { totalTokens: 8_250 },
+          last: { totalTokens: 250 },
+        },
+      })?.totalTokens,
+    ).toBe(250);
+  });
+
+  it('counts delayed first usage from an earlier observed live turn without a restored snapshot', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-1' },
+    });
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-2' },
+    });
+
+    // turn 1 的首帧 usage 可以晚于 turn 2 started；它仍是已观测的 live turn，必须用
+    // last 反推 spawn 基线，而不能把整帧误认成 fork / resume 的恢复快照。
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: {
+          total: { totalTokens: 8_250 },
+          last: { totalTokens: 250 },
+        },
+      })?.totalTokens,
+    ).toBe(250);
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-2',
+        tokenUsage: {
+          total: { totalTokens: 8_400 },
+          last: { totalTokens: 150 },
+        },
+      })?.totalTokens,
+    ).toBe(400);
+  });
+
+  it('keeps legacy total-only token payloads as absolute snapshots', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    tracker.handleDescendantNotification('t-child', 'item/started', {
+      turnId: 'child-turn-1',
+      item: { id: 'child-tool-1', type: 'commandExecution' },
+    });
+
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: { total: { totalTokens: 4_242 } },
+      })?.totalTokens,
+    ).toBe(4_242);
+  });
+
+  it('keeps the original spawn baseline when restored snapshots are duplicated out of order', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+
+    tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+      turnId: 'restored-parent-turn',
+      tokenUsage: { total: { totalTokens: 1_000 }, last: { totalTokens: 100 } },
+    });
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-1' },
+    });
+    // A zero-growth live snapshot leaves the visible counter at zero.
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: { total: { totalTokens: 1_000 }, last: { totalTokens: 0 } },
+      }),
+    ).toBeNull();
+
+    // A stale replay must not replace the already-established 1,000-token baseline.
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'older-parent-turn',
+        tokenUsage: { total: { totalTokens: 900 }, last: { totalTokens: 90 } },
+      }),
+    ).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: { total: { totalTokens: 1_100 }, last: { totalTokens: 100 } },
+      })?.totalTokens,
+    ).toBe(100);
+  });
+
+  it('keeps cumulative usage monotonic when a prior live turn reports late', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+      turnId: 'restored-parent-turn',
+      tokenUsage: { total: { totalTokens: 1_000 }, last: { totalTokens: 100 } },
+    });
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-1' },
+    });
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: { total: { totalTokens: 1_100 }, last: { totalTokens: 100 } },
+      })?.totalTokens,
+    ).toBe(100);
+
+    tracker.handleDescendantNotification('t-child', 'turn/started', {
+      turn: { id: 'child-turn-2' },
+    });
+    // The previous turn can finish flushing after the next turn starts; its newer
+    // cumulative snapshot still belongs to this child and must not be discarded.
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: { total: { totalTokens: 1_150 }, last: { totalTokens: 50 } },
+      })?.totalTokens,
+    ).toBe(150);
+    // An older duplicate must not make the displayed count fall back to 100.
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-1',
+        tokenUsage: { total: { totalTokens: 1_100 }, last: { totalTokens: 100 } },
+      }),
+    ).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+        turnId: 'child-turn-2',
+        tokenUsage: { total: { totalTokens: 1_300 }, last: { totalTokens: 150 } },
+      })?.totalTokens,
+    ).toBe(300);
+  });
+
   it('uses Cindy configured model only until the child thread reports its actual model', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0, subagentModelFallback: 'gpt-5.6-terra' });
     expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({
@@ -230,20 +419,35 @@ describe('createSubagentLiveCardTracker', () => {
       toolUses: 2,
     });
 
-    // token 是各线程累计快照之和;同线程再报只覆盖自己那份,不重复相加。
+    // 每个 receiver 都先收到 fork 恢复帧；卡片只累计各线程从自身基线之后的增长。
+    tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
+      turnId: 'restored-a',
+      tokenUsage: { total: { totalTokens: 1_000 }, last: { totalTokens: 80 } },
+    });
+    tracker.handleDescendantNotification('t-b', 'thread/tokenUsage/updated', {
+      turnId: 'restored-b',
+      tokenUsage: { total: { totalTokens: 2_000 }, last: { totalTokens: 90 } },
+    });
+    tracker.handleDescendantNotification('t-a', 'turn/started', { turn: { id: 'live-a' } });
+    tracker.handleDescendantNotification('t-b', 'turn/started', { turn: { id: 'live-b' } });
+
+    // token 是各线程 spawn 后累计快照之和;同线程再报只覆盖自己那份,不重复相加。
     expect(
       tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
-        tokenUsage: { total: { totalTokens: 100 } },
+        turnId: 'live-a',
+        tokenUsage: { total: { totalTokens: 1_100 }, last: { totalTokens: 100 } },
       })?.totalTokens,
     ).toBe(100);
     expect(
       tracker.handleDescendantNotification('t-b', 'thread/tokenUsage/updated', {
-        tokenUsage: { total: { totalTokens: 40 } },
+        turnId: 'live-b',
+        tokenUsage: { total: { totalTokens: 2_040 }, last: { totalTokens: 40 } },
       })?.totalTokens,
     ).toBe(140);
     expect(
       tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
-        tokenUsage: { total: { totalTokens: 130 } },
+        turnId: 'live-a',
+        tokenUsage: { total: { totalTokens: 1_130 }, last: { totalTokens: 30 } },
       })?.totalTokens,
     ).toBe(170);
   });
@@ -490,6 +694,34 @@ describe('createSubagentLiveCardTracker', () => {
     expect(
       tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'completed' } }),
     ).toBeNull();
+  });
+
+  it('counts delayed usage from a failed nested child turn without an item notification', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    // nested spawn 先失败，receiver 随后才补发 turn/started；失败状态必须锁住，但 turn id
+    // 仍要记下，否则后续现代 usage 会被当成恢复帧，烧掉的 token 永久漏计。
+    expect(tracker.noteDescendantThread('t-grand', 't-child', undefined, true)).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/started', {
+        turn: { id: 'failed-child-turn' },
+      }),
+    ).toBeNull();
+
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'thread/tokenUsage/updated', {
+        turnId: 'failed-child-turn',
+        tokenUsage: {
+          total: { totalTokens: 1_250 },
+          last: { totalTokens: 250 },
+        },
+      }),
+    ).toMatchObject({ status: 'running', totalTokens: 250 });
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', {
+        turn: { status: 'completed' },
+      }),
+    ).toMatchObject({ status: 'failed', totalTokens: 250 });
   });
 
   it('ignores lineage for threads unrelated to any subagent card', () => {

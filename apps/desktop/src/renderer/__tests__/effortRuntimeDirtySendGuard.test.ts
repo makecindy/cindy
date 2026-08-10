@@ -16,6 +16,7 @@ describe('effort runtime send guard', () => {
     expect(chatInputSource).toContain('const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;');
     expect(chatInputSource).toContain('editable: !composerEditorLocked');
     expect(chatInputSource).toContain('if (composerMutationLockedRef.current) return true;');
+    expect(chatInputSource).toContain("trigger.kind !== 'slash' || composerMutationLockedRef.current");
     expect(chatInputSource).toContain('if (composerMutationLocked) return;');
     expect(chatInputSource).toContain("id: 'attach-files'");
     expect(chatInputSource).toContain(

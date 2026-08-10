@@ -10,11 +10,22 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp/test-attach' } }));
 
 const writeFile = vi.hoisted(() => vi.fn(async () => {}));
 const mkdir = vi.hoisted(() => vi.fn(async () => {}));
+const chmod = vi.hoisted(() => vi.fn(async () => {}));
+const lstat = vi.hoisted(() =>
+  vi.fn(async (target: string) => {
+    if (target.endsWith('.cindy-owner.json')) {
+      throw Object.assign(new Error('not found'), { code: 'ENOENT' });
+    }
+    return { isDirectory: () => true, isSymbolicLink: () => false };
+  }),
+);
 const readFile = vi.hoisted(() => vi.fn(async () => Buffer.from('image-bytes')));
 vi.mock('node:fs/promises', () => ({
-  default: { writeFile, mkdir, readFile, rm: vi.fn(async () => {}) },
+  default: { writeFile, mkdir, chmod, lstat, readFile, rm: vi.fn(async () => {}) },
   writeFile,
   mkdir,
+  chmod,
+  lstat,
   readFile,
   rm: vi.fn(async () => {}),
 }));
@@ -136,7 +147,7 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
     expect(downloadToFile).toHaveBeenCalledTimes(1);
     const [ossKeyArg, destArg] = downloadToFile.mock.calls[0] as unknown as [string, string];
     expect(ossKeyArg).toBe('cindy/device-link/u/x.png');
-    expect(destArg).toMatch(/cindy-attachments[\\/]sess-1[\\/].+\.png$/);
+    expect(destArg).toMatch(/cindy-attachments[\\/]v2-[^\\/]+[\\/]sess-1[\\/].+\.png$/);
     const block = (out as { content: Array<{ type: string; path?: string; mimeType?: string }> })
       .content[1];
     expect(block.path).toBe(destArg); // path 指向下载目标
@@ -406,12 +417,14 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
     const persistedContent = JSON.stringify({
       text: 'run check',
       images: [],
-      files: [{
-        name: 'setup.exe',
-        path: ref,
-        size: 15,
-        sha256: ATTACHMENT_SHA256,
-      }],
+      files: [
+        {
+          name: 'setup.exe',
+          path: ref,
+          size: 15,
+          sha256: ATTACHMENT_SHA256,
+        },
+      ],
     });
 
     const out = await materializeDirectSendOssAttachments(
@@ -523,19 +536,15 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
         { type: 'file', path: fileRef, mimeType: 'application/pdf' },
       ],
     };
-    const out = await materializeDirectSendOssAttachments(
-      'sess-1',
-      message,
-      {
-        persistUserMessage: {
-          content: JSON.stringify({
-            text: '',
-            images: [],
-            files: [{ name: 'doc.pdf', path: fileRef }],
-          }),
-        },
+    const out = await materializeDirectSendOssAttachments('sess-1', message, {
+      persistUserMessage: {
+        content: JSON.stringify({
+          text: '',
+          images: [],
+          files: [{ name: 'doc.pdf', path: fileRef }],
+        }),
       },
-    );
+    });
     assert.deepEqual((out.message as typeof message).content[0], {
       type: 'image',
       base64: 'inline-image',

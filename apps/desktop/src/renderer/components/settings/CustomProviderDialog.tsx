@@ -14,9 +14,9 @@
  * DESIGN.md §4 规定的 `--surface-elevated`(压在 ivory settings 卡上的输入必须用它)。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -55,7 +55,8 @@ import {
 import {
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
-  sortPresetsForLocale,
+  presetDisplayName,
+  sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
   AgentKind,
@@ -65,6 +66,7 @@ import type {
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { SettingsTextInput } from './SettingsTextInput';
+import { CURRENT_CINDY_REGION } from '@/../shared/brandRegion';
 
 /**
  * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
@@ -114,6 +116,14 @@ interface CustomProviderDialogProps {
 }
 
 type ModelRow = ProviderRuntimeModelConfig;
+interface ModelPickerState {
+  agent: DialogAgentKind;
+  models: ModelRow[];
+  selected: Set<string>;
+  query: string;
+}
+type DialogChildLayer =
+  { kind: 'preset-menu' } | { kind: 'model-picker'; value: ModelPickerState } | null;
 interface HeaderRow {
   name: string;
   value: string;
@@ -204,17 +214,22 @@ function PresetDropdown({
   onApply,
   label,
   placeholder,
+  locale,
+  open,
+  onOpenChange,
 }: {
   presets: ProviderPreset[];
   appliedPreset: string | null;
   onApply: (p: ProviderPreset) => void;
   label: string;
   placeholder: string;
+  locale: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const selected = presets.find((p) => p.id === appliedPreset) ?? null;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -232,7 +247,7 @@ function PresetDropdown({
                 : 'text-[var(--settings-input-placeholder)]',
             )}
           >
-            {selected ? selected.name : placeholder}
+            {selected ? presetDisplayName(selected, locale) : placeholder}
           </span>
           <ChevronDown size={16} className="shrink-0 text-[var(--settings-eye-icon)]" />
         </button>
@@ -242,6 +257,11 @@ function PresetDropdown({
         align="start"
         sideOffset={6}
         collisionPadding={8}
+        onEscapeKeyDown={(event) => {
+          // Radix 自己也是该层的 dismiss owner；组合输入期间阻止它先于表单
+          // 的统一判据关闭菜单。
+          if (event.isComposing || event.keyCode === 229) event.preventDefault();
+        }}
         className={cn(
           // z-[10001]: 宿主弹窗 overlay 是 z-[10000],默认 z-50 会被盖住。
           // 底/hover 用 cmd-palette 菜单 token 对——settings-menu-bg-hover 在深色下
@@ -262,7 +282,7 @@ function PresetDropdown({
                 aria-selected={isSelected}
                 onClick={() => {
                   onApply(p);
-                  setOpen(false);
+                  onOpenChange(false);
                 }}
                 className={cn(
                   // 菜单项 hover 不加 transition——渐变会让高亮拖尾跟不上指针,菜单应瞬时切换
@@ -272,7 +292,7 @@ function PresetDropdown({
                 )}
               >
                 <span className="truncate text-13 font-medium text-[var(--settings-input-text)]">
-                  {p.name}
+                  {presetDisplayName(p, locale)}
                 </span>
                 {isSelected ? (
                   <Check size={16} className="shrink-0 text-[var(--settings-theme-icon-active)]" />
@@ -344,6 +364,9 @@ export function CustomProviderDialog({
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
+  // 嵌套 dismiss layer 互斥且由表单统一持有：Radix Popover 只负责呈现，
+  // 不再让退场中的菜单与新打开的模型选择器同时成为 Escape owner。
+  const [childLayer, setChildLayer] = useState<DialogChildLayer>(null);
   // per-runtime 测试连接状态。
   const [test, setTest] = useState<Record<DialogAgentKind, TestState>>({
     'claude-code': IDLE_TEST,
@@ -357,12 +380,44 @@ export function CustomProviderDialog({
     pi: false,
   });
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
-  const [picker, setPicker] = useState<{
-    agent: DialogAgentKind;
-    models: ModelRow[];
-    selected: Set<string>;
-    query: string;
-  } | null>(null);
+  const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
+  const presetMenuOpen = childLayer?.kind === 'preset-menu';
+  // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
+  // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
+  const childLayerRef = useRef(childLayer);
+  const onCloseRef = useRef(onClose);
+  useLayoutEffect(() => {
+    childLayerRef.current = childLayer;
+    onCloseRef.current = onClose;
+  }, [childLayer, onClose]);
+
+  // Dismissible form contract:一个关闭输入只结算最上层一次。模型选择器优先于
+  // 预设菜单，最后才是表单；Cancel 仍直接表示用户要关闭表单，且无重复 ×。
+  const dismissTopmostLayer = useCallback(() => {
+    const activeLayer = childLayerRef.current;
+    if (activeLayer) {
+      // 同一事件周期内先同步更新 owner，避免快速连续输入重复结算旧层。
+      childLayerRef.current = null;
+      setChildLayer((current) => (current === activeLayer ? null : current));
+      return;
+    }
+    onCloseRef.current();
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
+      if (event.isComposing || event.keyCode === 229) return;
+      // 在 Radix 的 document capture 之前由唯一 owner 结算；否则菜单的 80ms
+      // 退场层仍可能 preventDefault，吞掉刚打开的模型选择器的 Escape。
+      event.preventDefault();
+      event.stopPropagation();
+      dismissTopmostLayer();
+    };
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [dismissTopmostLayer]);
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
   // （见 setRtSynced），不用被动 useEffect——effect 在 commit 后才跑，IPC 响应若落在
@@ -419,15 +474,14 @@ export function CustomProviderDialog({
   );
 
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
-  // 区域感知排序：zh-CN 用户国内端点预设靠前、其它语言国际端点靠前（只排序不过滤，
-  // 用户不需要理解「地区」概念，可达性由测试连接实测裁决）。
+  // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
     if (editing) return;
     let cancelled = false;
     void window.electronAPI.maker
       .listProviderPresets()
       .then((r) => {
-        if (!cancelled) setPresets(sortPresetsForLocale(r.presets, i18n.language));
+        if (!cancelled) setPresets(sortPresetsForRegion(r.presets, CURRENT_CINDY_REGION));
       })
       .catch(() => {
         /* 预设缺失不影响手填 */
@@ -435,13 +489,13 @@ export function CustomProviderDialog({
     return () => {
       cancelled = true;
     };
-  }, [editing, i18n.language]);
+  }, [editing]);
 
   /** 应用预设：预填显示名 + 各 runtime 的 baseUrl / 模型 / headers（创建时快照，之后与预设脱钩）。 */
   const applyPreset = useCallback(
     (p: ProviderPreset) => {
       setAppliedPreset(p.id);
-      setName(p.name);
+      setName(presetDisplayName(p, i18n.language));
       setAuthMode(p.authMethod ?? 'apiKey');
       setRtSynced((prev) => {
         const next = { ...prev };
@@ -475,7 +529,7 @@ export function CustomProviderDialog({
       const first = AGENTS.find((a) => p.runtimes[a]);
       if (first) setActiveTab(first);
     },
-    [setRtSynced],
+    [i18n.language, setRtSynced],
   );
 
   // 编辑态：回填各已配置 runtime 的已存明文密钥（用户本机自己的 key）——
@@ -694,7 +748,10 @@ export function CustomProviderDialog({
             };
           }),
         ];
-        setPicker({ agent, models: rows, selected: new Set(currentById.keys()), query: '' });
+        setChildLayer({
+          kind: 'model-picker',
+          value: { agent, models: rows, selected: new Set(currentById.keys()), query: '' },
+        });
         // 弹层锁定所属 runtime：把背景 Tab 同步切回请求的 runtime（标题也带 runtime 名），
         // 请求期间切过 Tab 也不会在错误上下文里确认。
         setActiveTab(agent);
@@ -809,7 +866,9 @@ export function CustomProviderDialog({
       }
       return next;
     });
-    setPicker(null);
+    setChildLayer((current) =>
+      current?.kind === 'model-picker' && current.value === picker ? null : current,
+    );
   }, [picker, patch]);
 
   const handleSave = useCallback(async () => {
@@ -1027,8 +1086,17 @@ export function CustomProviderDialog({
     : t('settings.providers.custom.fields.apiKeyPlaceholder');
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]">
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
+      onPointerDown={(event) => {
+        // pointerdown 时先按当前层级结算，避免 Popover 的 outside-dismiss 在随后
+        // click 前把状态改成 closed，令同一次手势继续误关底层表单。
+        if (event.button === 0 && event.target === event.currentTarget) dismissTopmostLayer();
+      }}
+    >
       <div
+        role="dialog"
+        aria-modal="true"
         className={cn(
           'flex max-h-[88vh] w-[600px] flex-col rounded-[16px]',
           'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
@@ -1036,7 +1104,7 @@ export function CustomProviderDialog({
         )}
       >
         {/* Header bar */}
-        <div className="flex items-center justify-between px-3 py-3">
+        <div className="flex items-center px-3 py-3">
           <div className="flex items-center gap-2.5 pl-2">
             <Sparkles size={20} className="text-[var(--settings-section-title)]" />
             <h2 className="text-18 font-semibold text-[var(--settings-section-title)]">
@@ -1045,14 +1113,6 @@ export function CustomProviderDialog({
                 : t('settings.providers.custom.dialog.createTitle')}
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('settings.providers.custom.cancel')}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-          >
-            <X size={18} />
-          </button>
         </div>
 
         {/* Body (scrollable) */}
@@ -1062,7 +1122,7 @@ export function CustomProviderDialog({
           </p>
 
           {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
-              用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，见 sortPresetsForLocale）。 */}
+              用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
           {!editing && presets.length > 0 && (
             <div className="flex flex-col gap-2">
               <FieldLabel>{t('settings.providers.custom.presets.label')}</FieldLabel>
@@ -1072,6 +1132,16 @@ export function CustomProviderDialog({
                 onApply={applyPreset}
                 label={t('settings.providers.custom.presets.label')}
                 placeholder={t('settings.providers.custom.presets.placeholder')}
+                locale={i18n.language}
+                open={presetMenuOpen}
+                onOpenChange={(open) => {
+                  setChildLayer((current) => {
+                    if (open) {
+                      return current?.kind === 'model-picker' ? current : { kind: 'preset-menu' };
+                    }
+                    return current?.kind === 'preset-menu' ? null : current;
+                  });
+                }}
               />
             </div>
           )}
@@ -1757,9 +1827,13 @@ export function CustomProviderDialog({
       {picker && (
         <ModelPickerOverlay
           picker={picker}
-          onChange={setPicker}
+          onChange={(next) => {
+            setChildLayer((current) =>
+              current?.kind === 'model-picker' ? { kind: 'model-picker', value: next } : current,
+            );
+          }}
           onConfirm={applyPicker}
-          onClose={() => setPicker(null)}
+          onClose={dismissTopmostLayer}
         />
       )}
     </div>
@@ -1773,13 +1847,8 @@ function ModelPickerOverlay({
   onConfirm,
   onClose,
 }: {
-  picker: { agent: DialogAgentKind; models: ModelRow[]; selected: Set<string>; query: string };
-  onChange: (next: {
-    agent: DialogAgentKind;
-    models: ModelRow[];
-    selected: Set<string>;
-    query: string;
-  }) => void;
+  picker: ModelPickerState;
+  onChange: (next: ModelPickerState) => void;
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -1805,8 +1874,15 @@ function ModelPickerOverlay({
     onChange({ ...picker, selected: next });
   };
   return (
-    <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-[var(--overlay-modal)]">
+    <div
+      className="fixed inset-0 z-[10001] flex items-center justify-center bg-[var(--overlay-modal)]"
+      onPointerDown={(event) => {
+        if (event.button === 0 && event.target === event.currentTarget) onClose();
+      }}
+    >
       <div
+        role="dialog"
+        aria-modal="true"
         className={cn(
           'flex max-h-[72vh] w-[460px] flex-col rounded-[16px]',
           'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
@@ -1814,7 +1890,7 @@ function ModelPickerOverlay({
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 pb-1 pt-4">
+        <div className="flex items-center px-5 pb-1 pt-4">
           <div className="flex min-w-0 flex-col gap-0.5">
             <h3 className="text-15 font-semibold text-[var(--settings-section-title)]">
               {t('settings.providers.custom.fetch.pickerTitle', {
@@ -1828,14 +1904,6 @@ function ModelPickerOverlay({
               })}
             </span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('settings.providers.custom.cancel')}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
-          >
-            <X size={16} />
-          </button>
         </div>
         {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
         <div className="flex flex-col gap-2 px-5 pt-2">

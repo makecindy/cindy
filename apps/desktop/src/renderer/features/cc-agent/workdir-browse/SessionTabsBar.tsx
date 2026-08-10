@@ -269,7 +269,7 @@ export function SessionTabsBar({
                 // 普遍比文件名长,要把横向密度提一档。
                 'group/tab relative flex h-full shrink-0 items-center gap-1.5 px-2',
                 'border-r border-[var(--cmd-palette-border)]',
-                'cursor-pointer text-[12px] transition-colors',
+                'cursor-pointer text-12 transition-colors',
                 isActive
                   ? 'bg-[var(--chat-input-chip-bg)] text-foreground font-medium'
                   : 'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--chat-input-chip-bg)] hover:text-foreground',
@@ -308,7 +308,7 @@ export function SessionTabsBar({
                   onDoubleClick={(e) => e.stopPropagation()}
                   className={cn(
                     'max-w-[160px] h-5 px-1 rounded',
-                    'text-[12px] font-medium text-foreground',
+                    'text-12 font-medium text-foreground',
                     'bg-transparent outline-none',
                     'border-[1.5px] border-[var(--focus-ring)]',
                   )}
@@ -386,14 +386,14 @@ export function SessionTabsBar({
           >
             <DropdownMenuItem
               onSelect={() => onCreateNew('cc')}
-              className="h-7 px-2.5 rounded-md text-[13px] text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+              className="h-7 px-2.5 rounded-md text-13 text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
             >
               <VendorIcon vendor="cc" size={14} className="mr-2 text-foreground" />
               Claude
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => onCreateNew('codex')}
-              className="h-7 px-2.5 rounded-md text-[13px] text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+              className="h-7 px-2.5 rounded-md text-13 text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
             >
               <VendorIcon vendor="codex" size={14} className="mr-2 text-foreground" />
               Codex

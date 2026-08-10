@@ -29,7 +29,7 @@ describe('ChatInput voice lifecycle locks', () => {
     const permissionEnd = chatInputSource.indexOf('/>', permissionStart);
     expect(permissionEnd).toBeGreaterThan(permissionStart);
     const permissionBlock = chatInputSource.slice(permissionStart, permissionEnd);
-    expect(permissionBlock).toContain('disabled={composerEditorLocked}');
+    expect(permissionBlock).toContain('disabled={composerEditorLocked || settingsLocked}');
     expect(permissionBlock).not.toContain('disabled={composerMutationLocked}');
   });
 

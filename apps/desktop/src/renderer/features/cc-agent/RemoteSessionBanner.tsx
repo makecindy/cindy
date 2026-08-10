@@ -63,12 +63,12 @@ export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Pro
         style={{ backgroundColor: dotColor }}
         aria-hidden
       />
-      <span className="flex-1 truncate text-[12px] text-[var(--text-secondary)]">{label}</span>
+      <span className="flex-1 truncate text-12 text-[var(--text-secondary)]">{label}</span>
       {status === 'suspect-stall' && onFinalize && (
         <button
           type="button"
           onClick={onFinalize}
-          className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[12px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
         >
           <Square size={12} />
           {t('ccAgent.remoteSession.finalizeStuck')}
@@ -78,7 +78,7 @@ export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Pro
         <button
           type="button"
           onClick={onResync}
-          className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[12px] text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
         >
           <RotateCw size={12} />
           {t('ccAgent.remoteSession.resync')}

@@ -154,6 +154,12 @@ config/endpoint.dev.json
 # 发布机本地地区 / 签名配置；仓库只保留对应的 .example 文件。
 apps/mobile/scripts/self-host-regions.json
 apps/desktop/scripts/release-regions.json
+# iOS Simulator WDA archives and native sidecars are generated locally.
+apps/desktop/resources/ios-simulator/*.tar.gz
+apps/desktop/resources/ios-simulator/*.tmp
+apps/desktop/resources/ios-simulator/native/arm64/
+apps/desktop/resources/ios-simulator/native/x86_64/
+apps/desktop/resources/ios-simulator/helper/
 # 客户端日志上报目标(SLS project / logstore / 区域)。真值唯一事实源在
 # cindy-build-scripts 仓根,打包机由 sync-desktop-release-kit.sh 拷回;
 # 仓内只保留 config/log-upload.json.example。缺失时 cn/global 打包会硬失败,

@@ -31,6 +31,7 @@ import {
   buildRenderItems,
   groupWorkRuns,
   snapRenderWindowStartIdx,
+  isViewportAnchorWithinDefaultTail,
   RENDER_WINDOW_INITIAL_ITEMS,
   RENDER_WINDOW_FIRST_PAINT_ITEMS,
 } from '../components/chat/MessageStream';
@@ -471,5 +472,25 @@ describe('two-phase first-paint window', () => {
     expect(firstPaint[firstPaint.length - 1]?.key).toBe(
       allRenderItems[allRenderItems.length - 1]?.key,
     );
+  });
+});
+
+describe('restored default-tail window bound', () => {
+  const items = Array.from({ length: RENDER_WINDOW_INITIAL_ITEMS + 40 }, (_, i) => ({
+    key: `message-m-${i}`,
+    type: 'message' as const,
+    message: mkAssistant(`m-${i}`),
+  }));
+
+  it('accepts an anchor still inside the current default tail', () => {
+    expect(
+      isViewportAnchorWithinDefaultTail(items, items[items.length - RENDER_WINDOW_INITIAL_ITEMS].key),
+    ).toBe(true);
+    expect(isViewportAnchorWithinDefaultTail(items, items.at(-1)!.key)).toBe(true);
+  });
+
+  it('rejects an anchor pushed out of the tail by background appends', () => {
+    expect(isViewportAnchorWithinDefaultTail(items, items[0].key)).toBe(false);
+    expect(isViewportAnchorWithinDefaultTail(items, 'message-m-missing')).toBe(false);
   });
 });

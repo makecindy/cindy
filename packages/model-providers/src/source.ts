@@ -167,7 +167,7 @@ function backfillPresetContextWindows(
   primary: ProviderPreset,
   bundled: ProviderPreset,
 ): ProviderPreset {
-  let changed = false;
+  let changed = primary.nameZhTW === undefined && bundled.nameZhTW !== undefined;
   const runtimes: ProviderPreset['runtimes'] = {};
   for (const [agent, runtime] of Object.entries(primary.runtimes) as [
     AgentKind,
@@ -189,7 +189,15 @@ function backfillPresetContextWindows(
     });
     runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
   }
-  return changed ? { ...primary, runtimes } : primary;
+  return changed
+    ? {
+        ...primary,
+        ...(primary.nameZhTW === undefined && bundled.nameZhTW !== undefined
+          ? { nameZhTW: bundled.nameZhTW }
+          : {}),
+        runtimes,
+      }
+    : primary;
 }
 
 /**

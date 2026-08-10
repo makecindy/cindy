@@ -1,5 +1,6 @@
 import type {
   AndroidMcpDeps,
+  IOSSimulatorMcpDeps,
   BrowserMcpDeps,
   ComputerMcpDeps,
   FeishuBotMcpHostDeps,
@@ -27,6 +28,7 @@ import { createCindyLspMcpServer, detectTypeScriptProject } from './lsp/index.js
 import { createBrowserMcpServer } from './browser/index.js';
 import { createComputerMcpServer } from './computer/index.js';
 import { createAndroidMcpServer } from './android/index.js';
+import { createIOSSimulatorMcpServer } from './ios-simulator/index.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 
 export interface CreateLiziMcpProvidersOptions {
@@ -35,6 +37,8 @@ export interface CreateLiziMcpProvidersOptions {
    */
   enabled?: readonly LiziMcpId[];
   android?: AndroidMcpDeps;
+  /** Host-owned embedded iOS Simulator lifecycle and interaction tools. */
+  iosSimulator?: IOSSimulatorMcpDeps;
   /** Browser automation tools. Host injects the neutral runtime implementation. */
   browser?: BrowserMcpDeps;
   /** Local desktop computer-use tools backed by a host-managed external driver. */
@@ -168,6 +172,20 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_android',
         instance: createAndroidMcpServer(opts.android!, {
+          sessionId: ctx.sessionId,
+          getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+        }),
+      }),
+    });
+  }
+
+  if (opts.iosSimulator && selected(enabled, 'ios_simulator')) {
+    providers.push({
+      name: 'cindy_ios_simulator',
+      toClaudeSdkConfig: (ctx) => ({
+        type: 'sdk',
+        name: 'cindy_ios_simulator',
+        instance: createIOSSimulatorMcpServer(opts.iosSimulator!, {
           sessionId: ctx.sessionId,
           getSessionContext: () => resolveLiziMcpSessionContext(ctx),
         }),
@@ -314,6 +332,7 @@ export function createLiziMcpProviders(
         instance: createSchedulerMcpServer(opts.scheduler!, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
+          ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
           sessionId: ctx.sessionId,
           vendorOptions: ctx.vendorOptions,
         }),
@@ -353,6 +372,7 @@ export function createLiziMcpProviders(
         instance: createXdtHelperMcpServer(opts.xdtHelper!, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
+          ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
           sessionId: ctx.sessionId,
           vendorOptions: ctx.vendorOptions,
         }),
@@ -375,6 +395,7 @@ export function createLiziMcpProviders(
         instance: createOrcaMcpServer(opts.orca!, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
+          ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
           sessionId: ctx.sessionId,
           vendorOptions: ctx.vendorOptions,
         }),

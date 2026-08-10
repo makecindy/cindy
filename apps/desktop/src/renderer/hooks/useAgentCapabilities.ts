@@ -116,6 +116,12 @@ export interface AgentCapabilities {
    */
   supportsOrcaWorkerPermissionMode?: boolean;
   /**
+   * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
+   * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
+   * 上下文环压缩入口据此判定(见 resolveManualCompactChannel),不再硬编码 agentKind 列表。
+   */
+  manualCompact?: CapabilityStatus;
+  /**
    * 每轮 host 权限策略能力门:未声明或 supported.supported !== true 的 Agent 无法
    * 用于「无条件挂逐条权限确认」的渠道(如个人微信)。与 maker-core 的
    * Capabilities.turnPermissionPolicy 同构;device-link 老被控端无此字段 →
@@ -125,6 +131,25 @@ export interface AgentCapabilities {
     supported: CapabilityStatus;
     unsupportedPermissionModes: string[];
   };
+}
+
+/**
+ * 手动压缩调用通道判定 —— 上下文环压缩入口与请求分流的唯一判据(#1927 / #1933 review):
+ *   - 真实 Claude Code 会话 → `claude-input`(输入协调器 maker:input:compact,SDK 斜杠命令通道);
+ *   - 其余 agent 声明 manualCompact.supported(当前仅 pi)→ `compact-session`
+ *     (capability-aware 通用通道 maker:compact-session,本地 IPC / device-link 隧道均可路由);
+ *   - 其余(Codex 等无手动压缩能力)→ null = 无入口。
+ * 刻意不按 agentKind 扩排除列表:新 agent 只需在 maker-core 声明能力即可自动接入。
+ */
+export type CompactChannel = 'claude-input' | 'compact-session';
+
+export function resolveManualCompactChannel(
+  agentKind: AgentKind | null | undefined,
+  capabilities: Pick<AgentCapabilities, 'manualCompact'> | null | undefined,
+): CompactChannel | null {
+  if (agentKind === 'claude-code') return 'claude-input';
+  if (capabilities?.manualCompact?.supported) return 'compact-session';
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -141,6 +166,22 @@ function isOptionalString(value: unknown): boolean {
 
 function isOptionalBoolean(value: unknown): boolean {
   return value === undefined || typeof value === 'boolean';
+}
+
+/** CapabilityStatus 形状校验(与 maker-core types/capabilities.ts 对齐)。 */
+function isCapabilityStatus(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  // supported 必须是布尔;两种分支下可选字段统一只接受 string(undefined 允许)。
+  if (typeof value.supported !== 'boolean') return false;
+  return (
+    (value.reason === undefined || typeof value.reason === 'string') &&
+    (value.upstreamRef === undefined || typeof value.upstreamRef === 'string') &&
+    (value.message === undefined || typeof value.message === 'string')
+  );
+}
+
+function isOptionalCapabilityStatus(value: unknown): boolean {
+  return value === undefined || isCapabilityStatus(value);
 }
 
 function isOptionalFiniteNumber(value: unknown): boolean {
@@ -219,7 +260,8 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !value.permissionModes.every(isNamedDescriptor) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
-    !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode)
+    !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
+    !isOptionalCapabilityStatus(value.manualCompact)
   ) {
     throw new Error('Invalid agent capabilities response');
   }
@@ -261,11 +303,13 @@ function cacheKey(agentKind: AgentKind, deviceId?: string): CacheKey {
 }
 
 const cache = new Map<CacheKey, AgentCapabilities>();
-const inflight = new Map<CacheKey, Promise<AgentCapabilities>>();
+const inflight = new Map<CacheKey, Promise<AgentCapabilities | null>>();
 /** 本地能力刷新代际；使刷新前的在途 IPC 结果无法回写旧快照。 */
 let localGen = 0;
+/** 已提交的本地快照 revision；失败刷新不会前进，用来区分缺失 tombstone 与未提交。 */
+let localSnapshotRevision = 0;
 /** 已挂载 hook 的本地能力订阅者；刷新完成后一次性切到新快照，避免中途空白帧。 */
-const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities) => void>();
+const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities | null) => void>();
 /** 远程能力缓存事件；驱逐时先标 stale，成功 / 失败后再结束这一轮刷新。 */
 export type DeviceCapabilitiesEvent =
   | { status: 'loading' }
@@ -309,7 +353,7 @@ export function subscribeDeviceCapabilities(
 async function fetchCapabilities(
   agentKind: AgentKind,
   deviceId?: string,
-): Promise<AgentCapabilities> {
+): Promise<AgentCapabilities | null> {
   const key = cacheKey(agentKind, deviceId);
   const cached = cache.get(key);
   if (cached) return cached;
@@ -318,8 +362,11 @@ async function fetchCapabilities(
 
   // 捕获发起时的设备代际;回调里若代际已变(被 evict)则认为本次请求作废。
   const startGen = deviceId ? (deviceGen.get(deviceId) ?? 0) : localGen;
+  const startLocalSnapshotRevision = localSnapshotRevision;
   const isCurrent = (): boolean =>
-    deviceId ? (deviceGen.get(deviceId) ?? 0) === startGen : localGen === startGen;
+    deviceId
+      ? (deviceGen.get(deviceId) ?? 0) === startGen
+      : localGen === startGen && localSnapshotRevision === startLocalSnapshotRevision;
 
   let raw: Promise<AgentCapabilities>;
   if (deviceId) {
@@ -343,9 +390,16 @@ async function fetchCapabilities(
         if (deviceId)
           notifyRemoteCapabilities(deviceId, agentKind, { status: 'ready', capabilities: caps });
       } else if (!deviceId) {
-        // 本地热刷新可能已原子换入更新快照；旧请求的调用方也应拿当前 cache，不能在
-        // listener 更新之后又把 hook state 覆盖回旧对象。刷新仍在途时保留旧对象，完成后再通知。
-        return cache.get(key) ?? caps;
+        // 已提交的新快照优先：有值就返回当前 cache，明确删除则以 null 作为 tombstone。
+        const current = cache.get(key);
+        if (current) return current;
+        if (localSnapshotRevision !== startLocalSnapshotRevision) return null;
+        // 只有刷新代际变化、但最终没有快照提交时，成功的 cache-miss 结果仍然有效。
+        // 若已有更新请求占住 inflight，则服从更新请求，避免旧结果抢先落缓存。
+        const newer = inflight.get(key);
+        if (newer) return newer;
+        cache.set(key, caps);
+        return caps;
       }
       return caps;
     })
@@ -410,13 +464,13 @@ export function useAgentCapabilities(
       setError(null);
     };
     if (deviceId) return subscribeDeviceCapabilities(deviceId, agentKind, applyRemoteEvent);
-    const applySnapshot = (caps: AgentCapabilities): void => {
+    const applySnapshot = (caps: AgentCapabilities | null): void => {
       setOwnerKey(key);
       setCapabilities(caps);
       setLoading(false);
       setError(null);
     };
-    const onRefresh = (refreshedAgent: AgentKind, caps: AgentCapabilities): void => {
+    const onRefresh = (refreshedAgent: AgentKind, caps: AgentCapabilities | null): void => {
       if (refreshedAgent !== agentKind) return;
       applySnapshot(caps);
     };
@@ -459,7 +513,7 @@ export function useAgentCapabilities(
       .then((caps) => {
         // 远程成功结果只经「当前代际 cache commit → listener」更新，避免 revision 前的
         // 旧 Promise 晚到后直接把已刷新的 hook state 覆盖回旧快照。
-        if (cancelled || deviceId) return;
+        if (cancelled || deviceId || caps === null) return;
         setCapabilities(caps);
       })
       .catch((e: unknown) => {
@@ -531,7 +585,12 @@ export function beginLocalCapabilitiesRefresh(): number {
 }
 
 /**
- * 读取本地 agent 能力快照；核心 agent 失败向上抛，可选 Pi 的能力读取失败不阻断 provider 目录。
+ * 读取本地 agent 能力快照；核心 agent 失败向上抛，只有明确的 Pi 未注册结果才不阻断 provider 目录。
+ *
+ * Pi 的 CLI 是 best-effort 下载的目录分发，开发机或网络受限时可能暂时缺失。
+ * 明确未注册时不能让 `maker:get-capabilities('pi')` 的单点失败把 Claude/Codex
+ * 模型目录整组回滚为空；但临时 IPC、序列化或解析错误必须向上抛，让联合刷新保留
+ * 上一份完整快照。
  */
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
@@ -541,7 +600,13 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
       try {
         return [agent, await api.getCapabilities(agent)] as const;
       } catch (error) {
-        if (agent !== 'pi') throw error;
+        const message =
+          error instanceof Error
+            ? error.message
+            : typeof error === 'object' && error !== null && 'message' in error
+              ? String(error.message)
+              : String(error);
+        if (agent !== 'pi' || !message.includes("Agent 'pi' is not registered")) throw error;
         log.warn('optional Pi capabilities unavailable; continuing with core agents:', error);
         return null;
       }
@@ -556,14 +621,18 @@ export function isLocalCapabilitiesRefreshCurrent(generation: number): boolean {
   return localGen === generation;
 }
 
-/** 仅提交当前代际的可用能力快照，并在提交后统一通知 mounted hooks。 */
+/** 仅提交当前代际的完整能力快照，并在提交后统一通知 mounted hooks。 */
 export function commitLocalCapabilitiesSnapshot(
   generation: number,
   entries: LocalCapabilitiesSnapshot,
 ): boolean {
   if (!isLocalCapabilitiesRefreshCurrent(generation)) return false;
-  for (const [agent, caps] of entries) cache.set(cacheKey(agent), caps);
-  for (const [agent, caps] of entries) {
+  localSnapshotRevision += 1;
+  const snapshot = new Map(entries);
+  for (const agent of ALL_AGENT_KINDS) {
+    const caps = snapshot.get(agent) ?? null;
+    if (caps) cache.set(cacheKey(agent), caps);
+    else cache.delete(cacheKey(agent));
     for (const listener of localListeners) listener(agent, caps);
   }
   return true;

@@ -99,6 +99,7 @@ export interface AgentSwitchSessionRow {
   remoteHostId: string | null;
   orcaRole: string | null;
   sdkSessionId: string | null;
+  source?: string | null;
 }
 
 export interface MakerSessionAgentSwitchHandlerDeps {
@@ -388,6 +389,9 @@ export async function performSessionAgentSwitch(
   throwIfAgentSwitchAborted(signal);
   if (!row || row.status === 'deleted') {
     throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
+  }
+  if (row.source === 'review') {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
   }
   if (row.remoteHostId) {
     // SSH 远程会话:agent 进程在远端机器,cc-manager 链路仅覆盖 Claude,v1 不支持切换。

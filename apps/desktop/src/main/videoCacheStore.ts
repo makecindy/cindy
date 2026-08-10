@@ -60,11 +60,17 @@ export function resolveSafe(url: string): { absPath: string; mimeType: string } 
   } catch {
     throw new Error('xdt-video: malformed url');
   }
-  const host = decodeURIComponent(parsed.hostname);
-  const pathnameRaw = parsed.pathname.startsWith('/')
-    ? parsed.pathname.slice(1)
-    : parsed.pathname;
-  const filename = decodeURIComponent(pathnameRaw);
+  let host: string;
+  let filename: string;
+  try {
+    host = decodeURIComponent(parsed.hostname);
+    const pathnameRaw = parsed.pathname.startsWith('/')
+      ? parsed.pathname.slice(1)
+      : parsed.pathname;
+    filename = decodeURIComponent(pathnameRaw);
+  } catch {
+    throw new Error('xdt-video: malformed url');
+  }
 
   if (
     !host ||

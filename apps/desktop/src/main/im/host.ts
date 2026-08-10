@@ -56,7 +56,7 @@ import {
   WechatCompatibilityPolicyService,
 } from './wechat/compatibilityPolicy';
 import { fetchPublicImageBytes } from './publicImageFetch';
-import { buildPersonalBotCommandMenu } from './shared/personalBotCommands';
+import { buildPersonalBotCommandMenu } from './shared/botCommands';
 
 const log = createLogger('im/host');
 

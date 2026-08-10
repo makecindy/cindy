@@ -43,7 +43,9 @@
     --text-3xl-line-height: 36px;
     --text-4xl-line-height: 40px;
     --text-5xl-line-height: 48px;
-    --text-9: 9px;
+    /* DESIGN.md §3 的 numeric 字号白名单默认值。运行时会由
+       useFontSettings 按用户 UI 缩放覆写；档位须与 tailwind.config.ts、
+       UI_TEXT_TOKEN_SIZES、tailwind-merge 字号组保持权威来源与消费端一致。 */
     --text-10: 10px;
     --text-11: 11px;
     --text-12: 12px;
@@ -51,17 +53,9 @@
     --text-14: 14px;
     --text-15: 15px;
     --text-16: 16px;
-    --text-17: 17px;
     --text-18: 18px;
-    --text-19: 19px;
     --text-20: 20px;
-    --text-21: 21px;
-    --text-22: 22px;
-    --text-23: 23px;
     --text-24: 24px;
-    --text-25: 25px;
-    --text-26: 26px;
-    --text-27: 27px;
     --text-28: 28px;
 
     /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
@@ -188,7 +182,12 @@
       --motion-sidebar-title-marquee-per-viewport: 0ms;
     }
 
-    [class*='animate-spinner'] {
+    /* 'animate-spin' 是 'animate-spinner' 的子串,一条同时覆盖 Tailwind 的
+       animate-spin 与自定义 animate-spinner(含 motion-safe: 等变体的转义类名)。
+       之前只匹配 'animate-spinner',37 处裸 animate-spin 全部逃逸——组件级的
+       motion-reduce:animate-none 有兜底的不受影响,但十余处没写兜底的转圈在
+       减弱动效下照转(reducedMotionEscape.test.ts 回归)。 */
+    [class*='animate-spin'] {
       animation: none !important;
     }
 
@@ -375,19 +374,34 @@ html:lang(ko) {
 .chat-rail-compact [data-chat-input-root] .text-\[15px\] {
   font-size: 15px;
 }
+.chat-rail-compact [data-chat-input-root] .text-12 {
+  font-size: var(--text-12);
+}
+.chat-rail-compact [data-chat-input-root] .text-13 {
+  font-size: var(--text-13);
+}
+.chat-rail-compact [data-chat-input-root] .text-14 {
+  font-size: var(--text-14);
+}
+.chat-rail-compact [data-chat-input-root] .text-15 {
+  font-size: var(--text-15);
+}
 
 /* Tiptap ChatInput — placeholder hook & chip alignment
    (command-palette F2.5). The Placeholder extension injects
    `p.is-editor-empty::before` with the placeholder text in a `data-*`
-   attribute; we style it to match the old textarea placeholder. */
-.ProseMirror > p.is-editor-empty:first-child::before {
+   attribute; after a controlled clear it can leave only `is-empty`, so the
+   sole-empty-paragraph selector preserves the same truly-empty contract. */
+.ProseMirror > p.is-editor-empty:first-child::before,
+.ProseMirror > p.is-empty:first-child:only-child::before {
   content: attr(data-placeholder);
   color: var(--chat-input-placeholder-subtle);
   float: left;
   height: 0;
   pointer-events: none;
 }
-[data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before {
+[data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
+[data-voice-draft-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
 }
 .ProseMirror {
@@ -849,10 +863,17 @@ body.resizing-pane [data-ghost-webview] {
 
 /* F-SDK-3: Running status bar — soft whole-line breathing.
    The old clipping animation was perceived as a subtle fade, but forced
-   continuous Paint/Composite work in Electron. Opacity keeps it compositor-only. */
+   continuous Paint/Composite work in Electron. Opacity keeps it compositor-only.
+
+   Cadenced(2026-08-07,DESIGN.md §14.4):不再 infinite 循环 —— RunningStatusBar
+   在每次真实动静(状态文案 / token 计数变化)时通过重挂载触发一次呼吸,静默期
+   保持常亮。呼吸节奏跟随实际产出而非固定心跳,「运行指示」不再需要在循环装饰
+   红线上开洞;一次性动画也天然不进 hiddenAnimationGate 冻结清单。
+   steps(18, end):每半程 18 步 → 全程 36 步 / 1.5s = 24fps。常驻期合成帧减半以上,
+   低帧率的轻微颗粒感与纸面质感相合,肉眼近似无损(§14.4 低帧率原则)。 */
 .status-bar-shimmer {
   color: var(--status-bar-accent);
-  animation: status-shimmer 1.5s ease-in-out infinite;
+  animation: status-shimmer 1.5s steps(18, end) 1;
   will-change: opacity;
 }
 
@@ -979,6 +1000,8 @@ body.resizing-pane [data-ghost-webview] {
   .session-card-dot::after,
   .session-running-dot,
   .thinking-dot,
+  .stream-word,
+  [data-stream-marker]::marker,
   .card-col-fade {
     animation: none !important;
     will-change: auto;
@@ -1012,7 +1035,8 @@ body.resizing-pane [data-ghost-webview] {
    循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
 [data-app-hidden='true'] [data-voice-spinner-arc],
 [data-app-hidden='true'] [data-voice-mic-bar],
-[data-app-hidden='true'] .status-bar-shimmer,
+/* .status-bar-shimmer 已 cadenced 化为一次性动画(2026-08-07),按「一次性动画
+   不得纳入冻结清单」原则移出 —— 冻在中途帧会让状态栏停在半暗。 */
 [data-app-hidden='true'] .session-status-breathing,
 [data-app-hidden='true'] .session-card-bar::before,
 [data-app-hidden='true'] .session-card-dot::after,
@@ -1077,14 +1101,76 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* Cadenced 后的一次呼吸:静止态是全亮(无动画时 opacity 继承 fadeStyle 的 1),
+   每次触发从 1 下潜到 0.45 再回满 —— 幅度与旧 infinite 版一致,只是方向反转
+   (旧版 0% 起点是 0.45,一次性播放会让常亮态在触发瞬间硬跳暗)。 */
 @keyframes status-shimmer {
   0%,
   100% {
-    opacity: 0.45;
-  }
-  50% {
     opacity: 1;
   }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* 流式正文逐词淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
+   每个新词以 --motion-fast 从透明「浮现」,delay 由 rehypeStreamWordFade 按词序
+   写进 --wf-delay(上限 24ms/词,按排程预算自适应压缩)。不是逐字打字机 ——
+   词整体已就位,只有 opacity 渐变;pure-opacity 一次性动画,compositor-only。
+   `both`:delay 未到时停在 0% 帧(透明),避免先闪现再淡入。
+   reduced-motion 双保险:JS 侧短路(插件不挂载,span 不进 DOM)+ 下方 reduce
+   块的 animation: none(摘掉动画连同 both 填充,span 落回自然 opacity 1,
+   不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
+   这里 0% 帧之外元素本身没有 opacity 声明)。 */
+.stream-word {
+  animation: stream-word-in var(--motion-fast) ease-out var(--wf-delay, 0ms) both;
+}
+/* 流式列表圆点淡入(同一 motion class 家族,2026-08-08,Codex Desktop
+   fadeListDecoration 同构):动画打在 ::marker 上,圆点/序号从 transparent
+   浮现,delay 由 rehypeStreamWordFade 写入(与 li 内第一个词共享 timeline
+   位置,圆点与文字同帧出现)。::marker 只支持 color/font 等少数属性,故用
+   color 关键帧而不是 opacity。data 属性仅流式挂载;终版渲染无此属性。 */
+[data-stream-marker]::marker {
+  animation: stream-marker-in var(--motion-fast) ease-out var(--wf-delay, 0ms) both;
+}
+/* 只定义 0% 帧(Codex 同款):终点回落元素自然颜色,不用 inherit 终帧。 */
+@keyframes stream-marker-in {
+  from {
+    color: transparent;
+  }
+}
+@keyframes stream-word-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 消息流条目级渲染跳过(Codex Desktop 同款,2026-08-09):视口外的 render
+   item 跳过整棵子树的布局与绘制,只按 contain-intrinsic-size 估高占位
+   (auto 前缀:渲染过一次后记住真实高度,滚回时用真实值,锚点不漂)。
+   切入长 session 时首帧只需布局视口内的几条消息 —— 之前是渲染窗口全量
+   80 条同步布局,几万字的会话切换有数百毫秒长任务(2026-08-09 实测卡顿)。
+   仅作用于 .msg-stream-items 的直接子元素(每条 render item 的根节点):
+   滚动恢复(measureViewportTop/applyRestore)按 children 索引取
+   getBoundingClientRect —— 对 content-visibility 隐藏的条目返回估高盒,
+   量测仍然成立,进入视口后 ResizeObserver 纠偏收敛到真实高度。
+   打印/导出走独立渲染树,不经过本容器,不受影响。 */
+.msg-stream-items > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+/* Fixed-position menu triggers must keep the viewport as their containing
+   block. Their menu content is portaled to body, but Radix still measures the
+   zero-size trigger inside the render item. Opt only those items out of the
+   containment boundary; plain text items keep the render-skip optimization. */
+.msg-stream-items > *:has([data-fixed-menu-anchor]) {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 
 /* 意识卡片 running 扫光(卡槽③):主机盖在意识画布上的斜向光带。

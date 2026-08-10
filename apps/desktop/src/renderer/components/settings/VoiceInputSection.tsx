@@ -2664,7 +2664,7 @@ export function VoiceInputSection() {
             <dt className="text-12 leading-[1.3] text-[var(--settings-section-sublabel)] opacity-70">
               {t('settings.voiceInput.usage.duration')}
             </dt>
-            <dd className="mt-1 truncate text-17 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+            <dd className="mt-1 truncate text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
               {formatAudioDuration(stats.totalAudioMs)}
             </dd>
           </div>
@@ -2672,7 +2672,7 @@ export function VoiceInputSection() {
             <dt className="text-12 leading-[1.3] text-[var(--settings-section-sublabel)] opacity-70">
               {t('settings.voiceInput.usage.estimatedCost')}
             </dt>
-            <dd className="mt-1 truncate text-17 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+            <dd className="mt-1 truncate text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
               {formatUsd(cost.totalUsd)}
             </dd>
             <dd className="mt-1 truncate text-11 leading-[1.3] text-[var(--settings-section-sublabel)] opacity-70">
@@ -2686,7 +2686,7 @@ export function VoiceInputSection() {
             <dt className="text-12 leading-[1.3] text-[var(--settings-section-sublabel)] opacity-70">
               {t('settings.voiceInput.usage.sessions')}
             </dt>
-            <dd className="mt-1 truncate text-17 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+            <dd className="mt-1 truncate text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
               {stats.sessionCount}
             </dd>
             <dd className="mt-1 text-11 leading-[1.3] text-[var(--settings-section-sublabel)] opacity-70">

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   classifyLocalAutoReviewTier,
   isAutoReviewUnavailableNotice,
   composeAutoReviewIntentWithApprovedPlan,
@@ -169,7 +170,7 @@ describe('resolveAutoReviewDecision', () => {
       async () => new Promise<never>(() => {}),
     );
 
-    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs);
 
     await expect(pending).resolves.toMatchObject({
       verdict: 'block',
@@ -207,8 +208,23 @@ describe('resolveAutoReviewDecision', () => {
     it('flags a reviewer timeout as unavailable', async () => {
       vi.useFakeTimers();
       const pending = resolveAutoReviewDecision(gray, async () => new Promise<never>(() => {}));
-      await vi.advanceTimersByTimeAsync(8_000);
+      await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs);
       await expect(pending).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+    });
+
+    it('allows a valid delegate response after eight seconds but before the shared outer deadline', async () => {
+      vi.useFakeTimers();
+      let resolveDelegate: ((value: { verdict: 'allow' }) => void) | undefined;
+      const pending = resolveAutoReviewDecision(
+        gray,
+        async () => new Promise<{ verdict: 'allow' }>((resolve) => {
+          resolveDelegate = resolve;
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(8_001);
+      resolveDelegate?.({ verdict: 'allow' });
+
+      await expect(pending).resolves.toEqual({ verdict: 'allow' });
     });
 
     it('does NOT flag a model block — that one stays silent by design', async () => {

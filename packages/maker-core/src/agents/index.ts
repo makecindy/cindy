@@ -66,14 +66,21 @@ export {
 export { isNetworkishErrorMessage } from './shared/network-error.js';
 export {
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   getAutoReviewActionTextLength,
   isAutoReviewUnavailableNotice,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   type AutoReviewDecision,
   type AutoReviewDelegate,
   type AutoReviewRequest,
+  type AutoReviewTimeoutPolicy,
 } from './shared/auto-review-decision.js';
 export type { ReviewableAction } from './shared/auto-review.js';
+export {
+  ORCA_NESTED_REPORT_DENIAL_REASON,
+  ORCA_NESTED_REPORT_ERROR_CODE,
+  ORCA_NESTED_REPORT_ERROR_MESSAGE,
+} from './shared/orca-report-policy.js';
 // host 侧会话分享(导出/导入 .xdtshare)需要按 cwd 复算 CLI 转录目录、
 // 定位/落位 jsonl。规则单点维护在 claude-projects-fs.ts,这里仅 re-export。
 export {

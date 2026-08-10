@@ -159,6 +159,9 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       ));
       return true;
     }),
+    cancelWorkerSessionOperations: vi.fn(async (sessionId) => {
+      calls.push(`cancelWorkerSessionOperations:${sessionId}`);
+    }),
     closeWorkerSession: vi.fn(async (sessionId) => {
       calls.push(`closeWorkerSession:${sessionId}`);
     }),
@@ -1382,8 +1385,10 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
+      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
+      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -1403,8 +1408,10 @@ describe('OrcaTeamService', () => {
 
     expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'done');
     expect(calls).toEqual([
+      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
+      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -1498,8 +1505,10 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
+      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
+      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
