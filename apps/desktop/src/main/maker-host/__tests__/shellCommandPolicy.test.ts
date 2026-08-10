@@ -210,6 +210,35 @@ $(printf xcr) $(printf un) $(printf sim) $(printf ctl) shutdown DEVICE`,
 print(x) <<END
 PY
 $(printf xcr) $(printf un) shutdown DEVICE`,
+    `python3 - <<'PY'
+import os
+os.system(chr(120)+chr(99)+chr(114)+chr(117)+chr(110)+chr(32)+chr(115)+chr(105)+chr(109)+chr(99)+chr(116)+chr(108))
+PY`,
+    `python3 - <<'PY'
+import os
+os.system("".join(chr(c) for c in [120,99,114,117,110,32,115,105,109,99,116,108]))
+PY`,
+    `node - <<'JS'
+require("child_process").execSync(String.fromCharCode(120,99,114,117,110,32,115,105,109,99,116,108))
+JS`,
+    `python3 - <<'PY'
+import os
+os.system("\\x78\\x63\\x72\\x75\\x6e \\x73\\x69\\x6d\\x63\\x74\\x6c shutdown DEVICE")
+PY`,
+    `python3 - <<'END!'
+import os
+os.system("xcrun simctl shutdown DEVICE")
+END!`,
+    `python3 - <<'END$'
+import os
+os.system("xcr" + "un" + " sim" + "ctl shutdown DEVICE")
+END$`,
+    `echo x; # <<END
+$(printf xcr) $(printf un) $(printf sim) $(printf ctl) shutdown DEVICE`,
+    `echo x | # <<END
+$(printf xcr) $(printf un) $(printf sim) $(printf ctl) shutdown DEVICE`,
+    `( echo x ) # <<END
+$(printf xcr) $(printf un) $(printf sim) $(printf ctl) shutdown DEVICE`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
     `python3 -c 'import subprocess; subprocess.run(["/usr/bin/open","-a","Simulator"])'`,
@@ -317,6 +346,21 @@ print("hi")
 PY`,
     `python3 - <<'PY'
 print(x) <<END
+PY`,
+    `python3 - <<'END!'
+import json
+print(json.dumps({"ok": True}))
+END!`,
+    `python3 - <<'PY'
+print([1, 2, 3])
+colors = [(120, 99, 114), (65, 66, 67)]
+print(colors)
+PY`,
+    `python3 - <<'PY'
+print(chr(65))
+PY`,
+    `python3 - <<'PY'
+print("\\x78foo")
 PY`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',

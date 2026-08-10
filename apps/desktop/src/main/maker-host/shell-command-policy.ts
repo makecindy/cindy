@@ -1073,11 +1073,15 @@ function consumesStdinAsProgram(tokens: string[]): boolean {
 }
 
 /**
- * Quoted delimiters may contain punctuation (`<<'END.SH'`); unquoted
- * delimiters are shell words. `<<-` permits leading tabs on the delimiter
- * line, a plain `<<` does not.
+ * Quoted delimiters may contain any character except whitespace and the
+ * quoting character itself (`<<'END.SH'`, `<<'END!'`, `<<"END$"`); unquoted
+ * delimiters are shell words and stay restricted. `<<-` permits leading tabs
+ * on the delimiter line, a plain `<<` does not.
  */
-const HEREDOC_MARKER = /<<(-?)\s*(['"]?)([A-Za-z0-9_.-]+)\2/g;
+const HEREDOC_MARKER =
+  /<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z0-9_.-]+))/g;
+const HEREDOC_MARKER_START =
+  /^<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z0-9_.-]+))/;
 
 interface HeredocRegion {
   /** Line index of the line that opens the heredoc. */
@@ -1095,10 +1099,10 @@ interface HeredocRegion {
 /**
  * Mask quoted, commented, and command/process-substituted regions of a line
  * so heredoc markers inside them are not mistaken for real openers. A `#`
- * starts a comment only at a word boundary; `$'...'` is treated as a plain
- * single-quoted region. Substitutions (`$(...)`, `<(...)`, `>(...)`,
- * backticks) are re-scanned recursively by the caller, so masking their
- * markers here is safe.
+ * starts a comment at the start of a word, i.e. after whitespace or a shell
+ * control operator; `$'...'` is treated as a plain single-quoted region.
+ * Substitutions (`$(...)`, `<(...)`, `>(...)`, backticks) are re-scanned
+ * recursively by the caller, so masking their markers here is safe.
  */
 function maskQuotedAndCommentRegions(line: string): string {
   const masked = line.split('');
@@ -1144,13 +1148,17 @@ function maskQuotedAndCommentRegions(line: string): string {
     // A real heredoc marker keeps its delimiter word and quoting unmasked:
     // the quotes in `<<'END'` are syntax, not text.
     if (char === '<' && line[index + 1] === '<' && line[index + 2] !== '<') {
-      const marker = /^<<(-?)\s*(['"]?)([A-Za-z0-9_.-]+)\2/.exec(line.slice(index));
+      const marker = HEREDOC_MARKER_START.exec(line.slice(index));
       if (marker) {
         index += marker[0].length - 1;
         continue;
       }
     }
-    if (char === '#' && (index === 0 || /\s/.test(line[index - 1] ?? ''))) {
+    const prev = line[index - 1] ?? '';
+    if (
+      char === '#' &&
+      (index === 0 || /\s/.test(prev) || /[;&|()<>]/.test(prev))
+    ) {
       comment = true;
       masked[index] = ' ';
       continue;
@@ -1179,7 +1187,7 @@ function parseHeredocRegions(command: string): HeredocRegion[] {
         pending.push({
           lineIndex: index,
           markerIndex: match.index ?? 0,
-          delimiter: match[3] ?? '',
+          delimiter: match[2] ?? match[3] ?? match[4] ?? '',
           tabStripped: match[1] === '-',
         });
       }
@@ -1247,7 +1255,10 @@ function heredocConsumerExecutable(prefix: string): string | null {
  * Static pieces of the string literals in `value`, in source order. Pieces
  * are split at f-string `{...}` expression boundaries and string literals
  * inside expressions are collected as their own pieces, so an f-string
- * assembles to the same pieces the runtime produces.
+ * assembles to the same pieces the runtime produces. Escapes are kept as
+ * written (`\x78` stays two characters) so a quoted delimiter or quote
+ * inside an escape cannot end the literal early; decodeEscape decodes them
+ * for the assembly check.
  */
 function stringLiteralPieces(value: string): string[] {
   const pieces: string[] = [];
@@ -1265,8 +1276,12 @@ function stringLiteralPieces(value: string): string[] {
     while (cursor < value.length) {
       const char = value[cursor]!;
       if (char === '\\') {
-        if (braces === 0) piece += value[cursor + 1] ?? '';
-        cursor += 2;
+        if (braces === 0) {
+          piece += '\\' + (value[cursor + 1] ?? '');
+          cursor += 2;
+        } else {
+          cursor += 2;
+        }
         continue;
       }
       if (braces > 0) {
@@ -1276,7 +1291,7 @@ function stringLiteralPieces(value: string): string[] {
           let innerPiece = '';
           while (innerCursor < value.length && value[innerCursor] !== innerQuote) {
             if (value[innerCursor] === '\\') {
-              innerPiece += value[innerCursor + 1] ?? '';
+              innerPiece += '\\' + (value[innerCursor + 1] ?? '');
               innerCursor += 2;
             } else {
               innerPiece += value[innerCursor]!;
@@ -1316,15 +1331,62 @@ function stringLiteralPieces(value: string): string[] {
 }
 
 /**
+ * Decode statically resolvable character-producing constructs: `chr(120)`,
+ * `String.fromCharCode(120, 99, ...)`, integer arrays `[120, 99, ...]`, and
+ * `\xHH`/`\uHHHH` escapes. Runtime values (variables, file contents) have no
+ * static text and stay outside command-text policy.
+ */
+function decodedCharCodePieces(value: string): string[] {
+  const pieces: string[] = [];
+  const pushNumber = (number: string): void => {
+    const code = parseInt(number, 0) & 0xffff;
+    if (code > 0) pieces.push(String.fromCharCode(code));
+  };
+  for (const match of value.matchAll(/\b(?:chr|String\.fromCharCode)\(([^)]*)\)/g)) {
+    const numbers = (match[1] ?? '')
+      .split(',')
+      .map((part) => part.trim())
+      .filter((part) => part !== '');
+    if (numbers.length > 0 && numbers.every((n) => /^-?(?:\d+|0x[0-9a-f]+)$/i.test(n))) {
+      for (const number of numbers) pushNumber(number);
+    }
+  }
+  for (const match of value.matchAll(/\[([0-9,\s]+)\]|\(([0-9,\s]+)\)/g)) {
+    const body = (match[1] ?? match[2] ?? '').trim();
+    if (!body) continue;
+    const numbers = body.split(',').map((part) => part.trim());
+    if (numbers.every((n) => /^-?(?:\d+|0x[0-9a-f]+)$/i.test(n))) {
+      for (const number of numbers) pushNumber(number);
+    }
+  }
+  // `\xHH` / `\uHHHH` escapes inside string literals; a preceding backslash
+  // means the escape itself was escaped and must not decode.
+  for (const match of value.matchAll(/(?<!\\)\\x([0-9a-fA-F]{2})/g)) {
+    const code = parseInt(match[1] ?? '', 16);
+    if (code > 0) pieces.push(String.fromCharCode(code));
+  }
+  for (const match of value.matchAll(/(?<!\\)\\u([0-9a-fA-F]{4})/g)) {
+    const code = parseInt(match[1] ?? '', 16);
+    if (code > 0) pieces.push(String.fromCharCode(code));
+  }
+  return pieces;
+}
+
+/**
  * A literal scan alone cannot see an executor that is assembled at runtime,
  * e.g. `"xcr" + "un" + " sim" + "ctl"`, an f-string `f"xcr{'un'} sim{'ctl'}"`,
- * or an argv array `["xcr", "un", " sim", "ctl"]`. Join the string-literal
- * pieces in source order and scan the assembled text so redacting a heredoc
- * body cannot hide an assembled Simulator command from the shell-level checks.
+ * an argv array, `chr(120) + chr(99) + ...`, or `"\x78\x63..."` escapes. Join
+ * the statically decodable pieces in source order and scan the assembled text
+ * so redacting a heredoc body cannot hide an assembled Simulator command from
+ * the shell-level checks.
  */
 function containsAssembledSimulatorExecutor(value: string): boolean {
   if (containsLiteralSimulatorExecutor(value)) return true;
-  const pieces = stringLiteralPieces(value);
+  // Decoded character constructs count as their own pieces: a lone literal
+  // like `"\x78\x63..."` or a `chr(...)` chain must be checked even though
+  // the raw text yields only one string piece.
+  const decoded = decodedCharCodePieces(value);
+  const pieces = [...stringLiteralPieces(value), ...decoded];
   if (pieces.length < 2) return false;
   const joined = pieces.join('').replace(/[^A-Za-z0-9]/g, '');
   return /(?:xcrun|simctl|iphonesimulator|simulatorapp)/i.test(joined);
