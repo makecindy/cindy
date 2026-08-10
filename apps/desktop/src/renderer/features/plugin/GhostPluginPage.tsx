@@ -1959,7 +1959,7 @@ export function GhostPluginCard({
   // - 纯工具型插件不显示右侧图标(只能由 Agent 自动调用,不能对话)
   // - 停用不显示图标
   const needsAttention = item.hasSetupRequirements && !item.setupReady;
-  const isActionable = item.canUse || item.tabPanel;
+  const isActionable = item.canUse || item.tabPanel || Boolean(item.hostCapability);
   const rightAction = needsAttention ? onConfigure : onChat;
   const showRightIcon = enabled && (needsAttention || isActionable);
 

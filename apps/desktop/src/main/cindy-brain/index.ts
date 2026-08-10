@@ -5043,7 +5043,16 @@ export function registerGhostIpc(): void {
             expired: accounts.filter((a) => a.status === 'expired').length,
           };
         },
-        connectionCount: (key) => getGhostConnectionManager().list(ghostId, key).length,
+        connectionCount: (key) => {
+          try {
+            return getGhostConnectionManager().list(ghostId, key).length;
+          } catch (err) {
+            // 单个插件连接探测失败不中止整批查询:权限错误/密钥链故障时
+            // 退化为 0(视为未连接),不让一个插件的 I/O 故障拖垮整批 IPC。
+            log.warn('[ghosts:setup-profiles] connection probe failed', { ghostId, key, err });
+            return 0;
+          }
+        },
         kvValue: (key) => {
           if (kvSnapshot === null) {
             try {
