@@ -285,6 +285,7 @@ import {
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
 import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from './localDb/client/current';
+import { drainGhostUsageWrites } from './localDb/ghostUsage';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -1039,6 +1040,7 @@ const lifecycleDbClientManager = createLifecycleDbClientManager({
   createInprocClient: () => createInprocDbClient(),
   setCurrentDbClient,
   clearCurrentDbClient,
+  beforeDispose: drainGhostUsageBeforeDbClose,
   log: dbClientLog,
 });
 
@@ -1051,6 +1053,13 @@ async function ensureLifecycleDbClient(userId: string) {
     // worker 自行裸 require('better-sqlite3') 解析到错误目录。
     betterSqliteModulePath: resolveBetterSqliteModuleEntry(),
   });
+}
+
+async function drainGhostUsageBeforeDbClose(reason: string): Promise<void> {
+  const result = await drainGhostUsageWrites();
+  if (result.timedOut || result.failedCount > 0) {
+    dbClientLog.warn('[DbClient] ghost usage drain incomplete', { reason, ...result });
+  }
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {

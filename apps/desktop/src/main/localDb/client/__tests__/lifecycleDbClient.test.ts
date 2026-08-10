@@ -7,6 +7,60 @@ import {
 } from '../lifecycleDbClient.js';
 
 describe('lifecycle DbClient manager', () => {
+  it('drains tracked writes before disposing the active DbClient', async () => {
+    const worker = makeClient('worker');
+    worker.query.mockResolvedValueOnce([{ c: 7 }]);
+    const order: string[] = [];
+    const beforeDispose = vi.fn(async () => {
+      order.push('drain');
+    });
+    worker.dispose.mockImplementation(async () => {
+      order.push('dispose');
+    });
+
+    const manager = createLifecycleDbClientManager({
+      getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
+      createWorkerClient: vi.fn(async () => worker),
+      createInprocClient: vi.fn(),
+      setCurrentDbClient: vi.fn(),
+      clearCurrentDbClient: vi.fn(),
+      beforeDispose,
+      log: makeLog(),
+    });
+
+    await manager.ensure('user-1', { drizzleDir: 'C:/repo/apps/desktop/drizzle' });
+    await manager.dispose('logout');
+
+    expect(beforeDispose).toHaveBeenCalledWith('logout');
+    expect(order).toEqual(['drain', 'dispose']);
+  });
+
+  it('warns and still disposes when the pre-dispose drain hook fails', async () => {
+    const worker = makeClient('worker');
+    worker.query.mockResolvedValueOnce([{ c: 7 }]);
+    const log = makeLog();
+    const manager = createLifecycleDbClientManager({
+      getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
+      createWorkerClient: vi.fn(async () => worker),
+      createInprocClient: vi.fn(),
+      setCurrentDbClient: vi.fn(),
+      clearCurrentDbClient: vi.fn(),
+      beforeDispose: vi.fn(async () => {
+        throw new Error('drain failed');
+      }),
+      log,
+    });
+
+    await manager.ensure('user-1', { drizzleDir: 'C:/repo/apps/desktop/drizzle' });
+    await expect(manager.dispose('quit')).resolves.toBeUndefined();
+
+    expect(worker.dispose).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith('[DbClient] before-dispose hook failed', {
+      reason: 'quit',
+      error: 'drain failed',
+    });
+  });
+
   it('keeps main db active and installs inproc fallback when worker smoke fails', async () => {
     const worker = makeClient('worker');
     const fallback = makeClient('fallback');

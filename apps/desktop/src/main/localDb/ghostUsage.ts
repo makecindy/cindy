@@ -17,6 +17,17 @@ export type GhostUsageDb = BetterSQLite3Database<typeof schema>;
 
 const USAGE_WINDOW_DAYS = 7;
 const RETENTION_DAYS = 90;
+const DEFAULT_DRAIN_TIMEOUT_MS = 1_500;
+
+interface TrackedWriteResult {
+  ok: boolean;
+}
+
+export interface GhostUsageDrainResult {
+  timedOut: boolean;
+  failedCount: number;
+  pendingCount: number;
+}
 
 interface CleanupState {
   localDay: string;
@@ -25,6 +36,13 @@ interface CleanupState {
 
 /** One low-frequency cleanup per local database and local day. */
 const cleanupByDb = new WeakMap<object, CleanupState>();
+
+/**
+ * Only accepted Ghost-call counters are tracked here. The dispatcher never awaits these writes;
+ * account/app shutdown drains them before DbClient transport teardown rejects queued RPCs.
+ */
+const pendingUsageWrites = new Set<Promise<TrackedWriteResult>>();
+let activeDrain: Promise<GhostUsageDrainResult> | null = null;
 
 function defaultDb(): GhostUsageDb {
   return getDbClient().drizzle;
@@ -84,6 +102,70 @@ export async function recordGhostUsage(
     .run();
 
   await cleanupExpiredUsage(db, ts);
+}
+
+/** Start and track one counter write without making the plugin call await database I/O. */
+export function recordTrackedGhostUsage(
+  ghostId: string,
+  write: (ghostId: string) => Promise<void> = recordGhostUsage,
+): Promise<void> {
+  let writePromise: Promise<void>;
+  try {
+    writePromise = write(ghostId);
+  } catch (error) {
+    writePromise = Promise.reject(error);
+  }
+  let settled: Promise<TrackedWriteResult>;
+  settled = writePromise
+    .then<TrackedWriteResult>(() => ({ ok: true }))
+    .catch<TrackedWriteResult>(() => ({ ok: false }))
+    .finally(() => {
+      pendingUsageWrites.delete(settled);
+    });
+  pendingUsageWrites.add(settled);
+  return writePromise;
+}
+
+/**
+ * Drain writes accepted before the DB lifecycle boundary. Concurrent callers share one bounded
+ * wait, and timeout/failure is returned to the lifecycle owner instead of rejecting shutdown.
+ */
+export function drainGhostUsageWrites(
+  timeoutMs: number = DEFAULT_DRAIN_TIMEOUT_MS,
+): Promise<GhostUsageDrainResult> {
+  if (activeDrain) return activeDrain;
+
+  activeDrain = (async () => {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    let failedCount = 0;
+
+    while (pendingUsageWrites.size > 0) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        return { timedOut: true, failedCount, pendingCount: pendingUsageWrites.size };
+      }
+
+      const writes = [...pendingUsageWrites];
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        Promise.all(writes).then((results) => ({ kind: 'settled' as const, results })),
+        new Promise<{ kind: 'timeout' }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: 'timeout' }), remainingMs);
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+
+      if (outcome.kind === 'timeout') {
+        return { timedOut: true, failedCount, pendingCount: pendingUsageWrites.size };
+      }
+      failedCount += outcome.results.filter((result) => !result.ok).length;
+    }
+
+    return { timedOut: false, failedCount, pendingCount: 0 };
+  })().finally(() => {
+    activeDrain = null;
+  });
+  return activeDrain;
 }
 
 /**

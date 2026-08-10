@@ -3,17 +3,23 @@ import path from 'node:path';
 
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { GhostUsageDb } from '../ghostUsage';
-import { getGhostUsage7d, recordGhostUsage, shiftedLocalDayKey } from '../ghostUsage';
+import {
+  drainGhostUsageWrites,
+  getGhostUsage7d,
+  recordGhostUsage,
+  recordTrackedGhostUsage,
+  shiftedLocalDayKey,
+} from '../ghostUsage';
 import * as schema from '../schema';
 
-const MIGRATION_0089 = path.resolve(__dirname, '../../../../drizzle/0089_complex_fixer.sql');
+const MIGRATION_0090 = path.resolve(__dirname, '../../../../drizzle/0090_ghost_usage_daily.sql');
 
 function freshDb(): { raw: Database.Database; db: GhostUsageDb } {
   const raw = new Database(':memory:');
-  const sqlText = fs.readFileSync(MIGRATION_0089, 'utf8');
+  const sqlText = fs.readFileSync(MIGRATION_0090, 'utf8');
   for (const statement of sqlText.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
     if (trimmed) raw.exec(trimmed);
@@ -29,6 +35,72 @@ function localTimestamp(year: number, month: number, day: number, hour = 12): nu
 }
 
 describe('ghost usage daily counters', () => {
+  it('drains accepted writes before DB close and shares concurrent drain waits', async () => {
+    let releaseWrite!: () => void;
+    const write = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const tracked = recordTrackedGhostUsage('art', () => write);
+    const firstDrain = drainGhostUsageWrites(1_000);
+    const secondDrain = drainGhostUsageWrites(1_000);
+
+    expect(secondDrain).toBe(firstDrain);
+    let drained = false;
+    void firstDrain.then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    releaseWrite();
+    await expect(tracked).resolves.toBeUndefined();
+    await expect(firstDrain).resolves.toEqual({
+      timedOut: false,
+      failedCount: 0,
+      pendingCount: 0,
+    });
+  });
+
+  it('bounds shutdown drain without rejecting it when a write remains pending', async () => {
+    vi.useFakeTimers();
+    let releaseWrite!: () => void;
+    try {
+      const tracked = recordTrackedGhostUsage(
+        'art',
+        () =>
+          new Promise<void>((resolve) => {
+            releaseWrite = resolve;
+          }),
+      );
+      const drain = drainGhostUsageWrites(25);
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(drain).resolves.toEqual({
+        timedOut: true,
+        failedCount: 0,
+        pendingCount: 1,
+      });
+      releaseWrite();
+      await expect(tracked).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('isolates a rejected write and reports it through drain without rejecting shutdown', async () => {
+    const tracked = recordTrackedGhostUsage('art', async () => {
+      throw new Error('worker closing');
+    });
+    const observedWrite = tracked.catch((error: unknown) => error);
+    const drain = drainGhostUsageWrites(1_000);
+
+    await expect(observedWrite).resolves.toMatchObject({ message: 'worker closing' });
+    await expect(drain).resolves.toEqual({
+      timedOut: false,
+      failedCount: 1,
+      pendingCount: 0,
+    });
+  });
+
   it('atomically increments one plugin three times on the same local day', async () => {
     const { raw, db } = freshDb();
     try {

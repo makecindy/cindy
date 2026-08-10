@@ -24,6 +24,7 @@ export interface LifecycleDbClientManagerDeps {
   createInprocClient(): Promise<DbClient>;
   setCurrentDbClient(client: DbClient, userId: string): void;
   clearCurrentDbClient(client?: DbClient): void;
+  beforeDispose?(reason: string): Promise<void>;
   log: LifecycleDbClientLog;
 }
 
@@ -48,6 +49,14 @@ export function createLifecycleDbClientManager(
   async function dispose(reason: string): Promise<void> {
     const client = lifecycleDbClient;
     if (!client) return;
+    try {
+      await deps.beforeDispose?.(reason);
+    } catch (err) {
+      deps.log.warn('[DbClient] before-dispose hook failed', {
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     lifecycleDbClient = null;
     lifecycleDbClientUserId = null;
     lifecycleDbClientMode = null;

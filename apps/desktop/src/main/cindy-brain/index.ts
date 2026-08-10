@@ -181,6 +181,7 @@ import {
   updateGhostCardHeight,
   upsertGhostCard,
 } from './cardStoreDb.js';
+import { recordTrackedGhostUsage } from '../localDb/ghostUsage.js';
 import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
@@ -1125,6 +1126,7 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
       },
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
+      recordUsage: recordTrackedGhostUsage,
       log,
     });
   }
