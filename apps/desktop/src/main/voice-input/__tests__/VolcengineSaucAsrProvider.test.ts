@@ -8,9 +8,18 @@ import {
   encodeFullClientRequest,
   VolcengineSaucAsrProvider,
 } from '../VolcengineSaucAsrProvider.js';
+import { volcengineSaucLanguageCode } from '../language.js';
 import { mergeRecoveredTranscript } from '../transcriptMerge.js';
 
 describe('VolcengineSaucAsrProvider protocol helpers', () => {
+  it('normalizes Traditional Chinese to the documented provider hint', () => {
+    expect(volcengineSaucLanguageCode('auto')).toBeUndefined();
+    expect(volcengineSaucLanguageCode('zh-TW')).toBe('zh-CN');
+    expect(volcengineSaucLanguageCode('Traditional Chinese')).toBe('zh-CN');
+    expect(volcengineSaucLanguageCode('zh-CN')).toBe('zh-CN');
+    expect(volcengineSaucLanguageCode('en')).toBe('en');
+  });
+
   it('encodes the initial provider-native request as Volcengine binary protocol JSON', () => {
     const packet = encodeFullClientRequest({
       audio: {

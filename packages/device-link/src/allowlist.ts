@@ -159,6 +159,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:input:get-projection',
   'maker:input:enqueue',
   'maker:input:compact',
+  // 手动压缩(pi 原生 compact,capability-aware):上下文环 / 会话菜单对远程 pi 会话
+  // 隧道到被控端执行。业务 handler 无 sender / 本机 UI 副作用,真相在被控端。
+  // 长 LLM 摘要请求可能远超默认 30s → INVOKE_TIMEOUT_OVERRIDES_MS 覆盖(见下)。
+  'maker:compact-session',
   'maker:input:steer',
   'maker:input:stop',
   'maker:input:resume',
@@ -572,6 +576,13 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   'worktree:create': 60_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
+  // pi 手动压缩调 LLM 生成摘要,大上下文 + 网关排队可达分钟级(core 侧
+  // PI_COMPACT_TIMEOUT_MS = 10min);默认 30s 隧道超时会截断远程压缩请求,
+  // 用户在控制端看到的就是「无反馈失败」。给足执行预算 + 回程余量:
+  // 被控端在请求穿过 relay 后才开始跑 PI_COMPACT_TIMEOUT_MS,控制端若只给相同
+  // 10min,压缩恰好到预算上限时会先 INVOKE_TIMEOUT,被误判为「设备无响应」并
+  // 可能触发 peer-link 恢复(codex P2)——同 desktop-cmd:run 模式加 1min 余量。
+  'maker:compact-session': 11 * 60_000,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

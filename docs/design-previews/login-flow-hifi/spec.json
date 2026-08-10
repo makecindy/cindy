@@ -2,8 +2,8 @@
   "meta": {
     "name": "cindy-login-flow-hifi",
     "summary": {
-      "what": "最新 main(8a6bc911)桌面登录链路全状态高保真 QA demo:identifier/SSO/验证码/协议门/绑定/错误态",
-      "how": "truth 由 extract.mjs 从 loginDesignTokens/loginScale/colors.ts/四语 common.json/legalLinks 机械提取;布局公式 oracle=产品 loginScale.ts 编译预计算",
+      "what": "当前产品桌面登录链路全状态高保真 QA demo:identifier/SSO/验证码/协议门/绑定/错误态",
+      "how": "truth 由 extract.mjs 从 loginDesignTokens/loginScale/colors.ts/产品支持语言 common.json/legalLinks 机械提取;布局公式 oracle=产品 loginScale.ts 编译预计算",
       "accept": "A-F 门自动验收:extractor drift/状态覆盖/交互鲁棒(截断·输入·持久化)/渲染绑定/适配采样;门 E 无沙盒基准如实标注"
     }
   },
@@ -12,7 +12,7 @@
     "regions": ["cn", "global", "dev"],
     "systems": ["mac"],
     "themes": ["light", "dark"],
-    "langs": ["zh-CN", "en", "ja", "ko"]
+    "langs": ["zh-CN", "zh-TW", "en", "ja", "ko"]
   },
   "states": [
     { "id": "identifier", "via": [{ "expect": "identifier" }] },
@@ -23,7 +23,7 @@
       { "expect": "identifier.formatError" }
     ] },
     { "id": "consent.dialog", "via": [
-      { "click": ".lp-social-guest" },
+      { "click": ".lp-skip-entry" },
       { "expect": "consent.dialog" }
     ] },
     { "id": "sso-org", "via": [
@@ -98,7 +98,7 @@
       { "id": "cn-dark-ja", "prefs": { "plat": "desk", "region": "cn", "os": "mac", "mode": "dark", "lang": "ja" } },
       { "id": "global-light-en", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "light", "lang": "en" } },
       { "id": "global-dark-ko", "prefs": { "plat": "desk", "region": "global", "os": "mac", "mode": "dark", "lang": "ko" } },
-      { "id": "dev-light-en", "prefs": { "plat": "desk", "region": "dev", "os": "mac", "mode": "light", "lang": "en" } }
+      { "id": "dev-light-zh-TW", "prefs": { "plat": "desk", "region": "dev", "os": "mac", "mode": "light", "lang": "zh-TW" } }
     ],
     "noClip": [".lp-title", ".lp-subtitle"],
     "inputs": [

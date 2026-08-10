@@ -66,7 +66,8 @@ describe('resolvePastedImageAsset', () => {
 
 describe('粘贴接线源码断言(防重构掉线)', () => {
   const mobileRoot = join(__dirname, '..', '..');
-  const read = (rel: string) => readFileSync(join(mobileRoot, rel), 'utf8');
+  // Windows checkout 使用 CRLF；源码接线断言统一到 LF，避免把换行风格误判成逻辑缺失。
+  const read = (rel: string) => readFileSync(join(mobileRoot, rel), 'utf8').replace(/\r\n/g, '\n');
 
   it('共享输入行组件包 TextInputWrapper 并只上抛 images', () => {
     const source = read('src/session/MobileComposerInputRow.tsx');
@@ -114,7 +115,8 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
     // 占位窗口(原生还在读剪贴板 / 编码写盘)任务尚未入队,只等 waitForIdle
     // 会让「粘贴后立刻点发送」把图漏在消息外。
     expect(source).toContain('await waitForPastePlaceholders();');
-    expect(source).toContain('return controller.waitForIdle();');
+    expect(source).toContain('const result = await controller.waitForIdle();');
+    expect(source).toContain('return isAttachmentScopeActive() ? result : { failedCount: 0 };');
     // 兜底路径(超时清零 / 卸载)都要放行等待者,防发送永久悬挂。
     expect(source).toContain('flushPastePlaceholderWaiters();');
   });
@@ -127,13 +129,53 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
     // 路径不能绕过占位占坑)。
     expect(source).toContain('const getPendingSlotCount = () => controller.pendingCount() + getPastePlaceholderTotal();');
     expect(source).toContain('- getPendingSlotCount()');
-    expect(source).toContain('getPendingUploadCount: getPendingSlotCount,');
+    expect(source).toContain('getPendingUploadCount: () => (isAttachmentScopeActive() ? getPendingSlotCount() : 0),');
     // 批次 FIFO(review P2):兑现 / 失败只出列最早一批,并发粘贴时第一批完成
     // 不清掉第二批还在原生处理中的占位;addPastedImages 进限额检查前先出列
     // 本批(防双扣)。
     expect(source).toContain('const pastePlaceholderBatchesRef = useRef<number[]>([]);');
     expect(source).toContain('pastePlaceholderBatchesRef.current.shift();');
     expect(source).toContain('shiftPastePlaceholderBatch();');
+  });
+
+  it('composer 草稿作废时同步清上传队列、粘贴占位与等待者', () => {
+    const source = read('src/session/useMobileLocalAttachments.ts');
+    const start = source.indexOf('const discardAllPendingUploads = useCallback(() => {');
+    const end = source.indexOf('useEffect(() => () => {', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const discard = source.slice(start, end);
+    expect(discard).toContain('controller.removeAll();');
+    expect(discard).toContain('pastePlaceholderBatchesRef.current = [];');
+    expect(discard).toContain('setPastePlaceholderCount(0);');
+    expect(discard).toContain('clearTimeout(pastePlaceholderTimerRef.current);');
+    expect(discard).toContain('pastePlaceholderWaitersRef.current = [];');
+    expect(discard).toContain('for (const resolve of waiters) resolve();');
+    expect(source).toContain('attachmentScopeGenerationRef.current += 1;');
+    expect(source).toContain('discardAllPendingUploadsForScopeChange,');
+  });
+
+  it('session 作用域闸拒绝旧 picker / 粘贴入口与迟到上传完成结果', () => {
+    const source = read('src/session/useMobileLocalAttachments.ts');
+    expect(source).toContain('optionsRef.current.attachmentScopeKey === attachmentScopeKey');
+    expect(source).toContain('attachmentScopeGenerationRef.current === attachmentScopeGeneration');
+    expect(source).toContain('if (count <= 0 || !isAttachmentScopeActive()) return;');
+    expect(source).toContain('if (candidates.length === 0 || !isAttachmentScopeActive()) return;');
+    expect(source).toContain('if (!isAttachmentScopeActive()) {\n      if (ownedUris.length > 0) void deleteLocalUris(ownedUris);');
+    expect(source).toContain('optionsRef.current.attachmentScopeKey !== candidateScopeKey');
+    expect(source).toContain('candidate.attachmentScopeGeneration !== attachmentScopeGenerationRef.current');
+    expect(source).toContain('discardMobileUploadedAttachment(attachment');
+    expect(source).toContain('onFailed: (err, localId, candidate) => {');
+    expect(source).toContain('if (!isAttachmentScopeActive()) return { failedCount: 0 };');
+    expect(source).toContain('if (!isAttachmentScopeActive()) return [];');
+    const sessionSource = read('app/sessions/[sessionId].tsx');
+    expect(sessionSource).toContain('attachmentScopeKey: sessionId,');
+  });
+
+  it('富文本输入按 session 重挂载时作废旧粘贴批次，迟到写盘不回调新任务', () => {
+    const source = read('src/session/ComposerRichInput.tsx');
+    expect(source).toContain('pendingImagePastesRef.current.clear();');
+    expect(source).toContain('pendingImagePasteOrderRef.current = [];');
   });
 
   it('context-sheet 选图限额走同一占坑真源(直接入队路径不绕过粘贴占位)', () => {

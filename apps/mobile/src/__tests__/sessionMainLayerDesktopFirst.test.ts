@@ -161,6 +161,15 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(desktopSource).toContain('const titleClass');
     expect(desktopSource).not.toContain('SYSTEM');
     expect(cardSource).toContain('<Text style={styles.systemCardTitle}>{card.title}</Text>');
+    expect(cardSource).toContain('function MobileAutoResumeActionRow');
+    expect(cardSource).toContain('message.systemCard.autoResume.detail.reason');
+    expect(cardSource).toContain('message.systemCard.autoResume.detail.attempt');
+    expect(cardSource).toContain('message.systemCard.autoResume.detail.sessionTotal');
+    expect(cardSource).toContain('CompactActivityIndicator');
+    expect(cardSource).toContain('message.systemCard.autoResume.pendingWithProgress');
+    expect(cardSource).toContain('importantForAccessibility="no-hide-descendants"');
+    expect(cardSource).toContain('accessible={false}');
+    expect(source).toMatch(/autoResumeHeader:\s*\{[\s\S]*?minHeight:\s*44,/);
     expect(cardSource).not.toContain('SYSTEM');
     expect(cardSource).not.toContain('systemCardEyebrow');
     expect(source).not.toContain('systemCardEyebrow: {');

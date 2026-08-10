@@ -473,8 +473,10 @@ const REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS = 500;
  * subscribe 定向 flush(已有)。
  */
 const REMOTE_INVOKE_RESULT_OUTBOX_OFFLINE_SWEEP_MS = 5_000;
+/** 默认远程调用客户端等待预算(缺省 30s;无超时覆盖的 channel 用此值,与 allowlist 注释一致)。 */
+const DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS = 30_000;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
-  30_000,
+  DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS,
   ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
 );
 /** 再保留一轮同等重连窗口后才放弃无人等待的回包(全局上限;逐条按 channel 收窄)。 */
@@ -482,13 +484,14 @@ const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS 
 
 /**
  * outbox 条目的逐 channel 保留时长:控制端对该 channel 的等待预算(两端共享
- * INVOKE_TIMEOUT_OVERRIDES_MS,缺省 30s)× 2(再留一轮重连窗口),封顶全局上限。
+ * INVOKE_TIMEOUT_OVERRIDES_MS,缺省默认预算)× 2(再留一轮重连窗口),封顶全局上限。
  * 控制端超时后不会再认领旧 requestId 的回包(重发用新 id),listing 类回包在
  * 弱网时段最多占 outbox 两分钟纯属浪费配额;长任务 channel(60s 预算)自动保留
  * 更久。控制端可能配置更短的超时(mobile 15s),推断值只偏保守、不早丢。
  */
 function outboxEntryMaxAgeMs(channel: string | undefined): number {
-  const budgetMs = (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || 30_000;
+  const budgetMs =
+    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
   return Math.min(budgetMs * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
 }
 /**
@@ -496,6 +499,18 @@ function outboxEntryMaxAgeMs(channel: string | undefined): number {
  * 这里只在远超控制端等待窗后回收本地 bookkeeping；底层 Promise 仍带 catch 并允许自行收尾。
  */
 const REMOTE_INVOKE_ORPHAN_TIMEOUT_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
+/**
+ * 逐 channel 收窄(codex P2):orphan 截止时间按「该 channel 的控制端等待预算 × 2」取,
+ * 被全局上限(REMOTE_INVOKE_ORPHAN_TIMEOUT_MS)封顶,与 outboxEntryMaxAgeMs 同款。
+ * 否则 maker:compact-session 的 11min 覆盖会把全局 orphan 拉高到 22min——任何挂起的
+ * 默认 30s handler 都会占满 controller 的 in-flight 配额整整 22 分钟,后续远程控制
+ * 动作看起来卡住(BACKPRESSURE)。
+ */
+function remoteInvokeOrphanTimeoutMs(channel: string | undefined): number {
+  const budgetMs =
+    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
+  return Math.min(budgetMs * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+}
 interface CachedRemoteInvokeResult {
   result: InvokeResultPayload;
   bytes: number;
@@ -1839,6 +1854,7 @@ function settleRemoteInvokeWithOrphanDeadline(
   channel: string | undefined,
 ): Promise<InvokeResultPayload> {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const orphanMs = remoteInvokeOrphanTimeoutMs(channel);
   const timeout = new Promise<InvokeResultPayload>((resolve) => {
     timer = setTimeout(() => {
       timer = null;
@@ -1851,11 +1867,11 @@ function settleRemoteInvokeWithOrphanDeadline(
         error: {
           code: 'IPC_ERROR',
           message:
-            `[TIMEOUT] remote invoke exceeded ${REMOTE_INVOKE_ORPHAN_TIMEOUT_MS}ms; ` +
+            `[TIMEOUT] remote invoke exceeded ${orphanMs}ms; ` +
             'the underlying operation may still be running',
         },
       });
-    }, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+    }, orphanMs);
     (timer as unknown as { unref?: () => void }).unref?.();
   });
   return Promise.race([execution, timeout]).finally(() => {
@@ -2873,6 +2889,7 @@ export const __testing = {
   remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
   remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,
+  remoteInvokeOrphanTimeoutForChannelMs: remoteInvokeOrphanTimeoutMs,
   remoteInvokeResultOutboxLimit: REMOTE_INVOKE_RESULT_OUTBOX_LIMIT,
   remoteInvokeResultOutboxPerControllerLimit: REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT,
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,

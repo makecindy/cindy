@@ -3,9 +3,9 @@
   "name": "login-deletion-bubble",
   "pr": "feat/login-deletion-bubble(验收证据;施工 commit 31e472ed9 desktop + b7392d8d4 mobile)",
   "summary": {
-   "what": "验证修复后的账号注销提示气泡:浮层盖在登录页一切元素之上(立绘/字标/面板/社交行),不占布局流;desk/phone/pad(横/竖)四端,light/dark,四语言",
+   "what": "验证修复后的账号注销提示气泡:浮层盖在登录页一切元素之上(立绘/字标/面板/社交行),不占布局流;desk/phone/pad(横/竖)四端,light/dark,支持语言全集",
    "how": "气泡视觉/几何/颜色全部 truth 驱动(提取自本分支 HEAD 源码,带 provenance);布局引擎=产品 resolveDeletionBubbleFrame 移植,门 F oracle=产品纯函数 resolveLoginSurface+resolveDeletionBubbleFrame 预计算;家具为示意占位(非验收对象)",
-   "accept": "门 A/B/C/D/F 阻断门全绿;门 E 无沙盒基准照实跳过;长文案压力态验证撑高/居中换行/底距 20 恒定;completed 点「我知道了」消失;浮层覆盖与不推挤由交互门实测"
+   "accept": "门 A/B/C/D/F 为阻断门，当前报告是否有效以 report.json 的 stale 标记为准;门 E 无沙盒基准照实跳过;长文案压力态验证撑高/居中换行/底距 20 恒定;completed 点「我知道了」消失;浮层覆盖与不推挤由交互门实测"
   }
  },
  "matrix": {
@@ -28,6 +28,7 @@
   ],
   "langs": [
    "zh-CN",
+   "zh-TW",
    "en",
    "ja",
    "ko"
@@ -112,13 +113,13 @@
     }
    },
    {
-    "id": "phone-light-zh",
+    "id": "phone-light-zh-tw",
     "prefs": {
      "plat": "phone",
      "region": "cn",
      "os": "ios",
      "mode": "light",
-     "lang": "zh-CN"
+     "lang": "zh-TW"
     }
    },
    {
@@ -172,13 +173,13 @@
     }
    },
    {
-    "id": "pad-port-dark-zh",
+    "id": "pad-port-dark-zh-tw",
     "prefs": {
      "plat": "pad-portrait",
      "region": "cn",
      "os": "ios",
      "mode": "dark",
-     "lang": "zh-CN"
+     "lang": "zh-TW"
     }
    },
    {

@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 
@@ -26,6 +27,7 @@ export function MarketPluginDetailView({
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
+  const marketIcon = usePluginMarketIcon(detail, { deferUntilVisible: false });
   const presentationOrigin = pluginPresentationOrigin(detail);
   // 自定义市场（Git/本地源）的包字节未经服务端校验，安全说明必须如实区分。
   const isCustomSource = detail.sourceType !== 'server';
@@ -62,10 +64,12 @@ export function MarketPluginDetailView({
         <header>
           <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
             <GhostPluginIcon
-              iconDataUrl={detail.icon?.url}
+              iconContainerRef={marketIcon.containerRef}
+              iconDataUrl={marketIcon.iconDataUrl}
               iconId={detail.ghostId}
               iconName={detail.name}
-              onIconLoadError={onIconLoadError}
+              onIconLoad={marketIcon.onIconLoad}
+              onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
               size="detail"
             />
             <div className="min-w-0">

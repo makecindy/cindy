@@ -13,12 +13,16 @@ import { app, dialog } from 'electron';
 
 import {
   diffGhostPermissionItems,
+  GHOST_ICON_MAX_BYTES,
   ghostPermissionBaselineKey,
+  ghostIconMimeType,
+  isSafeGhostRelativePath,
   isOfficialGhostId,
   validateGhostManifest,
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import type {
   MarketSourceConfig,
   MarketSourceSummary,
@@ -26,6 +30,8 @@ import type {
   PluginMarketInstallOptions,
   PluginMarketInstallResult,
   PluginMarketItem,
+  PluginMarketLocalIconRequest,
+  PluginMarketLocalIconResult,
   PluginMarketPackageReviewFacts,
   PluginMarketSnapshot,
   PluginRemovalUserNotice,
@@ -37,6 +43,9 @@ import {
   customMarketReleaseId,
   marketSourceKey,
   parseCustomMarketPluginId,
+  PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH,
+  PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH,
+  pluginMarketCustomIconProjectionToken,
 } from '../../shared/pluginMarket.js';
 import { getCurrentUserId } from '../authManager.js';
 import {
@@ -61,6 +70,7 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollowWithStat,
   readBoundedFileNoFollowSync,
 } from '../utils/readBoundedFile.js';
 import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
@@ -80,12 +90,11 @@ import { MarketSourceStore } from './sources/store.js';
 
 const log = createLogger('plugin-market');
 
-type PackagePermissionReviewer = (
-  facts: PluginMarketPackageReviewFacts,
-) => Promise<boolean>;
+type PackagePermissionReviewer = (facts: PluginMarketPackageReviewFacts) => Promise<boolean>;
 
 class SilentUpgradeBusyError extends Error {}
 class SilentUpgradeStaleBaselineError extends Error {}
+class SilentDefaultInstallCancelledError extends Error {}
 
 /**
  * 来源增删改的互斥键。自定义市场安装的提交段也要拿这把锁，保证所选来源从
@@ -102,6 +111,7 @@ class SilentUpgradeStaleBaselineError extends Error {}
  * 放宽正确性的理由。
  */
 const SOURCE_MUTATION_KEY = 'market-sources';
+const CUSTOM_ICON_PROJECTION_TOKEN_RE = /^[a-f0-9]{16}$/;
 
 /**
  * 扩权批准的原子复核:Renderer 的 allowPermissionExpansion 只代表「用户对
@@ -157,8 +167,7 @@ function visiblePluginsForOwner(
 ): VisiblePluginSummary[] {
   return owner.mode === 'local'
     ? plugins.filter(
-        (plugin) =>
-          plugin.scope === 'public' && isGhostAvailableForActiveSession(plugin.ghostId),
+        (plugin) => plugin.scope === 'public' && isGhostAvailableForActiveSession(plugin.ghostId),
       )
     : [...plugins];
 }
@@ -237,9 +246,7 @@ function legacyRecordFrom(
   };
 }
 
-function ghostIdCounts(
-  plugins: readonly VisiblePluginSummary[],
-): Map<string, number> {
+function ghostIdCounts(plugins: readonly VisiblePluginSummary[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const plugin of plugins) {
     counts.set(plugin.ghostId, (counts.get(plugin.ghostId) ?? 0) + 1);
@@ -255,6 +262,7 @@ function manifestSupportsCurrentCindy(manifest: GhostManifest): boolean {
 interface CustomMarketEntry {
   config: MarketSourceConfig;
   plugin: DiscoveredMarketPlugin;
+  iconKey: string | null;
 }
 
 /**
@@ -269,10 +277,14 @@ interface CustomMarketEntry {
  * 展示投影用:剥掉控制字符(保留换行/制表)与双向文本控制符。只作用于送往
  * Renderer 的市场条目字段,不改动 manifest 本体(校验/摘要仍以原文为准)。
  */
+/* eslint-disable no-control-regex */
 function stripDirectionalControls(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
+  return text.replace(
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    '',
+  );
 }
+/* eslint-enable no-control-regex */
 
 function installedGhostRawManifest(dir: string): GhostManifest | null {
   try {
@@ -294,6 +306,113 @@ function installedGhostRawManifest(dir: string): GhostManifest | null {
 function installedGhostRawManifestDigest(dir: string): string | null {
   const manifest = installedGhostRawManifest(dir);
   return manifest ? ghostManifestDigest(manifest) : null;
+}
+
+/**
+ * 自定义市场图标的不可逆投影键。Renderer 只拿摘要，不拿来源路径；每次新的
+ * 市场快照都会换 projection token。它是快照级缓存代际，不是预读全部图标得出的
+ * 内容 hash：localIcons 会重新核对当前投影事实并稳定读取；Renderer 可丢弃字节缓存
+ * 后按同一代际重新物化，而刷新市场快照一定换 token 并触发新读取。
+ */
+function customMarketIconPath(plugin: DiscoveredMarketPlugin): string | null {
+  const icon = plugin.manifest.icon;
+  if (!isSafeGhostRelativePath(icon)) return null;
+  return path.join(plugin.dir, ...icon.split('/'));
+}
+
+/**
+ * 自定义市场的不透明传输身份。不包含 revision 或 projection，因此同一
+ * 来源在当前会话内的刷新仍共享一个槽；来源命名空间、会话或重加的同名来源
+ * 不会被旧来源的挂起 IPC 误阻塞。Renderer 只能看到摘要 token。
+ */
+function customMarketIconSourceToken(owner: ActiveAppSession, config: MarketSourceConfig): string {
+  return crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify([
+        owner.mode,
+        owner.dataOwnerId,
+        owner.generation,
+        config.name,
+        marketSourceKey(config.source),
+        config.addedAt,
+      ]),
+    )
+    .digest('hex')
+    .slice(0, PLUGIN_MARKET_CUSTOM_ICON_SOURCE_TOKEN_LENGTH);
+}
+
+async function customMarketIconKey(
+  owner: ActiveAppSession,
+  config: MarketSourceConfig,
+  plugin: DiscoveredMarketPlugin,
+  projectionToken: string,
+  openedIconStat?: fs.BigIntStats,
+): Promise<string | null> {
+  const iconPath = customMarketIconPath(plugin);
+  if (iconPath === null || !CUSTOM_ICON_PROJECTION_TOKEN_RE.test(projectionToken)) {
+    return null;
+  }
+  let iconFingerprint: string;
+  let projectionUncertain = false;
+  try {
+    // plugin.dir 是发现阶段得到的 realpath。先解析完整图标路径并确认仍在该根内，
+    // 再做 lstat；否则父目录 symlink 会让投影阶段探测并摘要根外文件元数据。
+    const realIconPath = await fs.promises.realpath(iconPath);
+    const relativeToPlugin = path.relative(plugin.dir, realIconPath);
+    if (
+      relativeToPlugin === '..' ||
+      relativeToPlugin.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativeToPlugin)
+    ) {
+      return null;
+    }
+    const stat = openedIconStat ?? (await fs.promises.lstat(iconPath, { bigint: true }));
+    iconFingerprint = `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    projectionUncertain = !isDeterministicLocalIconReadFailure(error);
+    iconFingerprint = `unreadable:${(error as NodeJS.ErrnoException)?.code ?? 'unknown'}`;
+  }
+  const digest = crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify([
+        owner.mode,
+        owner.dataOwnerId,
+        owner.generation,
+        config.name,
+        marketSourceKey(config.source),
+        config.addedAt,
+        config.lastRevision,
+        plugin.ghostId,
+        plugin.version,
+        ghostManifestDigest(plugin.manifest),
+        iconFingerprint,
+        projectionToken,
+      ]),
+    )
+    .digest('hex');
+  const digestHead = digest[0] ?? '2';
+  const stableHead = projectionUncertain
+    ? '1'
+    : digestHead === '0' || digestHead === '1'
+      ? '2'
+      : digestHead;
+  return `${stableHead}${customMarketIconSourceToken(owner, config)}${projectionToken}${digest.slice(0, 31)}`;
+}
+
+function localIconMissing(request: PluginMarketLocalIconRequest): PluginMarketLocalIconResult {
+  return { ...request, status: 'missing' };
+}
+
+function localIconRetryable(request: PluginMarketLocalIconRequest): PluginMarketLocalIconResult {
+  return { ...request, status: 'retryable' };
+}
+
+/** 文件不存在/路径形状非法是确定性缺失；权限、锁和其它 I/O 留给 Renderer 重试。 */
+function isDeterministicLocalIconReadFailure(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR' || code === 'ELOOP';
 }
 
 /** 官方市场是否仍拥有当前落地包；带摘要的新记录必须与磁盘事实一致。 */
@@ -372,6 +491,13 @@ export class PluginMarketService {
   private ledgerMutation: Promise<void> = Promise.resolve();
   private readonly pendingRemovalNotices = new Map<string, PluginRemovalUserNotice>();
   private readonly pendingUpgradeNotices = new Map<string, PluginUpgradeUserNotice>();
+  /**
+   * Renderer 把 customIconKey 当不可变缓存 generation。每次重新投影市场都换代，
+   * 使低精度文件系统上的同长度、同 stat 原地改写也会在刷新后重新按需读取。
+   */
+  private customIconProjectionGeneration = crypto
+    .randomBytes(PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
+    .toString('hex');
 
   constructor(
     private readonly api = new PluginMarketApi(undefined, () => app.getVersion()),
@@ -407,7 +533,8 @@ export class PluginMarketService {
         customSourceNames: [],
       };
     }
-    const customEntries = await this.discoverCustomEntriesSafe(owner);
+    const iconProjectionGeneration = this.nextCustomIconProjectionGeneration();
+    const customEntries = await this.discoverCustomEntriesSafe(owner, iconProjectionGeneration);
     const customSourceNames = this.customSourceNamesSafe(owner);
     requireSameMarketOwner(owner);
     if (!getClientEndpoint('pluginApiBaseUrl')) {
@@ -441,8 +568,14 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
     await this.backfillOfficialCindyGithubTrust(ledger, owner);
-    await this.reconcileRemovedInstallations(ledger, owner);
+    // A snapshot is passive discovery: an empty runtime list can be caused by
+    // startup, an owner transition, or a transient filesystem view. Only an
+    // explicit uninstall may turn that absence into installed=false/opt-out.
     await this.applyServerRemovals(removals, owner, ledger);
+    // Explicit uninstall completion is allowed to finish its physical removal
+    // before its ledger write. Wait for queued ledger mutations before deciding
+    // whether a default plugin should be installed again.
+    await this.ledgerMutation;
     // 自定义来源只影响自己的目录发现；暂时不可读的来源不能阻塞官方默认安装。
     // 已经落地的同 id 插件仍由 applyDefaultInstalls → installDetail 的本地事实检查保护。
     await this.applyDefaultInstalls(plugins, owner, ledger);
@@ -529,6 +662,157 @@ export class PluginMarketService {
     });
   }
 
+  /**
+   * 批量按需读取自定义市场图标。一次调用只捕获一个 owner，并按市场分组，保证
+   * 同一来源至多发现一次；路径与字节始终留在 Main，Renderer 只得到 data URL。
+   */
+  async localIcons(
+    requests: readonly PluginMarketLocalIconRequest[],
+  ): Promise<PluginMarketLocalIconResult[]> {
+    return this.runForOwner(async (owner) => {
+      const manager = this.sourceManagerForOwner(owner);
+      const results = new Array<PluginMarketLocalIconResult>(requests.length);
+      const groups = new Map<
+        string,
+        Array<{
+          index: number;
+          request: PluginMarketLocalIconRequest;
+          ref: { marketName: string; ghostId: string };
+        }>
+      >();
+
+      requests.forEach((request, index) => {
+        const ref = parseCustomMarketPluginId(request.pluginId);
+        if (!ref) {
+          results[index] = localIconMissing(request);
+          return;
+        }
+        const group = groups.get(ref.marketName) ?? [];
+        group.push({ index, request, ref });
+        groups.set(ref.marketName, group);
+      });
+
+      for (const [marketName, group] of groups) {
+        try {
+          await manager.withDiscoveredSource(marketName, async (discovered) => {
+            if (!discovered.result.ok) {
+              for (const entry of group) {
+                // 该 key 来自此前成功的快照；二次发现失败时无法可靠区分清单被删
+                // 与 exists/stat 的暂时不可访问。只有来源配置已移除的 NOT_FOUND 才在
+                // 外层 catch 固化为 missing，其余发现失败都交给 Renderer 重试。
+                results[entry.index] = localIconRetryable(entry.request);
+              }
+              return;
+            }
+            const pluginsByGhostId = new Map(
+              discovered.result.marketplace.plugins.map((plugin) => [plugin.ghostId, plugin]),
+            );
+            for (const entry of group) {
+              const plugin = pluginsByGhostId.get(entry.ref.ghostId);
+              if (!plugin) {
+                results[entry.index] =
+                  discovered.result.marketplace.unreadableCount > 0
+                    ? localIconRetryable(entry.request)
+                    : localIconMissing(entry.request);
+                continue;
+              }
+              const expectedProjectionToken = pluginMarketCustomIconProjectionToken(
+                entry.request.expectedIconKey,
+              );
+              if (expectedProjectionToken === null) {
+                results[entry.index] = localIconMissing(entry.request);
+                continue;
+              }
+              const currentIconKey = await customMarketIconKey(
+                owner,
+                discovered.config,
+                plugin,
+                expectedProjectionToken,
+              );
+              if (currentIconKey?.startsWith('1')) {
+                results[entry.index] = localIconRetryable(entry.request);
+                continue;
+              }
+              if (
+                currentIconKey !== entry.request.expectedIconKey &&
+                !entry.request.expectedIconKey.startsWith('1')
+              ) {
+                results[entry.index] = localIconMissing(entry.request);
+                continue;
+              }
+              const icon = plugin.manifest.icon;
+              const iconPath = customMarketIconPath(plugin);
+              const mime = icon === undefined ? null : ghostIconMimeType(icon);
+              if (iconPath === null || mime === null) {
+                results[entry.index] = localIconMissing(entry.request);
+                continue;
+              }
+              try {
+                const read = await readBoundedFileNoFollowWithStat(iconPath, GHOST_ICON_MAX_BYTES, {
+                  containWithin: plugin.dir,
+                  nonBlocking: true,
+                  rejectHardLinks: true,
+                  verifyContentStability: true,
+                });
+                if (read === null) {
+                  results[entry.index] =
+                    discovered.result.marketplace.unreadableCount > 0
+                      ? localIconRetryable(entry.request)
+                      : localIconMissing(entry.request);
+                } else if (
+                  (await customMarketIconKey(
+                    owner,
+                    discovered.config,
+                    plugin,
+                    expectedProjectionToken,
+                    read.stat,
+                  )) !== entry.request.expectedIconKey
+                ) {
+                  results[entry.index] = entry.request.expectedIconKey.startsWith('1')
+                    ? localIconRetryable(entry.request)
+                    : localIconMissing(entry.request);
+                } else {
+                  results[entry.index] = {
+                    ...entry.request,
+                    status: 'loaded',
+                    dataUrl: `data:${mime};base64,${read.bytes.toString('base64')}`,
+                  };
+                }
+              } catch (error) {
+                results[entry.index] = isDeterministicLocalIconReadFailure(error)
+                  ? localIconMissing(entry.request)
+                  : localIconRetryable(entry.request);
+                if (!isDeterministicLocalIconReadFailure(error)) {
+                  log.warn('custom marketplace icon read failed', {
+                    market: marketName,
+                    ghostId: entry.ref.ghostId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              }
+            }
+          });
+        } catch (error) {
+          if (isIpcError(error) && error.code === 'PRECONDITION_FAILED') throw error;
+          const status = isIpcError(error) && error.code === 'NOT_FOUND' ? 'missing' : 'retryable';
+          for (const entry of group) {
+            results[entry.index] =
+              status === 'missing'
+                ? localIconMissing(entry.request)
+                : localIconRetryable(entry.request);
+          }
+          if (status === 'retryable') {
+            log.warn('custom marketplace icon source unavailable', {
+              market: marketName,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+      return results;
+    });
+  }
+
   async install(
     pluginId: string,
     options: PluginMarketInstallOptions,
@@ -552,19 +836,14 @@ export class PluginMarketService {
       if (!selected) {
         throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
       }
-      if (
-        catalog.filter((plugin) => plugin.ghostId === selected.ghostId).length !== 1
-      ) {
+      if (catalog.filter((plugin) => plugin.ghostId === selected.ghostId).length !== 1) {
         throwIpcError('ALREADY_EXISTS', 'Multiple market Plugins use the same Plugin ID');
       }
       const plugin = await this.api.detail(pluginId);
       requireSameMarketOwner(owner);
       assertDetailMatchesSummary(selected, plugin);
       if (plugin.currentRelease.id !== options.expectedReleaseId) {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'Plugin release changed after permission review',
-        );
+        throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after permission review');
       }
       const compatible = validateGhostManifest(plugin.currentRelease.manifest);
       const reviewed = validateGhostManifest(options.expectedManifest);
@@ -573,10 +852,7 @@ export class PluginMarketService {
         !reviewed.ok ||
         ghostManifestDigest(compatible.manifest) !== ghostManifestDigest(reviewed.manifest)
       ) {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'Plugin manifest changed after permission review',
-        );
+        throwIpcError('PRECONDITION_FAILED', 'Plugin manifest changed after permission review');
       }
       if (!manifestSupportsCurrentCindy(compatible.manifest)) {
         throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
@@ -604,10 +880,7 @@ export class PluginMarketService {
 
   async uninstall(pluginId: string): Promise<{ ok: true }> {
     // 自定义市场插件的卸载走同一账本路径，仅跳过服务端 CUID 形状校验。
-    if (
-      !parseCustomMarketPluginId(pluginId) &&
-      !isValidPluginResourceId(pluginId)
-    ) {
+    if (!parseCustomMarketPluginId(pluginId) && !isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
     const owner = captureMarketOwner();
@@ -740,27 +1013,38 @@ export class PluginMarketService {
     ghostId: string;
   }): Promise<PluginMarketDetail> {
     return this.runForOwner(async (owner) => {
+      const iconProjectionGeneration = this.customIconProjectionGeneration;
       const manager = this.sourceManagerForOwner(owner);
-      const discovered = await manager.discoverSource(ref.marketName);
-      if (!discovered.result.ok) {
-        throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
-      }
-      const plugin = discovered.result.marketplace.plugins.find(
-        (candidate) => candidate.ghostId === ref.ghostId,
-      );
-      if (!plugin) {
-        throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
-      }
-      if (!manifestSupportsCurrentCindy(plugin.manifest)) {
-        throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
-      }
-      return {
-        ...this.customToItem(
-          { config: discovered.config, plugin },
-          this.localInstallSnapshot(this.ledgerForOwner(owner)),
-        ),
-        manifest: plugin.manifest,
-      };
+      return manager.withDiscoveredSource(ref.marketName, async (discovered) => {
+        if (!discovered.result.ok) {
+          throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
+        }
+        const plugin = discovered.result.marketplace.plugins.find(
+          (candidate) => candidate.ghostId === ref.ghostId,
+        );
+        if (!plugin) {
+          throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
+        }
+        if (!manifestSupportsCurrentCindy(plugin.manifest)) {
+          throwIpcError('NOT_FOUND', 'This Plugin is unavailable for this Cindy version');
+        }
+        return {
+          ...this.customToItem(
+            {
+              config: discovered.config,
+              plugin,
+              iconKey: await customMarketIconKey(
+                owner,
+                discovered.config,
+                plugin,
+                iconProjectionGeneration,
+              ),
+            },
+            this.localInstallSnapshot(this.ledgerForOwner(owner)),
+          ),
+          manifest: plugin.manifest,
+        };
+      });
     });
   }
 
@@ -805,10 +1089,7 @@ export class PluginMarketService {
         const pluginId = customMarketPluginId(ref.marketName, plugin.ghostId);
         const releaseId = customMarketReleaseId(ref.marketName, plugin.ghostId, plugin.version);
         if (releaseId !== options.expectedReleaseId) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'Plugin release changed after permission review',
-          );
+          throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after permission review');
         }
         const existing = getGhostManager()
           .list()
@@ -825,11 +1106,11 @@ export class PluginMarketService {
           : null;
         const ownsInstall = Boolean(
           existing &&
-            currentRecord?.installed &&
-            currentRecord.pluginId === pluginId &&
-            currentRecord.sourceKey === sourceKey &&
-            currentRecord.manifestDigest != null &&
-            currentRecord.manifestDigest === reviewInstalledDigest,
+          currentRecord?.installed &&
+          currentRecord.pluginId === pluginId &&
+          currentRecord.sourceKey === sourceKey &&
+          currentRecord.manifestDigest != null &&
+          currentRecord.manifestDigest === reviewInstalledDigest,
         );
         // 收养:运行时已装内容的声明与本来源候选**完全一致**(原始 manifest 摘要
         // 相等)时,允许在没有有效账本记录的情况下重装并补写溯源。这是"包已落位
@@ -838,8 +1119,8 @@ export class PluginMarketService {
         // 确认框审阅过同一份 manifest;声明有任何差异都收养不了。
         const adoptable = Boolean(
           existing &&
-            !ownsInstall &&
-            reviewInstalledDigest === ghostManifestDigest(plugin.manifest),
+          !ownsInstall &&
+          reviewInstalledDigest === ghostManifestDigest(plugin.manifest),
         );
         if (existing && !ownsInstall && !adoptable) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
@@ -899,9 +1180,7 @@ export class PluginMarketService {
           //   按 id 互斥,beforeCommit 的 runtime 复核到 installOrUpdate 落位之间,
           //   同 id 的本地装入/卸载插不进来(否则复核仍会在落位前过期)。
           withCommitLock: (fn) =>
-            this.withMutation(SOURCE_MUTATION_KEY, () =>
-              withGhostInstallLock(plugin.ghostId, fn),
-            ),
+            this.withMutation(SOURCE_MUTATION_KEY, () => withGhostInstallLock(plugin.ghostId, fn)),
           // 溯源写入仍在上面那把 ghost 锁内(afterCommit 由 commit 段调用):
           // 放到锁外时,本地装入能插在"包已落位"与"写下溯源"之间换掉同 id 的包。
           // 锁序:pluginId → SOURCE_MUTATION_KEY → ghostId → ledgerMutation。
@@ -951,25 +1230,26 @@ export class PluginMarketService {
   }
 
   /** 快照聚合用：发现全部自定义市场条目。任何失败都降级为空，不拖垮快照。 */
+  private nextCustomIconProjectionGeneration(): string {
+    return (this.customIconProjectionGeneration = crypto
+      .randomBytes(PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH / 2)
+      .toString('hex'));
+  }
+
   private async discoverCustomEntriesSafe(
-    owner?: ActiveAppSession,
+    owner: ActiveAppSession,
+    iconProjectionGeneration: string,
   ): Promise<CustomMarketEntry[]> {
     try {
-      const manager = owner
-        ? this.sourceManagerForOwner(owner)
-        : new MarketSourceManager({
-            store: this.sourceStore,
-            cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
-          });
-      const discovered = await manager.discoverAll();
+      const manager = this.sourceManagerForOwner(owner);
       const entries: CustomMarketEntry[] = [];
-      for (const { config, result } of discovered) {
+      await manager.forEachDiscoveredSource(async ({ config, result }) => {
         if (!result.ok) {
           log.warn('custom marketplace discovery failed', {
             market: config.name,
             code: result.code,
           });
-          continue;
+          return;
         }
         if (result.marketplace.unreadableCount > 0) {
           log.warn('custom marketplace has unreadable plugin entries', {
@@ -979,9 +1259,13 @@ export class PluginMarketService {
         }
         for (const plugin of result.marketplace.plugins) {
           if (!manifestSupportsCurrentCindy(plugin.manifest)) continue;
-          entries.push({ config, plugin });
+          entries.push({
+            config,
+            plugin,
+            iconKey: await customMarketIconKey(owner, config, plugin, iconProjectionGeneration),
+          });
         }
-      }
+      });
       return entries;
     } catch (error) {
       log.warn('custom marketplace enumeration failed', {
@@ -1000,10 +1284,7 @@ export class PluginMarketService {
   }
 
   /** 自定义市场项的状态机与服务端 toItem 完全一致（冲突 / 首装 / 更新 / 已装）。 */
-  private customToItem(
-    entry: CustomMarketEntry,
-    local: LocalInstallSnapshot,
-  ): PluginMarketItem {
+  private customToItem(entry: CustomMarketEntry, local: LocalInstallSnapshot): PluginMarketItem {
     const { config, plugin } = entry;
     const pluginId = customMarketPluginId(config.name, plugin.ghostId);
     const releaseId = customMarketReleaseId(config.name, plugin.ghostId, plugin.version);
@@ -1014,19 +1295,19 @@ export class PluginMarketService {
     // conflict 而不是 update-available。
     const ownsInstall = Boolean(
       ghost &&
-        record?.installed &&
-        record.pluginId === pluginId &&
-        record.sourceKey === marketSourceKey(config.source) &&
-        record.manifestDigest != null &&
-        record.manifestDigest === local.rawDigestByGhostId.get(plugin.ghostId),
+      record?.installed &&
+      record.pluginId === pluginId &&
+      record.sourceKey === marketSourceKey(config.source) &&
+      record.manifestDigest != null &&
+      record.manifestDigest === local.rawDigestByGhostId.get(plugin.ghostId),
     );
     // 收养口径与 customInstall 一致:运行时内容声明与候选完全一致时不标 conflict,
     // 投影成可安装——这是账本写失败后的自愈入口(conflict 在 UI 被禁用,没有它
     // 用户连重试的按钮都没有)。
     const adoptable = Boolean(
       ghost &&
-        !ownsInstall &&
-        local.rawDigestByGhostId.get(plugin.ghostId) === ghostManifestDigest(plugin.manifest),
+      !ownsInstall &&
+      local.rawDigestByGhostId.get(plugin.ghostId) === ghostManifestDigest(plugin.manifest),
     );
     // 市场目录只用于发现，不声明未安装 ghostId 的所有权。只有运行时已经存在
     // 同 id 且不属于当前来源时才冲突，避免官方或其它市场接管用户已装插件。
@@ -1038,6 +1319,7 @@ export class PluginMarketService {
         : record?.releaseId === releaseId
           ? 'installed'
           : 'update-available';
+    const iconKey = entry.iconKey;
     return {
       pluginId,
       ghostId: plugin.ghostId,
@@ -1045,12 +1327,12 @@ export class PluginMarketService {
       // 显示成另一副样子(视觉欺骗),控制字符可撑破布局。展示投影一律剥掉
       // (保留换行);市场名闸在 discover,这里补齐插件侧同一口径。
       name: stripDirectionalControls(plugin.manifest.name),
-      description: plugin.manifest.description != null
-        ? stripDirectionalControls(plugin.manifest.description)
-        : null,
-      author: plugin.manifest.author != null
-        ? stripDirectionalControls(plugin.manifest.author)
-        : null,
+      description:
+        plugin.manifest.description != null
+          ? stripDirectionalControls(plugin.manifest.description)
+          : null,
+      author:
+        plugin.manifest.author != null ? stripDirectionalControls(plugin.manifest.author) : null,
       // scope 是服务端授权概念，自定义市场项无服务端身份;展示层按 sourceType 分流。
       scope: 'public',
       organizationId: null,
@@ -1059,6 +1341,7 @@ export class PluginMarketService {
       version: plugin.version,
       publishedAt: config.lastSyncedAt ?? config.addedAt,
       icon: null,
+      ...(iconKey !== null ? { customIconKey: iconKey } : {}),
       installState,
       enabled: ownsInstall ? (ghost?.enabled ?? null) : null,
       sourceType: config.source.type === 'git' ? 'git-market' : 'local-market',
@@ -1073,9 +1356,7 @@ export class PluginMarketService {
    * 写操作落在错误账户。新增 owner-bound 方法只允许经此入口,从结构上
    * 杜绝逐路径漏加 generation 校验。
    */
-  private async runForOwner<T>(
-    operation: (owner: ActiveAppSession) => Promise<T>,
-  ): Promise<T> {
+  private async runForOwner<T>(operation: (owner: ActiveAppSession) => Promise<T>): Promise<T> {
     const owner = captureMarketOwner();
     let result: T;
     try {
@@ -1094,9 +1375,7 @@ export class PluginMarketService {
   private sourceManagerForOwner(owner: ActiveAppSession): MarketSourceManager {
     requireSameMarketOwner(owner);
     return new MarketSourceManager({
-      store: this.sourceStore.bind(
-        ownerScopedUserDataPath('plugin-market', 'sources.v1.json'),
-      ),
+      store: this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json')),
       cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
     });
   }
@@ -1171,9 +1450,7 @@ export class PluginMarketService {
           plugin,
           {
             expectedInstalled: options.expectedInstalled,
-            ...(reviewedManifest?.ok
-              ? { reviewedManifest: reviewedManifest.manifest }
-              : {}),
+            ...(reviewedManifest?.ok ? { reviewedManifest: reviewedManifest.manifest } : {}),
             allowPermissionExpansion: options.allowPermissionExpansion,
             reviewedBaseline: options.reviewedBaseline,
             beforeCommitInLock: options.beforeCommitInLock,
@@ -1193,9 +1470,7 @@ export class PluginMarketService {
           plugin,
           {
             expectedInstalled: options.expectedInstalled,
-            ...(reviewedManifest?.ok
-              ? { reviewedManifest: reviewedManifest.manifest }
-              : {}),
+            ...(reviewedManifest?.ok ? { reviewedManifest: reviewedManifest.manifest } : {}),
             allowPermissionExpansion: options.allowPermissionExpansion,
             reviewedBaseline: options.reviewedBaseline,
             approvedPackageSha256: error.review.packageSha256,
@@ -1262,8 +1537,7 @@ export class PluginMarketService {
       const permissionBaselineManifest =
         installedRawManifest &&
         currentRecordNow?.installed &&
-        (currentRecordNow.source === 'market' ||
-          currentRecordNow.source === 'legacy-adopted') &&
+        (currentRecordNow.source === 'market' || currentRecordNow.source === 'legacy-adopted') &&
         currentRecordNow.manifestDigest === ghostManifestDigest(installedRawManifest)
           ? installedRawManifest
           : null;
@@ -1274,9 +1548,7 @@ export class PluginMarketService {
         ...(options.reviewedManifest
           ? {
               reviewedManifest: options.reviewedManifest,
-              ...(permissionBaselineManifest
-                ? { permissionBaselineManifest }
-                : {}),
+              ...(permissionBaselineManifest ? { permissionBaselineManifest } : {}),
             }
           : {}),
         ...(options.approvedPackageSha256 !== undefined
@@ -1410,7 +1682,9 @@ export class PluginMarketService {
   ): Promise<void> {
     const record = ledger.installationForGhost('cindy-github');
     requireSameMarketOwner(owner);
-    const installed = getGhostManager().list().find((ghost) => ghost.manifest.id === 'cindy-github');
+    const installed = getGhostManager()
+      .list()
+      .find((ghost) => ghost.manifest.id === 'cindy-github');
     if (!record || !installed || !canBackfillOfficialCindyGithubTrust(record, installed)) return;
     const tempPath = path.join(
       app.getPath('temp'),
@@ -1458,26 +1732,6 @@ export class PluginMarketService {
       });
     } finally {
       await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
-    }
-  }
-
-  private async reconcileRemovedInstallations(
-    ledger: PluginMarketLedger,
-    owner: ActiveAppSession,
-  ): Promise<void> {
-    const installSubject = defaultInstallSubject(owner);
-    for (const record of Object.values(ledger.read().installations)) {
-      if (!record.installed) continue;
-      await this.withLedgerMutation(owner, () => {
-        // 在场判定必须与写入同处一把锁内且即时重取:manager.update 的两次
-        // rename 之间 ghosts/<id> 短暂不存在,锁外的一次性快照会把这类瞬态
-        // 误判成"已卸载",把 pluginId 永久写进 defaultInstallOptOuts,该
-        // 默认安装插件从此不再自动装回。
-        const stillInstalled = getGhostManager()
-          .list()
-          .some((ghost) => ghost.manifest.id === record.ghostId);
-        if (!stillInstalled) ledger.markRemoved(record.ghostId, installSubject);
-      });
     }
   }
 
@@ -1535,7 +1789,9 @@ export class PluginMarketService {
           if (reason) return skip(removal, reason);
 
           ghostsById ??= new Map(
-            getGhostManager().list().map((ghost) => [ghost.manifest.id, ghost]),
+            getGhostManager()
+              .list()
+              .map((ghost) => [ghost.manifest.id, ghost]),
           );
           const installed = ghostsById.get(removal.ghostId);
           if (!installed) return skip(removal, 'runtime-not-installed');
@@ -1576,8 +1832,7 @@ export class PluginMarketService {
     }
     if (removedNames.length === 0) return;
     const key = removalNoticeKey(owner);
-    const count =
-      (this.pendingRemovalNotices.get(key)?.count ?? 0) + removedNames.length;
+    const count = (this.pendingRemovalNotices.get(key)?.count ?? 0) + removedNames.length;
     this.pendingRemovalNotices.set(key, {
       count,
       name: count === 1 ? (removedNames[0] ?? null) : null,
@@ -1592,9 +1847,7 @@ export class PluginMarketService {
     const installSubject = defaultInstallSubject(owner);
     const counts = ghostIdCounts(plugins);
     const uniqueGhostIds = new Set(
-      plugins
-        .filter((plugin) => counts.get(plugin.ghostId) === 1)
-        .map((plugin) => plugin.ghostId),
+      plugins.filter((plugin) => counts.get(plugin.ghostId) === 1).map((plugin) => plugin.ghostId),
     );
     const ledgerData = ledger.read();
     const local = this.localInstallSnapshot(ledger, ledgerData.installations);
@@ -1607,6 +1860,14 @@ export class PluginMarketService {
       try {
         await this.withMutation(summary.id, async () => {
           requireSameMarketOwner(owner);
+          const freshLedgerData = ledger.read();
+          if (freshLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) {
+            return;
+          }
+          const freshLocal = this.localInstallSnapshot(ledger, freshLedgerData.installations);
+          if (this.toItem(summary, freshLocal).installState !== 'not-installed') {
+            return;
+          }
           const detail = await this.api.detail(summary.id);
           requireSameMarketOwner(owner);
           assertDetailMatchesSummary(summary, detail);
@@ -1623,6 +1884,27 @@ export class PluginMarketService {
               // 上限；真实包若额外扩权，installDetail 会安全取消并等待用户之后
               // 从详情页手动安装、在原请求窗口完成确认。
               reviewedManifest: reviewedManifest.manifest,
+              // 下载期间用户可能从本地插件页完成显式卸载。最终落位前在
+              // ghostId 锁内重读卸载意图，不能让旧 snapshot 把插件装回来。
+              beforeCommitInLock: () => {
+                const commitLedgerData = ledger.read();
+                if (
+                  commitLedgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)
+                ) {
+                  throw new SilentDefaultInstallCancelledError(
+                    'Default Plugin was explicitly uninstalled',
+                  );
+                }
+                const commitLocal = this.localInstallSnapshot(
+                  ledger,
+                  commitLedgerData.installations,
+                );
+                if (this.toItem(summary, commitLocal).installState !== 'not-installed') {
+                  throw new SilentDefaultInstallCancelledError(
+                    'Default Plugin install state changed',
+                  );
+                }
+              },
             },
             owner,
             ledger,
@@ -1630,10 +1912,12 @@ export class PluginMarketService {
         });
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。
-        log.warn('default plugin install failed', {
-          pluginId: summary.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        if (!(error instanceof SilentDefaultInstallCancelledError)) {
+          log.warn('default plugin install failed', {
+            pluginId: summary.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     }
   }
@@ -1763,9 +2047,7 @@ export class PluginMarketService {
 
   private ledgerForOwner(owner: ActiveAppSession): PluginMarketLedger {
     requireSameMarketOwner(owner);
-    return this.ledger.bind(
-      ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
-    );
+    return this.ledger.bind(ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'));
   }
 
   private withLedgerMutation<T>(
@@ -1804,9 +2086,7 @@ export class PluginMarketService {
 
   private withMutation<T>(pluginId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.mutations.get(pluginId) ?? Promise.resolve();
-    const current = previous
-      .catch(() => undefined)
-      .then(operation);
+    const current = previous.catch(() => undefined).then(operation);
     this.mutations.set(pluginId, current);
     const cleanup = () => {
       if (this.mutations.get(pluginId) === current) this.mutations.delete(pluginId);

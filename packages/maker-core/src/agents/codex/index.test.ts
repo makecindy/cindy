@@ -16654,6 +16654,598 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  it('REPRO: preserves a late collab-agent terminal update after the parent turn completes', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-terminal-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'spawnAgent running...', isRunning: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_use',
+      data: { toolUseId: 'collab-1', toolName: 'collab:spawnAgent' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.descendantNotification?.('child-thread', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      tokenUsage: { total: { totalTokens: 21 } },
+    });
+    const activeTurnUpdate = await nextEvent(iterator);
+    expect(activeTurnUpdate).toMatchObject({
+      type: 'agent_task_update',
+      data: {
+        taskId: 'collab-1',
+        status: 'running',
+        usage: { totalTokens: 21 },
+      },
+    });
+    expect(activeTurnUpdate).not.toHaveProperty('turnScope');
+    expect(activeTurnUpdate).not.toHaveProperty('backgroundTurnStartedAt');
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-1', fullText: 'child-thread: completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-1'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-1', status: 'completed' },
+    });
+
+    // The carve-out is one-shot: a retried late item must not duplicate the
+    // tool result or terminal task update.
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('does not replay a normally handled collab terminal after the parent turn completes', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-normal-collab-terminal-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-normal',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'finish before the parent turn',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-normal', status: 'running' },
+    });
+
+    const completedItem = {
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-normal',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'finish before the parent turn',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as const;
+    handlers!.itemCompleted?.(completedItem as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      data: { toolUseId: 'collab-normal' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      data: { toolUseIds: ['collab-normal'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-normal', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-normal', status: 'running' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Generating...', isRunning: true },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.(completedItem as never);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('REPRO: reconstructs a late completed-only collab tool call', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-completed-only-collab',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const turnStartedWindowStart = Date.now();
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    const turnStartedWindowEnd = Date.now();
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-completed-only',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'finish after the parent turn',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    const reconstructedToolUse = await nextEvent(iterator);
+    expect(reconstructedToolUse).toMatchObject({
+      type: 'tool_use',
+      turnScope: 'background',
+      data: {
+        toolUseId: 'collab-completed-only',
+        toolName: 'collab:spawnAgent',
+      },
+    });
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toEqual(expect.any(Number));
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toBeGreaterThanOrEqual(turnStartedWindowStart);
+    expect(reconstructedToolUse.backgroundTurnStartedAt).toBeLessThanOrEqual(turnStartedWindowEnd);
+    const reconstructedFullResult = await nextEvent(iterator);
+    expect(reconstructedFullResult).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: {
+        toolUseId: 'collab-completed-only',
+        fullText: 'child-thread: completed',
+      },
+    });
+    const reconstructedResult = await nextEvent(iterator);
+    expect(reconstructedResult).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-completed-only'] },
+    });
+    const reconstructedTaskUpdate = await nextEvent(iterator);
+    expect(reconstructedTaskUpdate).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-completed-only', status: 'completed' },
+    });
+    expect([
+      reconstructedFullResult.backgroundTurnStartedAt,
+      reconstructedResult.backgroundTurnStartedAt,
+      reconstructedTaskUpdate.backgroundTurnStartedAt,
+    ]).toEqual([
+      reconstructedToolUse.backgroundTurnStartedAt,
+      reconstructedToolUse.backgroundTurnStartedAt,
+      reconstructedToolUse.backgroundTurnStartedAt,
+    ]);
+
+    await handle.close();
+  });
+
+  it('REPRO: preserves a late collab-agent terminal update after a terminal error', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-terminal-error-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.error?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      willRetry: false,
+      error: { message: 'terminal error' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'wait, then finish',
+        agentsStates: { 'child-thread': { status: 'completed' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-1', fullText: 'child-thread: completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-1'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-1', status: 'completed' },
+    });
+
+    // The terminal notification still performs the normal authoritative cleanup.
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'failed', error: { message: 'terminal error' } },
+    });
+    await handle.close();
+  });
+
+  it('REPRO: scopes descendant updates from a completed parent turn as background', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-descendant-background-scope',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const parentTurnStartedWindowStart = Date.now();
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    const parentTurnStartedWindowEnd = Date.now();
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-1',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working after the parent turn',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'tool_use' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-1', status: 'running' },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-next' },
+    });
+
+    handlers!.descendantNotification?.('child-thread', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      tokenUsage: { total: { totalTokens: 42 } },
+    });
+    const lateDescendantUpdate = await nextEvent(iterator);
+    expect(lateDescendantUpdate).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: {
+        taskId: 'collab-1',
+        status: 'running',
+        usage: { totalTokens: 42 },
+      },
+    });
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toEqual(expect.any(Number));
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toBeGreaterThanOrEqual(
+      parentTurnStartedWindowStart,
+    );
+    expect(lateDescendantUpdate.backgroundTurnStartedAt).toBeLessThanOrEqual(
+      parentTurnStartedWindowEnd,
+    );
+
+    await handle.close();
+  });
+
+  it('REPRO: reasserts the live running state for a late V1 spawn completion', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-late-collab-running-repro',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const parentTurnStartedWindowStart = Date.now();
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    const parentTurnStartedWindowEnd = Date.now();
+    handlers!.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-running',
+        tool: 'spawnAgent',
+        status: 'inProgress',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working',
+        agentsStates: {},
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'spawnAgent running...', isRunning: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_use',
+      data: { toolUseId: 'collab-running', toolName: 'collab:spawnAgent' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      data: { taskId: 'collab-running', status: 'running' },
+    });
+
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-running',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+
+    const lateFullResult = await nextEvent(iterator);
+    expect(lateFullResult).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-running', fullText: 'child-thread: running' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+      data: { toolUseIds: ['collab-running'] },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-running', status: 'completed' },
+    });
+    const replayedRunningUpdate = await nextEvent(iterator);
+    expect(replayedRunningUpdate).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-running', status: 'running' },
+    });
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBe(
+      lateFullResult.backgroundTurnStartedAt,
+    );
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBeGreaterThanOrEqual(
+      parentTurnStartedWindowStart,
+    );
+    expect(replayedRunningUpdate.backgroundTurnStartedAt).toBeLessThanOrEqual(
+      parentTurnStartedWindowEnd,
+    );
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-running',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'keep working',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
   it('emits the terminal boundary only once for duplicate turnCompleted notifications', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -18203,6 +18795,80 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 
+  it('迟到的旧 turn collab 收口不重启新 turn idle 计时或注入前台状态', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-late-collab-terminal');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'start background child' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'inProgress',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish after the parent turn',
+          agentsStates: { 'child-thread': { status: 'running' } },
+        },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      } as never);
+
+      await handle.send({ type: 'user', content: 'new active turn' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+
+      const beforeLate = seen.length;
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish after the parent turn',
+          agentsStates: { 'child-thread': { status: 'completed' } },
+        },
+      } as never);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const lateEvents = seen.slice(beforeLate);
+      expect(lateEvents).toContainEqual(expect.objectContaining({
+        type: 'tool_result',
+        turnScope: 'background',
+      }));
+      expect(lateEvents).not.toContainEqual(expect.objectContaining({
+        type: 'status',
+        data: expect.objectContaining({ status: 'Generating...' }),
+      }));
+
+      // 新 turn 从启动起静默满原始额度就必须收口；旧 turn 的 completed
+      // 不能把已经消耗的一半 idle 配额重置成完整一轮。
+      await vi.advanceTimersByTimeAsync(IDLE_MS / 2 + 1);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('interrupt 两次都超时也要收干净本地 turn 状态,会话保持可发(review 第二轮)', async () => {
     // app-server 彻底哑火时 interruptTurnForPermissionTighten 会两次 ack 超时后放弃,
     // 而它按设计不动 isTurnInFlight —— 若 watchdog 只依赖它,会话 isTurnRunning() 恒 true,
@@ -18691,6 +19357,71 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       expect(seen.filter((e) => e.type === 'agent_task_update').length).toBeGreaterThan(0);
       // 关键:deadline 不被子代理帧续命,照旧到点收口。
       await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('迟到的 background terminal 不重置新 turn 的 reconnect deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-late-background-terminal',
+      );
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'inProgress',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish later',
+          agentsStates: { 'child-thread': { status: 'running' } },
+        },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      } as never);
+      await handle.send({ type: 'user', content: 'next' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      handlers.error?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        error: { message: 'Reconnecting... 1/5' },
+        willRetry: true,
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'old-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'start-thread-id',
+          receiverThreadIds: ['child-thread'],
+          prompt: 'finish later',
+          agentsStates: { 'child-thread': { status: 'completed' } },
+        },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(60_001);
       expect(seen).toContainEqual(expect.objectContaining({
         type: 'error',
         data: expect.objectContaining({

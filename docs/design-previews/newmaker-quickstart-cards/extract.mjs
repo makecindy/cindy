@@ -6,8 +6,8 @@
 // 门 A 会现跑本脚本并要求输出 ≡ truth.json——所以本脚本必须确定性(无时间/随机)。
 //
 // 覆盖:
-//   - 4 张卡片定义(key / icon / 4 语言 label)  ← NewMakerDraftRoute.tsx + 4×common.json
-//   - section 标题(4 语言 + 字号/行高)          ← NewMakerDraftRoute.tsx + common.json
+//   - 4 张卡片定义(key / icon / 支持语言 label) ← NewMakerDraftRoute.tsx + SUPPORTED_LOCALES
+//   - section 标题(支持语言 + 字号/行高)        ← NewMakerDraftRoute.tsx + common.json
 //   - 卡片几何(gap 8 / 圆角 12 / 描边 1 / icon 圈 32 / 字号 13 / min-h 84·112 / grid gap 12)
 //   - 主题 token(6 卡片色 + text-secondary,light/dark hex) ← themes/colors.ts
 //   - 布局公式常量(useProportionalWidth 的 5 常量 + minWidth 640 + 断点 560/700 + main px 16/32)
@@ -27,10 +27,9 @@ const SRC = {
   colors: `${REL}/src/renderer/themes/colors.ts`,
   hook: `${REL}/src/renderer/hooks/useProportionalWidth.ts`,
   globals: `${REL}/src/renderer/styles/globals.css`,
+  locales: `${REL}/src/shared/locale.ts`,
   i18n: (loc) => `${REL}/src/renderer/i18n/locales/${loc}/common.json`,
 };
-
-const LOCALES = ['zh-CN', 'en', 'ja', 'ko'];
 
 // —— 源文件读取 + 缓存 hash(整文件 sha256,与 schema.hashFile 一致) ——
 const _cache = new Map();
@@ -42,6 +41,14 @@ function read(relPath) {
     _cache.set(relPath, { text, hash });
   }
   return _cache.get(relPath);
+}
+function readSupportedLocales(relPath) {
+  const declaration = read(relPath).text.match(/SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]/s)?.[1];
+  const locales = declaration
+    ? [...declaration.matchAll(/['"]([^'"]+)['"]/g)].map((match) => match[1])
+    : [];
+  must(locales.length > 0, `${relPath} 未找到 SUPPORTED_LOCALES`);
+  return locales;
 }
 // 叶子包装:{ value, provenance:{ source, locator, hash } }
 function leaf(value, relPath, locator) {
@@ -62,6 +69,8 @@ function grab(relPath, re, msg) {
   return m;
 }
 
+const LOCALES = readSupportedLocales(SRC.locales);
+
 // ========== 1. 卡片定义(key / icon)—— NewMakerDraftRoute.tsx ==========
 // createAgentQuickStarts 数组:逐条 key + labelKey + icon
 const draftText = read(SRC.draft).text;
@@ -73,7 +82,7 @@ for (const m of draftText.matchAll(cardDefRe)) {
 }
 must(cardDefs.length === 4, `createAgentQuickStarts 期望 4 张卡,实得 ${cardDefs.length}`);
 
-// ========== 2. i18n 文案(4 语言 label + section 标题) ==========
+// ========== 2. i18n 文案(SUPPORTED_LOCALES label + section 标题) ==========
 const i18n = {};
 for (const loc of LOCALES) {
   const rel = SRC.i18n(loc);
@@ -114,8 +123,20 @@ grab(SRC.draft, /isDraftNarrow \? 'min-h-\[84px\] p-3' : 'min-h-\[112px\] p-4'/,
 grab(SRC.draft, /grid w-full gap-3/, 'grid 容器缺 "grid w-full gap-3"');
 grab(SRC.draft, /grid h-8 w-8 shrink-0 place-items-center rounded-full/, 'icon 圈缺 "h-8 w-8 ... rounded-full"');
 grab(SRC.draft, /size=\{16\}/, 'icon glyph size={16} 缺失');
-grab(SRC.draft, /w-full min-w-0 text-13 font-semibold leading-\[16px\]/, 'label span 缺 "w-full ... text-13 ... leading-[16px]"(竖排文字契约,与 icon 同宽左对齐)');
-grab(SRC.draft, /text-\[14px\] font-medium leading-\[18px\] text-\[var\(--text-secondary\)\]/, 'section 标题样式缺失');
+const labelLeading = Number(
+  grab(
+    SRC.draft,
+    /w-full min-w-0 text-13 font-semibold leading-\[([\d.]+)\]/,
+    'label span 缺 "w-full ... text-13 ... leading-[ratio]"(竖排文字契约,与 icon 同宽左对齐)',
+  )[1],
+);
+const sectionLeading = Number(
+  grab(
+    SRC.draft,
+    /text-14 font-medium leading-\[([\d.]+)\] text-\[var\(--text-secondary\)\]/,
+    'section 标题缺 "text-14 ... leading-[ratio] ... text-secondary"',
+  )[1],
+);
 // grid 列断点(draftContentWidth 即 inputWidth):< 560 → 1 列;< 700 → 2 列;否则 4 列
 grab(SRC.draft, /isDraftNarrow = draftContentWidth < 560/, 'grid 列断点 560 缺失');
 grab(SRC.draft, /isDraftMedium = draftContentWidth < 700/, 'grid 列断点 700 缺失');
@@ -123,6 +144,7 @@ grab(SRC.draft, /isDraftMedium = draftContentWidth < 700/, 'grid 列断点 700 �
 grab(SRC.draft, /isDraftNarrow\s*\n?\s*\? 'px-4/, 'main narrow padding px-4 缺失');
 // --text-13 = 13px(text-13 = var(--text-13),定义在 globals.css)
 grab(SRC.globals, /--text-13:\s*13px/, 'globals.css 缺 --text-13: 13px');
+grab(SRC.globals, /--text-14:\s*14px/, 'globals.css 缺 --text-14: 14px');
 
 const card = {
   gapPx: leaf(4, SRC.draft, 'className gap-1 → 4px(Tailwind spacing 1 = 0.25rem)'),
@@ -131,7 +153,7 @@ const card = {
   iconCirclePx: leaf(32, SRC.draft, 'className h-8 w-8 → 32px icon 圆圈'),
   iconGlyphPx: leaf(16, SRC.draft, 'Icon size={16} → 16px glyph'),
   labelFontPx: leaf(13, SRC.globals, 'text-13 = var(--text-13) = 13px(globals.css)'),
-  labelLinePx: leaf(16, SRC.draft, 'className leading-[16px] → 16px'),
+  labelLinePx: leaf(13 * labelLeading, SRC.draft, `className leading-[${labelLeading}] × text-13 → ${13 * labelLeading}px`),
   padNarrowPx: leaf(12, SRC.draft, 'narrow 档 p-3 → 12px'),
   padNormalPx: leaf(16, SRC.draft, '常态 p-4 → 16px'),
   minHNarrowPx: leaf(84, SRC.draft, 'narrow 档 min-h-[84px]'),
@@ -140,8 +162,8 @@ const card = {
 };
 
 const section = {
-  titleFontPx: leaf(14, SRC.draft, 'section 标题 text-[14px]'),
-  titleLinePx: leaf(18, SRC.draft, 'section 标题 leading-[18px]'),
+  titleFontPx: leaf(14, SRC.draft, 'section 标题 text-14 = var(--text-14) = 14px'),
+  titleLinePx: leaf(14 * sectionLeading, SRC.draft, `section 标题 leading-[${sectionLeading}] × text-14 → ${14 * sectionLeading}px`),
   titles: sectionTitles,
 };
 
@@ -260,6 +282,9 @@ const samples = SAMPLE_SIZES.map(([w, h]) => {
 
 // ========== 输出 ==========
 const truth = {
+  supportedLocales: LOCALES.map((locale, index) =>
+    leaf(locale, SRC.locales, `SUPPORTED_LOCALES[${index}]`),
+  ),
   cards,
   section,
   card,

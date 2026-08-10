@@ -910,6 +910,95 @@ describe('Maker session capabilities', () => {
   });
 });
 
+describe('Maker Pi runtime skill status', () => {
+  it('marks only project skills confirmed by the matching live session as loaded', async () => {
+    const agent = createAgent(async (opts) => {
+      const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+      handle.getRuntimeCapabilities = () => ({
+        sessionId: opts.sessionId,
+        capturedAt: '2026-08-08T00:00:00.000Z',
+        generation: 1,
+        status: 'loaded',
+        source: 'pi:get_commands',
+        commands: [
+          {
+            name: `skill:${opts.sessionId}-skill`,
+            source: 'skill',
+            sourceInfo: { source: 'auto', scope: 'project', baseDir: '/repo/.pi' },
+          },
+          {
+            name: 'skill:user-collision',
+            source: 'skill',
+            sourceInfo: { source: 'auto', scope: 'user', baseDir: '/home/.agents/skills' },
+          },
+        ],
+      });
+      return handle;
+    }, 'pi');
+    const projectSkill = (name: string, skillPath: string) => ({
+      kind: 'agent-skill' as const,
+      name,
+      source: 'skill' as const,
+      scope: 'repo' as const,
+      path: skillPath,
+      runtimeStatus: 'discovered' as const,
+    });
+    agent.listAgentSkills = vi.fn(async () => ({
+      skills: [
+        projectSkill('one-skill', '/repo/.pi/skills/one-skill'),
+        projectSkill('one-skill', '/repo/.agents/skills/one-skill'),
+        projectSkill('two-skill', '/repo/.pi/skills/two-skill'),
+        projectSkill('user-collision', '/repo/.pi/skills/user-collision'),
+      ],
+    }));
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'one',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'm',
+    });
+    await maker.createSession({
+      id: 'two',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'm',
+    });
+
+    const one = await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'one' });
+    const two = await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'two' });
+    const preview = await maker.listAgentSkills('pi', { workingDir: '/repo' });
+    const wrongProject = await maker.listAgentSkills('pi', {
+      workingDir: '/other-repo',
+      sessionId: 'one',
+    });
+
+    expect(one.skills.map((skill) => [skill.name, skill.runtimeStatus])).toEqual([
+      ['one-skill', 'loaded'],
+      ['one-skill', 'discovered'],
+      ['two-skill', 'discovered'],
+      ['user-collision', 'discovered'],
+    ]);
+    expect(one.skills[0]).toMatchObject({
+      name: 'one-skill',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:one-skill',
+    });
+    expect(two.skills.map((skill) => [skill.name, skill.runtimeStatus])).toEqual([
+      ['one-skill', 'discovered'],
+      ['one-skill', 'discovered'],
+      ['two-skill', 'loaded'],
+      ['user-collision', 'discovered'],
+    ]);
+    expect(preview.skills.every((skill) => skill.runtimeStatus === 'discovered')).toBe(true);
+    expect(wrongProject.skills.every((skill) => skill.runtimeStatus === 'discovered')).toBe(true);
+  });
+});
+
 describe('Session turn send guard', () => {
   it('reserves the turn synchronously while handle.send is still awaiting', async () => {
     let publishRelease!: (release: () => void) => void;

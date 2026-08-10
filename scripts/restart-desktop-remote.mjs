@@ -534,6 +534,8 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['OPEN_DEVTOOLS', env.OPEN_DEVTOOLS],
     // --wait-ready 的一次性状态文件：runner 写失败，Electron main ready-to-show 写成功。
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
+    // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
+    ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
   ].filter(([, value]) => value);
   if (envEntries.length === 0) return '';
 

@@ -24,7 +24,10 @@
 import type { AgentEvent, TurnContinuationState } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
-import { createTurnPresenter } from '../im/shared/turnPresenter.js';
+import {
+  createTurnPresenter,
+  type ProgressBodyMode,
+} from '../im/shared/turnPresenter.js';
 import { overloadFailureNotice } from '../im/shared/turnRetryNotice.js';
 
 /*
@@ -83,6 +86,10 @@ export interface ObservableSession {
 export interface HookTurnObserverDeps {
   /** 渲染快照出口(turn.progress); 省略 = 不发进度, 零开销路径。 */
   onProgress?: (text: string) => void;
+  /** 运行中正文范围；官方 Telegram 用 whole 对齐个人 bot，其它车道保留 latest。 */
+  progressBodyMode?: ProgressBodyMode;
+  /** done 时跳过尾沿节流并先发最新进度；仅官方 Telegram 车道启用。 */
+  flushProgressOnDone?: boolean;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
   /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle。 */
@@ -124,14 +131,26 @@ export function observeHookTurn(
   session: ObservableSession,
   deps: HookTurnObserverDeps,
 ): HookTurnObserver {
-  const { onProgress, onToolResult, onTurnTerminal, onSilentStopSettled, log } = deps;
+  const {
+    onProgress,
+    progressBodyMode,
+    flushProgressOnDone,
+    onToolResult,
+    onTurnTerminal,
+    onSilentStopSettled,
+    log,
+  } = deps;
   // 呈现大脑(正文累积 / render 投影 / 过程区合成 / trailing-edge 快照)抽到
   // im/shared/turnPresenter, 与个人 IM 渠道共用同一实现。这里用 finalized-segments
   // 策略: isFinal 逐条契约、定稿段按消息切开、claude fallbackTail 自成段、uuid 缺失
   // 退 requestId、完成态经 buildMessageRenderItems 折叠 —— #1272/#1636/#1703 的实踩
   // 教训随代码留在该模块。收口(何时结束)刻意**不在** presenter: 见下面 done /
   // silentStop / onStatusChange 三条出口, 只有它们能让本观察器 settle。
-  const presenter = createTurnPresenter({ mode: 'finalized-segments', onProgress });
+  const presenter = createTurnPresenter({
+    mode: 'finalized-segments',
+    onProgress,
+    progressBodyMode,
+  });
 
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
@@ -235,6 +254,9 @@ export function observeHookTurn(
           return;
         }
         presenter.seal();
+        // Telegram 的 turn.end 仍要经过 server 发布队列。先把节流窗里的最新安全
+        // 快照冲进既有 progress 载体，避免客户端在 teardown 时直接吞掉最后一帧。
+        if (flushProgressOnDone) presenter.flushProgress();
         // done 是 SDK turn 的权威完成事件；只有 provider 明确锁存了会自动
         // 唤醒下一 turn 的任务时，它才是中间边界。agent_task_update 只是 UI
         // 任务卡事件，Codex / Pi 子代理和 local_bash 都没有资格阻塞收口。

@@ -1298,6 +1298,74 @@ describe('maker SEND transaction', () => {
   });
 });
 
+describe('mobile client prompt note', () => {
+  it('keeps ordinary mobile messages annotated on the wire but persists the original text', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', 'hello', undefined, {
+      persistUserMessage: { clientId: 'mobile-1', content: 'hello' },
+    });
+
+    const sent = vi.mocked(session.send).mock.calls[0]?.[0];
+    expect(sent).toEqual(expect.stringMatching(/^\[客户端说明\]/));
+    expect(sent).toEqual(expect.stringMatching(/\n\nhello$/));
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1].content).toBe('hello');
+  });
+
+  it('sends mobile Claude Code /compact commands without a prepended note', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', '/compact focus on decisions');
+
+    expect(session.send).toHaveBeenCalledWith('/compact focus on decisions', expect.anything());
+  });
+
+  it('keeps the mobile note for /compact text sent to a non-Claude agent', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', '/compact');
+
+    const sent = vi.mocked(session.send).mock.calls[0]?.[0];
+    expect(sent).toEqual(expect.stringMatching(/^\[客户端说明\]/));
+  });
+
+  it('applies the same command bypass to coordinator-drained mobile messages', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => false),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/compact' },
+      undefined,
+      { fromMobileClient: true },
+    );
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: '/compact' },
+      expect.anything(),
+    );
+  });
+});
+
 describe('session-agent-switch handoff injection', () => {
   it('pending 命中时 wire payload 前置交接段,落库内容保持用户原文,accepted 后 consume', async () => {
     const consumePendingHandoff = vi.fn();

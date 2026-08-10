@@ -65,6 +65,16 @@ describe('refreshLocalCatalogSnapshot', () => {
     expect(mocks.warn).toHaveBeenCalledOnce();
   });
 
+  it('keeps the last valid snapshot when capabilities loading fails', async () => {
+    mocks.loadProviders.mockResolvedValueOnce({ providers: [{ id: 'provider-old' }] });
+    mocks.loadCapabilities.mockRejectedValueOnce(new Error('Pi capability IPC failed'));
+
+    await expect(refreshLocalCatalogSnapshot()).resolves.toBe(false);
+    expect(mocks.commitProviders).not.toHaveBeenCalled();
+    expect(mocks.commitCapabilities).not.toHaveBeenCalled();
+    expect(mocks.warn).toHaveBeenCalledOnce();
+  });
+
   it('does not commit capabilities when the provider snapshot owner is stale', async () => {
     const providers = {
       dataOwnerId: 'owner-b',
