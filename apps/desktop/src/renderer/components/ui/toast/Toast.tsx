@@ -38,16 +38,6 @@ export const VARIANT_MAP: Record<ToastVariant, VariantMeta> = {
   },
 };
 
-/** 无 source 时用 variant 作为副文本标签 */
-function variantLabel(v: ToastVariant): string {
-  switch (v) {
-    case 'info': return 'Info';
-    case 'success': return 'Success';
-    case 'warning': return 'Warning';
-    case 'error': return 'Error';
-  }
-}
-
 export interface ToastProps {
   item: ToastItem;
 }
@@ -55,9 +45,6 @@ export interface ToastProps {
 export function Toast({ item }: ToastProps) {
   const meta = VARIANT_MAP[item.variant];
   const Icon = meta.icon;
-
-  // 副文本：有 source 时显示来源名，否则用 variant 名称作为标签
-  const subtitle = item.source?.name ?? variantLabel(item.variant);
 
   return (
     <div
@@ -85,19 +72,21 @@ export function Toast({ item }: ToastProps) {
         >
           {item.message}
         </div>
-        <div className="mt-1 inline-flex items-center gap-1.5">
-          {item.source?.iconDataUrl && (
-            <img
-              src={item.source.iconDataUrl}
-              alt=""
-              draggable={false}
-              className="h-3.5 w-3.5 rounded-[4px] object-cover"
-            />
-          )}
-          <span className="text-xs leading-snug text-[var(--text-tertiary)]">
-            {subtitle}
-          </span>
-        </div>
+        {item.source && (
+          <div className="mt-1 inline-flex items-center gap-1.5">
+            {item.source.iconDataUrl && (
+              <img
+                src={item.source.iconDataUrl}
+                alt=""
+                draggable={false}
+                className="h-3.5 w-3.5 rounded-[4px] object-cover"
+              />
+            )}
+            <span className="text-xs leading-snug text-[var(--text-tertiary)]">
+              {item.source.name}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
