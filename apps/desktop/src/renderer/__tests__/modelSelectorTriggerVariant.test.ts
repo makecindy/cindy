@@ -32,6 +32,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
+        'newChat.modelSelector.modelListAria': '模型列表',
         'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
@@ -1151,7 +1152,7 @@ describe('ModelSelector trigger variants', () => {
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: /Current: Subscription Model 1/ }));
       });
-      const list = screen.getByRole('listbox', { name: 'Model list' });
+      const list = screen.getByRole('listbox', { name: '模型列表' });
 
       expect(list.className).toContain('max-h-[300px]');
       expect(list.className).toContain('overflow-y-auto');
@@ -1202,7 +1203,7 @@ describe('ModelSelector trigger variants', () => {
           vendorKey: 'cc',
         }),
       );
-      const list = screen.getByRole('listbox', { name: 'Model list' });
+      const list = screen.getByRole('listbox', { name: '模型列表' });
       Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 80 });
 
       view.rerender(
@@ -1856,7 +1857,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByRole('group', { name: /Opus 4\.8/ })).toBeTruthy();
 
     // 列表滚动不派发 pointerleave,浮层会跟着滚出视口的锚点行跑到菜单外 → 用户滚动必须立即收起。
-    fireEvent.scroll(screen.getByRole('listbox', { name: 'Model list' }));
+    fireEvent.scroll(screen.getByRole('listbox', { name: '模型列表' }));
     expect(screen.queryByRole('group', { name: /Opus 4\.8/ })).toBeNull();
     vi.useRealTimers();
   });
@@ -2191,7 +2192,7 @@ describe('ModelSelector trigger variants', () => {
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
       expect(row.className).toContain('min-h-9');
       expect(within(row).getByText('Qwen 3.7').className).toContain('leading-5');
-      expect(screen.getByRole('listbox', { name: 'Model list' }).style.maxHeight).toBe('226px');
+      expect(screen.getByRole('listbox', { name: '模型列表' }).style.maxHeight).toBe('226px');
       expect(row.textContent).not.toContain('¥6 / ¥18');
       expect(row.textContent).not.toContain('¥12 / ¥36');
       const rowBadge = within(row).getByText('立省 50%');

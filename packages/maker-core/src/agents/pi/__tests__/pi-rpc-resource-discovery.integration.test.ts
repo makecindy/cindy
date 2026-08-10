@@ -25,6 +25,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { scanPiCustomizations } from '../customization-scanner.js';
 import { capturePiRuntimeCapabilityManifest } from '../runtime-capabilities.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -666,6 +667,33 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
     }]);
   });
 
+  it('scanner superset differs from unapproved runtime only by project trust', async () => {
+    const fixture = await createFixture('pi-rpc-scanner-trust-gap-');
+    const result = await runGetCommands({
+      binaryPath: PI_BINARY,
+      cwd: fixture.workingDir,
+      configHome: fixture.configHome,
+      sessionDir: fixture.sessionDir,
+      approve: false,
+    });
+    const loadedNames = new Set(
+      normalizeSkills(result.commands, fixture)
+        .filter((skill) => skill.scope === 'project')
+        .map((skill) => skill.name),
+    );
+    const scanned = await scanPiCustomizations({ workingDirs: [fixture.workingDir] });
+    const discovered = scanned.items.filter((item) => item.scope === 'repo');
+    const discoveredNames = new Set(discovered.map((item) => `skill:${item.name}`));
+
+    expect([...loadedNames].every((name) => discoveredNames.has(name))).toBe(true);
+    expect([...discoveredNames].filter((name) => !loadedNames.has(name)).sort()).toEqual([
+      'skill:ancestor-agents-skill',
+      'skill:project-agents-skill',
+      'skill:project-pi-skill',
+    ]);
+    expect(discovered.every((item) => item.runtimeStatus === 'discovered')).toBe(true);
+  });
+
   it('records project .pi/skills and current/ancestor .agents/skills only with explicit trust', async () => {
     const fixture = await createFixture('pi-rpc-trust-');
     const result = await runGetCommands({
@@ -676,6 +704,38 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
       approve: true,
     });
     const skills = normalizeSkills(result.commands, fixture);
+    const scanned = await scanPiCustomizations({ workingDirs: [fixture.workingDir] });
+    const discoveredProjectNames = new Set(
+      scanned.items
+        .filter((item) => item.scope === 'repo')
+        .map((item) => `skill:${item.name}`),
+    );
+    const loadedProjectNames = new Set(
+      skills
+        .filter((skill) => skill.scope === 'project')
+        .map((skill) => skill.name),
+    );
+    const loadedProjectBaseDirs = new Map(
+      result.commands.flatMap((command) => {
+        const baseDir = command.sourceInfo?.baseDir;
+        if (command.source !== 'skill' || command.sourceInfo?.scope !== 'project' || !baseDir) {
+          return [];
+        }
+        return [[command.name, canonicalPath(baseDir)] as const];
+      }),
+    );
+    expect(discoveredProjectNames).toEqual(new Set([
+      'skill:ancestor-agents-skill',
+      'skill:project-agents-skill',
+      'skill:project-pi-skill',
+    ]));
+    expect([...loadedProjectNames].every((name) => discoveredProjectNames.has(name))).toBe(true);
+    expect([...discoveredProjectNames].filter((name) => !loadedProjectNames.has(name))).toEqual([]);
+    expect(loadedProjectBaseDirs).toEqual(new Map([
+      ['skill:ancestor-agents-skill', canonicalPath(path.join(fixture.repoRoot, '.agents'))],
+      ['skill:project-agents-skill', canonicalPath(path.join(fixture.workingDir, '.agents'))],
+      ['skill:project-pi-skill', canonicalPath(path.join(fixture.workingDir, '.pi'))],
+    ]));
 
     expect(skills).toEqual([
       {

@@ -252,3 +252,20 @@ export function resolveRowSelection(args: {
 
   return { model: row.model.id, providerId: row.provider.id, effort, fastMode };
 }
+
+/**
+ * 记忆的 fastMode 恢复前重验(codex review P2):恢复值必须与手动选行同款
+ * `fastEditable` 门控对齐——行必须仍在目录中,且 agent 有 Fast 能力、该 (供应商,
+ * 模型) 支持 Fast;任一不满足即不可恢复(置 false),避免恢复出「UI 显示关、
+ * 实际创建发 true」的矛盾态。
+ */
+export function isFastRestorable(
+  agentKind: AgentKind,
+  providerId: string,
+  modelId: string,
+  modelRows: readonly ProviderModelRow[],
+  hasFastModeCap: boolean,
+): boolean {
+  const row = modelRows.find((r) => r.provider.id === providerId && r.model.id === modelId);
+  return !!row && hasFastModeCap && modelSupportsFastMode(row.provider, row.model.id, agentKind);
+}

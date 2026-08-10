@@ -2785,7 +2785,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(h).toBeTruthy();
       expect(mocks.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
     });
-  
+
     it('未受保护的消息照常落库(既有行为不变)', async () => {
       setupSession(async () => ({ accepted: true }));
       mocks.persistUserMessage.mockClear();

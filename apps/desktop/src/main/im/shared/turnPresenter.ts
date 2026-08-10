@@ -156,6 +156,8 @@ export function shouldEmitProgressFrame(candidate: string, slots: ProgressDedupe
 /** trailing-edge 节流发射器的公开形态。 */
 export interface ProgressEmitter {
   schedule(): void;
+  /** 取消节流等待并立即尝试发出当前最新快照。 */
+  flush(): void;
   ensureTicker(): void;
   stop(): void;
 }
@@ -260,6 +262,12 @@ export function createProgressEmitter(
   };
   return {
     schedule,
+    flush(): void {
+      if (stopped) return;
+      if (pending !== null) clearTimeout(pending);
+      pending = null;
+      fire();
+    },
     ensureTicker(): void {
       if (stopped || ticker !== null) return;
       ticker = setInterval(schedule, PROGRESS_TICK_MS);
@@ -290,12 +298,17 @@ export function composeProgressView(activityText: string, body: string): string 
 /** 正文累积策略。见模块头。 */
 export type TurnPresenterMode = 'finalized-segments' | 'buffer-replace';
 
+/** 运行中正文投影：默认只露当前消息；whole 与个人 IM 一样露出整轮累计正文。 */
+export type ProgressBodyMode = 'latest' | 'whole';
+
 export interface TurnPresenterOptions {
   mode: TurnPresenterMode;
   /** 过程区耗时基准(activity.startedAt); 缺省取当前时刻。 */
   startedAt?: number;
   /** 注入后启用 trailing-edge 进度发射器(observer 路径); 省略 = 零开销, 无发射器。 */
   onProgress?: (text: string) => void;
+  /** 运行中正文范围；缺省保留官方 bot 既有的 latest 行为。 */
+  progressBodyMode?: ProgressBodyMode;
   /** 纯呈现策略(节流/长度上限/惰性占位); 省略 = DEFAULT_PRESENTER_POLICY(两侧同值)。 */
   policy?: PresenterPolicy;
 }
@@ -333,6 +346,8 @@ export interface TurnPresenter {
 
   // ── trailing-edge 发射器(仅当注入 onProgress 时有效, 否则均为 no-op) ──
   scheduleProgress(): void;
+  /** 跳过剩余节流窗口，立即尝试发出当前最新快照。 */
+  flushProgress(): void;
   ensureProgressTicker(): void;
   stopProgress(): void;
 }
@@ -659,8 +674,17 @@ export function createTurnPresenter(options: TurnPresenterOptions): TurnPresente
   const activity = createTurnActivity(startedAt);
   const composeRunning = (b: string): string =>
     composeProgressView(renderActivity(activity, Date.now()), b);
+  const composeProgress = (): string => {
+    if (options.progressBodyMode !== 'whole') return composeRunning(body.progressBody());
+    const whole = composeRunning(body.wholeText());
+    // 累计正文跨过单帧上限后不能继续头截断：那会让最新答案永远落在截点外。
+    // 退回当前消息，至少保住最新进展；终稿仍由 turn.end 带完整正文。
+    return whole.length <= policy.intermediateMaxRenderedChars
+      ? whole
+      : composeRunning(body.progressBody());
+  };
   const emitter = options.onProgress
-    ? createProgressEmitter(options.onProgress, () => composeRunning(body.progressBody()), policy)
+    ? createProgressEmitter(options.onProgress, composeProgress, policy)
     : null;
 
   return {
@@ -713,6 +737,9 @@ export function createTurnPresenter(options: TurnPresenterOptions): TurnPresente
     composeRunning,
     scheduleProgress(): void {
       emitter?.schedule();
+    },
+    flushProgress(): void {
+      emitter?.flush();
     },
     ensureProgressTicker(): void {
       emitter?.ensureTicker();

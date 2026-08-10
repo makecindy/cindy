@@ -32,6 +32,7 @@ import {
   PluginManagementPage,
 } from '@/features/plugin/PluginManagementLayout';
 import { canAccessSkillhubMarket } from './lib/marketAccess';
+import { buildLocalSkillRoute, findLocalSkillByPath } from './lib/localRoutes';
 import { refresh as refreshSkillhub, useSkillhub } from './hooks/useSkillhub';
 import { useMarketList, type MarketSkill } from './hooks/useMarketList';
 import { basename, deriveProjectWorkingDir } from './lib/pathDerivations';
@@ -150,15 +151,10 @@ export function SkillhubHomeView() {
   const [importBusy, setImportBusy] = useState(false);
 
   const openLocal = (s: SkillhubSkill) => {
-    const name = encodeURIComponent(s.name);
-    const base =
-      s.scope === 'global'
-        ? `/skillhub/local/${s.kind}/global/${name}`
-        : `/skillhub/local/${s.kind}/project/${s.projectHash}/${name}`;
     // 从首页进入 = 一次全新入口:清掉旧的技能历史栈(resetHistory),并把回退落点
     // 设为首页(from)。这样详情页「返回」回到首页这一步,而不是会话内残留的上一个技能。
     // 详情→详情的链式跳转不带 resetHistory,链路仍能逐级回退。
-    navigate(`${base}?engine=${s.engine}`, {
+    navigate(buildLocalSkillRoute(s), {
       state: { from: '/skillhub/local', resetHistory: true },
     });
   };
@@ -432,22 +428,33 @@ export function SkillhubHomeView() {
             });
           }}
           onInstallComplete={(result) => {
-            void refreshSkillhub();
             closeImportPicker();
             if (!result?.name) return;
-            const name = encodeURIComponent(result.name);
-            const projectRoot = result.absolutePath
-              ? deriveProjectWorkingDir(result.absolutePath)
-              : null;
-            if (projectRoot) {
-              navigate(
-                `/skillhub/local/skill/project/${projectHash(projectRoot)}/${name}`,
-                { state: { from: '/skillhub/local', resetHistory: true } },
-              );
-              return;
-            }
-            navigate(`/skillhub/local/skill/global/${name}`, {
-              state: { from: '/skillhub/local', resetHistory: true },
+            void refreshSkillhub().then((scannedSkills) => {
+              const imported = result.absolutePath
+                ? findLocalSkillByPath(scannedSkills, result.absolutePath)
+                : undefined;
+              if (imported) {
+                navigate(buildLocalSkillRoute(imported), {
+                  state: { from: '/skillhub/local', resetHistory: true },
+                });
+                return;
+              }
+              const projectRoot = result.absolutePath
+                ? deriveProjectWorkingDir(result.absolutePath)
+                : null;
+              const fallback = {
+                id: '',
+                absolutePath: result.absolutePath ?? '',
+                engine: 'claude-code' as const,
+                kind: 'skill' as const,
+                scope: projectRoot ? 'project' as const : 'global' as const,
+                projectHash: projectRoot ? projectHash(projectRoot) : undefined,
+                name: result.name,
+              };
+              navigate(buildLocalSkillRoute(fallback), {
+                state: { from: '/skillhub/local', resetHistory: true },
+              });
             });
           }}
         />

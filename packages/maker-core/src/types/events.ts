@@ -10,6 +10,7 @@
  */
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
 
 export type AgentEventType =
@@ -94,6 +95,8 @@ export interface AgentTaskUpdateEventData {
   model?: string | null;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
+  /** Explicit durable-workspace identity; control/task-card-only updates omit it. */
+  subagentObservation?: SubagentObservation;
   /**
    * workflow 逐 agent 进度树(taskType=local_workflow 时 task_progress 事件携带,
    * 经 `@cindy/maker-shared/agent-task` 的 normalizeWorkflowProgressEntries 收窄截断)。
@@ -132,6 +135,20 @@ export interface AgentEvent {
   data: unknown;
   /** 事件来源标识，便于调试 */
   source?: 'claude-code' | 'codex' | 'pi';
+  /**
+   * Events that finish work owned by a completed turn can still arrive after a
+   * later turn has started (for example, a V1 collab child). These are still
+   * useful to render, but must not inherit the later turn's attribution or
+   * watchdog state.
+   */
+  turnScope?: 'turn' | 'background';
+  /**
+   * Local start time of the turn that owns a background event. Main-process
+   * persistence uses this lifecycle evidence to keep pre-clear late work from
+   * repopulating a cleared conversation. Never expose it to renderer/device
+   * boundaries.
+   */
+  backgroundTurnStartedAt?: number;
   /**
    * 本事件所属 turn 的发起来源,由 Session 在事件 fan-out 前打标(见 session.ts
    * 的 currentTurnOrigin)。turn 结束(isTerminalTurnEvent)后清空,不污染下一轮。

@@ -13,7 +13,7 @@
  *   - 附件限额计算要把 pendingUploads.length 算进去;
  *   - 页面卸载时 hook 自动 dispose(在途上传完成后回收 OSS 中转对象)。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
@@ -53,6 +53,11 @@ import {
 import type { RemoteSerializedAttachment } from '@/session/types';
 
 export interface UseMobileLocalAttachmentsOptions {
+  /**
+   * composer 附件作用域。已建任务页传 sessionId；作用域换代后，旧 picker / 粘贴 /
+   * 标注异步入口与上传完成结果不得写入新作用域。省略时保持旧的单作用域行为。
+   */
+  attachmentScopeKey?: string;
   getAccessToken: () => Promise<string | null>;
   /** 当前已入列附件数(限额用;pending 由 hook 自己计入)。 */
   getAttachmentCount: () => number;
@@ -111,8 +116,13 @@ export interface UseMobileLocalAttachmentsResult {
   removePendingUpload: (localId: string) => void;
   /** 重试一个失败态的上传卡(自动取新鲜 token 重跑完整管线)。 */
   retryPendingUpload: (localId: string) => void;
-  /** 丢弃全部在途上传(切换目标电脑等草稿整体作废场景;完成后回收 OSS 中转对象)。 */
+  /**
+   * 丢弃 composer 域的全部在途上传与粘贴占位(切换任务 / 目标电脑等草稿整体
+   * 作废场景;完成后回收 OSS 中转对象)。
+   */
   discardAllPendingUploads: () => void;
+  /** 切换 attachmentScopeKey 前封住旧作用域；迟到 picker / 粘贴结果也会被拒绝。 */
+  discardAllPendingUploadsForScopeChange: () => void;
   /** 等全部在途上传落定;返回期间失败个数(>0 时调用方应中止发送)。 */
   waitForPendingUploads: () => Promise<{ failedCount: number }>;
   /**
@@ -175,6 +185,16 @@ export function useMobileLocalAttachments(
   // 回调经 ref 转发,controller 单例化的同时始终调到最新一次 render 的闭包。
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  // scope-change discard 与普通 removeAll 不同：除了清当前队列，还要让旧 render
+  // 持有的 picker / 粘贴 / 标注闭包永久过期。不能只比 sessionId：A → B → A 时
+  // 最早 A 的超慢异步结果仍是同 id，必须靠单调 generation 区分两次进入。
+  const attachmentScopeGenerationRef = useRef(0);
+  const attachmentScopeKey = options.attachmentScopeKey;
+  const attachmentScopeGeneration = attachmentScopeGenerationRef.current;
+  const isAttachmentScopeActive = () => attachmentScopeKey == null || (
+    optionsRef.current.attachmentScopeKey === attachmentScopeKey
+    && attachmentScopeGenerationRef.current === attachmentScopeGeneration
+  );
 
   const getPastePlaceholderTotal = () =>
     pastePlaceholderBatchesRef.current.reduce((sum, n) => sum + n, 0);
@@ -220,7 +240,7 @@ export function useMobileLocalAttachments(
   };
 
   const beginPastePlaceholders = (count: number) => {
-    if (count <= 0) return;
+    if (count <= 0 || !isAttachmentScopeActive()) return;
     pastePlaceholderBatchesRef.current.push(count);
     syncPastePlaceholders();
   };
@@ -233,6 +253,7 @@ export function useMobileLocalAttachments(
   };
 
   const failPastePlaceholders = () => {
+    if (!isAttachmentScopeActive()) return;
     if (pastePlaceholderBatchesRef.current.length === 0) return;
     shiftPastePlaceholderBatch();
     optionsRef.current.onError(t('composer.upload.clipboardReadFailed'));
@@ -251,6 +272,21 @@ export function useMobileLocalAttachments(
     }),
     onPendingChange: setPendingUploads,
     onUploaded: async (attachment, candidate, uploadedUri, localId, localUris, isActive) => {
+      const candidateScopeKey = candidate.attachmentScopeKey;
+      if (candidateScopeKey != null && (
+        optionsRef.current.attachmentScopeKey !== candidateScopeKey
+        || candidate.attachmentScopeGeneration !== attachmentScopeGenerationRef.current
+      )) {
+        // 防御性代际闸：正常抽屉路径会先 removeAll，把任务标 discarded；若完成结果
+        // 已越过 controller 的最后取消检查点，这里仍按 candidate 的原 owner 拒收。
+        // task 已被 removeAll 标记时由 controller 统一回收，避免这里重复 DELETE。
+        if (!isActive()) return;
+        discardMobileUploadedAttachment(attachment, {
+          getToken: () => optionsRef.current.getAccessToken(),
+        });
+        if (candidate.cleanupLocalUris) await candidate.cleanupLocalUris(localUris);
+        return;
+      }
       // 发送后气泡的本地缩略图兜底:消息里持久化的是 cindy-oss-attach:// 中转引用,
       // 被控端物化改写前(乐观渲染 / 电脑离线窗口)渲染端没有任何预览路径——把
       // 实际上传的文件拷进自有目录记映射,气泡用本地图顶上。
@@ -280,8 +316,58 @@ export function useMobileLocalAttachments(
         }
       }
     },
-    onFailed: (err, localId) => optionsRef.current.onError(formatRemoteError(err), { uploadLocalId: localId }),
+    onFailed: (err, localId, candidate) => {
+      const candidateScopeKey = candidate.attachmentScopeKey;
+      if (candidateScopeKey != null && (
+        optionsRef.current.attachmentScopeKey !== candidateScopeKey
+        || candidate.attachmentScopeGeneration !== attachmentScopeGenerationRef.current
+      )) return;
+      optionsRef.current.onError(formatRemoteError(err), { uploadLocalId: localId });
+    },
   }), []);
+
+  const discardAllPendingUploads = useCallback(() => {
+    controller.removeAll();
+    // 粘贴占位尚未进入 controller 队列，但同样属于当前 composer 草稿。任务 / 设备
+    // 换代时若只清 controller，旧占位会继续显示在新目标，且 waitForPendingUploads
+    // 的等待者会一直挂到旧粘贴事件落定或超时。
+    pastePlaceholderBatchesRef.current = [];
+    setPastePlaceholderCount(0);
+    if (pastePlaceholderTimerRef.current) {
+      clearTimeout(pastePlaceholderTimerRef.current);
+      pastePlaceholderTimerRef.current = null;
+    }
+    const waiters = pastePlaceholderWaitersRef.current;
+    pastePlaceholderWaitersRef.current = [];
+    for (const resolve of waiters) resolve();
+  }, [controller]);
+
+  const discardAllPendingUploadsForScopeChange = useCallback(() => {
+    // 同一旧 render 的抽屉同步封口 + effect cleanup 会各调用一次；只有仍是本代时
+    // 才递增，保证新 session render 捕获的 generation 不被旧 cleanup 再作废。
+    if (
+      attachmentScopeKey != null
+      && attachmentScopeGenerationRef.current === attachmentScopeGeneration
+    ) attachmentScopeGenerationRef.current += 1;
+    discardAllPendingUploads();
+  }, [attachmentScopeGeneration, attachmentScopeKey, discardAllPendingUploads]);
+
+  const enqueueUploads = (
+    candidates: readonly MobileLocalAttachmentUploadCandidate[],
+    opts: { token: string | Promise<string | null> },
+  ) => {
+    if (!isAttachmentScopeActive()) return;
+    controller.enqueue(
+      attachmentScopeKey == null
+        ? candidates
+        : candidates.map((candidate) => ({
+            ...candidate,
+            attachmentScopeGeneration,
+            attachmentScopeKey,
+          })),
+      opts,
+    );
+  };
 
   useEffect(() => () => {
     controller.dispose();
@@ -301,6 +387,7 @@ export function useMobileLocalAttachments(
 
   /** 限额检查 + 防重入的公共前奏;返回 null 表示不能继续。 */
   const beginPick = (): { remainingSlots: number } | null => {
+    if (!isAttachmentScopeActive()) return null;
     if (pickerBusyRef.current) return null;
     // 占坑数读同步真源 getPendingSlotCount(上传中 + 粘贴占位),不读 React state:
     // 连续入队场景不受 state commit 滞后影响(review P1);占位期间从相册再加图
@@ -330,6 +417,7 @@ export function useMobileLocalAttachments(
       const permission = source === 'camera'
         ? await ImagePicker.requestCameraPermissionsAsync()
         : await ImagePicker.requestMediaLibraryPermissionsAsync(false);
+      if (!isAttachmentScopeActive()) return;
       if (!permission.granted) {
         optionsRef.current.onError(source === 'camera'
           ? t('composer.upload.cameraPermission')
@@ -349,18 +437,19 @@ export function useMobileLocalAttachments(
           quality: 1,
           selectionLimit: begun.remainingSlots,
         });
+      if (!isAttachmentScopeActive()) return;
       if (picked.canceled) return;
 
       const candidates: MobileLocalAttachmentUploadCandidate[] = picked.assets
         .slice(0, begun.remainingSlots)
         .map((asset, index) => ({ kind: 'image', ...buildMobileImageAttachmentCandidate(asset, index) }));
-      if (candidates.length === 0) return;
+      if (candidates.length === 0 || !isAttachmentScopeActive()) return;
       // 立即入 pending 托盘(不先 await token):token 等待窗里任务已可被 waitForIdle 看到,
       // composer 抢发会等它落定而不是丢图;token 由任务开跑时自行等待(拿不到→该任务失败报错)。
-      controller.enqueue(candidates, { token: optionsRef.current.getAccessToken() });
+      enqueueUploads(candidates, { token: optionsRef.current.getAccessToken() });
       optionsRef.current.onPicked?.();
     } catch (err) {
-      optionsRef.current.onError(formatRemoteError(err));
+      if (isAttachmentScopeActive()) optionsRef.current.onError(formatRemoteError(err));
     } finally {
       pickerBusyRef.current = false;
     }
@@ -374,6 +463,7 @@ export function useMobileLocalAttachments(
         copyToCacheDirectory: true,
         multiple: false,
       });
+      if (!isAttachmentScopeActive()) return;
       if (picked.canceled) return;
 
       const asset = picked.assets?.[0];
@@ -393,8 +483,9 @@ export function useMobileLocalAttachments(
       const size = typeof asset.size === 'number' && Number.isFinite(asset.size) && asset.size > 0
         ? asset.size
         : 0;
+      if (!isAttachmentScopeActive()) return;
       // 立即入 pending 托盘(带文件名 chip,不先 await token,同 addImages):大 PDF 不再卡住托盘。
-      controller.enqueue([{
+      enqueueUploads([{
         kind: 'file',
         uri,
         name,
@@ -403,7 +494,7 @@ export function useMobileLocalAttachments(
       }], { token: optionsRef.current.getAccessToken() });
       optionsRef.current.onPicked?.();
     } catch (err) {
-      optionsRef.current.onError(formatRemoteError(err));
+      if (isAttachmentScopeActive()) optionsRef.current.onError(formatRemoteError(err));
     } finally {
       pickerBusyRef.current = false;
     }
@@ -417,6 +508,10 @@ export function useMobileLocalAttachments(
   const addPastedImages = async (uris: string[]): Promise<void> => {
     if (uris.length === 0) return;
     const ownedUris = uris.filter(isComposerPastedImageUri);
+    if (!isAttachmentScopeActive()) {
+      if (ownedUris.length > 0) void deleteLocalUris(ownedUris);
+      return;
+    }
     for (const uri of ownedUris) pastedImageLocalUrisRef.current.add(uri);
     // 本批 uris 就是最早一批占位卡的兑现:先按 FIFO 出列本批再做限额检查
     //(否则这批会被自己的占位双扣槽位)。出列与下方 enqueue 的 pending 上屏在
@@ -434,7 +529,7 @@ export function useMobileLocalAttachments(
       const acceptedUris = uris.slice(0, begun.remainingSlots);
       const rejectedUris = uris.slice(begun.remainingSlots).filter(isComposerPastedImageUri);
       if (rejectedUris.length > 0) void cleanupPastedImageLocalUris(rejectedUris);
-      controller.enqueue(acceptedUris.map((uri, index) => {
+      enqueueUploads(acceptedUris.map((uri, index) => {
         const classified = classifyPastedImageUri(uri);
         const ownsLocalFile = isComposerPastedImageUri(uri);
         return {
@@ -453,7 +548,7 @@ export function useMobileLocalAttachments(
         };
       }), { token: optionsRef.current.getAccessToken() });
     } catch (err) {
-      optionsRef.current.onError(formatRemoteError(err));
+      if (isAttachmentScopeActive()) optionsRef.current.onError(formatRemoteError(err));
     } finally {
       pickerBusyRef.current = false;
     }
@@ -467,23 +562,29 @@ export function useMobileLocalAttachments(
     addImages,
     addDocument,
     addPastedImages,
-    enqueueUploads: controller.enqueue,
+    enqueueUploads,
     removePendingUpload: controller.remove,
     retryPendingUpload: (localId) => {
+      if (!isAttachmentScopeActive()) return;
       // 重试前清掉上一次失败的错误文案;token 取新鲜值(失败卡可能停留很久)。
       optionsRef.current.onError(null);
       controller.retry(localId, { token: optionsRef.current.getAccessToken() });
     },
-    discardAllPendingUploads: controller.removeAll,
+    discardAllPendingUploads,
+    discardAllPendingUploadsForScopeChange,
     // 先等粘贴占位落定(images 兑现会把任务同步入队 / 失败与超时直接归零),
     // 再等 controller 队列——否则占位窗口内抢发会把刚粘贴的图漏在消息外
     //(review P2)。占位失败不计入 failedCount:那张图从未成为附件,语义等同
     // 用户手动移除,不应中止发送。
     waitForPendingUploads: async () => {
+      if (!isAttachmentScopeActive()) return { failedCount: 0 };
       await waitForPastePlaceholders();
-      return controller.waitForIdle();
+      if (!isAttachmentScopeActive()) return { failedCount: 0 };
+      const result = await controller.waitForIdle();
+      return isAttachmentScopeActive() ? result : { failedCount: 0 };
     },
     claimActiveUploads: () => {
+      if (!isAttachmentScopeActive()) return [];
       const snapshot = controller.claimableTasks();
       controller.claim(snapshot.map((task) => task.localId));
       return snapshot;
@@ -493,8 +594,10 @@ export function useMobileLocalAttachments(
     // 乐观发送(outbox)在占位窗口内需要它把「尚未入队、无法划归」的粘贴图等成
     // 可划归任务,再做同步 claim——不能用 waitForPendingUploads(那会退化回
     // 等整个上传完成)。失败 / 超时同样放行(60s 兜底,错误 toast 已由占位路径给出)。
-    waitForPastePlaceholdersSettled: waitForPastePlaceholders,
-    hasPastePlaceholders: () => getPastePlaceholderTotal() > 0,
-    getPendingUploadCount: getPendingSlotCount,
+    waitForPastePlaceholdersSettled: () => (
+      isAttachmentScopeActive() ? waitForPastePlaceholders() : Promise.resolve()
+    ),
+    hasPastePlaceholders: () => isAttachmentScopeActive() && getPastePlaceholderTotal() > 0,
+    getPendingUploadCount: () => (isAttachmentScopeActive() ? getPendingSlotCount() : 0),
   };
 }

@@ -7,9 +7,10 @@ import {
   parseMarkdownPreviewPayload,
   parseOpenFilePayload,
   parseTarget,
+  readReviewData,
   runReviewFileStageOperation,
 } from '../ipc';
-import type { FileDiff, GitReviewDeps } from '../types';
+import type { FileDiff, GitReviewDeps, ReviewScope, ReviewStatus } from '../types';
 
 const HEX_OID = '0123456789abcdef0123456789abcdef01234567';
 const SHORT_HEX_OID = 'abc1234';
@@ -124,6 +125,33 @@ describe('git-review IPC payload guards', () => {
       commitOid: 'feature',
     })).toThrow(/\[INVALID_PARAMS\]/);
   });
+});
+
+describe('git-review evidence failures', () => {
+  it.each(['resolveScope', 'readStatus', 'readDiffs'] as const)(
+    'propagates %s errors instead of manufacturing an empty non-Git result',
+    async (failingStage) => {
+      const failure = new Error(`${failingStage} failed`);
+      const scope = { disabledReason: null, repoRoot: '/repo' } as ReviewScope;
+      const status = { scope } as ReviewStatus;
+      const deps: GitReviewDeps = {
+        resolveScope: vi.fn(async () => {
+          if (failingStage === 'resolveScope') throw failure;
+          return scope;
+        }),
+        readStatus: vi.fn(async () => {
+          if (failingStage === 'readStatus') throw failure;
+          return status;
+        }),
+        readDiffs: vi.fn(async () => {
+          if (failingStage === 'readDiffs') throw failure;
+          return { staged: [], unstaged: [], capped: { staged: null, unstaged: null } };
+        }),
+      };
+
+      await expect(readReviewData('s1', deps)).rejects.toBe(failure);
+    },
+  );
 });
 
 describe('git-review write busy gate', () => {

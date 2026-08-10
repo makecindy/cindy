@@ -202,9 +202,16 @@ test('fetches a published head missing from the local protocol clone', () => {
     git(bare, 'init', '--bare');
     git(publisher.repo, 'remote', 'add', 'origin', bare);
     git(publisher.repo, 'push', 'origin', 'main');
+    git(
+      publisher.repo,
+      'push',
+      'origin',
+      `${publisher.one}:refs/heads/test-baseline`,
+    );
     git(local, 'init', '-b', 'main');
     git(local, 'remote', 'add', 'origin', bare);
-    git(local, 'fetch', 'origin', publisher.one);
+    git(local, 'fetch', 'origin', 'test-baseline');
+    git(publisher.repo, 'push', 'origin', '--delete', 'test-baseline');
     assert.throws(() =>
       git(local, 'cat-file', '-e', `${publisher.two}^{commit}`),
     );

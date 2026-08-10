@@ -115,6 +115,7 @@ describe('automation-generated sessions', () => {
       'wecom',
       'scheduler',
       'learn',
+      'review',
       'shared',
       'plugin',
     ]);
@@ -122,6 +123,7 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('discord');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('dingtalk');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('review');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');

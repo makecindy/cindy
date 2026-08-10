@@ -181,7 +181,7 @@ export function LoginConsentRow({
   // 行容器向上扩出 pressSize-height(48 设计px)容纳放大的命中区:行底 622 不变,
   // paddingTop 把文字/视觉内容压回原 40 高内容带(582..622),视觉零变化
   const pressExpand = radio.pressSize - LOGIN_CONSENT_ROW.height;
-  // 读屏标签 = 协议声明整行纯文本(剥掉 <terms>/<privacy> 标记;四语随 i18n;codex P1)
+  // 读屏标签 = 协议声明整行纯文本(剥掉 <terms>/<privacy> 标记;五语随 i18n;codex P1)
   const statementLabel = parseLegalSegments(statement)
     .map((segment) => segment.text)
     .join('');

@@ -66,12 +66,14 @@ export {
 export { isNetworkishErrorMessage } from './shared/network-error.js';
 export {
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   getAutoReviewActionTextLength,
   isAutoReviewUnavailableNotice,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   type AutoReviewDecision,
   type AutoReviewDelegate,
   type AutoReviewRequest,
+  type AutoReviewTimeoutPolicy,
 } from './shared/auto-review-decision.js';
 export type { ReviewableAction } from './shared/auto-review.js';
 export {

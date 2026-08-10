@@ -25,6 +25,7 @@ import {
 import {
   attachMainOwnedInputBoundary,
   buildMobileClientPromptNote,
+  shouldPrependMobileClientPromptNote,
   stampMobileClientOrigin,
   stripMainOnlySendOpts,
 } from '../maker-ipc/mobileClientPromptNote';
@@ -189,6 +190,39 @@ describe('prependNoteToWireUserMessage(wire 注入形态)', () => {
   });
 });
 
+describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
+  it('Claude Code /compact 保持在消息开头，含可选指令也旁路', () => {
+    expect(shouldPrependMobileClientPromptNote('/compact', 'claude-code')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/compact focus on decisions', 'claude-code'))
+      .toBe(false);
+    expect(shouldPrependMobileClientPromptNote(
+      { type: 'user', content: '/compact\nkeep the API contract' },
+      'claude-code',
+    )).toBe(false);
+    expect(shouldPrependMobileClientPromptNote(
+      { type: 'user', content: [{ type: 'text', text: '/compact' }] },
+      'claude-code',
+    )).toBe(false);
+  });
+
+  it('不把相似文本、带附件消息或其他 Agent 的输入误判成 Claude 命令', () => {
+    expect(shouldPrependMobileClientPromptNote('/compactness', 'claude-code')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote(' /compact', 'claude-code')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote(
+      {
+        type: 'user',
+        content: [
+          { type: 'text', text: '/compact' },
+          { type: 'image', url: 'x' },
+        ],
+      },
+      'claude-code',
+    )).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/compact', 'codex')).toBe(true);
+  });
+});
+
 describe('注入接线(源码级守卫)', () => {
   const source = readFileSync(
     resolve(process.cwd(), 'src/main/maker-ipc/makerSendTransaction.ts'),
@@ -196,10 +230,11 @@ describe('注入接线(源码级守卫)', () => {
   );
 
   it('说明只进 wire payload,落库走 persistUserMessage.content', () => {
-    expect(source).toMatch(
-      /const mobileClientNote =\s*deps\.isMobileClientInvoke\?\.\(\) === true/,
+    expect(source).toContain(
+      'deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true',
     );
     expect(source).toContain('prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)');
+    expect(source).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
     // 落库内容必须仍取 persistUserMessage.content —— 若改成 outgoing,提示语会写进
     // 用户消息、污染界面显示的原话。
     expect(source).toContain('content: persistUserMessage.content');
@@ -352,6 +387,7 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
 
   it('steer 投递也注入说明,且只进 wire payload', () => {
     expect(register).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
+    expect(register).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
     expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerNote)');
     expect(register).toContain('await sess.steer(steerPayload as never');
   });

@@ -14,10 +14,20 @@ describe('translateRequest', () => {
     expect(out.model).toBe('gpt-5.5');
     expect(out.instructions).toBe('You are terse.');
     expect(out.store).toBe(false);
+    expect(out.stream).toBe(true);
     expect(out.include).toContain('reasoning.encrypted_content');
     expect(out.input).toEqual([
       { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
     ]);
+  });
+
+  it('preserves stream:false for Claude Code non-streaming fallback', () => {
+    const req: AnthropicMessagesRequest = {
+      model: 'chatgpt/gpt-5.5',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+    };
+    expect(translateRequest(req, { model: 'gpt-5.5' }).stream).toBe(false);
   });
 
   it('joins array-form system blocks', () => {

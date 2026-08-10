@@ -947,6 +947,52 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('stamps the turn plan as failed on a codex terminal error, through live-plan overlays', () => {
+    // 没有 done 的 codex 终态 error:这一轮的计划行等不到章。手机端要自己补失败
+    // 印记,否则全勾完的失败计划按旧数据兜底退场;而印记只写内存行、不写 live
+    // 缓存时,overlay 会用旧缓存把 main 随后广播的落库印记盖回去(review P1)。
+    const planRow = {
+      ...message('plan-row-1', 's1'),
+      role: 'tool_use' as const,
+      toolUseId: 'plan:turn-err',
+      content: {
+        toolUseId: 'plan:turn-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+    };
+    remoteSessionStore.setMessages('s1', [planRow]);
+    // 先按真实链路让 live 缓存记住这一行(update_plan 推送)。
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'tool_use',
+      data: {
+        toolUseId: 'plan:turn-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+    }, 'plan-row-1');
+
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'error',
+      source: 'codex',
+      data: { message: 'stream disconnected' },
+    });
+
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      content: {
+        turnCompleted: false,
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+    });
+
+    // main 落库前的行重新到达(无印记):overlay 用 live 缓存覆盖 content,
+    // 缓存已带印记 → 不回退成"已完成的旧计划"。
+    remoteSessionStore.mergeMessages('s1', [planRow]);
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      content: { turnCompleted: false },
+    });
+  });
+
   it('coalesces update_plan with streaming finalization into one notification', () => {
     vi.useFakeTimers();
     const notify = vi.fn();
@@ -1054,7 +1100,7 @@ describe('remoteSessionStore', () => {
     });
   });
 
-  it('keeps synthetic completion when done precedes the initial plan DB row', () => {
+  it('keeps the honest live snapshot when done precedes the initial plan DB row', () => {
     remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
       sessionId: 's1',
       persistId: 'plan-row-1',
@@ -1106,17 +1152,19 @@ describe('remoteSessionStore', () => {
       },
     });
 
+    // 成功收尾封的是生命周期,不改步骤事实:agent 报告什么就显示什么,
+    // 晚到的 DB 行也不能把 live 快照拉回更旧的内容。
     expect(remoteSessionStore.getMessages('s1')[0].content).toMatchObject({
       input: {
         plan: [
-          { step: 'Inspect', status: 'completed' },
-          { step: 'Patch', status: 'completed' },
+          { step: 'Inspect', status: 'in_progress' },
+          { step: 'Patch', status: 'pending' },
         ],
       },
     });
   });
 
-  it('does not let a delayed message window revert synthetic completion', () => {
+  it('does not let a delayed message window revert the live plan snapshot', () => {
     const stalePlanRow = {
       ...message('plan-row-1', 's1'),
       role: 'tool_use' as const,
@@ -1154,8 +1202,9 @@ describe('remoteSessionStore', () => {
 
     remoteSessionStore.setLatestMessageWindow('s1', [stalePlanRow]);
 
+    // 步骤保持 agent 实际报告的状态,不因成功收尾被改写成 completed。
     expect(remoteSessionStore.getMessages('s1')[0].content).toMatchObject({
-      input: { plan: [{ step: 'Inspect', status: 'completed' }] },
+      input: { plan: [{ step: 'Inspect', status: 'in_progress' }] },
     });
   });
 
@@ -2635,6 +2684,55 @@ describe('remoteSessionStore', () => {
       pendingQueue: [{ clientId: 'q-1', text: 'queued' }],
       queuePaused: true,
     });
+  });
+
+  it('rejects a late projection query after a newer push and terminal boundary', () => {
+    const ownerProjection = {
+      ...projection('s1'),
+      continuationTurnClientId: 'resume-1',
+    };
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    remoteSessionStore.setInputProjection('s1', ownerProjection);
+    const queryEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:input:projection', {
+      ...projection('s1'),
+      continuationTurnClientId: null,
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'done', data: {} },
+    });
+
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, queryEpoch)).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+    expect(remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')).not.toBe(expectedEpoch);
+  });
+
+  it('accepts a projection query result when no newer authority event arrived', () => {
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', projection('s1'), expectedEpoch)).toBe(true);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');
+  });
+
+  it('clears a continuation owner at a terminal boundary without a projection clear push', () => {
+    const ownerProjection = {
+      ...projection('s1'),
+      continuationTurnClientId: 'resume-1',
+    };
+    remoteSessionStore.setInputProjection('s1', ownerProjection);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const operationEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:status-changed', {
+      sessionId: 's1',
+      status: 'closed',
+    });
+
+    expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, operationEpoch)).toBe(false);
   });
 
   it('soft-invalidates an offline device without deleting sessions or messages', () => {

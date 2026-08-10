@@ -26,6 +26,15 @@ function readJson(relativePath) {
 	return JSON.parse(readText(relativePath));
 }
 
+function readSupportedLocales(relativePath) {
+	const declaration = readText(relativePath).match(/SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]/s)?.[1];
+	const locales = declaration
+		? [...declaration.matchAll(/["']([^"']+)["']/g)].map((match) => match[1])
+		: [];
+	assert.ok(locales.length, `${relativePath} must declare SUPPORTED_LOCALES`);
+	return locales;
+}
+
 function workflowJob(workflow, jobId) {
 	const lines = workflow.split(/\r?\n/);
 	const start = lines.findIndex((line) => line === `  ${jobId}:`);
@@ -168,6 +177,102 @@ test("developer documentation links resolve", () => {
 				`broken local link in ${relativePath}: ${target}`,
 			);
 		}
+	}
+});
+
+test("login-all-hifi embeds generated truth as a script-safe static literal", () => {
+	const html = readText("docs/design-previews/login-all-hifi/index.html");
+	const match = html.match(/<script id="qa-truth">const RAW = ([\s\S]*?)<\/script>/);
+	assert.ok(match, "login-all-hifi must define RAW directly from its generated truth literal");
+	assert.doesNotMatch(
+		html,
+		/document\.getElementById\(["']qa-truth["']\)\.textContent/,
+		"generated truth must not re-enter HTML rendering through DOM text",
+	);
+	assert.deepEqual(JSON.parse(match[1]), readJson("docs/design-previews/login-all-hifi/truth.json"));
+});
+
+test("current locale-aware QA artifacts cover every supported locale", () => {
+	const supportedLocales = readSupportedLocales("apps/desktop/src/shared/locale.ts");
+	assert.deepEqual(
+		readSupportedLocales("apps/mobile/src/i18n/locale.ts"),
+		supportedLocales,
+		"Desktop and Mobile must expose the same concrete locale set",
+	);
+	const expectedSet = [...supportedLocales].sort();
+	const currentLoginDemos = [
+		{
+			dir: "docs/design-previews/login-flow-hifi",
+			copyPaths: [["copy"]],
+		},
+		{
+			dir: "docs/design-previews/login-all-hifi",
+			copyPaths: [["desk", "copy"], ["mobile", "copy"]],
+		},
+		{
+			dir: "docs/design-previews/login-deletion-bubble",
+			copyPaths: [["desktop", "copy"], ["mobile", "copy"]],
+		},
+	];
+
+	for (const { dir, copyPaths } of currentLoginDemos) {
+		const spec = readJson(`${dir}/spec.json`);
+		const truth = readJson(`${dir}/truth.json`);
+		assert.deepEqual(spec.matrix.langs, supportedLocales, `${dir} matrix locale order drifted`);
+		assert.deepEqual(
+			truth.supportedLocales.map(({ value }) => value),
+			supportedLocales,
+			`${dir} embedded locale order drifted`,
+		);
+		assert.deepEqual(
+			[...new Set(spec.verify.cases.map(({ prefs }) => prefs.lang))].sort(),
+			expectedSet,
+			`${dir} representative cases must exercise every supported locale`,
+		);
+		for (const copyPath of copyPaths) {
+			const copy = copyPath.reduce((value, key) => value?.[key], truth);
+			assert.deepEqual(
+				Object.keys(copy ?? {}).sort(),
+				expectedSet,
+				`${dir} truth ${copyPath.join(".")} locale coverage drifted`,
+			);
+		}
+	}
+
+	const newMakerDir = "docs/design-previews/newmaker-quickstart-cards";
+	const newMakerSpec = readJson(`${newMakerDir}/spec.json`);
+	const newMakerTruth = readJson(`${newMakerDir}/truth.json`);
+	assert.deepEqual(newMakerSpec.matrix.langs, supportedLocales, `${newMakerDir} matrix locale order drifted`);
+	assert.deepEqual(
+		newMakerTruth.supportedLocales.map(({ value }) => value),
+		supportedLocales,
+		`${newMakerDir} embedded locale order drifted`,
+	);
+	assert.deepEqual(
+		[...new Set(newMakerSpec.verify.cases.map(({ prefs }) => prefs.lang))].sort(),
+		expectedSet,
+		`${newMakerDir} representative cases must exercise every supported locale`,
+	);
+	assert.deepEqual(
+		Object.keys(newMakerTruth.section.titles).sort(),
+		expectedSet,
+		`${newMakerDir} section-title locale coverage drifted`,
+	);
+	for (const [index, card] of newMakerTruth.cards.entries()) {
+		assert.deepEqual(
+			Object.keys(card.labels).sort(),
+			expectedSet,
+			`${newMakerDir} card ${index} locale coverage drifted`,
+		);
+	}
+
+	for (const dir of ["docs/design-previews/login-deletion-bubble", newMakerDir]) {
+		const html = readText(`${dir}/index.html`);
+		const embedded = html.match(
+			/<script id="qa-truth" type="application\/json">([\s\S]*?)<\/script>/,
+		)?.[1];
+		assert.ok(embedded, `${dir} must embed generated truth`);
+		assert.deepEqual(JSON.parse(embedded), readJson(`${dir}/truth.json`), `${dir} embedded truth drifted`);
 	}
 });
 

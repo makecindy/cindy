@@ -4,6 +4,7 @@
   "locales": [
     "en",
     "zh-CN",
+    "zh-TW",
     "ja",
     "ko"
   ],
@@ -18,6 +19,7 @@
       "en": "Active",
       "translations": {
         "zh-CN": "活跃",
+        "zh-TW": "活躍",
         "ja": "アクティブ",
         "ko": "활성"
       },
@@ -28,12 +30,24 @@
             "text": "生效中",
             "when": "计费语境（\"no active subscription\"→没有生效中的订阅），指订阅状态而非活跃度"
           }
+        ],
+        "zh-TW": [
+          {
+            "text": "生效中",
+            "when": "計費語境（\"no active subscription\"→沒有生效中的訂閱），指訂閱狀態而非活躍度"
+          }
         ]
       },
       "forbidden": {
         "zh-CN": [
           {
             "text": "活动",
+            "whenEn": "Active"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "活動",
             "whenEn": "Active"
           }
         ]
@@ -273,6 +287,7 @@
       "en": "Agent",
       "translations": {
         "zh-CN": "Agent",
+        "zh-TW": "Agent",
         "ja": "Agent",
         "ko": "Agent"
       },
@@ -283,9 +298,16 @@
             "text": "代理",
             "whenEn": "Agent"
           }
+        ],
+        "zh-TW": [
+          "智能體",
+          {
+            "text": "代理",
+            "whenEn": "Agent"
+          }
         ]
       },
-      "note": "产品一级概念，四语统一保留英文原词。zh-CN 现状 44:5 已是主流；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故三语一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 \"Agent\"→「代理」的 4 处和 \"Subagent models\" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 \"SSH agent\" / \"probe agent\"），是与产品 Agent 同形的另一个概念。",
+      "note": "产品一级概念，五语统一保留英文原词。zh-CN 现状 44:5 已是主流；zh-TW 沿用同一裁决；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故四个目标语言一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 \"Agent\"→「代理」的 4 处和 \"Subagent models\" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 \"SSH agent\" / \"probe agent\"），是与产品 Agent 同形的另一个概念。",
       "exempt": [
         "desktop:settings.remote."
       ]
@@ -296,12 +318,23 @@
       "en": "Author",
       "translations": {
         "zh-CN": "作者",
+        "zh-TW": "作者",
         "ja": "作成者",
         "ko": "작성자"
       },
       "checkCase": false,
       "forbidden": {
         "zh-CN": [
+          {
+            "text": "提交者",
+            "whenEn": "Author"
+          },
+          {
+            "text": "提出者",
+            "whenEn": "Author"
+          }
+        ],
+        "zh-TW": [
           {
             "text": "提交者",
             "whenEn": "Author"
@@ -320,6 +353,7 @@
       "en": "Automation",
       "translations": {
         "zh-CN": "自动化",
+        "zh-TW": "自動化",
         "ja": "自動化",
         "ko": "자동화"
       },
@@ -328,6 +362,12 @@
           {
             "text": "自动操作",
             "when": "Computer Use 语境——「自动操作电脑 / 浏览器」，指代操控设备而非定时任务"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "自動操作",
+            "when": "Computer Use 語境——「自動操作電腦 / 瀏覽器」，指代操控裝置而非定時任務"
           }
         ]
       },
@@ -351,6 +391,7 @@
       "en": "Balance",
       "translations": {
         "zh-CN": "余额",
+        "zh-TW": "餘額",
         "ja": "残高",
         "ko": "잔액"
       },
@@ -359,6 +400,12 @@
         "zh-CN": [
           {
             "text": "额度",
+            "whenEn": "Balance"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "額度",
             "whenEn": "Balance"
           }
         ]
@@ -371,12 +418,16 @@
       "en": "Chat",
       "translations": {
         "zh-CN": "对话",
+        "zh-TW": "對話",
         "ja": "チャット",
         "ko": "채팅"
       },
       "checkCase": false,
       "forbidden": {
         "zh-CN": [
+          "聊天"
+        ],
+        "zh-TW": [
           "聊天"
         ]
       },
@@ -388,6 +439,7 @@
       "en": "Collaboration",
       "translations": {
         "zh-CN": "协同",
+        "zh-TW": "協同",
         "ja": "協同",
         "ko": "협업"
       },
@@ -396,6 +448,12 @@
         "zh-CN": [
           {
             "text": "协作",
+            "whenEn": "Collaboration"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "協作",
             "whenEn": "Collaboration"
           }
         ]
@@ -411,6 +469,7 @@
       "en": "Collapse",
       "translations": {
         "zh-CN": "收起",
+        "zh-TW": "收起",
         "ja": "折りたたむ",
         "ko": "접기"
       },
@@ -419,6 +478,12 @@
         "zh-CN": [
           {
             "text": "折叠",
+            "whenEn": "Collapse"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "折疊",
             "whenEn": "Collapse"
           }
         ]
@@ -442,6 +507,7 @@
       "en": "Credits",
       "translations": {
         "zh-CN": "点数",
+        "zh-TW": "點數",
         "ja": "クレジット",
         "ko": "크레딧"
       },
@@ -456,12 +522,28 @@
             "text": "重置次数",
             "when": "reset credits——指可用的配额重置次数，与计费点数无关"
           }
+        ],
+        "zh-TW": [
+          {
+            "text": "credits",
+            "when": "指第三方服務自身的 credits（如 Codex / ChatGPT 訂閱餘量），保留其原生叫法"
+          },
+          {
+            "text": "重置次數",
+            "when": "reset credits——指可用的配額重置次數，與計費點數無關"
+          }
         ]
       },
       "forbidden": {
         "zh-CN": [
           {
             "text": "额度",
+            "whenEn": "Credit"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "額度",
             "whenEn": "Credit"
           }
         ]
@@ -518,6 +600,7 @@
       "en": "Directory",
       "translations": {
         "zh-CN": "目录",
+        "zh-TW": "目錄",
         "ja": "ディレクトリ",
         "ko": "디렉터리"
       },
@@ -531,12 +614,23 @@
       "en": "Dismiss",
       "translations": {
         "zh-CN": "关闭",
+        "zh-TW": "關閉",
         "ja": "閉じる",
         "ko": "닫기"
       },
       "checkCase": false,
       "forbidden": {
         "zh-CN": [
+          {
+            "text": "忽略",
+            "whenEn": "Dismiss"
+          },
+          {
+            "text": "知道了",
+            "whenEn": "Dismiss"
+          }
+        ],
+        "zh-TW": [
           {
             "text": "忽略",
             "whenEn": "Dismiss"
@@ -555,12 +649,20 @@
       "en": "Effort",
       "translations": {
         "zh-CN": "推理强度",
+        "zh-TW": "推理強度",
         "ja": "推論強度",
         "ko": "추론 강도"
       },
       "forbidden": {
         "zh-CN": [
           "思考强度",
+          "思考深度",
+          "推理深度",
+          "努力程度",
+          "推理力度"
+        ],
+        "zh-TW": [
+          "思考強度",
           "思考深度",
           "推理深度",
           "努力程度",
@@ -579,6 +681,7 @@
       "en": "Issue",
       "translations": {
         "zh-CN": "Issue",
+        "zh-TW": "Issue",
         "ja": "Issue",
         "ko": "이슈"
       },
@@ -587,6 +690,10 @@
         "zh-CN": [
           "工单",
           "议题"
+        ],
+        "zh-TW": [
+          "工單",
+          "議題"
         ],
         "ja": [
           {
@@ -649,11 +756,33 @@
       "note": "登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。"
     },
     {
+      "id": "privacy-policy",
+      "status": "decided",
+      "en": "Privacy Policy",
+      "translations": {
+        "zh-CN": "隐私政策",
+        "zh-TW": "隱私政策",
+        "ja": "プライバシーポリシー",
+        "ko": "개인정보 처리방침"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-TW": [
+          {
+            "text": "隱私協議",
+            "whenEn": "Privacy Policy"
+          }
+        ]
+      },
+      "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
+    },
+    {
       "id": "plugin",
       "status": "decided",
       "en": "Plugin",
       "translations": {
         "zh-CN": "插件",
+        "zh-TW": "插件",
         "ja": "プラグイン",
         "ko": "플러그인"
       },
@@ -661,6 +790,11 @@
         "zh-CN": [
           "Plugin",
           "plugin"
+        ],
+        "zh-TW": [
+          "Plugin",
+          "plugin",
+          "外掛"
         ]
       },
       "note": "中文一律「插件」，不保留英文原词（现状 94:4）。历史上 Ghost / Plugin 两种叫法并存，对外统一为「插件」。",
@@ -683,11 +817,15 @@
       "en": "Project",
       "translations": {
         "zh-CN": "项目",
+        "zh-TW": "專案",
         "ja": "プロジェクト",
         "ko": "프로젝트"
       },
       "forbidden": {
         "zh-CN": [
+          "Project"
+        ],
+        "zh-TW": [
           "Project"
         ]
       },
@@ -700,6 +838,7 @@
       "en": "Provider",
       "translations": {
         "zh-CN": "供应商",
+        "zh-TW": "供應商",
         "ja": "プロバイダー",
         "ko": "제공자"
       },
@@ -709,10 +848,20 @@
             "text": "模型供应商",
             "when": "首次出现或需要消歧时用全称，如设置页标题"
           }
+        ],
+        "zh-TW": [
+          {
+            "text": "模型供應商",
+            "when": "首次出現或需要消歧時用全稱，如設定頁標題"
+          }
         ]
       },
       "forbidden": {
         "zh-CN": [
+          "提供方",
+          "提供商"
+        ],
+        "zh-TW": [
           "提供方",
           "提供商"
         ],
@@ -743,11 +892,18 @@
       "en": "Proxy",
       "translations": {
         "zh-CN": "Proxy",
+        "zh-TW": "Proxy",
         "ja": "プロキシ",
         "ko": "프록시"
       },
       "forbidden": {
         "zh-CN": [
+          {
+            "text": "代理",
+            "whenEn": "Proxy"
+          }
+        ],
+        "zh-TW": [
           {
             "text": "代理",
             "whenEn": "Proxy"
@@ -762,6 +918,7 @@
       "en": "Quota",
       "translations": {
         "zh-CN": "配额",
+        "zh-TW": "配額",
         "ja": "クォータ",
         "ko": "할당량"
       },
@@ -773,6 +930,12 @@
         "zh-CN": [
           {
             "text": "额度",
+            "whenEn": "Quota"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "額度",
             "whenEn": "Quota"
           }
         ]
@@ -789,6 +952,7 @@
       "en": "Running",
       "translations": {
         "zh-CN": "运行中",
+        "zh-TW": "執行中",
         "ja": "実行中",
         "ko": "실행 중"
       },
@@ -799,7 +963,16 @@
             "text": "正在运行",
             "when": "完整句子里作谓语时（\"Agent 正在运行\"），不是状态标签"
           }
+        ],
+        "zh-TW": [
+          {
+            "text": "正在執行",
+            "when": "完整句子裡作謂語時（\"Agent 正在執行\"），不是狀態標籤"
+          }
         ]
+      },
+      "minorityByDesign": {
+        "zh-TW": "狀態標籤統一用「執行中」；「進行中」保留給 Active / In Progress 等其他英文語境，避免同一詞跨概念混用。"
       },
       "forbidden": {
         "zh-CN": [
@@ -809,6 +982,12 @@
           },
           {
             "text": "进行中",
+            "whenEn": "Running"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "進行中",
             "whenEn": "Running"
           }
         ]
@@ -821,6 +1000,7 @@
       "en": "Session",
       "translations": {
         "zh-CN": "任务",
+        "zh-TW": "任務",
         "ja": "セッション",
         "ko": "세션"
       },
@@ -828,6 +1008,9 @@
       "forbidden": {
         "zh-CN": [
           "会话"
+        ],
+        "zh-TW": [
+          "會話"
         ]
       },
       "note": "面向用户叫「任务」——它是左侧列表里可单独打开/删除/分享的条目，有自己的独立空间、可以同时跑多个；「对话」表达不出这个并行性（2026-07-31 裁决，替代此前的「对话」）。任务内人与 AI 交流的过程与内容仍叫「对话」，见 alsoAllowed 与 chat 条目。「会话」继续禁用于产品概念。但英文的 session 在本仓实际承载**五个**不同概念，其中最容易译错、也最影响用户行为的是 Agent 运行时会话——已单独立为 agent-session 条目，中文叫「Agent 会话」，务必先读它再改这类文案；余下三类（登录/绑定校验、SSH 远程与传输、操作系统桌面）与 mobile 语音连接会话都与产品无关，存量译法不在本条约束内，见本条 exempt。代码与内部标识仍用 Session，本条只约束 UI 文案。ja / ko 用音译 `セッション` / `세션`，本次一并收敛：改名前这两种语言就在混用（音译 271 / 277 处 vs `会話`・`대화` 16 / 11 处），改完英文后不一致放大到 133 处，2026-07-31 逐条判断后统一到音译（详见 docs/product-rules/task-and-conversation-naming.md §5.1）。日韩不存在中文那种一词多义问题，所以 `タスク` / `작업`（task）无需像中文那样改写成「自动化」。交流过程仍用 `会話` / `대화`，chat history 仍用 `チャット履歴` / `채팅 기록`。概念分层与判定规则见 docs/product-rules/task-and-conversation-naming.md。",
@@ -886,6 +1069,12 @@
             "text": "对话",
             "when": "指任务内人与 AI 交流的过程或其内容（对话区、对话正文、对话记录、继续对话）"
           }
+        ],
+        "zh-TW": [
+          {
+            "text": "對話",
+            "when": "指任務內人與 AI 交流的過程或其內容（對話區、對話正文、對話記錄、繼續對話）"
+          }
         ]
       }
     },
@@ -895,6 +1084,7 @@
       "en": "Agent session",
       "translations": {
         "zh-CN": "Agent 会话",
+        "zh-TW": "Agent 會話",
         "ja": "Agent セッション",
         "ko": "Agent 세션"
       },
@@ -903,6 +1093,12 @@
         "zh-CN": [
           {
             "text": "任务",
+            "whenEn": "agent session"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "任務",
             "whenEn": "agent session"
           }
         ]
@@ -950,6 +1146,7 @@
       "en": "Skill",
       "translations": {
         "zh-CN": "技能",
+        "zh-TW": "技能",
         "ja": "スキル",
         "ko": "스킬"
       },
@@ -958,6 +1155,12 @@
           {
             "text": "Skill",
             "when": "技术语境下指代具体的 skill 文件 / 目录结构时，可保留英文"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "Skill",
+            "when": "技術語境下指代具體的 skill 檔案 / 目錄結構時，可保留英文"
           }
         ]
       },
@@ -981,6 +1184,7 @@
       "en": "SkillHub",
       "translations": {
         "zh-CN": "SkillHub",
+        "zh-TW": "SkillHub",
         "ja": "SkillHub",
         "ko": "SkillHub"
       },
@@ -992,7 +1196,7 @@
           "스킬 허브"
         ]
       },
-      "note": "产品名，四语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。"
+      "note": "产品名，五语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。"
     },
     {
       "id": "subagent",
@@ -1000,11 +1204,18 @@
       "en": "Subagent",
       "translations": {
         "zh-CN": "Subagent",
+        "zh-TW": "Subagent",
         "ja": "サブエージェント",
         "ko": "하위 에이전트"
       },
       "forbidden": {
         "zh-CN": [
+          {
+            "text": "代理",
+            "whenEn": "Subagent"
+          }
+        ],
+        "zh-TW": [
           {
             "text": "代理",
             "whenEn": "Subagent"
@@ -1019,6 +1230,7 @@
       "en": "Thread",
       "translations": {
         "zh-CN": "任务",
+        "zh-TW": "任務",
         "ja": "スレッド",
         "ko": "스레드"
       },
@@ -1033,11 +1245,24 @@
             "text": "评论",
             "when": "指 GitHub PR 的 review thread 时，用「review 评论」"
           }
+        ],
+        "zh-TW": [
+          {
+            "text": "thread",
+            "when": "指 Codex 的 thread 這一外部系統概念時（匯入歷史、thread 上下文），保留英文"
+          },
+          {
+            "text": "評論",
+            "when": "指 GitHub PR 的 review thread 時，用「review 評論」"
+          }
         ]
       },
       "forbidden": {
         "zh-CN": [
           "线程"
+        ],
+        "zh-TW": [
+          "執行緒"
         ]
       },
       "note": "按语境分四类：①指产品内那个条目 → 跟随 session 叫「任务」（2026-07-31 随 session 改名一并更新）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 \"persistent work thread\" → 改写为「持续推进的工作」。「线程」一律禁用。"
@@ -1048,6 +1273,7 @@
       "en": "Usage",
       "translations": {
         "zh-CN": "用量",
+        "zh-TW": "用量",
         "ja": "使用量",
         "ko": "사용량"
       },
@@ -1055,6 +1281,10 @@
         "zh-CN": [
           "使用情况",
           "使用表现"
+        ],
+        "zh-TW": [
+          "使用情況",
+          "使用表現"
         ],
         "ja": [
           "使用状況",
@@ -1093,16 +1323,28 @@
       "note": "设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。"
     },
     {
+      "id": "ios-simulator",
+      "status": "proposed",
+      "en": "iOS Simulator",
+      "translations": {
+        "zh-CN": "iOS 模拟器",
+        "ja": "iOS シミュレータ",
+        "ko": "iOS 시뮬레이터"
+      },
+      "note": "Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。"
+    },
+    {
       "id": "worker",
       "status": "decided",
       "en": "Worker",
       "translations": {
         "zh-CN": "Worker",
+        "zh-TW": "Worker",
         "ja": "Worker",
         "ko": "Worker"
       },
       "forbidden": {},
-      "note": "Orca 协同角色名，四语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
+      "note": "Orca 协同角色名，五语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
     },
     {
       "id": "working-directory",
@@ -1110,6 +1352,7 @@
       "en": "Working directory",
       "translations": {
         "zh-CN": "工作目录",
+        "zh-TW": "工作目錄",
         "ja": "作業ディレクトリ",
         "ko": "작업 디렉터리"
       },
@@ -1118,9 +1361,13 @@
         "zh-CN": [
           "任务空间",
           "工作空间"
+        ],
+        "zh-TW": [
+          "任務空間",
+          "工作空間"
         ]
       },
-      "note": "Agent 干活所在的那个目录，中文一律「工作目录」（现状 43:0，四语唯一译法）。**不绑项目的任务也有工作目录**：Cindy 在 userData/dialogues/<日期>/<sessionId>/ 下自动分配一个空目录，用来存 Agent 产出的文件；对话消息存在数据库里，与该目录无关。这个目录不要另起名字——「独立任务空间」「任务空间」「工作空间」一类新造说法一并禁用（2026-07-31 裁决），免得同一个东西攒出多套称呼。「工作区」不入 forbidden：它是 Workspace 的合法译法，见 worktree 条目 note（那里已裁定「工作区」只留给 Workspace、working directory 用「工作目录」，本条把该裁决提为独立条目并加上门禁）。"
+      "note": "Agent 干活所在的那个目录，中文一律「工作目录」（现状 43:0，五语唯一译法）。**不绑项目的任务也有工作目录**：Cindy 在 userData/dialogues/<日期>/<sessionId>/ 下自动分配一个空目录，用来存 Agent 产出的文件；对话消息存在数据库里，与该目录无关。这个目录不要另起名字——「独立任务空间」「任务空间」「工作空间」一类新造说法一并禁用（2026-07-31 裁决），免得同一个东西攒出多套称呼。「工作区」不入 forbidden：它是 Workspace 的合法译法，见 worktree 条目 note（那里已裁定「工作区」只留给 Workspace、working directory 用「工作目录」，本条把该裁决提为独立条目并加上门禁）。"
     },
     {
       "id": "worktree",
@@ -1128,6 +1375,7 @@
       "en": "Worktree",
       "translations": {
         "zh-CN": "worktree",
+        "zh-TW": "worktree",
         "ja": "worktree",
         "ko": "worktree"
       },
@@ -1142,9 +1390,19 @@
             "text": "工作区",
             "whenEn": "Worktree"
           }
+        ],
+        "zh-TW": [
+          {
+            "text": "工作樹",
+            "whenEn": "Worktree"
+          },
+          {
+            "text": "工作區",
+            "whenEn": "Worktree"
+          }
         ]
       },
-      "note": "Git worktree 是外部工具的既定概念，四语一律保留英文小写原词（现状 21 处最多）。desktop:chat 一个模块里就有 worktree / 工作区 / 工作树 三种写法。特别要紧的是「工作区」——它同时被用于 worktree、Workspace、working tree 三个不同英文概念，必须让出来只表示 Workspace；working directory 用「工作目录」。条件禁用只在英文源含 Worktree 时生效，不影响 Workspace 的正常翻译。豁免导入提示那一句：英文原文同时出现 worktree 与 main workspace，条件禁用是按整句英文判定的，无法区分句内两个概念——那里的「主工作区」正是 Workspace，必须保留，否则会把「不影响主工作区」这条安全边界说成「不影响主 worktree」。",
+      "note": "Git worktree 是外部工具的既定概念，五语一律保留英文小写原词（现状 21 处最多）。desktop:chat 一个模块里就有 worktree / 工作区 / 工作树 三种写法。特别要紧的是「工作区」——它同时被用于 worktree、Workspace、working tree 三个不同英文概念，必须让出来只表示 Workspace；working directory 用「工作目录」。条件禁用只在英文源含 Worktree 时生效，不影响 Workspace 的正常翻译。豁免导入提示那一句：英文原文同时出现 worktree 与 main workspace，条件禁用是按整句英文判定的，无法区分句内两个概念——那里的「主工作区」正是 Workspace，必须保留，否则会把「不影响主工作区」这条安全边界说成「不影响主 worktree」。",
       "exempt": [
         "desktop:sessionShare.import.useWorktreeHint"
       ]
@@ -1232,6 +1490,7 @@
       "en": "Task",
       "translations": {
         "zh-CN": "任务",
+        "zh-TW": "任務",
         "ja": "タスク",
         "ko": "작업"
       },
@@ -1244,6 +1503,7 @@
       "en": "Message",
       "translations": {
         "zh-CN": "消息",
+        "zh-TW": "訊息",
         "ja": "メッセージ",
         "ko": "메시지"
       },
@@ -1252,6 +1512,12 @@
         "zh-CN": [
           {
             "text": "条对话",
+            "whenEn": "Message"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "條對話",
             "whenEn": "Message"
           }
         ]
@@ -1264,6 +1530,7 @@
       "en": "Turn",
       "translations": {
         "zh-CN": "轮",
+        "zh-TW": "輪",
         "ja": "ターン",
         "ko": "턴"
       },
