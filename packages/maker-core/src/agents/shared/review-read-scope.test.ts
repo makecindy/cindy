@@ -137,6 +137,42 @@ describe("review read scope", () => {
     expect(await resolveReviewReadPath(keyLink, workspace, grants)).toBeNull();
   });
 
+  it("resolves directory junctions before checking scope and credential policy", async () => {
+    const root = await makeTempDir();
+    const workspace = path.join(root, "workspace");
+    const outsideDir = path.join(root, "outside-dir");
+    await fs.mkdir(workspace);
+    await fs.mkdir(outsideDir);
+    // 在 worktree 外部目录放一个凭证文件和一个普通文件
+    const outsideSecret = path.join(outsideDir, "token.env");
+    const outsideDoc = path.join(outsideDir, "notes.txt");
+    await fs.writeFile(outsideSecret, "SECRET=value");
+    await fs.writeFile(outsideDoc, "public");
+    // 目录链接：Windows junction 无需管理员权限
+    const linkDir = path.join(workspace, "linked-dir");
+    await fs.symlink(
+      outsideDir,
+      linkDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const grants = await buildReviewReadGrants(workspace, []);
+    expect(
+      await resolveReviewReadPath(
+        path.join(linkDir, "token.env"),
+        workspace,
+        grants,
+      ),
+    ).toBeNull();
+    expect(
+      await resolveReviewReadPath(
+        path.join(linkDir, "notes.txt"),
+        workspace,
+        grants,
+      ),
+    ).toBeNull();
+  });
+
   it("rejects pre-existing hard links in workspace and explicit file grants", async () => {
     if (process.platform === "win32") return;
     const root = await makeTempDir();
