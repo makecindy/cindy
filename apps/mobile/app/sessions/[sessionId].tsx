@@ -6035,7 +6035,6 @@ export default function SessionScreen() {
     if (legacyPlanRequiresLiveDispatch && (
       dispatchBlockedAtSend || outboxRef.current.length > 0 || outboxPumpBusyRef.current
     )) {
-      if (dispatchBlockedAtSend) setError(t('session.menu.aiRenameOffline'));
       sendInFlightRef.current = false;
       setSending(false);
       return;

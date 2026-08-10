@@ -154,7 +154,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(guard).toContain("runtimeOptions?.planModeSupported !== true");
     expect(guard).toContain('const useLocalOutbox = shouldUseLocalOutbox && !legacyPlanRequiresLiveDispatch;');
     expect(guard).toContain('dispatchBlockedAtSend || outboxRef.current.length > 0 || outboxPumpBusyRef.current');
-    expect(guard).toContain("setError(t('session.menu.aiRenameOffline'));");
+    expect(guard).not.toContain("setError(t('session.menu.aiRenameOffline'));");
     expect(source).toContain(
       'const recovery = recoverOutboxItemsToComposerDraft([capturedDraftRecoveryItem()], {',
     );
