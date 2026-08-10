@@ -40,9 +40,14 @@ export type NewSessionWorktreeEligibility =
   | { status: 'unsupported' }
   | { status: 'detect-failed' };
 
-export interface NewSessionWorktreeProbeTarget {
+export interface NewSessionWorktreeBranchTarget {
   deviceId: string;
   workingDir: string;
+}
+
+export interface NewSessionWorktreeProbeTarget extends NewSessionWorktreeBranchTarget {
+  /** 设备连接/在线存在变化时递增；同目录旧探测结果不能跨 generation 复用。 */
+  probeGeneration: string;
 }
 
 /** 探测结果与发起时的设备/目录绑定，防切换目标后的首帧误用上一仓库结果。 */
@@ -55,7 +60,7 @@ export interface NewSessionWorktreeProbeSnapshot {
 
 /** 用户显式选择的源分支只属于发起选择时的设备 + 工作目录，不得跨目标复用。 */
 export interface NewSessionWorktreeBranchSelectionSnapshot {
-  target: NewSessionWorktreeProbeTarget;
+  target: NewSessionWorktreeBranchTarget;
   sourceBranch: string;
 }
 
@@ -63,8 +68,8 @@ export interface NewSessionWorktreeBranchSelectionSnapshot {
 export function shouldAcceptWorktreeBranchListResult(input: {
   requestSeq: number;
   latestSeq: number;
-  requestTarget: NewSessionWorktreeProbeTarget;
-  latestTarget: NewSessionWorktreeProbeTarget;
+  requestTarget: NewSessionWorktreeBranchTarget;
+  latestTarget: NewSessionWorktreeBranchTarget;
 }): boolean {
   return input.requestSeq === input.latestSeq
     && input.requestTarget.deviceId === input.latestTarget.deviceId
@@ -72,8 +77,9 @@ export function shouldAcceptWorktreeBranchListResult(input: {
 }
 
 /**
- * 只向当前选择暴露同 target 的结果。React effect 要到 commit 后才会把 state 重置为
- * probing；render 阶段先做这道同步 fence，用户切项目/设备后立即创建也不会拿旧 baseRepo。
+ * 只向当前选择与连接代次暴露同 target 的结果。React effect 要到 commit 后才会把 state
+ * 重置为 probing；render 阶段先做这道同步 fence，用户切项目/设备或同目标重连后立即创建
+ * 也不会拿旧资格。
  */
 export function worktreeEligibilityForTarget(
   snapshot: NewSessionWorktreeProbeSnapshot | null,
@@ -83,6 +89,7 @@ export function worktreeEligibilityForTarget(
     !snapshot
     || snapshot.target.deviceId !== target.deviceId
     || snapshot.target.workingDir.trim() !== target.workingDir.trim()
+    || snapshot.target.probeGeneration !== target.probeGeneration
   ) {
     return { status: 'probing' };
   }
@@ -96,7 +103,7 @@ export function worktreeEligibilityForTarget(
  */
 export function worktreeSourceBranchForTarget(
   snapshot: NewSessionWorktreeBranchSelectionSnapshot | null,
-  target: NewSessionWorktreeProbeTarget,
+  target: NewSessionWorktreeBranchTarget,
   eligibility: NewSessionWorktreeEligibility,
 ): string {
   if (
@@ -323,6 +330,11 @@ export function isWorktreeChannelNotAllowedError(error: unknown): boolean {
 /**
  * 开关行是否显示:正常情况下是 project + workingDir + 通道可用；若老端不支持但
  * 镜像仍为 ON，保留已勾选的关闭入口，不能把用户锁在 fail-closed 状态。
+ *
+ * 2026-08-07 用户裁决(对齐桌面 WorktreeChipsRow):勾选记忆只对具备资格的目录
+ * 生效——探测**成功**且确认不合格(ineligible:非 git / 无 git / 已在 worktree 内)
+ * 时开关行隐藏、创建按普通会话放行,记忆保留;probing / detect-failed 不算确认,
+ * 维持显示 + fail closed,一次断连不能把用户要求的隔离静默降级。
  */
 export function shouldShowWorktreeToggle(input: {
   workspaceKind: 'project' | 'dialogue';
@@ -332,13 +344,19 @@ export function shouldShowWorktreeToggle(input: {
 }): boolean {
   return input.workspaceKind === 'project'
     && input.workingDir.trim().length > 0
+    && input.eligibility.status !== 'ineligible'
     && (input.eligibility.status !== 'unsupported' || input.enabled);
 }
 
 /**
- * checkbox 正在写工作端时不能按旧镜像创建；已勾选且当前目标尚未确认 eligible 时，
+ * checkbox 正在写工作端时不能按旧镜像创建；已勾选且当前目标**探测未定**时,
  * 也不能静默退化为普通目录会话。unsupported + ON 仍 fail closed，但保留显式关闭
  * 入口，不能绕过 worktree:create 落到 base repo，也不能把用户永久锁住。
+ *
+ * ineligible(探测成功、确认不合格)放行(2026-08-07 裁决):勾选记忆只对合格
+ * 目录生效,确认非 git 等三种资格缺失时按普通会话创建,开关行同步隐藏
+ * (shouldShowWorktreeToggle)。probing / recovering / detect-failed 仍拦截——
+ * 「确认不是 git」和「探测不出来」不是一回事。
  */
 export function shouldBlockNewSessionCreateForWorktree(input: {
   /** 当前草稿是否真的会使用 worktree：仅 project + 已选目录。 */
@@ -350,6 +368,9 @@ export function shouldBlockNewSessionCreateForWorktree(input: {
   // 对话工作区 / 尚未选目录时 worktree 控件本就隐藏，工作端记忆不能反向卡住
   // 普通会话创建；切回具体项目后再按该项目资格决定是否阻止。
   if (!input.applicable) return false;
+  // ineligible 目标不创建 worktree,preference 写入在途也不该卡住普通会话
+  // 创建(2026-08-07 裁决);仅 eligible/probing/detect-failed/unsupported 需要等。
+  if (input.eligibility.status === 'ineligible') return false;
   if (input.preferenceSaving) return true;
   return input.enabled
     && input.eligibility.status !== 'eligible';

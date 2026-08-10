@@ -215,6 +215,7 @@ describe('provider:list IPC handler', () => {
           upstream: 'https://custom.example/v1',
           authStrategy: 'api-key-header',
           headerOverride: { Authorization: 'Bearer secret' },
+          headerOverrideState: 'configured',
         },
       },
     } as unknown as ProviderView;
@@ -227,6 +228,7 @@ describe('provider:list IPC handler', () => {
       providers: ProviderView[];
     };
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
+    expect(result.providers[0].routing.pi?.headerOverrideState).toBe('configured');
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
   });
 
@@ -241,6 +243,7 @@ describe('provider:list IPC handler', () => {
           upstream: 'https://custom.example/v1',
           authStrategy: 'api-key-header',
           headerOverride: { Authorization: 'Bearer secret' },
+          headerOverrideState: 'configured',
         },
       },
     } as unknown as ProviderView;
@@ -253,6 +256,7 @@ describe('provider:list IPC handler', () => {
       providers: ProviderView[];
     };
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
+    expect(result.providers[0].routing.pi?.headerOverrideState).toBe('configured');
     // 非密字段仍完整回传,编辑表单据此渲染 endpoint/鉴权策略。
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
   });
@@ -1124,6 +1128,70 @@ describe('provider:custom:* CRUD handlers', () => {
 
     expect(removeCustomProviderHeaders).toHaveBeenCalledWith('move-headers', 'pi');
     expect(headers.get('pi')).toBeUndefined();
+  });
+
+  it('clears a stored API key when an update moves the runtime to a different endpoint', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string>();
+    const removeCustomProviderKey = vi.fn((_providerId, agent: AgentKind) => {
+      keys.delete(agent);
+      return { success: true };
+    });
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => keys.get(agent) ?? null,
+      ),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey,
+    }));
+    const config: CustomProviderConfig = {
+      id: 'move-api-key',
+      name: 'Move API key',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://old-endpoint.example/v1',
+          modelsUrl: 'https://old-endpoint.example/models',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      pi: 'endpoint-bound-key',
+    });
+    removeCustomProviderKey.mockClear();
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...config,
+      name: 'Move API key — model edit only',
+      runtimes: {
+        pi: {
+          ...config.runtimes.pi!,
+          models: [{ id: 'm', name: 'M renamed' }],
+        },
+      },
+    })).resolves.toEqual({ ok: true });
+    expect(removeCustomProviderKey).not.toHaveBeenCalledWith('move-api-key', 'pi');
+    expect(keys.get('pi')).toBe('endpoint-bound-key');
+    removeCustomProviderKey.mockClear();
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...config,
+      runtimes: {
+        pi: {
+          baseUrl: 'https://new-endpoint.example/v1',
+          modelsUrl: 'https://new-endpoint.example/models',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    })).resolves.toEqual({ ok: true });
+
+    expect(removeCustomProviderKey).toHaveBeenCalledWith('move-api-key', 'pi');
+    expect(keys.get('pi')).toBeUndefined();
   });
 
   it('merges stored main-only headers into a saved-provider model fetch', async () => {
@@ -2124,12 +2192,17 @@ describe('provider:test-connection handler', () => {
         baseUrl: 'https://pi.example/v1',
         modelId: 'pi-model',
         authMethod: 'apiKey',
+        requestPath: '/ignored-by-pi',
         apiKey: 'k',
       },
     })).resolves.toMatchObject({ ok: true });
     expect(testConnection).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'adhoc',
-      spec: expect.objectContaining({ agent: 'pi', wireProtocol: 'openai-chat' }),
+      spec: expect.objectContaining({
+        agent: 'pi',
+        wireProtocol: 'openai-chat',
+        requestPath: undefined,
+      }),
     }));
   });
 

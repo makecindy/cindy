@@ -25,6 +25,7 @@ import {
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   REMOTE_INVOKE_ALLOWLIST,
+  REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS,
   topicForPush,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -214,11 +215,20 @@ type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult;
 /** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */
 let workingDirGuard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null = null;
 
+type RemoteReviewInputGuard = (sessionId: string) => void | Promise<void>;
+
+/** Main injects the DB-backed sessions.source authorization check once ready. */
+let remoteReviewInputGuard: RemoteReviewInputGuard | null = null;
+
 /** 注入远程 create-session/worktree:create 的本地目录校验器(register.ts 在 maker 就绪后接入)。 */
 export function setRemoteWorkingDirGuard(
   guard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null,
 ): void {
   workingDirGuard = guard;
+}
+
+export function setRemoteReviewInputGuard(guard: RemoteReviewInputGuard | null): void {
+  remoteReviewInputGuard = guard;
 }
 
 /** 从 args[0] 里取待收敛的路径字段(见 PATH_GUARDED_CHANNELS);取不到返回 null。 */
@@ -2635,6 +2645,27 @@ export async function runInvoke(
     };
   }
 
+  // Review sessions may be mirrored to controllers for visibility, but their
+  // only input is the host's direct reviewer.send() call. Reject before the
+  // synthetic ipcMain event is dispatched, then let the handler repeat the
+  // same DB-backed check as defense in depth for local Renderer calls.
+  if (REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS.has(payload.channel) && remoteReviewInputGuard) {
+    const sessionId = payload.args?.[0];
+    if (typeof sessionId === 'string') {
+      try {
+        await remoteReviewInputGuard(sessionId);
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: 'IPC_ERROR',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
+  }
+
   // device-link:media:fetch 不是 ipcMain handler(同 subscribe),在此拦截:解析本机媒体 →
   // 上传 OSS 中转 → 回 { ossKey, mimeType, size }。已过三道 gate,等同受信本地访问。
   if (payload.channel === DL_MEDIA_FETCH_CHANNEL) {
@@ -2878,6 +2909,7 @@ export const __testing = {
     cancelAllLinkAcceptRetries();
     setBroadcastTapListener(null);
     presenceOfflineCheck = null;
+    remoteReviewInputGuard = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,

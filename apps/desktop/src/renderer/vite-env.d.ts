@@ -26,6 +26,28 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
+type IOSSimulatorSessionStatus = import('../shared/iosSimulatorIpc').IOSSimulatorSessionStatus;
+type IOSSimulatorAccessRequest = import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequest;
+type IOSSimulatorAccessRequestResult =
+  import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequestResult;
+type IOSSimulatorStatusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorStatusRequest;
+type IOSSimulatorToolRequest = import('../shared/iosSimulatorIpc').IOSSimulatorToolRequest;
+type IOSSimulatorToolResponse = import('../shared/iosSimulatorIpc').IOSSimulatorToolResponse;
+type IOSSimulatorAgentControlRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorAgentControlRequest;
+type IOSSimulatorFocusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorFocusRequest;
+type IOSSimulatorH264FramePush = import('../shared/iosSimulatorIpc').IOSSimulatorH264FramePush;
+type IOSSimulatorRouteStatusPush = import('../shared/iosSimulatorIpc').IOSSimulatorRouteStatusPush;
+type IOSSimulatorLiveTouchRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorLiveTouchRequest;
+type IOSSimulatorMutationControlRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorMutationControlRequest;
+type IOSSimulatorViewerRouteRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorViewerRouteRequest;
+type IOSSimulatorViewerVisibilityRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorViewerVisibilityRequest;
+type IOSSimulatorStreamProfileRequest =
+  import('../shared/iosSimulatorIpc').IOSSimulatorStreamProfileRequest;
 type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing'];
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
@@ -1913,9 +1935,7 @@ interface ElectronAPI {
    * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
    */
   uploadLogsNow: () => Promise<LogUploadResult>;
-  onLogUploadSettingsChange: (
-    callback: (payload: LogUploadSettingsPayload) => void,
-  ) => () => void;
+  onLogUploadSettingsChange: (callback: (payload: LogUploadSettingsPayload) => void) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: () => Promise<{
@@ -4101,6 +4121,20 @@ interface ElectronAPI {
         }>;
         activeTabId: string | null;
       }>;
+      ensureSingleton: (input: { sessionId: string; kind: string; state?: unknown }) => Promise<{
+        tab: {
+          id: string;
+          sessionId: string;
+          kind: string;
+          position: number;
+          state: unknown;
+          isActive: boolean;
+          createdAt: number;
+          updatedAt: number;
+        } | null;
+        created: boolean;
+        persistable: boolean;
+      }>;
       /** 新增 / 更新单个 tab;超 20 抛 RIGHT_SIDEBAR_TOO_MANY_TABS;state >16KB 抛 RIGHT_SIDEBAR_STATE_TOO_LARGE。 */
       upsert: (input: {
         id: string;
@@ -4112,6 +4146,20 @@ interface ElectronAPI {
       close: (input: { id: string }) => Promise<{ ok: true }>;
       setActive: (input: { sessionId: string; id: string | null }) => Promise<{ ok: true }>;
       reorder: (input: { sessionId: string; orderedIds: string[] }) => Promise<{ ok: true }>;
+    };
+    subagentRuns: {
+      list: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentRunsListRequest,
+      ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunsListResponse>;
+      detail: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
+      ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailResponse>;
+      onChanged: (
+        callback: (
+          payload: import('@cindy/maker-shared/subagent-workspace').SubagentRunsChangedPayload,
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
     };
     projectAliases: {
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
@@ -4668,6 +4716,12 @@ interface ElectronAPI {
       name: string,
       ctx: { sessionId?: string; workingDir?: string; args?: string; deviceId?: string },
     ) => Promise<{ success: boolean; error?: string }>;
+
+    startReview: (input: {
+      sourceSessionId: string;
+      focus?: string;
+      attachments?: import('./lib/fileTypes').SerializedAttachedFile[];
+    }) => Promise<{ ok: true; runId: string; reviewerSessionId: string }>;
 
     listAgentCommands: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
       success: boolean;
@@ -5380,9 +5434,7 @@ interface ElectronAPI {
       id: string,
       action: import('../shared/turnChangeSet').TurnChangeAction,
     ) => Promise<import('../shared/turnChangeSet').TurnChangeActionResult>;
-    onTurnChangeSetUpdated: (
-      cb: (data: unknown, ownerStamp?: unknown) => void,
-    ) => () => void;
+    onTurnChangeSetUpdated: (cb: (data: unknown, ownerStamp?: unknown) => void) => () => void;
     onEvent: (cb: (data: unknown) => void) => () => void;
     onStatusChanged: (cb: (data: unknown) => void) => () => void;
     onInteractionRequest: (cb: (data: unknown) => void) => () => void;
@@ -5769,6 +5821,30 @@ interface ElectronAPI {
       ) => Promise<AndroidAutomationConfigState>;
       setAdbPath: (adbPathOverride: string | null) => Promise<AndroidAutomationConfigState>;
       prepareAdb: () => Promise<AndroidAdbPreparationState>;
+    };
+    iosSimulator: {
+      requestAccess: (
+        request: IOSSimulatorAccessRequest,
+      ) => Promise<IOSSimulatorAccessRequestResult>;
+      status: (request: IOSSimulatorStatusRequest) => Promise<IOSSimulatorSessionStatus>;
+      call: (request: IOSSimulatorToolRequest) => Promise<IOSSimulatorToolResponse>;
+      setAgentControl: (
+        request: IOSSimulatorAgentControlRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      setMutationControl: (
+        request: IOSSimulatorMutationControlRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      setViewerVisibility: (
+        request: IOSSimulatorViewerVisibilityRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      latestFrame: (request: IOSSimulatorViewerRouteRequest) => Promise<IOSSimulatorToolResponse>;
+      setStreamProfile: (
+        request: IOSSimulatorStreamProfileRequest,
+      ) => Promise<IOSSimulatorToolResponse>;
+      liveTouch: (request: IOSSimulatorLiveTouchRequest) => Promise<IOSSimulatorToolResponse>;
+      onH264Frame: (callback: (payload: IOSSimulatorH264FramePush) => void) => () => void;
+      onRouteStatus: (callback: (payload: IOSSimulatorRouteStatusPush) => void) => () => void;
+      onFocusRequest: (callback: (request: IOSSimulatorFocusRequest) => void) => () => void;
     };
     computer: {
       status: (options?: ComputerDriverStatusOptions) => Promise<ComputerDriverStatus>;

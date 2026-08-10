@@ -1,5 +1,9 @@
 import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
 import type { AgentKind } from '@cindy/maker-core';
+import type {
+  IOSSimulatorInstanceErrorCode,
+  IOSSimulatorRuntimeErrorCode,
+} from '@cindy/ios-simulator-runtime';
 
 import type { Recipe, SiteGuide } from './browser/recipe-loader.js';
 
@@ -448,6 +452,7 @@ export type SessionSearchFn = (
 // 接替退役的 cindy-slack 意识。
 export type LiziMcpId =
   | 'android'
+  | 'ios_simulator'
   | 'browser'
   | 'computer'
   | 'cindy_feishu_bot'
@@ -591,8 +596,26 @@ export interface ComputerMcpCallContext {
   agentKind?: string;
 }
 
+export interface ComputerProcessIdentity {
+  pid: number;
+  name?: string;
+  command?: string;
+  executable?: string;
+  bundleId?: string;
+}
+
+export interface ComputerProcessIdentityResolveOptions {
+  /** Bypass any host-side process snapshot cache before a side effect. */
+  forceFresh?: boolean;
+}
+
 export interface ComputerMcpDeps {
   getStatus(): Promise<ComputerDriverStatus>;
+  /** Resolve process provenance without trusting model-supplied app labels. */
+  resolveProcessIdentity?(
+    pid: number,
+    options?: ComputerProcessIdentityResolveOptions,
+  ): Promise<ComputerProcessIdentity | null>;
   callTool(
     name: ComputerMcpToolName,
     args: Record<string, unknown>,
@@ -726,6 +749,110 @@ export interface AndroidMcpDeps {
     args: Record<string, unknown>,
     context?: AndroidMcpCallContext,
   ): Promise<unknown>;
+  logger?: LiziMcpLogger;
+}
+
+export type IOSSimulatorMcpErrorCode =
+  | IOSSimulatorRuntimeErrorCode
+  | IOSSimulatorInstanceErrorCode
+  | 'SESSION_CONTEXT_REQUIRED'
+  | 'SESSION_NOT_FOUND'
+  | 'UNSUPPORTED_SESSION_KIND'
+  | 'IOS_SIMULATOR_DISABLED'
+  | 'WDA_UNAVAILABLE'
+  | 'XCODE_BUILD_FAILED'
+  | 'DRIVER_DISCONNECTED'
+  | 'ORIENTATION_UNSUPPORTED'
+  | 'IOS_SIMULATOR_HOST_ERROR';
+
+export type IOSSimulatorToolAvailabilityState =
+  | 'available'
+  | 'requires-instance'
+  | 'instance-dependent'
+  | 'unavailable';
+
+export interface IOSSimulatorToolAvailability {
+  state: IOSSimulatorToolAvailabilityState;
+  reasonCode?: string;
+  backend?: 'wda' | 'native-hid' | 'simctl' | 'host';
+}
+
+export interface IOSSimulatorToolAvailabilityReport {
+  ready: boolean;
+  instanceCount: number;
+  runningInstanceCount: number;
+  tools: Record<string, IOSSimulatorToolAvailability>;
+}
+
+export type IOSSimulatorMcpToolName =
+  | 'check_environment'
+  | 'doctor'
+  | 'list_devices'
+  | 'list_instances'
+  | 'create_instance'
+  | 'attach_device'
+  | 'detach_device'
+  | 'start_instance'
+  | 'stop_instance'
+  | 'get_screen_map'
+  | 'audit_accessibility'
+  | 'compare_screen_maps'
+  | 'wait_for_ui'
+  | 'tap'
+  | 'swipe'
+  | 'drag'
+  | 'long_press'
+  | 'key_press'
+  | 'batch'
+  | 'touch_path'
+  | 'touch2_path'
+  | 'type_text'
+  | 'press_home'
+  | 'set_orientation'
+  | 'set_appearance'
+  | 'set_increase_contrast'
+  | 'set_content_size'
+  | 'set_location'
+  | 'start_location_route'
+  | 'clear_location'
+  | 'set_privacy'
+  | 'push_notification'
+  | 'set_status_bar'
+  | 'clear_status_bar'
+  | 'lock_screen'
+  | 'unlock_screen'
+  | 'build_app'
+  | 'read_build_diagnostics'
+  | 'install_app'
+  | 'launch_app'
+  | 'terminate_app'
+  | 'open_url'
+  | 'take_screenshot'
+  | 'capture_visual_baseline'
+  | 'visual_diff'
+  | 'capture_state'
+  | 'get_diagnostics'
+  | 'start_recording'
+  | 'stop_recording';
+
+export interface IOSSimulatorMcpCallContext {
+  sessionId?: string;
+  /** Workdir bound by the Host for project-scoped capability policy. */
+  workingDir?: string;
+  /** Host-internal origin. MCP transport always uses agent; renderer IPC uses user. */
+  origin?: 'agent' | 'user';
+}
+
+/** Host adapter used by the reusable iOS Simulator MCP server. */
+export interface IOSSimulatorMcpDeps {
+  callTool(
+    name: IOSSimulatorMcpToolName,
+    args: Record<string, unknown>,
+    context?: IOSSimulatorMcpCallContext,
+  ): Promise<unknown>;
+  describeTools?(
+    context?: IOSSimulatorMcpCallContext,
+  ): Promise<IOSSimulatorToolAvailabilityReport>;
   logger?: LiziMcpLogger;
 }
 

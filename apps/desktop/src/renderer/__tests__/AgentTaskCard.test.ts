@@ -31,11 +31,15 @@ vi.mock('@/hooks/useExpandedBlockMemory', () => ({
   }),
 }));
 
-const { openBackgroundTasksTabMock } = vi.hoisted(() => ({
+const { openBackgroundTasksTabMock, openSubagentsTabMock } = vi.hoisted(() => ({
   openBackgroundTasksTabMock: vi.fn().mockResolvedValue(undefined),
+  openSubagentsTabMock: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
   openBackgroundTasksTab: openBackgroundTasksTabMock,
+}));
+vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
+  openSubagentsTab: openSubagentsTabMock,
 }));
 
 const { getWorkflowProgressForMock } = vi.hoisted(() => ({
@@ -515,8 +519,9 @@ describe('AgentTaskCard', () => {
     expect(progressLine(container)?.textContent).toBe('2/2 Agent');
   });
 
-  it('renders no progress line when workflowProgress is absent, and keeps non-workflow cards off the panel entry', () => {
+  it('renders no workflow progress line and opens ordinary Subagents in their durable panel', () => {
     openBackgroundTasksTabMock.mockClear();
+    openSubagentsTabMock.mockClear();
     const workflow = render(
       React.createElement(AgentTaskCard, {
         sessionId: 'session-1',
@@ -531,23 +536,59 @@ describe('AgentTaskCard', () => {
     expect(progressLine(workflow.container)).toBeNull();
 
     const normal = render(
-      React.createElement(AgentTaskCard, {
-        sessionId: 'session-1',
-        update: {
-          provider: 'claude-code',
-          taskId: 'task-1',
-          status: 'running',
-          title: 'Inspect files',
-        },
-      }),
+      withPanelHost(
+        'session-1',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-1',
+          update: {
+            provider: 'claude-code',
+            taskId: 'task-1',
+            status: 'running',
+            title: 'Inspect files',
+          },
+        }),
+      ),
     );
-    // 普通卡头部仍是展开 toggle,不触发面板。
-    const toggleBtn = normal.container.querySelector<HTMLButtonElement>('button[aria-expanded]');
-    expect(toggleBtn).not.toBeNull();
+    const subagentButton = headerButton(normal.container);
+    expect(subagentButton).not.toBeNull();
     act(() => {
-      toggleBtn!.click();
+      subagentButton!.click();
     });
     expect(openBackgroundTasksTabMock).not.toHaveBeenCalled();
+    expect(openSubagentsTabMock).toHaveBeenCalledWith('session-1', {
+      focusRunId: 'task-1',
+      focusProvider: 'claude-code',
+    });
     expect(progressLine(normal.container)).toBeNull();
+  });
+
+  it('keeps Codex control cards expandable instead of opening a nonexistent Subagent run', () => {
+    openSubagentsTabMock.mockClear();
+    const { container } = render(
+      withPanelHost(
+        'session-1',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-1',
+          toolCall: {
+            clientId: 'wait-1',
+            role: 'tool_use',
+            content: '',
+            toolName: 'collab:wait',
+            toolUseId: 'wait-1',
+          },
+          update: {
+            provider: 'codex',
+            taskId: 'wait-1',
+            status: 'completed',
+            title: 'wait',
+          },
+        }),
+      ),
+    );
+
+    const toggleButton = container.querySelector<HTMLButtonElement>('button[aria-expanded]');
+    expect(toggleButton).not.toBeNull();
+    act(() => toggleButton!.click());
+    expect(openSubagentsTabMock).not.toHaveBeenCalled();
   });
 });

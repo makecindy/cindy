@@ -141,7 +141,12 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
-import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
+import {
+  focusComposerEndNextFrame,
+  hostCapabilityForGhost,
+  placeGhostAtComposerStart,
+  placeHostCapabilityAtComposerStart,
+} from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
 import {
@@ -159,6 +164,7 @@ import {
   findGhostByCommand,
   parseGhostCommandWord,
 } from '@/cindy-brain/ghostCommand';
+import { expandHostCapabilityInvocation } from '@/cindy-brain/hostCapabilityInvocation';
 import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -468,6 +474,8 @@ interface ChatInputProps {
   onWorkingDirChange?: (dir: string | null) => void;
   /** When true, the input is disabled (e.g. during streaming). */
   disabled?: boolean;
+  /** Freeze model/provider/effort/permission controls for audit-only tasks. */
+  settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
   isStreaming?: boolean;
   /**
@@ -947,6 +955,7 @@ export function ChatInput({
   onFastModeChange,
   onWorkingDirChange,
   disabled,
+  settingsLocked = false,
   isStreaming = false,
   isAgentBusy,
   onStop,
@@ -1471,8 +1480,8 @@ export function ChatInput({
   // 与下拉菜单看到的顺序一致。vendorKey 未锁定时按 PermissionSelector 的
   // 默认取 cc。editorProps.handleKeyDown 是稳定闭包, 走 ref 取值。
   const permissionCycleOptions = useMemo(
-    () => activeAgentCapabilities?.permissionModes ?? [],
-    [activeAgentCapabilities],
+    () => (settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])),
+    [activeAgentCapabilities, settingsLocked],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -1486,7 +1495,7 @@ export function ChatInput({
   // 计划模式入口门控:agent capability(device-link 老被控端无此字段 → 隐藏)+ 父组件接线。
   const planModeSupported = activeAgentCapabilities?.planMode?.supported === true;
   const planModeEntry =
-    planModeSupported && onPlanModeChange
+    !settingsLocked && planModeSupported && onPlanModeChange
       ? { enabled: planModeEnabled, onToggle: (next: boolean) => void onPlanModeChange(next) }
       : undefined;
   // 当前 activeModel 归属的 agent runtime —— 用于 send 预检里按 (model, agent) 查
@@ -2294,6 +2303,11 @@ export function ChatInput({
             attachments: existing?.attachments ?? [],
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
         );
@@ -2499,48 +2513,51 @@ export function ChatInput({
     [installedGhosts, workingDir],
   );
   const pluginAvailableIds = useMemo(
-    () =>
-      new Set(
-        ghostsForCommand
-          .filter((ghost) => ghost.enabled && ghost.manifest.command)
-          .map((ghost) => ghost.manifest.id),
-      ),
+    () => new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
     [ghostsForCommand],
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
-  // 未生效项保留展示但置灰(entry 级 disabled + 原因)。
-  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(
-    () => {
-      // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
-      // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
-      if (deviceLinkDeviceId) return [];
-      return pluginsForMenu.map((ghost) => {
-        const hasCommand = !!ghost.manifest.command;
-        const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasCommand;
-        return {
-          item: {
-            type: 'plugin-command' as const,
-            name: ghost.manifest.name,
-            relPath: ghost.manifest.command ?? `cindy://plugin/${ghost.manifest.id}`,
-            pluginId: ghost.manifest.id,
-            ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-            sourceLabel: ghost.manifest.command ?? '',
-            _nameLower: `${ghost.manifest.name} ${ghost.manifest.command ?? ''}`.toLowerCase(),
-            _relPathLower: `${ghost.manifest.command ?? ''} ${ghost.manifest.id}`.toLowerCase(),
-          },
-          ...(selectable
-            ? {}
-            : {
-                disabled: true,
-                disabledReason: t(
-                  hasCommand ? 'extraDirs.pluginDisabled' : 'extraDirs.pluginNoCommand',
-                ),
-              }),
-        };
-      });
-    },
-    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, t],
-  );
+  // Host 入口或未生效项保留展示但置灰(entry 级 disabled + 原因)。
+  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(() => {
+    // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
+    // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
+    if (deviceLinkDeviceId) return [];
+    return pluginsForMenu.map((ghost) => {
+      const hasCommand = !!ghost.manifest.command;
+      const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
+      const hasComposerEntry = hasCommand || hostCapability !== null;
+      const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
+      const entryKey = ghost.manifest.command ?? hostCapability ?? '';
+      return {
+        item: {
+          type: 'plugin-command' as const,
+          name: ghost.manifest.name,
+          relPath:
+            ghost.manifest.command ??
+            (hostCapability
+              ? `cindy://host-capability/${hostCapability}`
+              : `cindy://plugin/${ghost.manifest.id}`),
+          pluginId: ghost.manifest.id,
+          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+          sourceLabel: entryKey,
+          _nameLower: `${ghost.manifest.name} ${entryKey}`.toLowerCase(),
+          _relPathLower: `${entryKey} ${ghost.manifest.id}`.toLowerCase(),
+        },
+        ...(selectable
+          ? {}
+          : {
+              disabled: true,
+              disabledReason: t(
+                !pluginAvailableIds.has(ghost.manifest.id)
+                  ? 'extraDirs.pluginDisabled'
+                  : ghost.manifest.slots.includes('skill')
+                    ? 'extraDirs.pluginAgentInvoked'
+                    : 'extraDirs.pluginNoCommand',
+              ),
+            }),
+      };
+    });
+  }, [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, remoteHostId, t]);
   useEffect(() => {
     setGhostCommandRoster(editor, ghostsForCommand);
   }, [editor, ghostsForCommand]);
@@ -3046,6 +3063,11 @@ export function ChatInput({
           attachments: existing?.attachments ?? [],
           quotes: existing?.quotes ?? [],
           browserComments: existing?.browserComments ?? [],
+          ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+          ...(existing?.pendingHostCapabilityGhostId
+            ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+            : {}),
+          ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
         },
         { silent: true },
       );
@@ -3257,9 +3279,9 @@ export function ChatInput({
   }, [editor, storageKey]);
 
   // Plugin page routed entry: wait until the editor has hydrated its existing
-  // draft, then reuse the exact same insertion/focus path as the in-composer
-  // `$` / `+` selectors. This preserves body text and replaces an existing
-  // Plugin command instead of treating the command as prefilled plain text.
+  // draft, then reuse the same placement path as the in-composer selectors.
+  // Command and Host-capability Plugins intentionally use separate handoff
+  // fields because only commands expand through `ghost_call`.
   useEffect(() => {
     if (!editor || !storageKey || !hasHydratedRef.current) return;
     const draft = getComposerDraft(storageKey);
@@ -3280,6 +3302,23 @@ export function ChatInput({
         { silent: true },
       );
       placeGhostAtComposerStart(editor, ghost, installedGhosts);
+      return;
+    }
+
+    if (draft.pendingHostCapabilityGhostId) {
+      const ghost = ghostsForCommand.find(
+        (candidate) => candidate.manifest.id === draft.pendingHostCapabilityGhostId,
+      );
+      saveComposerDraft(
+        storageKey,
+        {
+          ...draft,
+          pendingHostCapabilityGhostId: undefined,
+          focusAtEnd: false,
+        },
+        { silent: true },
+      );
+      if (ghost) placeHostCapabilityAtComposerStart(editor, ghost, installedGhosts);
       return;
     }
 
@@ -3328,6 +3367,11 @@ export function ChatInput({
             attachments: existing?.attachments ?? [],
             quotes: existing?.quotes ?? [],
             browserComments: next,
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
         );
@@ -4122,10 +4166,17 @@ export function ChatInput({
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
-        const ghost = installedGhostsRef.current.find(
-          (candidate) => candidate.manifest.id === selectedItem.pluginId,
-        );
-        if (!ghost?.enabled || !ghost.manifest.command) return;
+        const ghost = filterGhostsForWorkdir(
+          installedGhostsRef.current,
+          workingDirRef.current,
+        ).find((candidate) => candidate.manifest.id === selectedItem.pluginId);
+        if (!ghost?.enabled) return;
+        const useHostCapability =
+          !ghost.manifest.command &&
+          !remoteHostId &&
+          !deviceLinkDeviceId &&
+          hostCapabilityForGhost(ghost) !== null;
+        if (!ghost.manifest.command && !useHostCapability) return;
         editor
           .chain()
           .focus()
@@ -4134,7 +4185,11 @@ export function ChatInput({
             return true;
           })
           .run();
-        placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
+        if (ghost.manifest.command) {
+          placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
+        } else {
+          placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);
+        }
         closeAtPanel();
         return;
       }
@@ -4195,8 +4250,10 @@ export function ChatInput({
     },
     [
       closeAtPanel,
+      deviceLinkDeviceId,
       editor,
       effectiveAt,
+      remoteHostId,
       resolveEffectiveAtRange,
       setSyntheticAtAnchor,
     ],
@@ -4317,13 +4374,15 @@ export function ChatInput({
           serializedContent = serializeEditorContent(editor);
         }
         const {
-          text: editorText,
+          text: serializedEditorText,
           mentions,
           hasQuotes,
           agentReferences: serializedAgentReferences,
           pastedTextRanges,
           slashCommandRanges,
+          hostCapability: serializedHostCapability,
         } = serializedContent;
+        let editorText = serializedEditorText;
         let agentReferences = serializedAgentReferences;
         const attachmentsForSend = optimisticallyClearRemoteComposer
           ? attachmentsBeforeOptimisticClear
@@ -4331,7 +4390,46 @@ export function ChatInput({
         const commentsForSend = optimisticallyClearRemoteComposer
           ? commentsBeforeOptimisticClear
           : [...browserCommentsRef.current];
+        // Resolve the structured capability atom against the current enabled,
+        // workdir-scoped Plugin roster. Draft data is presentation state only;
+        // it cannot grant a Host route after the Plugin is disabled/uninstalled.
+        const eligibleGhosts = filterGhostsForWorkdir(
+          installedGhostsRef.current,
+          workingDirRef.current,
+        );
+        const canUseLocalHostCapability = !remoteHostId && !deviceLinkDeviceId;
+        const hostCapabilityGhost =
+          serializedHostCapability && canUseLocalHostCapability
+            ? (eligibleGhosts.find(
+                (candidate) =>
+                  candidate.enabled &&
+                  candidate.manifest.id === serializedHostCapability.ghostId &&
+                  hostCapabilityForGhost(candidate) === serializedHostCapability.capability,
+              ) ?? null)
+            : null;
+        if (serializedHostCapability && !hostCapabilityGhost) {
+          toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));
+          return;
+        }
+        const hostCapability =
+          serializedHostCapability && hostCapabilityGhost
+            ? {
+                capability: serializedHostCapability.capability,
+                ghostId: hostCapabilityGhost.manifest.id,
+                name: hostCapabilityGhost.manifest.name,
+              }
+            : null;
+        // A capability chip is metadata, not an automatic visible prefix. Use
+        // the localized default only when the user sent the chip by itself;
+        // otherwise preserve their body byte-for-byte and avoid duplication.
+        if (hostCapability && !editorText.trim()) {
+          editorText =
+            hostCapability.capability === 'ios-simulator'
+              ? t('rightSidebar.iosSimulator.startPrompt')
+              : hostCapability.name;
+        }
         if (
+          !serializedHostCapability &&
           isPlanModeComposerCommandText(
             editorText,
             planModeEntry !== undefined,
@@ -4460,15 +4558,19 @@ export function ChatInput({
         // 追加"必须走 cindy 总机"的机器指令;未命中原样发送。
         // 读取 useInstalledGhosts 的最新窗口级快照。ghosts:changed 会原子更新
         // 该快照;发送路径无需同步 IPC,仍按当前工作目录执行同一禁用判定。
-        const eligibleGhosts = filterGhostsForWorkdir(
-          installedGhostsRef.current,
-          workingDirRef.current,
-        );
         const ghostCommandWord = parseGhostCommandWord(text);
-        const usedGhost = ghostCommandWord
-          ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
-          : null;
-        const textToSend = expandGhostCommand(text, eligibleGhosts);
+        const usedGhost = hostCapabilityGhost
+          ? hostCapabilityGhost
+          : ghostCommandWord
+            ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
+            : null;
+        const textToSend = hostCapability
+          ? expandHostCapabilityInvocation(
+              text,
+              hostCapability,
+              t('rightSidebar.iosSimulator.startPrompt'),
+            )
+          : expandGhostCommand(text, eligibleGhosts);
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
           latestAttachmentsRef.current,
@@ -4600,6 +4702,11 @@ export function ChatInput({
                   attachments: [...next.attachments],
                   quotes: existing?.quotes ?? [],
                   browserComments: [...next.browserComments],
+                  ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+                  ...(existing?.pendingHostCapabilityGhostId
+                    ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+                    : {}),
+                  ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
                 },
                 { silent: true, preserveRemoteOptimisticRecovery: true },
               );
@@ -4863,6 +4970,7 @@ export function ChatInput({
       restoreFiles,
       storageKey,
       deviceLinkDeviceId,
+      remoteHostId,
       t,
       currentModelAgentKind,
       enforceConnectedSourceGate,
@@ -4872,6 +4980,8 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
+      slashCommandsReady,
+      mergedCommands,
       planModeEntry,
       captureSendFocusForRestore,
     ],
@@ -5152,6 +5262,7 @@ export function ChatInput({
       syncDraft = true,
       memoryProviderId = effectiveSourceId,
     ) => {
+      if (settingsLocked) return;
       // 切换意图期:Fast 改动是"更新意图"而不是改当前会话实时状态(否则普通
       // SET_FAST 链路会让 main 清意图、renderer 乐观态失配)。经 ref 调用——
       // performAgentSwitch 声明在本回调之后(TDZ)。
@@ -5191,6 +5302,7 @@ export function ChatInput({
       modelMemory,
       persistFastModeChange,
       syncSessionDraftModelPrefs,
+      settingsLocked,
     ],
   );
 
@@ -5476,6 +5588,7 @@ export function ChatInput({
 
   const performModelChange = useCallback(
     async (newModelId: string, expectedAgentSwitchRevision?: number) => {
+      if (settingsLocked) return false;
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -5515,10 +5628,7 @@ export function ChatInput({
 
       // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
       // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(
-        newModelId,
-        effectiveSourceId,
-      );
+      const { efforts, defaultEffort } = resolveModelEfforts(newModelId, effectiveSourceId);
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
@@ -5706,6 +5816,7 @@ export function ChatInput({
       confirmModelSwitchContextGuard,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
+      settingsLocked,
     ],
   );
 
@@ -5726,6 +5837,7 @@ export function ChatInput({
 
   const handleEffortChange = useCallback(
     async (newEffort: Effort) => {
+      if (settingsLocked) return;
       // 切换意图期:effort 改动 = 更新意图(重登记),不走普通 setEffort 链路。
       if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
@@ -5823,6 +5935,7 @@ export function ChatInput({
       syncSessionDraftModelPrefs,
       fastMode,
       performAgentSwitch,
+      settingsLocked,
     ],
   );
 
@@ -5874,6 +5987,7 @@ export function ChatInput({
       reconciledEffort?: Effort,
       expectedAgentSwitchRevision?: number,
     ) => {
+      if (settingsLocked) return false;
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -6148,6 +6262,7 @@ export function ChatInput({
       confirmModelSwitchContextGuard,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
+      settingsLocked,
     ],
   );
 
@@ -6194,6 +6309,7 @@ export function ChatInput({
 
   const handlePermissionModeChange = useCallback(
     async (newMode: PermissionMode) => {
+      if (settingsLocked) return;
       const previousMode = activePermissionModeRef.current;
       if (requiresFullAccessConfirmation(previousMode, newMode)) {
         const confirmed = await confirmDialog({
@@ -6240,7 +6356,7 @@ export function ChatInput({
         toast.error(t('newChat.chatInput.permissionSwitchFailed'));
       }
     },
-    [sessionId, onPermissionModeDidChange, t, confirmDialog],
+    [sessionId, onPermissionModeDidChange, t, confirmDialog, settingsLocked],
   );
   useEffect(() => {
     handlePermissionModeChangeRef.current = handlePermissionModeChange;
@@ -6788,7 +6904,7 @@ export function ChatInput({
                 {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
                   extraDirsCount={(extraDirs ?? []).length}
-                  hasReferenceDirs={onExtraDirsChange !== undefined}
+                  hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   autoFocusTarget={composerSuggestionFocusTarget}
@@ -6804,7 +6920,7 @@ export function ChatInput({
                       onClose={closeAtPanel}
                       onRetry={() => runAtScan(atQuery)}
                       referenceDirs={
-                        onExtraDirsChange
+                        !settingsLocked && onExtraDirsChange
                           ? {
                               dirs: extraDirs ?? [],
                               onRemove: (path) => {
@@ -6827,7 +6943,7 @@ export function ChatInput({
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}
                   deviceId={deviceLinkDeviceId}
-                  disabled={composerEditorLocked}
+                  disabled={composerEditorLocked || settingsLocked}
                   dense={effectiveDenseToolbar}
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
@@ -6908,7 +7024,9 @@ export function ChatInput({
                     onProviderChange={handleProviderChange}
                     onNavigateToProviders={handleNavigateToProviders}
                     switching={remoteSwitchInFlight}
-                    disabled={disabled || agentSendDispatchInFlight || agentSwitchInFlight}
+                    disabled={
+                      disabled || settingsLocked || agentSendDispatchInFlight || agentSwitchInFlight
+                    }
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     compactToolbar={useNarrowToolbar}
                     ultraCompactToolbar={useUltraCompactToolbar}

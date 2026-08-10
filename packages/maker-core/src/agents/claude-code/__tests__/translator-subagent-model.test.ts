@@ -274,6 +274,11 @@ describe('Claude Code translator subagent model attribution', () => {
       parentToolUseId: 'toolu_agent_a',
       status: 'running',
       model: 'codex/gpt-5.6-sol',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'agent-a',
+        parentToolUseId: 'toolu_agent_a',
+      },
     });
   });
 

@@ -375,24 +375,74 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   const compactionItem = { type: 'compaction', encrypted_content: 'ENC' };
   const contextCompactionItem = { type: 'context_compaction', id: 'cc_1', encrypted_content: 'ENC2' };
   const userMessage = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] };
+  const agentMessage = {
+    type: 'agent_message',
+    author: 'researcher',
+    recipient: 'parent',
+    content: [
+      { type: 'input_text', text: 'readable agent result' },
+      { type: 'encrypted_content', encrypted_content: 'AGENT_ENC' },
+    ],
+  };
+  const reasoningItem = {
+    type: 'reasoning',
+    content: null,
+    summary: [],
+    encrypted_content: 'REASONING_ENC',
+  };
 
-  it('把加密压缩块替换为明文占位 message(非 ChatGPT 上游)', async () => {
+  it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 ChatGPT 上游)', async () => {
     const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
-      { model: 'gpt-5.5', input: [compactionItem, contextCompactionItem, userMessage] },
+      {
+        model: 'gpt-5.5',
+        input: [compactionItem, contextCompactionItem, agentMessage, reasoningItem, userMessage],
+      },
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
     ) as { input: Array<Record<string, unknown>> };
 
     expect(out).not.toBeNull();
-    expect(out.input).toHaveLength(3);
+    expect(out.input).toHaveLength(5);
     expect(out.input[0].type).toBe('message');
     expect(out.input[1].type).toBe('message');
-    expect(JSON.stringify(out.input)).not.toContain('ENC');
     expect(JSON.stringify(out.input[0])).toContain('compacted into an encrypted snapshot');
-    // 压缩点之后的原有消息原样保留
-    expect(out.input[2]).toEqual(userMessage);
+    expect(out.input[2]).toEqual({
+      type: 'agent_message',
+      author: 'researcher',
+      recipient: 'parent',
+      content: [{ type: 'input_text', text: 'readable agent result' }],
+    });
+    expect(out.input[3]).toEqual(reasoningItem);
+    expect(out.input[4]).toEqual(userMessage);
+    expect(JSON.stringify(out.input)).not.toContain('AGENT_ENC');
+    expect(JSON.stringify(out.input)).toContain('REASONING_ENC');
+    // transform 不得原地污染 Codex 持有的历史对象。
+    expect(agentMessage.content).toHaveLength(2);
+  });
+
+  it('agent_message 只有密文时整条丢弃', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      {
+        model: 'gpt-5.5',
+        input: [
+          {
+            type: 'agent_message',
+            author: 'researcher',
+            recipient: 'parent',
+            content: [{ type: 'encrypted_content', encrypted_content: 'ONLY_ENC' }],
+          },
+          userMessage,
+        ],
+      },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out.input).toEqual([userMessage]);
   });
 
   it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
@@ -400,7 +450,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
-      { model: 'gpt-5.5', input: [compactionItem, userMessage] },
+      { model: 'gpt-5.5', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
       { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
     )).toBeNull();
   });
@@ -614,6 +664,104 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     clearSessionProvider('session-kimi-image');
     setCustomProviderKeyReader(() => null);
     setCustomProviders([]);
+  });
+
+  it('strips agent message ciphertext before a cross-provider Chat bridge request', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'history-chat-provider',
+        name: 'History Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'history-model', name: 'History Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'history-provider-key');
+    host.registerComposed('session-history-chat', 'thread-history-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-history-chat', 'history-chat-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const parsedBody = {
+      model: 'history-model',
+      input: [
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [
+            { type: 'input_text', text: 'readable result' },
+            { type: 'encrypted_content', encrypted_content: 'AGENT_ENC' },
+          ],
+        },
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [{ type: 'encrypted_content', encrypted_content: 'ONLY_ENC' }],
+        },
+        {
+          type: 'reasoning',
+          content: null,
+          summary: [],
+          encrypted_content: 'REASONING_ENC',
+        },
+      ],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-history-chat' },
+    };
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        parsedBody,
+        ctx,
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      if (!decision?.localHandler) throw new Error('expected Chat bridge local handler');
+
+      const res = {} as never;
+      await decision.localHandler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx,
+        res,
+      });
+      const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+        | { handle: ReturnType<typeof vi.fn> }
+        | undefined;
+      expect(bridge?.handle).toHaveBeenCalledWith({
+        parsedBody: {
+          ...parsedBody,
+          instructions: 'PRODUCT_PROMPT',
+          input: [
+            {
+              type: 'agent_message',
+              author: 'researcher',
+              recipient: 'parent',
+              content: [{ type: 'input_text', text: 'readable result' }],
+            },
+            parsedBody.input[2],
+          ],
+        },
+        res,
+      });
+    } finally {
+      clearSessionProvider('session-history-chat');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
   });
 
   it('routes a custom Codex Anthropic Messages runtime to the local bridge with provider-owned auth', async () => {

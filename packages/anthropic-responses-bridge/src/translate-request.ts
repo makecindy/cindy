@@ -359,9 +359,9 @@ export function translateRequest(
     model: opts.model,
     input,
     store: false,
-    // 恒 stream:server.ts 的响应翻译器只解析 SSE(非流式 JSON 会被静默丢成空响应)。
-    // Claude Code SDK 全程流式;万一上游拿到 stream:false 请求也强制转成流,保证解析路径唯一。
-    stream: true,
+    // 保持调用方的响应模式:Claude Code 的 stream watchdog 会用 stream:false 做非流式
+    // fallback,bridge 必须让上游返回可组装成单个 Anthropic Message 的 Responses JSON。
+    stream: req.stream !== false,
     include: ['reasoning.encrypted_content'],
   };
 

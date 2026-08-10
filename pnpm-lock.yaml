@@ -79,6 +79,9 @@ importers:
       '@cindy/im':
         specifier: workspace:*
         version: link:../../packages/lizi-im
+      '@cindy/ios-simulator-runtime':
+        specifier: workspace:*
+        version: link:../../packages/ios-simulator-runtime
       '@cindy/maker-cc-manager':
         specifier: workspace:*
         version: link:../../packages/maker-cc-manager
@@ -713,6 +716,9 @@ importers:
       xdt-mobile-realtime-audio:
         specifier: file:./modules/xdt-mobile-realtime-audio
         version: file:apps/mobile/modules/xdt-mobile-realtime-audio
+      xdt-screenshot-monitor:
+        specifier: file:./modules/xdt-screenshot-monitor
+        version: file:apps/mobile/modules/xdt-screenshot-monitor
       xdt-tapdb:
         specifier: file:./modules/xdt-tapdb
         version: file:apps/mobile/modules/xdt-tapdb(expo-modules-core@56.0.21(react-native-worklets@0.8.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@56.0.16)
@@ -754,29 +760,11 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
-  cindy-protocol/packages/skill-protocol:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
-
   cindy-protocol/packages/slack-hook-protocol:
     devDependencies:
       '@types/node':
         specifier: '*'
         version: 25.9.5
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
-
-  cindy-protocol/packages/voice-protocol:
-    devDependencies:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -981,6 +969,21 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/ios-simulator-runtime:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.9.5
+      tsx:
+        specifier: ^4.20.6
+        version: 4.23.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   packages/lizi-im:
     dependencies:
       '@larksuiteoapi/node-sdk':
@@ -1026,6 +1029,9 @@ importers:
       '@cindy/gitlab-client':
         specifier: workspace:*
         version: link:../gitlab-client
+      '@cindy/ios-simulator-runtime':
+        specifier: workspace:*
+        version: link:../ios-simulator-runtime
       '@cindy/maker-core':
         specifier: workspace:*
         version: link:../maker-core
@@ -10420,6 +10426,9 @@ packages:
   xdt-mobile-realtime-audio@file:apps/mobile/modules/xdt-mobile-realtime-audio:
     resolution: {directory: apps/mobile/modules/xdt-mobile-realtime-audio, type: directory}
 
+  xdt-screenshot-monitor@file:apps/mobile/modules/xdt-screenshot-monitor:
+    resolution: {directory: apps/mobile/modules/xdt-screenshot-monitor, type: directory}
+
   xdt-tapdb@file:apps/mobile/modules/xdt-tapdb:
     resolution: {directory: apps/mobile/modules/xdt-tapdb, type: directory}
     peerDependencies:
@@ -13836,7 +13845,9 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
@@ -21286,6 +21297,8 @@ snapshots:
       expo-modules-core: 56.0.21(react-native-worklets@0.8.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
 
   xdt-mobile-realtime-audio@file:apps/mobile/modules/xdt-mobile-realtime-audio: {}
+
+  xdt-screenshot-monitor@file:apps/mobile/modules/xdt-screenshot-monitor: {}
 
   xdt-tapdb@file:apps/mobile/modules/xdt-tapdb(expo-modules-core@56.0.21(react-native-worklets@0.8.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@56.0.16):
     dependencies:

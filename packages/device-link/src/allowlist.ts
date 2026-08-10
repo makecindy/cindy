@@ -490,6 +490,31 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
 ];
 
+/**
+ * Session-scoped input mutations that must be re-authorized by the controlled
+ * Desktop before dispatch. Review tasks are visible over device-link but are
+ * host-owned audit runs, so none of these channels may inject or mutate input.
+ */
+export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:send',
+  'maker:steer',
+  'maker:input:enqueue',
+  'maker:input:compact',
+  'maker:input:steer',
+  'maker:input:stop',
+  'maker:input:resume',
+  'maker:input:retry-last-error',
+  'maker:input:clear-error',
+  'maker:input:remove',
+  'maker:input:update-text',
+  'maker:input:update-content',
+  'maker:input:move',
+  'maker:input:set-expanded',
+  'maker:input:set-interaction-lock',
+  'maker:input:set-edit-lock',
+  'maker:input:clear-session',
+]);
+
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
 export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
   ...CORE_INVOKE_CHANNELS,

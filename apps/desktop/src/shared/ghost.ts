@@ -6,8 +6,10 @@ import {
   type GhostLocale,
   type GhostManifestLocales,
 } from '@cindy/plugin-protocol';
+import type { IOSSimulatorMcpErrorCode } from '@cindy/mcps';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
+import type { IOSSimulatorPublicInstance, IOSSimulatorPublicRouteStatus } from './iosSimulatorIpc';
 
 /**
  * 意识(Ghost,.cindy 文件)的清单数据模型与校验 —— main / renderer 共用。
@@ -121,6 +123,10 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
  * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
  * v1 一律拒(fail closed)。
+ * 'ios-simulator' = 内置 iOS 模拟器(2026-08-06):插件只能读取当前台前任务的
+ * 脱敏状态摘要并请求 Host 打开既有模拟器面板。视频帧、输入、viewer lease、
+ * UDID、Sidecar 路径/进程与任意 sessionId 均不跨插件边界；实际 WDA / Native
+ * 路由、生命周期、恢复与 fallback 仍完全由 Host 管理。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -140,6 +146,7 @@ export const GHOST_SLOTS = [
   'preview',
   'skill',
   'workspace',
+  'ios-simulator',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
@@ -324,9 +331,7 @@ function isChildId(v: unknown): v is string {
 }
 
 /** worker → 主机控制帧的形状校验(主机侧守门用;不合形一律静默丢)。 */
-export function parseGhostNodeChildToHostMessage(
-  raw: unknown,
-): GhostNodeChildToHostMessage | null {
+export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildToHostMessage | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
   if (m.type === 'spawn-child') {
@@ -588,7 +593,8 @@ export function isValidGhostNetworkHostPattern(p: unknown): p is string {
  * 作者两者都要就两条都声明,规则不做隐式扩张。
  */
 export function ghostNetworkHostMatches(pattern: string, hostname: string): boolean {
-  if (pattern.startsWith('*.')) return hostname.endsWith(pattern.slice(1)) && hostname.length > pattern.length - 1;
+  if (pattern.startsWith('*.'))
+    return hostname.endsWith(pattern.slice(1)) && hostname.length > pattern.length - 1;
   return hostname === pattern;
 }
 
@@ -813,7 +819,13 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  * 改走 source:'oauth' + tokenBroker:'feishu';存量已装清单由内置意识播种器
  * 按指纹覆盖自愈,未覆盖前该意识加载被拒属预期。)
  */
-export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth', 'gh-cli', 'oidc-token'] as const;
+export const GHOST_SECRET_SOURCES = [
+  'user',
+  'login-email',
+  'oauth',
+  'gh-cli',
+  'oidc-token',
+] as const;
 export type GhostSecretSource = (typeof GHOST_SECRET_SOURCES)[number];
 
 /**
@@ -986,7 +998,11 @@ export interface GhostSkillNeeds {
  * - hostname 必须命中 preview.hosts 声明(逐模式 ghostNetworkHostMatches)。
  */
 export function ghostPreviewUrlAllowed(manifest: GhostManifest, rawUrl: string): boolean {
-  if (typeof rawUrl !== 'string' || rawUrl.length === 0 || rawUrl.length > GHOST_PREVIEW_URL_MAX_CHARS) {
+  if (
+    typeof rawUrl !== 'string' ||
+    rawUrl.length === 0 ||
+    rawUrl.length > GHOST_PREVIEW_URL_MAX_CHARS
+  ) {
     return false;
   }
   const hosts = manifest.preview?.hosts ?? [];
@@ -1021,7 +1037,13 @@ export function ghostExternalLinkUrls(manifest: GhostManifest): string[] {
  * (小写比较;Cookie 也拒——会话粘连语义不给意识)。
  */
 export const GHOST_NETWORK_FORBIDDEN_INJECT_HEADERS: readonly string[] = [
-  'host', 'content-length', 'transfer-encoding', 'connection', 'cookie', 'origin', 'referer',
+  'host',
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'cookie',
+  'origin',
+  'referer',
   // content-type 由请求语义决定(上传通道的 multipart boundary 依赖它),
   // 不许被凭证注入声明占用——401 重换/跨域跳转的重注入会砸掉 boundary。
   'content-type',
@@ -1063,8 +1085,7 @@ export const GHOST_SETUP_MAX_STEPS =
  */
 export const GHOST_SETUP_MAX_HOST_STEPS = 8;
 /** setup interaction/plan transport capacity, including Host-owned steps. */
-export const GHOST_SETUP_MAX_INTERACTION_STEPS =
-  GHOST_SETUP_MAX_STEPS + GHOST_SETUP_MAX_HOST_STEPS;
+export const GHOST_SETUP_MAX_INTERACTION_STEPS = GHOST_SETUP_MAX_STEPS + GHOST_SETUP_MAX_HOST_STEPS;
 /** setup kv 引用的键名形状(意识 /kv 顶层键;点号仅作普通字符,不做路径下钻)。 */
 export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
@@ -1111,11 +1132,7 @@ export interface GhostSetupStatus {
 
 /** Setup Runtime 暴露给 Agent / Renderer 的需求类型；不包含任何配置值。 */
 export type GhostSetupRequirementKind =
-  | 'oauth'
-  | 'secret'
-  | 'connection'
-  | 'plugin_config'
-  | 'client_config';
+  'oauth' | 'secret' | 'connection' | 'plugin_config' | 'client_config';
 
 /** Host 对单条 requirement 的权威判定。 */
 export type GhostSetupRequirementState = 'missing' | 'expired' | 'satisfied';
@@ -1262,8 +1279,7 @@ export type GhostSetupErrorCode = (typeof GHOST_SETUP_ERROR_CODES)[number];
 /** 不可信 interaction payload 的稳定 Setup 错误码守卫。 */
 export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorCode {
   return (
-    typeof value === 'string' &&
-    (GHOST_SETUP_ERROR_CODES as readonly string[]).includes(value)
+    typeof value === 'string' && (GHOST_SETUP_ERROR_CODES as readonly string[]).includes(value)
   );
 }
 
@@ -1406,11 +1422,14 @@ export interface GhostManifestLocaleResource {
   name?: string;
   description?: string;
   whenToUse?: string;
-  tools?: Record<string, {
-    description: string;
-    /** JSON Pointer → 该参数 schema 节点已有的 title / description 翻译。 */
-    parameters?: Record<string, { title?: string; description?: string }>;
-  }>;
+  tools?: Record<
+    string,
+    {
+      description: string;
+      /** JSON Pointer → 该参数 schema 节点已有的 title / description 翻译。 */
+      parameters?: Record<string, { title?: string; description?: string }>;
+    }
+  >;
   panel?: { title: string };
   network?: {
     secrets?: Record<string, { label: string; hint?: string }>;
@@ -1455,11 +1474,7 @@ export interface InstalledGhost {
  * 插件包的来源与审核等级；通常只决定 UI 徽标。保留的 gh-cli 凭证来源还会
  * 要求 cindy-github 具备 cindy-official Host receipt，防止第三方仅自报 id。
  */
-export type GhostTrustLevel =
-  | 'cindy-official'
-  | 'reviewed'
-  | 'verified-publisher'
-  | 'unverified';
+export type GhostTrustLevel = 'cindy-official' | 'reviewed' | 'verified-publisher' | 'unverified';
 
 export interface GhostTrustInfo {
   level: GhostTrustLevel;
@@ -1505,6 +1520,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
     else if (slot === 'skill') keys.push('slotSkill');
     else if (slot === 'workspace') keys.push('slotWorkspace');
+    else if (slot === 'ios-simulator') keys.push('slotIOSSimulator');
     // 'panel' 槽已由 manifest.panel 覆盖,不重复
   }
   return keys;
@@ -1530,7 +1546,11 @@ export const GHOST_OFFICIAL_ID_PREFIX = 'cindy-';
  * ——官方密钥别名按 id 登记,前缀不保留会被第三方抢注蹭钥匙)。
  * 新增官方前缀在此登记。
  */
-export const GHOST_OFFICIAL_ID_PREFIXES: readonly string[] = [GHOST_OFFICIAL_ID_PREFIX, 'filo-', 'xd-'];
+export const GHOST_OFFICIAL_ID_PREFIXES: readonly string[] = [
+  GHOST_OFFICIAL_ID_PREFIX,
+  'filo-',
+  'xd-',
+];
 
 /** id 是否属于官方保留命名空间。 */
 export function isOfficialGhostId(id: string): boolean {
@@ -1566,7 +1586,26 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
+  kind:
+    | 'cindy'
+    | 'agent'
+    | 'node'
+    | 'tool'
+    | 'command'
+    | 'panel'
+    | 'code'
+    | 'subscribe'
+    | 'card'
+    | 'network'
+    | 'notify'
+    | 'confirm'
+    | 'fs'
+    | 'session-context'
+    | 'pick'
+    | 'preview'
+    | 'skill'
+    | 'workspace'
+    | 'ios-simulator';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1636,7 +1675,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       // 快问快答声明了偏好模型:说明行换带模型的版本(装入即知情,成本透明)。
       const declaredOneshotModel =
         cap === 'text.oneshot' ? manifest.cindy?.oneshotModel : undefined;
-      const detailKey = declaredOneshotModel ? 'cindyTextOneshotModelDetail' : GHOST_CINDY_PERM_DETAIL[cap];
+      const detailKey = declaredOneshotModel
+        ? 'cindyTextOneshotModelDetail'
+        : GHOST_CINDY_PERM_DETAIL[cap];
       // 未登记的能力键不该出现(validateGhostManifest 已拦),防御性跳过。
       if (labelKey) {
         items.push({
@@ -1853,6 +1894,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       detailKey: 'workspaceDetail',
     });
   }
+  // 内置模拟器槽只给脱敏状态与 Host 面板入口；视频、输入和进程控制都不授权。
+  if (manifest.slots.includes('ios-simulator')) {
+    items.push({
+      key: 'ios-simulator',
+      kind: 'ios-simulator',
+      labelKey: 'iosSimulator',
+      detailKey: 'iosSimulatorDetail',
+    });
+  }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
   // 非文件访问权;node 槽的执行权另行单列)。
   if (manifest.slots.includes('session-context')) {
@@ -1964,8 +2014,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
           detailKey: 'cardExternalLinkDetail',
         });
       }
-    }
-    else if (slot === 'notify') {
+    } else if (slot === 'notify') {
       items.push({ key: 'notify', kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
     }
   }
@@ -1981,11 +2030,21 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
   // 决定权仍在用户的点击上——detailKey 的固定说明把这层讲清。
   if (manifest.slots.includes('confirm')) {
-    items.push({ key: 'confirm', kind: 'confirm', labelKey: 'confirm', detailKey: 'confirmDetail' });
+    items.push({
+      key: 'confirm',
+      kind: 'confirm',
+      labelKey: 'confirm',
+      detailKey: 'confirmDetail',
+    });
   }
   // 常驻模式如实告知(用户要背一个后台进程);on-demand 是默认行为,不列。
   if (manifest.launch === 'resident') {
-    items.push({ key: 'resident', kind: 'code', labelKey: 'resident', detailKey: 'residentDetail' });
+    items.push({
+      key: 'resident',
+      kind: 'code',
+      labelKey: 'resident',
+      detailKey: 'residentDetail',
+    });
   }
   // 可执行代码的沙箱说明分档:
   // - 有 node 槽时浏览器沙箱部分仍隔离,但不能再笼统说"无文件无网络"
@@ -2039,7 +2098,12 @@ function ghostPermissionItemFingerprint(item: GhostPermissionItem): string {
   const args = item.detailArgs
     ? Object.entries(item.detailArgs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     : [];
-  return JSON.stringify([item.key, item.detail ?? '', permissionDetailKeyForFingerprint(item), args]);
+  return JSON.stringify([
+    item.key,
+    item.detail ?? '',
+    permissionDetailKeyForFingerprint(item),
+    args,
+  ]);
 }
 
 /**
@@ -2052,10 +2116,7 @@ function ghostPermissionItemFingerprint(item: GhostPermissionItem): string {
  * 每项 JSON 编码后排序拼接,全可打印、无拼接歧义。
  */
 export function ghostPermissionBaselineKey(manifest: GhostManifest): string {
-  return ghostPermissionItems(manifest)
-    .map(ghostPermissionItemFingerprint)
-    .sort()
-    .join('\n');
+  return ghostPermissionItems(manifest).map(ghostPermissionItemFingerprint).sort().join('\n');
 }
 
 export function diffGhostPermissionItems(
@@ -2100,7 +2161,9 @@ export function unreviewedGhostPermissionItems(
   for (const item of ghostPermissionItems(previouslyInstalled ?? reviewed)) {
     approved.add(ghostPermissionItemFingerprint(item));
   }
-  return ghostPermissionItems(actual).filter((item) => !approved.has(ghostPermissionItemFingerprint(item)));
+  return ghostPermissionItems(actual).filter(
+    (item) => !approved.has(ghostPermissionItemFingerprint(item)),
+  );
 }
 
 /**
@@ -2138,9 +2201,7 @@ export function isSafeGhostRelativePath(p: unknown): p is string {
   if (typeof p !== 'string' || p.length === 0 || p.length > 256) return false;
   if (p.includes('\\')) return false;
   const segments = p.split('/');
-  return segments.every(
-    (seg) => GHOST_PATH_SEGMENT_RE.test(seg) && seg !== '.' && seg !== '..',
-  );
+  return segments.every((seg) => GHOST_PATH_SEGMENT_RE.test(seg) && seg !== '.' && seg !== '..');
 }
 
 /**
@@ -2177,7 +2238,9 @@ export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): L
   // 的 pane 是用户布局记忆,本函数只管首次装入,不搬动存量)。
   const chatIndex =
     layout.content.type === 'split'
-      ? layout.content.children.findIndex((c) => c.node.type === 'pane' && c.node.panelKind === 'chat-main')
+      ? layout.content.children.findIndex(
+          (c) => c.node.type === 'pane' && c.node.panelKind === 'chat-main',
+        )
       : -1;
   const index = chatIndex < 0 ? 0 : chatIndex;
   const result = insertRootSplitPane(
@@ -2192,7 +2255,8 @@ export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): L
   return result.applied ? result.layout : null;
 }
 
-export type ManifestValidation = { ok: true; manifest: GhostManifest } | { ok: false; reason: string };
+export type ManifestValidation =
+  { ok: true; manifest: GhostManifest } | { ok: false; reason: string };
 
 const GHOST_MANIFEST_RESERVED_RECORD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -2211,9 +2275,11 @@ export function ghostLocalePathFor(
 ): string | null {
   if (!manifest.locales) return null;
   const manifestLocale = (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
-    ? locale as GhostLocale
+    ? (locale as GhostLocale)
     : null;
-  return (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null;
+  return (
+    (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null
+  );
 }
 
 /** 插件 app-context 只暴露协议旧四语；宿主新增语言固定回退英文以兼容存量插件。 */
@@ -2229,7 +2295,7 @@ export function withGhostResolvedLocale(
   locale: string | undefined | null,
 ): GhostManifest {
   const resolvedLocale = (SUPPORTED_LOCALES as readonly string[]).includes(locale ?? '')
-    ? locale as SupportedLocale
+    ? (locale as SupportedLocale)
     : DEFAULT_LOCALE;
   return { ...manifest, resolvedLocale };
 }
@@ -2238,11 +2304,22 @@ type GhostSchemaLocaleText = { title?: string; description?: string };
 type GhostSchemaLocaleShape = { title: boolean; description: boolean };
 
 const GHOST_SCHEMA_MAP_KEYWORDS = [
-  'properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas',
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
 ] as const;
 const GHOST_SCHEMA_SINGLE_KEYWORDS = [
-  'additionalProperties', 'unevaluatedProperties', 'propertyNames', 'items',
-  'contains', 'not', 'if', 'then', 'else',
+  'additionalProperties',
+  'unevaluatedProperties',
+  'propertyNames',
+  'items',
+  'contains',
+  'not',
+  'if',
+  'then',
+  'else',
 ] as const;
 const GHOST_SCHEMA_ARRAY_KEYWORDS = ['allOf', 'anyOf', 'oneOf', 'prefixItems'] as const;
 
@@ -2255,7 +2332,10 @@ function ghostJsonPointerChild(pointer: string, segment: string | number): strin
 function collectGhostSchemaLocaleShape(
   schema: unknown,
   pointer = '',
-  result: Record<string, GhostSchemaLocaleShape> = Object.create(null) as Record<string, GhostSchemaLocaleShape>,
+  result: Record<string, GhostSchemaLocaleShape> = Object.create(null) as Record<
+    string,
+    GhostSchemaLocaleShape
+  >,
 ): Record<string, GhostSchemaLocaleShape> {
   if (!isPlainObject(schema)) return result;
   const title = typeof schema.title === 'string';
@@ -2265,7 +2345,11 @@ function collectGhostSchemaLocaleShape(
     const children = schema[keyword];
     if (!isPlainObject(children)) continue;
     for (const [key, child] of Object.entries(children)) {
-      collectGhostSchemaLocaleShape(child, ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), key), result);
+      collectGhostSchemaLocaleShape(
+        child,
+        ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), key),
+        result,
+      );
     }
   }
   for (const keyword of GHOST_SCHEMA_SINGLE_KEYWORDS) {
@@ -2275,7 +2359,11 @@ function collectGhostSchemaLocaleShape(
     const children = schema[keyword];
     if (!Array.isArray(children)) continue;
     children.forEach((child, index) => {
-      collectGhostSchemaLocaleShape(child, ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), index), result);
+      collectGhostSchemaLocaleShape(
+        child,
+        ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), index),
+        result,
+      );
     });
   }
   return result;
@@ -2309,20 +2397,24 @@ function resolveGhostSchemaLocale(
   for (const keyword of GHOST_SCHEMA_SINGLE_KEYWORDS) {
     const child = schema[keyword];
     if (!isPlainObject(child)) continue;
-    result[keyword] = resolveGhostSchemaLocale(child, localized, ghostJsonPointerChild(pointer, keyword));
+    result[keyword] = resolveGhostSchemaLocale(
+      child,
+      localized,
+      ghostJsonPointerChild(pointer, keyword),
+    );
   }
   for (const keyword of GHOST_SCHEMA_ARRAY_KEYWORDS) {
     const children = schema[keyword];
     if (!Array.isArray(children)) continue;
-    result[keyword] = children.map((child, index) => (
+    result[keyword] = children.map((child, index) =>
       isPlainObject(child)
         ? resolveGhostSchemaLocale(
             child,
             localized,
             ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), index),
           )
-        : child
-    ));
+        : child,
+    );
   }
   return result;
 }
@@ -2339,7 +2431,14 @@ export function validateGhostManifestLocaleResource(
 ): { ok: true; resource: GhostManifestLocaleResource } | { ok: false; reason: string } {
   if (!isPlainObject(raw)) return { ok: false, reason: 'locale 文件必须是对象' };
   const allowedTopLevelFields = new Set([
-    'name', 'description', 'whenToUse', 'tools', 'panel', 'network', 'node', 'setup',
+    'name',
+    'description',
+    'whenToUse',
+    'tools',
+    'panel',
+    'network',
+    'node',
+    'setup',
   ]);
   const unknownTopLevelField = Object.keys(raw).find((field) => !allowedTopLevelFields.has(field));
   if (unknownTopLevelField) {
@@ -2429,7 +2528,9 @@ export function validateGhostManifestLocaleResource(
           };
         }
         const expectedPointers = new Set(parameterPointers);
-        const unknownPointer = Object.keys(localized.parameters).find((pointer) => !expectedPointers.has(pointer));
+        const unknownPointer = Object.keys(localized.parameters).find(
+          (pointer) => !expectedPointers.has(pointer),
+        );
         if (unknownPointer) {
           return {
             ok: false,
@@ -2451,7 +2552,9 @@ export function validateGhostManifestLocaleResource(
             ...(shape.title ? ['title'] : []),
             ...(shape.description ? ['description'] : []),
           ]);
-          const unknownField = Object.keys(localizedText).find((field) => !allowedFields.has(field));
+          const unknownField = Object.keys(localizedText).find(
+            (field) => !allowedFields.has(field),
+          );
           if (unknownField) {
             return {
               ok: false,
@@ -2460,7 +2563,9 @@ export function validateGhostManifestLocaleResource(
           }
           if (
             localizedText.title !== undefined &&
-            (typeof localizedText.title !== 'string' || localizedText.title.trim().length === 0 || localizedText.title.length > 256)
+            (typeof localizedText.title !== 'string' ||
+              localizedText.title.trim().length === 0 ||
+              localizedText.title.length > 256)
           ) {
             return {
               ok: false,
@@ -2469,11 +2574,9 @@ export function validateGhostManifestLocaleResource(
           }
           if (
             localizedText.description !== undefined &&
-            (
-              typeof localizedText.description !== 'string' ||
+            (typeof localizedText.description !== 'string' ||
               localizedText.description.trim().length === 0 ||
-              localizedText.description.length > 1024
-            )
+              localizedText.description.length > 1024)
           ) {
             return {
               ok: false,
@@ -2482,7 +2585,9 @@ export function validateGhostManifestLocaleResource(
           }
           parameters[pointer] = {
             ...(typeof localizedText.title === 'string' ? { title: localizedText.title } : {}),
-            ...(typeof localizedText.description === 'string' ? { description: localizedText.description } : {}),
+            ...(typeof localizedText.description === 'string'
+              ? { description: localizedText.description }
+              : {}),
           };
         }
       }
@@ -2505,7 +2610,11 @@ export function validateGhostManifestLocaleResource(
     if (unknownPanelField) {
       return { ok: false, reason: `locale.panel 含未知字段 ${JSON.stringify(unknownPanelField)}` };
     }
-    if (typeof raw.panel.title !== 'string' || raw.panel.title.trim().length === 0 || raw.panel.title.length > 64) {
+    if (
+      typeof raw.panel.title !== 'string' ||
+      raw.panel.title.trim().length === 0 ||
+      raw.panel.title.length > 64
+    ) {
       return { ok: false, reason: 'locale.panel.title 必须是 1–64 字符的非空字符串' };
     }
     panel = { title: raw.panel.title };
@@ -2515,7 +2624,9 @@ export function validateGhostManifestLocaleResource(
     rawValue: unknown,
     fieldPath: string,
     declarations: ReadonlyArray<{ key: string; hint?: string }>,
-  ): { ok: true; labels?: Record<string, { label: string; hint?: string }> } | { ok: false; reason: string } => {
+  ):
+    | { ok: true; labels?: Record<string, { label: string; hint?: string }> }
+    | { ok: false; reason: string } => {
     if (rawValue === undefined) return { ok: true };
     if (declarations.length === 0) {
       return { ok: false, reason: `${fieldPath} 不应存在：原 manifest 未声明对应项目` };
@@ -2535,7 +2646,8 @@ export function validateGhostManifestLocaleResource(
       if (!isPlainObject(localized)) {
         return { ok: false, reason: `${fieldPath}[${JSON.stringify(declaration.key)}] 必须是对象` };
       }
-      const allowedFields = declaration.hint !== undefined ? new Set(['label', 'hint']) : new Set(['label']);
+      const allowedFields =
+        declaration.hint !== undefined ? new Set(['label', 'hint']) : new Set(['label']);
       const unknownField = Object.keys(localized).find((field) => !allowedFields.has(field));
       if (unknownField) {
         return {
@@ -2543,7 +2655,11 @@ export function validateGhostManifestLocaleResource(
           reason: `${fieldPath}[${JSON.stringify(declaration.key)}] 含未知字段 ${JSON.stringify(unknownField)}`,
         };
       }
-      if (typeof localized.label !== 'string' || localized.label.trim().length === 0 || localized.label.length > 64) {
+      if (
+        typeof localized.label !== 'string' ||
+        localized.label.trim().length === 0 ||
+        localized.label.length > 64
+      ) {
         return {
           ok: false,
           reason: `${fieldPath}[${JSON.stringify(declaration.key)}].label 必须是 1–64 字符的非空字符串`,
@@ -2551,7 +2667,9 @@ export function validateGhostManifestLocaleResource(
       }
       if (
         localized.hint !== undefined &&
-        (typeof localized.hint !== 'string' || localized.hint.trim().length === 0 || localized.hint.length > 200)
+        (typeof localized.hint !== 'string' ||
+          localized.hint.trim().length === 0 ||
+          localized.hint.length > 200)
       ) {
         return {
           ok: false,
@@ -2580,11 +2698,22 @@ export function validateGhostManifestLocaleResource(
       (field) => field !== 'secrets' && field !== 'connections',
     );
     if (unknownNetworkField) {
-      return { ok: false, reason: `locale.network 含未知字段 ${JSON.stringify(unknownNetworkField)}` };
+      return {
+        ok: false,
+        reason: `locale.network 含未知字段 ${JSON.stringify(unknownNetworkField)}`,
+      };
     }
-    const secrets = validateLocalizedLabels(raw.network.secrets, 'locale.network.secrets', secretDecls);
+    const secrets = validateLocalizedLabels(
+      raw.network.secrets,
+      'locale.network.secrets',
+      secretDecls,
+    );
     if (!secrets.ok) return secrets;
-    const connections = validateLocalizedLabels(raw.network.connections, 'locale.network.connections', connectionDecls);
+    const connections = validateLocalizedLabels(
+      raw.network.connections,
+      'locale.network.connections',
+      connectionDecls,
+    );
     if (!connections.ok) return connections;
     network = {
       ...(secrets.labels !== undefined ? { secrets: secrets.labels } : {}),
@@ -2703,7 +2832,8 @@ export function resolveGhostManifestLocale(
                   })),
                 }
               : {}),
-            ...(manifest.network.connections !== undefined && resource.network.connections !== undefined
+            ...(manifest.network.connections !== undefined &&
+            resource.network.connections !== undefined
               ? {
                   connections: manifest.network.connections.map((connection) => ({
                     ...connection,
@@ -2729,11 +2859,11 @@ export function resolveGhostManifestLocale(
       ? {
           setup: {
             requires: manifest.setup.requires.map((group) => ({
-              anyOf: group.anyOf.map((requirement) => (
+              anyOf: group.anyOf.map((requirement) =>
                 requirement.kind === 'kv' && resource.setup!.kv![requirement.key] !== undefined
                   ? { ...requirement, label: resource.setup!.kv![requirement.key].label }
-                  : requirement
-              )),
+                  : requirement,
+              ),
             })),
           },
         }
@@ -2749,7 +2879,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (!isPlainObject(raw)) return { ok: false, reason: '清单不是对象' };
 
   if (raw.schemaVersion !== 2) {
-    return { ok: false, reason: `schemaVersion 必须是 2,得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)` };
+    return {
+      ok: false,
+      reason: `schemaVersion 必须是 2,得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)`,
+    };
   }
   if (!isValidGhostId(raw.id)) {
     return { ok: false, reason: 'id 必须是 1–32 位小写字母/数字/连字符(不能以连字符开头)' };
@@ -2757,7 +2890,11 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (typeof raw.name !== 'string' || raw.name.trim().length === 0 || raw.name.length > 64) {
     return { ok: false, reason: 'name 必须是 1–64 字符的非空字符串' };
   }
-  if (typeof raw.version !== 'string' || raw.version.trim().length === 0 || raw.version.length > 32) {
+  if (
+    typeof raw.version !== 'string' ||
+    raw.version.trim().length === 0 ||
+    raw.version.length > 32
+  ) {
     return { ok: false, reason: 'version 必须是 1–32 字符的非空字符串' };
   }
   if (raw.minCindyVersion !== undefined && !isValidCindyVersion(raw.minCindyVersion)) {
@@ -2766,7 +2903,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。
   if (raw.kind !== undefined && raw.kind !== 'chip') {
-    return { ok: false, reason: `kind 必须是 "chip" 或省略(缺省即 chip),得到 ${JSON.stringify(raw.kind)}(意识只有芯片一种形态,declaration 已移除)` };
+    return {
+      ok: false,
+      reason: `kind 必须是 "chip" 或省略(缺省即 chip),得到 ${JSON.stringify(raw.kind)}(意识只有芯片一种形态,declaration 已移除)`,
+    };
   }
   if (
     raw.author !== undefined &&
@@ -2811,7 +2951,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         !isSafeGhostRelativePath(localePath) ||
         !localePath.toLowerCase().endsWith('.json')
       ) {
-        return { ok: false, reason: `locales.${locale} 必须是安装目录内以 .json 结尾的安全相对路径` };
+        return {
+          ok: false,
+          reason: `locales.${locale} 必须是安装目录内以 .json 结尾的安全相对路径`,
+        };
       }
       const normalizedLocalePath = localePath.toLowerCase();
       if (nonLocalePathFolds.has(normalizedLocalePath)) {
@@ -2830,15 +2973,25 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (
     raw.description !== undefined &&
-    (typeof raw.description !== 'string' || raw.description.trim().length === 0 || raw.description.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
+    (typeof raw.description !== 'string' ||
+      raw.description.trim().length === 0 ||
+      raw.description.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: `description 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串` };
+    return {
+      ok: false,
+      reason: `description 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+    };
   }
   if (
     raw.whenToUse !== undefined &&
-    (typeof raw.whenToUse !== 'string' || raw.whenToUse.trim().length === 0 || raw.whenToUse.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
+    (typeof raw.whenToUse !== 'string' ||
+      raw.whenToUse.trim().length === 0 ||
+      raw.whenToUse.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: `whenToUse 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串` };
+    return {
+      ok: false,
+      reason: `whenToUse 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+    };
   }
   if (raw.icon !== undefined) {
     if (!isSafeGhostRelativePath(raw.icon)) {
@@ -2855,7 +3008,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (raw.panel !== undefined) {
     const p = raw.panel;
     if (!isPlainObject(p)) return { ok: false, reason: 'panel 必须是对象' };
-    if (p.title !== undefined && (typeof p.title !== 'string' || p.title.length === 0 || p.title.length > 64)) {
+    if (
+      p.title !== undefined &&
+      (typeof p.title !== 'string' || p.title.length === 0 || p.title.length > 64)
+    ) {
       return { ok: false, reason: 'panel.title 必须是 1–64 字符的字符串' };
     }
     // 面板一律由意识自绘(html 必填):declaration 时代的静态 body 面板已随
@@ -2865,7 +3021,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     if (
       p.minWidth !== undefined &&
-      (typeof p.minWidth !== 'number' || !Number.isFinite(p.minWidth) || p.minWidth < 120 || p.minWidth > 1200)
+      (typeof p.minWidth !== 'number' ||
+        !Number.isFinite(p.minWidth) ||
+        p.minWidth < 120 ||
+        p.minWidth > 1200)
     ) {
       return { ok: false, reason: 'panel.minWidth 必须是 120–1200 之间的数字' };
     }
@@ -2888,7 +3047,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       const knownButtons = ['maximize', 'detach', 'minimize'];
       for (const key of Object.keys(sb)) {
         if (!knownButtons.includes(key)) {
-          return { ok: false, reason: `panel.systemButtons 只认 ${knownButtons.join(' / ')},未知键:${key}` };
+          return {
+            ok: false,
+            reason: `panel.systemButtons 只认 ${knownButtons.join(' / ')},未知键:${key}`,
+          };
         }
         if (typeof (sb as Record<string, unknown>)[key] !== 'boolean') {
           return { ok: false, reason: `panel.systemButtons.${key} 必须是布尔值` };
@@ -2907,7 +3069,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (p.position !== undefined) {
       if (p.position === 'top' || p.position === 'bottom') {
         // 收词但明确拒绝(规则 9 不静默降级):上下停靠等布局引擎嵌套分割就绪后开放。
-        return { ok: false, reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / tab' };
+        return {
+          ok: false,
+          reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / tab',
+        };
       }
       if (p.position === 'right') {
         // right 退役兼容(见 GHOST_PANEL_POSITIONS 注释):旧包归一化为 left,
@@ -2924,7 +3089,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       // 页签形态没有拖缝宽度/标准头语义:收词明确拒绝而非静默忽略(规则 9)。
       if (
         position === 'tab' &&
-        (p.minWidth !== undefined || p.defaultFraction !== undefined || p.systemButtons !== undefined)
+        (p.minWidth !== undefined ||
+          p.defaultFraction !== undefined ||
+          p.systemButtons !== undefined)
       ) {
         return {
           ok: false,
@@ -2957,7 +3124,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (raw.settingsHeight !== undefined) {
     if (raw.settingsHtml === undefined) {
-      return { ok: false, reason: '声明了 settingsHeight 但没有 settingsHtml——没有界面就没有高度可言' };
+      return {
+        ok: false,
+        reason: '声明了 settingsHeight 但没有 settingsHtml——没有界面就没有高度可言',
+      };
     }
     if (
       typeof raw.settingsHeight !== 'number' ||
@@ -2976,12 +3146,23 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     // 旧名兼容:'model' 静默归一化为 'cindy'(2026-07-11 更名,已装老包不消失)。
     const name = s === 'model' ? 'cindy' : s;
     if (typeof name !== 'string' || !(GHOST_SLOTS as readonly string[]).includes(name)) {
-      return { ok: false, reason: `slots 含未知卡槽 ${JSON.stringify(s)}(可用:${GHOST_SLOTS.join(' / ')})` };
+      return {
+        ok: false,
+        reason: `slots 含未知卡槽 ${JSON.stringify(s)}(可用:${GHOST_SLOTS.join(' / ')})`,
+      };
     }
     if (slots.includes(name as GhostSlot)) {
       return { ok: false, reason: `slots 含重复卡槽 ${JSON.stringify(s)}` };
     }
     slots.push(name as GhostSlot);
+  }
+  // Host-native capabilities cannot be safely ignored by an older Cindy.
+  // Require an explicit installation/enablement floor for deterministic UX.
+  if (slots.includes('ios-simulator') && raw.minCindyVersion === undefined) {
+    return {
+      ok: false,
+      reason: 'slots 声明了 "ios-simulator" 时必须同时声明 minCindyVersion',
+    };
   }
   // 声明了面板却没申请 panel 槽(或反之有槽无面板)都是清单自相矛盾。
   if (panel !== undefined && !slots.includes('panel')) {
@@ -3031,7 +3212,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (slots.includes('badge') && panel === undefined) {
     return {
       ok: false,
-      reason: 'slots 声明了 "badge" 但缺少 panel——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
+      reason:
+        'slots 声明了 "badge" 但缺少 panel——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
     };
   }
 
@@ -3046,18 +3228,30 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     for (const t of raw.tools) {
       if (!isPlainObject(t)) return { ok: false, reason: 'tools 每项必须是对象' };
       if (typeof t.name === 'string' && isGhostManifestReservedRecordKey(t.name)) {
-        return { ok: false, reason: `tools[].name 不允许使用对象保留键名 ${JSON.stringify(t.name)}` };
+        return {
+          ok: false,
+          reason: `tools[].name 不允许使用对象保留键名 ${JSON.stringify(t.name)}`,
+        };
       }
       if (typeof t.name !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(t.name)) {
-        return { ok: false, reason: 'tools[].name 必须是小写字母开头的 1–64 位小写/数字/下划线/连字符' };
+        return {
+          ok: false,
+          reason: 'tools[].name 必须是小写字母开头的 1–64 位小写/数字/下划线/连字符',
+        };
       }
-      if (seenNames.has(t.name)) return { ok: false, reason: `tools 含重名工具 ${JSON.stringify(t.name)}` };
+      if (seenNames.has(t.name))
+        return { ok: false, reason: `tools 含重名工具 ${JSON.stringify(t.name)}` };
       seenNames.add(t.name);
-      if (typeof t.description !== 'string' || t.description.trim().length === 0 || t.description.length > 1024) {
+      if (
+        typeof t.description !== 'string' ||
+        t.description.trim().length === 0 ||
+        t.description.length > 1024
+      ) {
         return { ok: false, reason: 'tools[].description 必须是 1–1024 字符的非空字符串' };
       }
       if (t.parameters !== undefined) {
-        if (!isPlainObject(t.parameters)) return { ok: false, reason: 'tools[].parameters 必须是对象(JSON Schema)' };
+        if (!isPlainObject(t.parameters))
+          return { ok: false, reason: 'tools[].parameters 必须是对象(JSON Schema)' };
         try {
           if (JSON.stringify(t.parameters).length > 16_384) {
             return { ok: false, reason: 'tools[].parameters 过大(上限 16KB)' };
@@ -3069,7 +3263,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       tools.push({
         name: t.name,
         description: t.description,
-        ...(t.parameters !== undefined ? { parameters: t.parameters as Record<string, unknown> } : {}),
+        ...(t.parameters !== undefined
+          ? { parameters: t.parameters as Record<string, unknown> }
+          : {}),
       });
     }
   }
@@ -3099,12 +3295,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     // 只验形态不验存在——目录随主机演进,声明式字段永不构成硬依赖。
     const oneshotModelRaw = cindyRaw.oneshotModel;
     if (
-      oneshotModelRaw !== undefined
-      && (typeof oneshotModelRaw !== 'string'
-        || oneshotModelRaw.trim().length === 0
-        || oneshotModelRaw.length > 128)
+      oneshotModelRaw !== undefined &&
+      (typeof oneshotModelRaw !== 'string' ||
+        oneshotModelRaw.trim().length === 0 ||
+        oneshotModelRaw.length > 128)
     ) {
-      return { ok: false, reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")' };
+      return {
+        ok: false,
+        reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")',
+      };
     }
     // 类目 → 合法动作表(image / video / media;image 与 video 的动作集恰好
     // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。新增类目必须
@@ -3150,13 +3349,20 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
       else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
-      else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
+      else
+        return {
+          ok: false,
+          reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)`,
+        };
     }
     // 偏好模型只是快问快答的选型意图,必须挂在能力本体上(无能力单挂偏好 =
     // 清单自相矛盾,与"有详单必有槽"同一判据)。
     if (oneshotModelRaw !== undefined) {
       if (!cindy.text?.includes('oneshot')) {
-        return { ok: false, reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)' };
+        return {
+          ok: false,
+          reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)',
+        };
       }
       cindy.oneshotModel = (oneshotModelRaw as string).trim();
     }
@@ -3525,7 +3731,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     preview = { hosts: previewRaw.hosts as string[] };
   }
   if (slots.includes('preview') && preview === undefined) {
-    return { ok: false, reason: 'slots 声明了 "preview" 但缺少 preview 详单(hosts 域名白名单必填)' };
+    return {
+      ok: false,
+      reason: 'slots 声明了 "preview" 但缺少 preview 详单(hosts 域名白名单必填)',
+    };
   }
 
   // skill 槽详单:与 slots 含 'skill' **严格成对**(有槽必有详单——捆绑了什么
@@ -3536,7 +3745,11 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   let skill: GhostSkillNeeds | undefined;
   if (raw.skill !== undefined) {
     if (!isPlainObject(raw.skill)) {
-      return { ok: false, reason: 'skill 详单必须是对象(如 { "items": [{ "dir": "skills/foo", "name": "foo", "description": "..." }] })' };
+      return {
+        ok: false,
+        reason:
+          'skill 详单必须是对象(如 { "items": [{ "dir": "skills/foo", "name": "foo", "description": "..." }] })',
+      };
     }
     if (!slots.includes('skill')) {
       return { ok: false, reason: '声明了 skill 详单但 slots 未包含 "skill"' };
@@ -3564,17 +3777,26 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         (key) => key !== 'dir' && key !== 'name' && key !== 'description',
       );
       if (unknownItemField !== undefined) {
-        return { ok: false, reason: `skill.items 条目含不允许的字段 ${JSON.stringify(unknownItemField)}` };
+        return {
+          ok: false,
+          reason: `skill.items 条目含不允许的字段 ${JSON.stringify(unknownItemField)}`,
+        };
       }
       if (!isSafeGhostRelativePath(itemRaw.dir)) {
-        return { ok: false, reason: `skill.items[].dir 必须是包内安全相对路径(如 "skills/foo"),得到 ${JSON.stringify(itemRaw.dir)}` };
+        return {
+          ok: false,
+          reason: `skill.items[].dir 必须是包内安全相对路径(如 "skills/foo"),得到 ${JSON.stringify(itemRaw.dir)}`,
+        };
       }
       if (
         typeof itemRaw.name !== 'string' ||
         itemRaw.name.length > GHOST_SKILL_NAME_MAX_CHARS ||
         !GHOST_SKILL_NAME_RE.test(itemRaw.name)
       ) {
-        return { ok: false, reason: `skill.items[].name 必须是小写字母/数字加单连字符分段(禁首尾/连续连字符)、长度 1–${GHOST_SKILL_NAME_MAX_CHARS},得到 ${JSON.stringify(itemRaw.name)}` };
+        return {
+          ok: false,
+          reason: `skill.items[].name 必须是小写字母/数字加单连字符分段(禁首尾/连续连字符)、长度 1–${GHOST_SKILL_NAME_MAX_CHARS},得到 ${JSON.stringify(itemRaw.name)}`,
+        };
       }
       if (
         typeof itemRaw.description !== 'string' ||
@@ -3645,7 +3867,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (subscribe.hooks !== undefined && raw.launch !== 'resident') {
       return {
         ok: false,
-        reason: '声明了 subscribe.hooks(拦截钩子)必须同时声明 launch: "resident"——拦截要求常驻在场,否则每条消息都要等冷启动',
+        reason:
+          '声明了 subscribe.hooks(拦截钩子)必须同时声明 launch: "resident"——拦截要求常驻在场,否则每条消息都要等冷启动',
       };
     }
   }
@@ -3668,16 +3891,25 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     // 原规则必填 1–8 条(静态域名与动态连接至少有其一)。
     const hasConnectionDecls = Array.isArray(n.connections) && n.connections.length > 0;
     if (n.hosts === undefined && !hasConnectionDecls) {
-      return { ok: false, reason: `network.hosts 必须是 1–${GHOST_NETWORK_MAX_HOSTS} 条的数组(仅声明了 network.connections 时才可缺省)` };
+      return {
+        ok: false,
+        reason: `network.hosts 必须是 1–${GHOST_NETWORK_MAX_HOSTS} 条的数组(仅声明了 network.connections 时才可缺省)`,
+      };
     }
-    if (n.hosts !== undefined && (!Array.isArray(n.hosts) || n.hosts.length > GHOST_NETWORK_MAX_HOSTS)) {
+    if (
+      n.hosts !== undefined &&
+      (!Array.isArray(n.hosts) || n.hosts.length > GHOST_NETWORK_MAX_HOSTS)
+    ) {
       return { ok: false, reason: `network.hosts 必须是 1–${GHOST_NETWORK_MAX_HOSTS} 条的数组` };
     }
     if (Array.isArray(n.hosts) && n.hosts.length === 0 && !hasConnectionDecls) {
-      return { ok: false, reason: `network.hosts 必须是 1–${GHOST_NETWORK_MAX_HOSTS} 条的数组(仅声明了 network.connections 时才允许为空)` };
+      return {
+        ok: false,
+        reason: `network.hosts 必须是 1–${GHOST_NETWORK_MAX_HOSTS} 条的数组(仅声明了 network.connections 时才允许为空)`,
+      };
     }
     const hosts: string[] = [];
-    for (const h of (Array.isArray(n.hosts) ? n.hosts : [])) {
+    for (const h of Array.isArray(n.hosts) ? n.hosts : []) {
       if (typeof h !== 'string' || !isValidGhostNetworkHostPattern(h.trim().toLowerCase())) {
         return {
           ok: false,
@@ -3692,18 +3924,31 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     let secrets: GhostSecretDecl[] | undefined;
     if (n.secrets !== undefined) {
-      if (!Array.isArray(n.secrets) || n.secrets.length === 0 || n.secrets.length > GHOST_NETWORK_MAX_SECRETS) {
-        return { ok: false, reason: `network.secrets 必须是 1–${GHOST_NETWORK_MAX_SECRETS} 条的数组` };
+      if (
+        !Array.isArray(n.secrets) ||
+        n.secrets.length === 0 ||
+        n.secrets.length > GHOST_NETWORK_MAX_SECRETS
+      ) {
+        return {
+          ok: false,
+          reason: `network.secrets 必须是 1–${GHOST_NETWORK_MAX_SECRETS} 条的数组`,
+        };
       }
       secrets = [];
       const seenKeys = new Set<string>();
       for (const s of n.secrets) {
         if (!isPlainObject(s)) return { ok: false, reason: 'network.secrets 每项必须是对象' };
         if (typeof s.key === 'string' && isGhostManifestReservedRecordKey(s.key)) {
-          return { ok: false, reason: `network.secrets[].key 不允许使用对象保留键名 ${JSON.stringify(s.key)}` };
+          return {
+            ok: false,
+            reason: `network.secrets[].key 不允许使用对象保留键名 ${JSON.stringify(s.key)}`,
+          };
         }
         if (typeof s.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(s.key)) {
-          return { ok: false, reason: 'network.secrets[].key 必须是小写字母开头的 1–32 位小写/数字/下划线' };
+          return {
+            ok: false,
+            reason: 'network.secrets[].key 必须是小写字母开头的 1–32 位小写/数字/下划线',
+          };
         }
         if (seenKeys.has(s.key)) {
           return { ok: false, reason: `network.secrets 含重复 key ${JSON.stringify(s.key)}` };
@@ -3742,7 +3987,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (s.input !== undefined && s.input !== 'ghost') {
           return {
             ok: false,
-            reason: 'network.secrets[].input 已退役:Setup 表单直接从 Secret 声明生成,详情页由 settingsHtml 管理(删掉 input 字段即可;唯一可接受的遗留值是 "ghost")',
+            reason:
+              'network.secrets[].input 已退役:Setup 表单直接从 Secret 声明生成,详情页由 settingsHtml 管理(删掉 input 字段即可;唯一可接受的遗留值是 "ghost")',
           };
         }
         // login-email:值取自主机登录态派生,用户不填、没有输入面,
@@ -3757,7 +4003,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (!hostDerived && raw.settingsHtml === undefined) {
           return {
             ok: false,
-            reason: 'network.secrets 声明了用户填写的凭证时必须同时声明 settingsHtml(调用前可由 Host Setup 卡收单,settingsHtml 仍是长期管理/替换/清除入口)',
+            reason:
+              'network.secrets 声明了用户填写的凭证时必须同时声明 settingsHtml(调用前可由 Host Setup 卡收单,settingsHtml 仍是长期管理/替换/清除入口)',
           };
         }
         if (hostDerived && s.url !== undefined) {
@@ -3777,7 +4024,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (source === 'gh-cli' && s.exchange !== undefined) {
           return {
             ok: false,
-            reason: 'network.secrets[].source 为 gh-cli 时不允许声明 exchange(GitHub token 只能直接注入 GitHub API)',
+            reason:
+              'network.secrets[].source 为 gh-cli 时不允许声明 exchange(GitHub token 只能直接注入 GitHub API)',
           };
         }
         if (
@@ -3797,18 +4045,30 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             return { ok: false, reason: 'network.secrets[].url 不是合法的绝对地址' };
           }
           if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
-            return { ok: false, reason: 'network.secrets[].url 仅支持 https 且不允许内嵌用户名/密码' };
+            return {
+              ok: false,
+              reason: 'network.secrets[].url 仅支持 https 且不允许内嵌用户名/密码',
+            };
           }
         }
         if (!isPlainObject(s.inject)) {
-          return { ok: false, reason: `network.secrets[${JSON.stringify(s.key)}].inject 必填(凭证要声明注入到哪个请求头)` };
+          return {
+            ok: false,
+            reason: `network.secrets[${JSON.stringify(s.key)}].inject 必填(凭证要声明注入到哪个请求头)`,
+          };
         }
         const inj = s.inject as Record<string, unknown>;
         if (typeof inj.header !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(inj.header)) {
-          return { ok: false, reason: 'network.secrets[].inject.header 必须是 1–64 位字母/数字/连字符的头名' };
+          return {
+            ok: false,
+            reason: 'network.secrets[].inject.header 必须是 1–64 位字母/数字/连字符的头名',
+          };
         }
         if (GHOST_NETWORK_FORBIDDEN_INJECT_HEADERS.includes(inj.header.toLowerCase())) {
-          return { ok: false, reason: `network.secrets[].inject.header 不允许使用协议关键头 ${JSON.stringify(inj.header)}` };
+          return {
+            ok: false,
+            reason: `network.secrets[].inject.header 不允许使用协议关键头 ${JSON.stringify(inj.header)}`,
+          };
         }
         if (
           typeof inj.format !== 'string' ||
@@ -3816,12 +4076,19 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           inj.format.length > 200 ||
           inj.format.split('{value}').length !== 2
         ) {
-          return { ok: false, reason: 'network.secrets[].inject.format 必须是 ≤200 字符且恰含一个 {value} 占位的字符串(如 "Bearer {value}")' };
+          return {
+            ok: false,
+            reason:
+              'network.secrets[].inject.format 必须是 ≤200 字符且恰含一个 {value} 占位的字符串(如 "Bearer {value}")',
+          };
         }
         let injectHosts: string[] | undefined;
         if (inj.hosts !== undefined) {
           if (!Array.isArray(inj.hosts) || inj.hosts.length === 0) {
-            return { ok: false, reason: 'network.secrets[].inject.hosts 必须是非空数组(或省略 = 全部白名单域名)' };
+            return {
+              ok: false,
+              reason: 'network.secrets[].inject.hosts 必须是非空数组(或省略 = 全部白名单域名)',
+            };
           }
           injectHosts = [];
           for (const ih of inj.hosts) {
@@ -3833,7 +4100,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             }
             const ihNorm = ih.trim().toLowerCase();
             if (injectHosts.includes(ihNorm)) {
-              return { ok: false, reason: `network.secrets[].inject.hosts 含重复条目 ${JSON.stringify(ih)}` };
+              return {
+                ok: false,
+                reason: `network.secrets[].inject.hosts 含重复条目 ${JSON.stringify(ih)}`,
+              };
             }
             injectHosts.push(ihNorm);
           }
@@ -3842,19 +4112,22 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           if (inj.header !== 'Authorization' || inj.format !== 'Bearer {value}') {
             return {
               ok: false,
-              reason: 'network.secrets[].source 为 oidc-token 时 inject 必须是 Authorization: Bearer {value}',
+              reason:
+                'network.secrets[].source 为 oidc-token 时 inject 必须是 Authorization: Bearer {value}',
             };
           }
           if (injectHosts === undefined) {
             return {
               ok: false,
-              reason: 'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts，限制企业身份令牌的流向',
+              reason:
+                'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts，限制企业身份令牌的流向',
             };
           }
           if (injectHosts.some((host) => host.startsWith('*.'))) {
             return {
               ok: false,
-              reason: 'network.secrets[].source 为 oidc-token 时 inject.hosts 只允许精确域名，不允许通配',
+              reason:
+                'network.secrets[].source 为 oidc-token 时 inject.hosts 只允许精确域名，不允许通配',
             };
           }
         }
@@ -3873,7 +4146,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           ) {
             return {
               ok: false,
-              reason: 'network.secrets[].source 为 gh-cli 时 inject 必须固定为 api.github.com 的 Authorization: Bearer {value}',
+              reason:
+                'network.secrets[].source 为 gh-cli 时 inject 必须固定为 api.github.com 的 Authorization: Bearer {value}',
             };
           }
         }
@@ -3895,11 +4169,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         }
         if (source === 'oauth' && s.exchange !== undefined) {
           // access token 已是最终注入物,再叠一段 key 换令牌没有语义。
-          return { ok: false, reason: 'network.secrets[].source 为 oauth 时不允许声明 exchange(access token 直接注入,无二段交换)' };
+          return {
+            ok: false,
+            reason:
+              'network.secrets[].source 为 oauth 时不允许声明 exchange(access token 直接注入,无二段交换)',
+          };
         }
         if (s.oauth !== undefined) {
           if (!isPlainObject(s.oauth)) {
-            return { ok: false, reason: `network.secrets[${JSON.stringify(s.key)}].oauth 必须是对象` };
+            return {
+              ok: false,
+              reason: `network.secrets[${JSON.stringify(s.key)}].oauth 必须是对象`,
+            };
           }
           const oa = s.oauth as Record<string, unknown>;
           const parseHostBoundUrl = (
@@ -3907,7 +4188,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             field: string,
           ): { ok: true; url: string } | { ok: false; reason: string } => {
             if (typeof raw2 !== 'string' || raw2.length === 0 || raw2.length > 2048) {
-              return { ok: false, reason: `network.secrets[].oauth.${field} 必须是 1–2048 字符的字符串` };
+              return {
+                ok: false,
+                reason: `network.secrets[].oauth.${field} 必须是 1–2048 字符的字符串`,
+              };
             }
             let parsed2: URL;
             try {
@@ -3915,8 +4199,16 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             } catch {
               return { ok: false, reason: `network.secrets[].oauth.${field} 不是合法的绝对地址` };
             }
-            if (parsed2.protocol !== 'https:' || parsed2.port !== '' || parsed2.username || parsed2.password) {
-              return { ok: false, reason: `network.secrets[].oauth.${field} 仅支持 https 默认端口且不允许内嵌用户名/密码` };
+            if (
+              parsed2.protocol !== 'https:' ||
+              parsed2.port !== '' ||
+              parsed2.username ||
+              parsed2.password
+            ) {
+              return {
+                ok: false,
+                reason: `network.secrets[].oauth.${field} 仅支持 https 默认端口且不允许内嵌用户名/密码`,
+              };
             }
             if (!hosts.some((pattern) => ghostNetworkHostMatches(pattern, parsed2.hostname))) {
               return {
@@ -3938,13 +4230,19 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               oa.clientId.length > 200 ||
               /\s/.test(oa.clientId)
             ) {
-              return { ok: false, reason: 'network.secrets[].oauth.clientId 必须是 1–200 字符、不含空白的字符串' };
+              return {
+                ok: false,
+                reason: 'network.secrets[].oauth.clientId 必须是 1–200 字符、不含空白的字符串',
+              };
             }
           }
           let oaClientIdAlternatives: string[] | undefined;
           if (oa.clientIdAlternatives !== undefined) {
             if (oa.clientId === undefined) {
-              return { ok: false, reason: 'network.secrets[].oauth.clientIdAlternatives 必须与默认 clientId 一起声明' };
+              return {
+                ok: false,
+                reason: 'network.secrets[].oauth.clientIdAlternatives 必须与默认 clientId 一起声明',
+              };
             }
             if (
               !Array.isArray(oa.clientIdAlternatives) ||
@@ -3966,7 +4264,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               ) {
                 return {
                   ok: false,
-                  reason: 'network.secrets[].oauth.clientIdAlternatives 含非法条目(须为 1–200 字符、不含空白的字符串)',
+                  reason:
+                    'network.secrets[].oauth.clientIdAlternatives 含非法条目(须为 1–200 字符、不含空白的字符串)',
                 };
               }
               if (clientId === oa.clientId || oaClientIdAlternatives.includes(clientId)) {
@@ -3980,7 +4279,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           }
           if (oa.clientSecret !== undefined) {
             if (oa.clientId === undefined) {
-              return { ok: false, reason: 'network.secrets[].oauth.clientSecret 必须与 clientId 成对声明' };
+              return {
+                ok: false,
+                reason: 'network.secrets[].oauth.clientSecret 必须与 clientId 成对声明',
+              };
             }
             if (
               typeof oa.clientSecret !== 'string' ||
@@ -3988,21 +4290,38 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               oa.clientSecret.length > 200 ||
               /\s/.test(oa.clientSecret)
             ) {
-              return { ok: false, reason: 'network.secrets[].oauth.clientSecret 必须是 1–200 字符、不含空白的字符串' };
+              return {
+                ok: false,
+                reason: 'network.secrets[].oauth.clientSecret 必须是 1–200 字符、不含空白的字符串',
+              };
             }
           }
           let oaScopes: string[] | undefined;
           if (oa.scopes !== undefined) {
             if (!Array.isArray(oa.scopes) || oa.scopes.length > GHOST_OAUTH_SCOPES_MAX) {
-              return { ok: false, reason: `network.secrets[].oauth.scopes 必须是 ≤${GHOST_OAUTH_SCOPES_MAX} 条的数组` };
+              return {
+                ok: false,
+                reason: `network.secrets[].oauth.scopes 必须是 ≤${GHOST_OAUTH_SCOPES_MAX} 条的数组`,
+              };
             }
             oaScopes = [];
             for (const sc of oa.scopes) {
-              if (typeof sc !== 'string' || sc.trim().length === 0 || sc.length > 200 || /\s/.test(sc)) {
-                return { ok: false, reason: `network.secrets[].oauth.scopes 含非法条目 ${JSON.stringify(sc)}(1–200 字符、不含空白)` };
+              if (
+                typeof sc !== 'string' ||
+                sc.trim().length === 0 ||
+                sc.length > 200 ||
+                /\s/.test(sc)
+              ) {
+                return {
+                  ok: false,
+                  reason: `network.secrets[].oauth.scopes 含非法条目 ${JSON.stringify(sc)}(1–200 字符、不含空白)`,
+                };
               }
               if (oaScopes.includes(sc)) {
-                return { ok: false, reason: `network.secrets[].oauth.scopes 含重复条目 ${JSON.stringify(sc)}` };
+                return {
+                  ok: false,
+                  reason: `network.secrets[].oauth.scopes 含重复条目 ${JSON.stringify(sc)}`,
+                };
               }
               oaScopes.push(sc);
             }
@@ -4011,27 +4330,45 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             return { ok: false, reason: 'network.secrets[].oauth.pkce 必须是布尔值(缺省 true)' };
           }
           if (oa.scopeDelimiter !== undefined && oa.scopeDelimiter !== ',') {
-            return { ok: false, reason: 'network.secrets[].oauth.scopeDelimiter 目前只支持 ","(缺省 = 空格拼接)' };
+            return {
+              ok: false,
+              reason: 'network.secrets[].oauth.scopeDelimiter 目前只支持 ","(缺省 = 空格拼接)',
+            };
           }
           let oaExtra: Record<string, string> | undefined;
           if (oa.extraAuthorizeParams !== undefined) {
             if (!isPlainObject(oa.extraAuthorizeParams)) {
-              return { ok: false, reason: 'network.secrets[].oauth.extraAuthorizeParams 必须是对象' };
+              return {
+                ok: false,
+                reason: 'network.secrets[].oauth.extraAuthorizeParams 必须是对象',
+              };
             }
             const entries = Object.entries(oa.extraAuthorizeParams as Record<string, unknown>);
             if (entries.length === 0 || entries.length > GHOST_OAUTH_EXTRA_PARAMS_MAX) {
-              return { ok: false, reason: `network.secrets[].oauth.extraAuthorizeParams 必须是 1–${GHOST_OAUTH_EXTRA_PARAMS_MAX} 条(或省略)` };
+              return {
+                ok: false,
+                reason: `network.secrets[].oauth.extraAuthorizeParams 必须是 1–${GHOST_OAUTH_EXTRA_PARAMS_MAX} 条(或省略)`,
+              };
             }
             oaExtra = {};
             for (const [pk, pv] of entries) {
               if (!/^[a-z][a-z0-9_]{0,31}$/.test(pk)) {
-                return { ok: false, reason: `network.secrets[].oauth.extraAuthorizeParams 键 ${JSON.stringify(pk)} 必须是小写字母开头的 1–32 位小写/数字/下划线` };
+                return {
+                  ok: false,
+                  reason: `network.secrets[].oauth.extraAuthorizeParams 键 ${JSON.stringify(pk)} 必须是小写字母开头的 1–32 位小写/数字/下划线`,
+                };
               }
               if (GHOST_OAUTH_RESERVED_AUTHORIZE_PARAMS.includes(pk)) {
-                return { ok: false, reason: `network.secrets[].oauth.extraAuthorizeParams 不允许声明协议保留参数 ${JSON.stringify(pk)}` };
+                return {
+                  ok: false,
+                  reason: `network.secrets[].oauth.extraAuthorizeParams 不允许声明协议保留参数 ${JSON.stringify(pk)}`,
+                };
               }
               if (typeof pv !== 'string' || pv.length === 0 || pv.length > 200) {
-                return { ok: false, reason: `network.secrets[].oauth.extraAuthorizeParams[${JSON.stringify(pk)}] 必须是 1–200 字符的字符串` };
+                return {
+                  ok: false,
+                  reason: `network.secrets[].oauth.extraAuthorizeParams[${JSON.stringify(pk)}] 必须是 1–200 字符的字符串`,
+                };
               }
               oaExtra[pk] = pv;
             }
@@ -4044,17 +4381,31 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               oa.redirectPort < 1024 ||
               oa.redirectPort > 65535
             ) {
-              return { ok: false, reason: 'network.secrets[].oauth.redirectPort 必须是 1024–65535 的整数' };
+              return {
+                ok: false,
+                reason: 'network.secrets[].oauth.redirectPort 必须是 1024–65535 的整数',
+              };
             }
           }
           // tokenBroker(可选):XDT server broker slug;secret 在服务端,与
           // clientSecret 互斥(同时声明说明作者没想清 secret 到底在哪)。
           if (oa.tokenBroker !== undefined) {
-            if (typeof oa.tokenBroker !== 'string' || !GHOST_OAUTH_TOKEN_BROKER_RE.test(oa.tokenBroker)) {
-              return { ok: false, reason: 'network.secrets[].oauth.tokenBroker 必须是小写字母开头的 1–32 位小写/数字/下划线/连字符' };
+            if (
+              typeof oa.tokenBroker !== 'string' ||
+              !GHOST_OAUTH_TOKEN_BROKER_RE.test(oa.tokenBroker)
+            ) {
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.tokenBroker 必须是小写字母开头的 1–32 位小写/数字/下划线/连字符',
+              };
             }
             if (oa.clientSecret !== undefined) {
-              return { ok: false, reason: 'network.secrets[].oauth.tokenBroker 与 clientSecret 互斥(broker 模式下 secret 由服务端持有,不随包分发)' };
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.tokenBroker 与 clientSecret 互斥(broker 模式下 secret 由服务端持有,不随包分发)',
+              };
             }
           }
           if (oaClientIdAlternatives !== undefined && oa.tokenBroker === undefined) {
@@ -4068,7 +4419,11 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           let oaBounce: { path: string; callbackPath: string } | undefined;
           if (oa.brokerBounce !== undefined) {
             if (oa.tokenBroker === undefined || oa.redirectPort === undefined) {
-              return { ok: false, reason: 'network.secrets[].oauth.brokerBounce 必须与 tokenBroker、redirectPort 同时声明' };
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.brokerBounce 必须与 tokenBroker、redirectPort 同时声明',
+              };
             }
             if (!isPlainObject(oa.brokerBounce)) {
               return { ok: false, reason: 'network.secrets[].oauth.brokerBounce 必须是对象' };
@@ -4102,7 +4457,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             ) {
               return {
                 ok: false,
-                reason: 'network.secrets[].oauth.identity.labelPath 必须是 ≤128 字符的点分路径(段名限字母/数字/_/-,如 "email" / "user.name")',
+                reason:
+                  'network.secrets[].oauth.identity.labelPath 必须是 ≤128 字符的点分路径(段名限字母/数字/_/-,如 "email" / "user.name")',
               };
             }
             // displayTemplate(可选):展示名模板,占位符 `{点分路径}`(路径
@@ -4120,11 +4476,14 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
                   reason: `network.secrets[].oauth.identity.displayTemplate 必须是 1–${GHOST_OAUTH_IDENTITY_TEMPLATE_MAX_CHARS} 字符的字符串`,
                 };
               }
-              const placeholders = [...idn.displayTemplate.matchAll(GHOST_OAUTH_IDENTITY_TEMPLATE_PLACEHOLDER_RE)];
+              const placeholders = [
+                ...idn.displayTemplate.matchAll(GHOST_OAUTH_IDENTITY_TEMPLATE_PLACEHOLDER_RE),
+              ];
               if (placeholders.length === 0) {
                 return {
                   ok: false,
-                  reason: 'network.secrets[].oauth.identity.displayTemplate 必须含至少一个 {点分路径} 占位符(如 "{team} · {user}")',
+                  reason:
+                    'network.secrets[].oauth.identity.displayTemplate 必须含至少一个 {点分路径} 占位符(如 "{team} · {user}")',
                 };
               }
               for (const m of placeholders) {
@@ -4148,7 +4507,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               ) {
                 return {
                   ok: false,
-                  reason: 'network.secrets[].oauth.identity.avatarPath 必须是 ≤128 字符的点分路径(段名限字母/数字/_/-,如 "data.avatar_thumb")',
+                  reason:
+                    'network.secrets[].oauth.identity.avatarPath 必须是 ≤128 字符的点分路径(段名限字母/数字/_/-,如 "data.avatar_thumb")',
                 };
               }
               idnAvatarPath = idn.avatarPath;
@@ -4169,7 +4529,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               : {}),
             ...(oa.clientSecret !== undefined ? { clientSecret: oa.clientSecret as string } : {}),
             ...(oaScopes !== undefined ? { scopes: oaScopes } : {}),
-            ...(oa.scopeDelimiter !== undefined ? { scopeDelimiter: oa.scopeDelimiter as ',' } : {}),
+            ...(oa.scopeDelimiter !== undefined
+              ? { scopeDelimiter: oa.scopeDelimiter as ',' }
+              : {}),
             ...(oa.pkce !== undefined ? { pkce: oa.pkce as boolean } : {}),
             ...(oaExtra !== undefined ? { extraAuthorizeParams: oaExtra } : {}),
             ...(oaIdentity !== undefined ? { identity: oaIdentity } : {}),
@@ -4183,11 +4545,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         let exchange: GhostSecretExchangeDecl | undefined;
         if (s.exchange !== undefined) {
           if (!isPlainObject(s.exchange)) {
-            return { ok: false, reason: `network.secrets[${JSON.stringify(s.key)}].exchange 必须是对象` };
+            return {
+              ok: false,
+              reason: `network.secrets[${JSON.stringify(s.key)}].exchange 必须是对象`,
+            };
           }
           const ex = s.exchange as Record<string, unknown>;
           if (typeof ex.url !== 'string' || ex.url.length === 0 || ex.url.length > 2048) {
-            return { ok: false, reason: 'network.secrets[].exchange.url 必须是 1–2048 字符的字符串' };
+            return {
+              ok: false,
+              reason: 'network.secrets[].exchange.url 必须是 1–2048 字符的字符串',
+            };
           }
           let exUrl: URL;
           try {
@@ -4195,8 +4563,16 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           } catch {
             return { ok: false, reason: 'network.secrets[].exchange.url 不是合法的绝对地址' };
           }
-          if (exUrl.protocol !== 'https:' || exUrl.port !== '' || exUrl.username || exUrl.password) {
-            return { ok: false, reason: 'network.secrets[].exchange.url 仅支持 https 默认端口且不允许内嵌用户名/密码' };
+          if (
+            exUrl.protocol !== 'https:' ||
+            exUrl.port !== '' ||
+            exUrl.username ||
+            exUrl.password
+          ) {
+            return {
+              ok: false,
+              reason: 'network.secrets[].exchange.url 仅支持 https 默认端口且不允许内嵌用户名/密码',
+            };
           }
           if (!hosts.some((pattern) => ghostNetworkHostMatches(pattern, exUrl.hostname))) {
             return {
@@ -4235,7 +4611,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           ) {
             return {
               ok: false,
-              reason: 'network.secrets[].exchange.tokenPath 必须是 ≤128 字符的点分路径(段名限字母/数字/_/-,如 "session" / "data.token")',
+              reason:
+                'network.secrets[].exchange.tokenPath 必须是 ≤128 字符的点分路径(段名限字母/数字/_/-,如 "session" / "data.token")',
             };
           }
           let exTtl: number | undefined;
@@ -4288,14 +4665,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         n.connections.length === 0 ||
         n.connections.length > GHOST_NETWORK_MAX_CONNECTION_DECLS
       ) {
-        return { ok: false, reason: `network.connections 必须是 1–${GHOST_NETWORK_MAX_CONNECTION_DECLS} 条的数组` };
+        return {
+          ok: false,
+          reason: `network.connections 必须是 1–${GHOST_NETWORK_MAX_CONNECTION_DECLS} 条的数组`,
+        };
       }
       // 没人收地址和 token:连接的地址与凭证一律由意识 settingsHtml 收单
       // (经 /connections 协议通道),没有界面就没有入口。
       if (raw.settingsHtml === undefined) {
         return {
           ok: false,
-          reason: '声明了 network.connections 必须同时声明 settingsHtml(连接地址与凭证由意识设置界面收单,没有界面就没人收单)',
+          reason:
+            '声明了 network.connections 必须同时声明 settingsHtml(连接地址与凭证由意识设置界面收单,没有界面就没人收单)',
         };
       }
       connections = [];
@@ -4305,20 +4686,32 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       for (const c of n.connections) {
         if (!isPlainObject(c)) return { ok: false, reason: 'network.connections 每项必须是对象' };
         if (typeof c.key === 'string' && isGhostManifestReservedRecordKey(c.key)) {
-          return { ok: false, reason: `network.connections[].key 不允许使用对象保留键名 ${JSON.stringify(c.key)}` };
+          return {
+            ok: false,
+            reason: `network.connections[].key 不允许使用对象保留键名 ${JSON.stringify(c.key)}`,
+          };
         }
         if (typeof c.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(c.key)) {
-          return { ok: false, reason: 'network.connections[].key 必须是小写字母开头的 1–32 位小写/数字/下划线' };
+          return {
+            ok: false,
+            reason: 'network.connections[].key 必须是小写字母开头的 1–32 位小写/数字/下划线',
+          };
         }
         if (seenConnKeys.has(c.key)) {
           return { ok: false, reason: `network.connections 含重复 key ${JSON.stringify(c.key)}` };
         }
         // 与 secrets 共用键命名空间(保险库派生键同一前缀),撞名拒装。
         if (secretKeySet.has(c.key)) {
-          return { ok: false, reason: `network.connections[].key ${JSON.stringify(c.key)} 与 network.secrets 的 key 撞名(两者共用命名空间)` };
+          return {
+            ok: false,
+            reason: `network.connections[].key ${JSON.stringify(c.key)} 与 network.secrets 的 key 撞名(两者共用命名空间)`,
+          };
         }
         if (nodeSecretKeySet.has(c.key)) {
-          return { ok: false, reason: `network.connections[].key ${JSON.stringify(c.key)} 与 node.secretBindings 的 key 撞名(两者共用命名空间)` };
+          return {
+            ok: false,
+            reason: `network.connections[].key ${JSON.stringify(c.key)} 与 node.secretBindings 的 key 撞名(两者共用命名空间)`,
+          };
         }
         seenConnKeys.add(c.key);
         if (typeof c.label !== 'string' || c.label.trim().length === 0 || c.label.length > 64) {
@@ -4331,14 +4724,23 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           return { ok: false, reason: 'network.connections[].hint 必须是 1–200 字符的非空字符串' };
         }
         if (!isPlainObject(c.inject)) {
-          return { ok: false, reason: `network.connections[${JSON.stringify(c.key)}].inject 必填(连接凭证要声明注入到哪个请求头)` };
+          return {
+            ok: false,
+            reason: `network.connections[${JSON.stringify(c.key)}].inject 必填(连接凭证要声明注入到哪个请求头)`,
+          };
         }
         const cinj = c.inject as Record<string, unknown>;
         if (typeof cinj.header !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(cinj.header)) {
-          return { ok: false, reason: 'network.connections[].inject.header 必须是 1–64 位字母/数字/连字符的头名' };
+          return {
+            ok: false,
+            reason: 'network.connections[].inject.header 必须是 1–64 位字母/数字/连字符的头名',
+          };
         }
         if (GHOST_NETWORK_FORBIDDEN_INJECT_HEADERS.includes(cinj.header.toLowerCase())) {
-          return { ok: false, reason: `network.connections[].inject.header 不允许使用协议关键头 ${JSON.stringify(cinj.header)}` };
+          return {
+            ok: false,
+            reason: `network.connections[].inject.header 不允许使用协议关键头 ${JSON.stringify(cinj.header)}`,
+          };
         }
         if (
           typeof cinj.format !== 'string' ||
@@ -4346,12 +4748,20 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           cinj.format.length > 200 ||
           cinj.format.split('{value}').length !== 2
         ) {
-          return { ok: false, reason: 'network.connections[].inject.format 必须是 ≤200 字符且恰含一个 {value} 占位的字符串(如 "Bearer {value}")' };
+          return {
+            ok: false,
+            reason:
+              'network.connections[].inject.format 必须是 ≤200 字符且恰含一个 {value} 占位的字符串(如 "Bearer {value}")',
+          };
         }
         if (cinj.hosts !== undefined) {
           // 注入范围恒等于各连接自身地址(用户添加哪条注入哪条),作者无从
           // 收窄或扩张——声明即结构性误解,直接拒装。
-          return { ok: false, reason: 'network.connections[].inject.hosts 不允许声明(连接凭证只注入对应连接自身的地址)' };
+          return {
+            ok: false,
+            reason:
+              'network.connections[].inject.hosts 不允许声明(连接凭证只注入对应连接自身的地址)',
+          };
         }
         if (c.maxConnections !== undefined) {
           if (
@@ -4360,7 +4770,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             c.maxConnections < 1 ||
             c.maxConnections > GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL
           ) {
-            return { ok: false, reason: `network.connections[].maxConnections 必须是 1–${GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL} 的整数(缺省 ${GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL})` };
+            return {
+              ok: false,
+              reason: `network.connections[].maxConnections 必须是 1–${GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL} 的整数(缺省 ${GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL})`,
+            };
           }
         }
         connections.push({
@@ -4385,38 +4798,51 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   let setup: GhostSetupDecl | undefined;
   if (raw.setup !== undefined) {
     if (!isPlainObject(raw.setup)) {
-      return { ok: false, reason: 'setup 必须是对象(如 { "requires": [{ "anyOf": ["secret:api_key"] }] })' };
+      return {
+        ok: false,
+        reason: 'setup 必须是对象(如 { "requires": [{ "anyOf": ["secret:api_key"] }] })',
+      };
     }
     const su = raw.setup as Record<string, unknown>;
     // 空数组是合法的显式 opt-out:「本意识没有使用前置需求」——凭证全为
     // 可选项的意识用它关掉宿主启发式(不声明才走启发式)。
     if (!Array.isArray(su.requires) || su.requires.length > GHOST_SETUP_MAX_GROUPS) {
-      return { ok: false, reason: `setup.requires 必须是 0–${GHOST_SETUP_MAX_GROUPS} 组的数组(空数组 = 显式声明无使用前置需求)` };
+      return {
+        ok: false,
+        reason: `setup.requires 必须是 0–${GHOST_SETUP_MAX_GROUPS} 组的数组(空数组 = 显式声明无使用前置需求)`,
+      };
     }
     const secretByKey = new Map<
       string,
       { hostDerivedSource: 'login-email' | 'gh-cli' | 'oidc-token' | null }
     >([
       ...(network?.secrets ?? []).map(
-        (s) => [
-          s.key,
-          {
-            hostDerivedSource:
-              s.source === 'login-email' || s.source === 'gh-cli' || s.source === 'oidc-token'
-                ? s.source
-                : null,
-          },
-        ] as const,
+        (s) =>
+          [
+            s.key,
+            {
+              hostDerivedSource:
+                s.source === 'login-email' || s.source === 'gh-cli' || s.source === 'oidc-token'
+                  ? s.source
+                  : null,
+            },
+          ] as const,
       ),
-      ...(node?.secretBindings ?? []).map(
-        (s) => [s.key, { hostDerivedSource: null }] as const,
-      ),
+      ...(node?.secretBindings ?? []).map((s) => [s.key, { hostDerivedSource: null }] as const),
     ]);
     const connectionKeys = new Set((network?.connections ?? []).map((c) => c.key));
     const groups: GhostSetupGroup[] = [];
     for (const g of su.requires) {
-      if (!isPlainObject(g) || !Array.isArray(g.anyOf) || g.anyOf.length === 0 || g.anyOf.length > GHOST_SETUP_MAX_ITEMS_PER_GROUP) {
-        return { ok: false, reason: `setup.requires 每组必须是 { "anyOf": [...] } 且组内 1–${GHOST_SETUP_MAX_ITEMS_PER_GROUP} 条` };
+      if (
+        !isPlainObject(g) ||
+        !Array.isArray(g.anyOf) ||
+        g.anyOf.length === 0 ||
+        g.anyOf.length > GHOST_SETUP_MAX_ITEMS_PER_GROUP
+      ) {
+        return {
+          ok: false,
+          reason: `setup.requires 每组必须是 { "anyOf": [...] } 且组内 1–${GHOST_SETUP_MAX_ITEMS_PER_GROUP} 条`,
+        };
       }
       const items: GhostSetupRequirement[] = [];
       const seenRefs = new Set<string>();
@@ -4425,40 +4851,72 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (typeof it === 'string') {
           const m = /^(secret|connection):(.+)$/.exec(it);
           if (!m) {
-            return { ok: false, reason: `setup 条目 ${JSON.stringify(it)} 形态不对(字符串条目须为 "secret:<key>" 或 "connection:<key>";kv 用对象 { "kv": "<key>", "label": "..." })` };
+            return {
+              ok: false,
+              reason: `setup 条目 ${JSON.stringify(it)} 形态不对(字符串条目须为 "secret:<key>" 或 "connection:<key>";kv 用对象 { "kv": "<key>", "label": "..." })`,
+            };
           }
           const [, refKind, refKey] = m;
           if (refKind === 'secret') {
             const decl = secretByKey.get(refKey);
             if (!decl) {
-              return { ok: false, reason: `setup 引用了未声明的凭证 ${JSON.stringify(refKey)}(必须逐字取自 network.secrets[].key 或 node.secretBindings[].key)` };
+              return {
+                ok: false,
+                reason: `setup 引用了未声明的凭证 ${JSON.stringify(refKey)}(必须逐字取自 network.secrets[].key 或 node.secretBindings[].key)`,
+              };
             }
             if (decl.hostDerivedSource) {
-              return { ok: false, reason: `setup 不允许引用 ${decl.hostDerivedSource} 源凭证 ${JSON.stringify(refKey)}(Host 派生身份没有用户配置动作可引导)` };
+              return {
+                ok: false,
+                reason: `setup 不允许引用 ${decl.hostDerivedSource} 源凭证 ${JSON.stringify(refKey)}(Host 派生身份没有用户配置动作可引导)`,
+              };
             }
             item = { kind: 'secret', key: refKey };
           } else {
             if (!connectionKeys.has(refKey)) {
-              return { ok: false, reason: `setup 引用了未声明的连接 ${JSON.stringify(refKey)}(必须逐字取自 network.connections[].key)` };
+              return {
+                ok: false,
+                reason: `setup 引用了未声明的连接 ${JSON.stringify(refKey)}(必须逐字取自 network.connections[].key)`,
+              };
             }
             item = { kind: 'connection', key: refKey };
           }
         } else if (isPlainObject(it)) {
           if (typeof it.kv === 'string' && isGhostManifestReservedRecordKey(it.kv)) {
-            return { ok: false, reason: `setup kv 条目的 kv 不允许使用对象保留键名 ${JSON.stringify(it.kv)}` };
+            return {
+              ok: false,
+              reason: `setup kv 条目的 kv 不允许使用对象保留键名 ${JSON.stringify(it.kv)}`,
+            };
           }
           if (typeof it.kv !== 'string' || !GHOST_SETUP_KV_KEY_RE.test(it.kv)) {
-            return { ok: false, reason: 'setup kv 条目的 kv 必须是 1–64 位字母/数字/下划线/点/连字符的键名' };
+            return {
+              ok: false,
+              reason: 'setup kv 条目的 kv 必须是 1–64 位字母/数字/下划线/点/连字符的键名',
+            };
           }
-          if (typeof it.label !== 'string' || it.label.trim().length === 0 || it.label.length > 64) {
-            return { ok: false, reason: 'setup kv 条目必须带 1–64 字符的 label(kv 键名宿主无先验,弹窗要有名字可展示)' };
+          if (
+            typeof it.label !== 'string' ||
+            it.label.trim().length === 0 ||
+            it.label.length > 64
+          ) {
+            return {
+              ok: false,
+              reason: 'setup kv 条目必须带 1–64 字符的 label(kv 键名宿主无先验,弹窗要有名字可展示)',
+            };
           }
           if (raw.settingsHtml === undefined) {
-            return { ok: false, reason: 'setup 引用了 kv 参数但没有 settingsHtml——参数由意识设置界面收单,没有界面就没人填' };
+            return {
+              ok: false,
+              reason:
+                'setup 引用了 kv 参数但没有 settingsHtml——参数由意识设置界面收单,没有界面就没人填',
+            };
           }
           item = { kind: 'kv', key: it.kv, label: it.label };
         } else {
-          return { ok: false, reason: 'setup.requires[].anyOf 每条必须是字符串引用或 { "kv", "label" } 对象' };
+          return {
+            ok: false,
+            reason: 'setup.requires[].anyOf 每条必须是字符串引用或 { "kv", "label" } 对象',
+          };
         }
         const ref = `${item.kind}:${item.key}`;
         if (seenRefs.has(ref)) {
@@ -4504,7 +4962,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       if (typeof k !== 'string') return { ok: false, reason: 'keywords 每项必须是字符串' };
       const word = k.trim();
       if (word.length < 2 || word.length > 24) {
-        return { ok: false, reason: `keywords 每项须为 2–24 字符(单字词命中面失控):${JSON.stringify(k)}` };
+        return {
+          ok: false,
+          reason: `keywords 每项须为 2–24 字符(单字词命中面失控):${JSON.stringify(k)}`,
+        };
       }
       const fold = word.toLowerCase();
       if (seen.has(fold)) continue; // 重复词静默去重,不拒装
@@ -5017,6 +5478,83 @@ export type GhostPipeWorkspaceResult =
       message: string;
     };
 
+/** 插件内置模拟器槽协议版本；能力按版本握手，不靠插件自报可用性。 */
+export const GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION = 1 as const;
+
+/**
+ * 插件可见的最小模拟器状态。刻意不含 sessionId、UDID、source fingerprint、
+ * lease、device grant、mutation state、路径或诊断；这些值既不是状态面板所需，
+ * 也可能被滥用于跨任务控制或设备指纹识别。
+ */
+export interface GhostIOSSimulatorStatusSnapshot {
+  environment: {
+    platform: string;
+    supported: boolean;
+    ready: boolean;
+    xcodeVersion: string | null;
+    availableDeviceCount: number;
+  };
+  instances: Array<{
+    instanceId: string;
+    simulatorName: string;
+    generation: number;
+    lifecycleState: IOSSimulatorPublicInstance['lifecycleState'];
+    healthState: IOSSimulatorPublicInstance['healthState'];
+  }>;
+  routeStatuses: Array<{
+    instanceId: string;
+    generation: number;
+    stream: Pick<IOSSimulatorPublicRouteStatus['stream'], 'adapter' | 'encoding' | 'state'>;
+    input: Pick<IOSSimulatorPublicRouteStatus['input'], 'adapter' | 'state'>;
+  }>;
+}
+
+/** Host 内部的只读投影结果；供 capability slot 消费，不直接跨 preload。 */
+export type GhostIOSSimulatorStatusProbeResult =
+  | { ok: true; status: GhostIOSSimulatorStatusSnapshot }
+  | { ok: false; errorCode: IOSSimulatorMcpErrorCode; message: string };
+
+/** 插件只能请求能力摘要、当前台前任务状态，或打开 Host 面板。 */
+export type GhostPipeIOSSimulatorRequest =
+  | { type: 'ios-simulator-request'; kind: 'capabilities' }
+  | { type: 'ios-simulator-request'; kind: 'status' }
+  | { type: 'ios-simulator-request'; kind: 'open-panel'; instanceId?: string };
+
+export type GhostPipeIOSSimulatorErrorCode =
+  | IOSSimulatorMcpErrorCode
+  | 'PERMISSION_DENIED'
+  | 'INVALID_REQUEST'
+  | 'INSTANCE_NOT_OWNED'
+  | 'RATE_LIMITED'
+  | 'HOST_NOT_READY'
+  | 'IOS_SIMULATOR_HOST_ERROR';
+
+export type GhostPipeIOSSimulatorResult =
+  | {
+      ok: true;
+      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
+      kind: 'capabilities';
+      capabilities: {
+        status: true;
+        openHostPanel: true;
+        pluginVideo: false;
+        pluginInput: false;
+      };
+    }
+  | {
+      ok: true;
+      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
+      kind: 'status';
+      status: GhostIOSSimulatorStatusSnapshot;
+    }
+  | {
+      ok: true;
+      apiVersion: typeof GHOST_IOS_SIMULATOR_CAPABILITY_API_VERSION;
+      kind: 'open-panel';
+      instanceId?: string;
+    }
+  | { ok: false; errorCode: GhostPipeIOSSimulatorErrorCode; message: string };
+
 /**
  * 上行:preview 槽——请主机在右侧栏内置浏览器打开一个预览标签页。
  * url 必须命中身份卡 preview.hosts 白名单(ghostPreviewUrlAllowed);
@@ -5085,11 +5623,7 @@ export type GhostPipeScheduleDraftResult =
   | {
       ok: false;
       errorCode:
-        | 'PERMISSION_DENIED'
-        | 'INVALID_REQUEST'
-        | 'RATE_LIMITED'
-        | 'HOST_NOT_READY'
-        | 'INTERNAL';
+        'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'RATE_LIMITED' | 'HOST_NOT_READY' | 'INTERNAL';
       message: string;
     };
 
@@ -5350,7 +5884,12 @@ export const GHOST_NOTIFY_MAX_CHARS = 200;
  * 校验后翻译渲染(i18n `chat.ghostNotify.<key>`);白名单外的键静默丢弃,
  * 防版本错配时把生肉 key 摆上界面。
  */
-export const GHOST_HOST_NOTICE_KEYS = ['secretSaved', 'oauthConnected', 'oauthConnectedNoLabel', 'connectionAdded'] as const;
+export const GHOST_HOST_NOTICE_KEYS = [
+  'secretSaved',
+  'oauthConnected',
+  'oauthConnectedNoLabel',
+  'connectionAdded',
+] as const;
 export type GhostHostNoticeKey = (typeof GHOST_HOST_NOTICE_KEYS)[number];
 
 /** 同一意识两条提示的最小间隔 ms(超发拒收,防 toast 刷屏骚扰)。 */
@@ -5388,7 +5927,13 @@ export type GhostPipeConfirmResult =
   | { ok: true; confirmed: boolean }
   | {
       ok: false;
-      errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'RATE_LIMITED' | 'BUSY' | 'UNAVAILABLE' | 'INTERNAL';
+      errorCode:
+        | 'PERMISSION_DENIED'
+        | 'INVALID_REQUEST'
+        | 'RATE_LIMITED'
+        | 'BUSY'
+        | 'UNAVAILABLE'
+        | 'INTERNAL';
       message: string;
     };
 
@@ -6186,16 +6731,11 @@ export interface GhostEventInteractionActivityData {
   requestId: string;
 }
 
-export type GhostEventActivityData =
-  | GhostEventThinkingData
-  | GhostEventInteractionActivityData;
+export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteractionActivityData;
 
 /** 所有 did- 旁听事件共享的安全元数据载荷。 */
 export type GhostDidEventData =
-  | GhostEventTurnStartData
-  | GhostEventTurnEndData
-  | GhostEventSessionData
-  | GhostEventActivityData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData;
 
 export type GhostMessageHookData = { sessionId: string; text: string; model?: string };
 
@@ -6473,8 +7013,20 @@ export interface GhostFsListEntry {
 
 /** 代写文件的返回(cindy.send 的 resolve 值;失败带人话原因,永不 reject)。 */
 export type GhostPipeFsResult =
-  | { ok: true; op: 'write'; /** 落盘后的相对路径(save 档为消毒去重后的文件名)。 */ path: string; bytes: number }
-  | { ok: true; op: 'read'; path: string; content: string; encoding: 'utf8' | 'base64'; bytes: number }
+  | {
+      ok: true;
+      op: 'write';
+      /** 落盘后的相对路径(save 档为消毒去重后的文件名)。 */ path: string;
+      bytes: number;
+    }
+  | {
+      ok: true;
+      op: 'read';
+      path: string;
+      content: string;
+      encoding: 'utf8' | 'base64';
+      bytes: number;
+    }
   | { ok: true; op: 'list'; entries: GhostFsListEntry[]; truncated?: boolean }
   | { ok: true; op: 'delete'; path: string; /** false = 本来就不存在(幂等)。 */ existed: boolean }
   | { ok: false; message: string };

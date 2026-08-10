@@ -3,33 +3,40 @@ import { describe, expect, it } from 'vitest';
 import {
   getDesktopClaudeReadOnlyAllowedTools,
   getDesktopMcpToolApprovalPolicy,
+  getDesktopMcpToolApprovalPresentation,
 } from '../mcp-tool-approval-policy.js';
+import { setMainLocale } from '../../i18n.js';
 
 describe('desktop Claude read-only allowlist', () => {
   it('allows only explicitly reviewed read-only tools', () => {
     const tools = getDesktopClaudeReadOnlyAllowedTools();
 
-    expect(tools).toEqual(expect.arrayContaining([
-      'mcp__cindy__ghost_list',
-      'mcp__cindy__ghost_info',
-      'mcp__cindy__ghost_forge_guide',
-      'mcp__cindy_helper__list_tools',
-      'mcp__cindy_slack__slack_status',
-    ]));
-    expect(tools).not.toEqual(expect.arrayContaining([
-      'Bash',
-      'Edit',
-      'Write',
-      'Agent',
-      'Skill',
-      // 外发网络请求(搜索词/URL 出境),与 maker-core READ_ONLY_CLAUDE_TOOLS 边界一致,
-      // 不免审批(Greptile P1 security)。
-      'WebSearch',
-      'WebFetch',
-      'mcp__cindy__ghost_call',
-      'mcp__cindy_helper__call_tool',
-      'mcp__cindy_slack__slack_list_tools',
-    ]));
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        'mcp__cindy__ghost_list',
+        'mcp__cindy__ghost_info',
+        'mcp__cindy__ghost_forge_guide',
+        'mcp__cindy_ios_simulator__list_tools',
+        'mcp__cindy_helper__list_tools',
+        'mcp__cindy_slack__slack_status',
+      ]),
+    );
+    expect(tools).not.toEqual(
+      expect.arrayContaining([
+        'Bash',
+        'Edit',
+        'Write',
+        'Agent',
+        'Skill',
+        // 外发网络请求(搜索词/URL 出境),与 maker-core READ_ONLY_CLAUDE_TOOLS 边界一致,
+        // 不免审批(Greptile P1 security)。
+        'WebSearch',
+        'WebFetch',
+        'mcp__cindy__ghost_call',
+        'mcp__cindy_helper__call_tool',
+        'mcp__cindy_slack__slack_list_tools',
+      ]),
+    );
     expect(tools.every((tool) => !tool.includes('*'))).toBe(true);
     expect(tools.every((tool) => !tool.endsWith('__call_tool'))).toBe(true);
   });
@@ -44,6 +51,7 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy__ghost_forge_guide',
       'mcp__cindy_browser__list_tools',
       'mcp__cindy_android__list_tools',
+      'mcp__cindy_ios_simulator__list_tools',
       'mcp__cindy_computer__list_tools',
       'mcp__cindy_feishu_bot__list_tools',
       'mcp__cindy_scheduler__list_tools',
@@ -123,25 +131,119 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party' })).toBe('prompt');
   });
 
+  it('prompts for simulator setup actions while device-gated actions stay trusted', () => {
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'list_tools',
+      }),
+    ).toBe('auto-approve');
+    for (const name of ['attach_device', 'build_app', 'create_instance', 'open_url']) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_ios_simulator',
+          toolName: 'call_tool',
+          toolParams: { name, args: {} },
+        }),
+      ).toBe('prompt-each-time');
+    }
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator',
+        toolParams: { name: 'build_app', args: {} },
+      }),
+    ).toBe('prompt-each-time');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: { name: 'tap', args: {} },
+      }),
+    ).toBe('auto-approve');
+  });
+
+  it('discloses host file access before an agent starts an Xcode build', () => {
+    setMainLocale('en');
+    expect(
+      getDesktopMcpToolApprovalPresentation({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: { name: 'build_app', args: {} },
+      }),
+    ).toEqual({
+      title: 'Allow Xcode to build this project?',
+      description: expect.stringMatching(
+        /macOS user.*outside the project.*returned to the Agent.*trust this project/i,
+      ),
+    });
+    expect(
+      getDesktopMcpToolApprovalPresentation({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: { name: 'tap', args: {} },
+      }),
+    ).toBeUndefined();
+    expect(
+      getDesktopMcpToolApprovalPresentation({
+        serverName: 'cindy_ios_simulator',
+        toolParams: { name: 'build_app', args: {} },
+      })?.description,
+    ).toContain('outside the project');
+  });
+
+  it('discloses the task-scoped control lease before an agent creates or attaches a simulator', () => {
+    setMainLocale('en');
+    for (const [name, title] of [
+      ['attach_device', /connect to and control this simulator/i],
+      ['create_instance', /create and control a simulator/i],
+    ] as const) {
+      const presentation = getDesktopMcpToolApprovalPresentation({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: { name, args: {} },
+      });
+      expect(presentation?.title).toMatch(title);
+      expect(presentation?.description).toMatch(
+        /current Cindy task.*start or stop.*install or launch.*tap.*swipe.*type.*screenshots.*settings.*without another device-control prompt.*disconnect.*revoke Agent control.*sensitive actions.*separate approval/i,
+      );
+    }
+
+    // Codex app-server versions that omit the outer progressive tool name
+    // must receive the same Host-owned disclosure from the validated payload.
+    expect(
+      getDesktopMcpToolApprovalPresentation({
+        serverName: 'cindy_ios_simulator',
+        toolParams: { name: 'attach_device', args: {} },
+      })?.description,
+    ).toContain('without another device-control prompt');
+    expect(
+      getDesktopMcpToolApprovalPresentation({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: { name: 'open_url', args: {} },
+      }),
+    ).toBeUndefined();
+  });
+
   it('auto-approves read-only discovery entries even on untrusted servers', () => {
     // server 整体不可信, 但列工具清单 / 查连接状态没有副作用。
     expect(
       getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh', toolName: 'list_tools' }),
     ).toBe('auto-approve');
-    expect(
-      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_list' }),
-    ).toBe('auto-approve');
-    expect(
-      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_info' }),
-    ).toBe('auto-approve');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_list' })).toBe(
+      'auto-approve',
+    );
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_info' })).toBe(
+      'auto-approve',
+    );
 
     // 同一个 server 的执行入口不跟着沾光。
     expect(
       getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh', toolName: 'call_tool' }),
     ).toBe('prompt');
-    expect(
-      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call' }),
-    ).toBe('prompt');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call' })).toBe(
+      'prompt',
+    );
   });
 
   it('auto-approves the browser call_tool entry that Claude used to prompt for every time', () => {

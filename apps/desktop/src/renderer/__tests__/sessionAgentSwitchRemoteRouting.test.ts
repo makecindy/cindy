@@ -873,7 +873,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(sendFinish).toBeGreaterThan(onSend);
     expect(switchGuard).toBeGreaterThan(sendFinish);
     expect(source).toContain(
-      'disabled={disabled || agentSendDispatchInFlight || agentSwitchInFlight}',
+      'disabled || settingsLocked || agentSendDispatchInFlight || agentSwitchInFlight',
     );
   });
 

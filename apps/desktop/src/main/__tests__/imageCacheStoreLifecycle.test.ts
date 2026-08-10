@@ -150,4 +150,14 @@ describe('imageCacheStore lifecycle metadata', () => {
 
     expect(urls).toEqual(['xdt-image://session-a/a.png', 'xdt-image://session-b/c.webp']);
   });
+
+  it('keeps the legacy session cleanup IPC out of the cindy-media ledger', async () => {
+    const source = await fs.readFile(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+    const start = source.indexOf("'image-cache:cleanup-session'");
+    const end = source.indexOf('// F7: cleanup a list of files', start);
+    const handler = source.slice(start, end);
+
+    expect(handler).toContain('imageCacheStore.removeSession(sessionId)');
+    expect(handler).not.toContain('removeSessionMediaRefs');
+  });
 });

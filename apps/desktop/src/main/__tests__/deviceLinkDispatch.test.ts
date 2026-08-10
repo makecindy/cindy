@@ -29,6 +29,7 @@ vi.mock('../voice-input/index.js', () => ({
 import {
   markRemoteSettingPersistedInsideHandler,
   runInvoke,
+  setRemoteReviewInputGuard,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
   handleControllerOffline,
@@ -49,6 +50,7 @@ beforeEach(() => {
   registry.reset();
   dispatchTesting.reset(); // 清订阅 registry / tap / onControllersChanged / activeClient
   setRemoteWorkingDirGuard(null); // 默认不注入,行为同生产未就绪态(放行)
+  setRemoteReviewInputGuard(null);
   setRemoteSettingsPersist(null);
   fetchLocalMediaToOssMock.mockReset();
   transcribeRemoteVoiceInputMock.mockReset();
@@ -85,6 +87,43 @@ describe('runInvoke 双层校验', () => {
     registry.register('maker:list-active', () => ['session-x']);
     const r = await runInvoke('ctrl', { channel: 'maker:list-active', args: [] });
     expect(r).toEqual({ ok: true, result: ['session-x'] });
+  });
+
+  it('Review 外部输入在 device-link handler 前整族拒绝', async () => {
+    const handler = vi.fn(() => ({ accepted: true }));
+    const channels = [
+      'maker:send',
+      'maker:steer',
+      'maker:input:enqueue',
+      'maker:input:steer',
+      'maker:input:resume',
+      'maker:input:update-content',
+      'maker:input:clear-session',
+    ];
+    for (const channel of channels) registry.register(channel, handler);
+    setRemoteReviewInputGuard((sessionId) => {
+      if (sessionId === 'review-1') {
+        throw new Error(
+          '[UNSUPPORTED_CAPABILITY] Review tasks only accept the host-owned initial review prompt',
+        );
+      }
+    });
+
+    for (const channel of channels) {
+      await expect(runInvoke('ctrl', { channel, args: ['review-1'] })).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message: expect.stringContaining('[UNSUPPORTED_CAPABILITY]'),
+        },
+      });
+    }
+    expect(handler).not.toHaveBeenCalled();
+
+    await expect(
+      runInvoke('ctrl', { channel: 'maker:send', args: ['desktop-1', 'hello'] }),
+    ).resolves.toEqual({ ok: true, result: { accepted: true } });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('远程 invoke 期间给本机 handler 暴露 device-link 上下文,结束后不泄漏', async () => {

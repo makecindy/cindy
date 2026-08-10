@@ -1485,6 +1485,12 @@ describe('translateItemNotification collabAgentToolCall', () => {
       title: 'spawnAgent',
       description: 'Review the auth flow',
       receiverThreadIds: ['thread-2'],
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        providerRunIds: ['thread-2'],
+      },
     });
     expect(events[2].data).toMatchObject({
       toolUseId: 'collab-1',
@@ -1495,6 +1501,77 @@ describe('translateItemNotification collabAgentToolCall', () => {
       status: 'completed',
       summary: 'thread-2: done',
     });
+    expect(events[4].data).not.toHaveProperty('subagentObservation');
+  });
+
+  it('marks a completed-only spawn as a creation-capable Subagent observation', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'completed-only-spawn',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'thread-1',
+          receiverThreadIds: ['thread-2'],
+          prompt: 'Finish without a started notification',
+          agentsStates: { 'thread-2': { status: 'done' } },
+        },
+      },
+      q,
+      ctx,
+    );
+
+    const events = await collect(q);
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+      'agent_task_update',
+    ]);
+    expect(events[3].data).toMatchObject({
+      provider: 'codex',
+      taskId: 'completed-only-spawn',
+      status: 'completed',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'completed-only-spawn',
+        parentToolUseId: 'completed-only-spawn',
+        providerRunIds: ['thread-2'],
+      },
+    });
+  });
+
+  it('keeps wait/send/resume control updates live-only', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(newCodexRuntimeState());
+    const params = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'wait-1',
+        tool: 'wait',
+        status: 'inProgress',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: ['child-a', 'child-b'],
+        agentsStates: {},
+      },
+    };
+
+    translateItemNotification('started', params, q, ctx);
+
+    const update = (await collect(q)).find((event) => event.type === 'agent_task_update');
+    expect(update?.data).toMatchObject({
+      taskId: 'wait-1',
+      receiverThreadIds: ['child-a', 'child-b'],
+    });
+    expect(update?.data).not.toHaveProperty('subagentObservation');
   });
 });
 
@@ -1548,6 +1625,13 @@ describe('translateItemNotification subAgentActivity', () => {
       status: 'running',
       title: '/root/survey_startup',
       model: 'gpt-5.6-terra',
+      receiverThreadIds: ['thread-2'],
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'spawn-1',
+        parentToolUseId: 'spawn-1',
+        providerRunIds: ['thread-2'],
+      },
     });
   });
 

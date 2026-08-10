@@ -22,20 +22,59 @@ const ROOT = process.cwd();
 const SCAN_DIRS = ['src', 'app'];
 /** 不扫描:token 定义与主题实现本体、测试自身、DEV-only 性能测量脚手架(listperf harness + src/debug,
  * __DEV__ 门控、不进生产;调试样式故意不走生产 token)。 */
-const EXEMPT = [/__tests__/, /\.test\./, /^src\/theme\//, /^app\/listperf\.tsx$/, /^src\/debug\//];
+const EXEMPT = [
+  /__tests__/,
+  /\.test\./,
+  /^src\/theme\//,
+  /^app\/listperf\.tsx$/,
+  /^src\/debug\//,
+  /richContentAssets\.generated\.ts$/,
+];
 /** 颜色规则额外豁免:WebView HTML 生成器(CSS 模板)与 lightbox 黑白语境。 */
 const COLOR_EXEMPT = [/Html\.ts$/i, /src\/session\/ImageLightbox\.tsx$/];
 
 /** 组件几何 / 特殊语义的登记豁免:file 后缀匹配 + 行内容包含 snippet 即放行。 */
 const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
-  { file: 'src/session/MobileComposerInputRow.tsx', snippet: 'borderRadius: 30', reason: 'composer 多行形态组件几何(desktop-first 测试钉死)' },
-  { file: 'app/devices/index.tsx', snippet: 'size={9}', reason: 'Pencil 微徽标,徽标容器几何依赖 9px' },
-  { file: 'app/devices/index.tsx', snippet: '? 19 : iconSize.lg', reason: 'Claude logo 视觉重量偏小的 +1px 光学补偿' },
-  { file: 'app/sessions/[sessionId].tsx', snippet: 'size={10}', reason: '停止按钮实心 Square(填充块语义,非阶梯图标)' },
-  { file: 'app/sessions/[sessionId].tsx', snippet: 'strokeWidth={0}', reason: '实心填充图标,零描边为语义本身' },
-  { file: 'app/files/[sessionId].tsx', snippet: 'borderRadius: 2', reason: '文档缩略图卡刻意 2px 锐角(iOS Files 风格)' },
-  { file: 'src/session/ComposerAttachmentTray.tsx', snippet: 'size={10} strokeWidth={2.5}', reason: '标注角标微徽标几何(红底 12px 徽标内画笔,阶梯档过大)' },
-  { file: 'app/devices/index.tsx', snippet: 'borderRadius: 0', reason: '显式方角覆盖,非漂移(通栏布局回退恢复,用户改稿 2026-07-21)' },
+  {
+    file: 'src/session/MobileComposerInputRow.tsx',
+    snippet: 'borderRadius: 30',
+    reason: 'composer 多行形态组件几何(desktop-first 测试钉死)',
+  },
+  {
+    file: 'app/devices/index.tsx',
+    snippet: 'size={9}',
+    reason: 'Pencil 微徽标,徽标容器几何依赖 9px',
+  },
+  {
+    file: 'app/devices/index.tsx',
+    snippet: '? 19 : iconSize.lg',
+    reason: 'Claude logo 视觉重量偏小的 +1px 光学补偿',
+  },
+  {
+    file: 'app/sessions/[sessionId].tsx',
+    snippet: 'size={10}',
+    reason: '停止按钮实心 Square(填充块语义,非阶梯图标)',
+  },
+  {
+    file: 'app/sessions/[sessionId].tsx',
+    snippet: 'strokeWidth={0}',
+    reason: '实心填充图标,零描边为语义本身',
+  },
+  {
+    file: 'app/files/[sessionId].tsx',
+    snippet: 'borderRadius: 2',
+    reason: '文档缩略图卡刻意 2px 锐角(iOS Files 风格)',
+  },
+  {
+    file: 'src/session/ComposerAttachmentTray.tsx',
+    snippet: 'size={10} strokeWidth={2.5}',
+    reason: '标注角标微徽标几何(红底 12px 徽标内画笔,阶梯档过大)',
+  },
+  {
+    file: 'app/devices/index.tsx',
+    snippet: 'borderRadius: 0',
+    reason: '显式方角覆盖,非漂移(通栏布局回退恢复,用户改稿 2026-07-21)',
+  },
 ];
 
 function collectFiles(): string[] {
@@ -56,7 +95,9 @@ function collectFiles(): string[] {
 }
 
 /** 命中计数:除了放行,还用于「陈旧条目」检测(0 命中的登记项必须清理,防 allowlist 腐化)。 */
-const allowlistHits = new Map<(typeof ALLOWLIST)[number], number>(ALLOWLIST.map((entry) => [entry, 0]));
+const allowlistHits = new Map<(typeof ALLOWLIST)[number], number>(
+  ALLOWLIST.map((entry) => [entry, 0]),
+);
 
 function allowlisted(rel: string, line: string): boolean {
   let hit = false;
@@ -83,19 +124,31 @@ describe('design token discipline (iconSize / iconStroke / radius / colors)', ()
         // 数字必须紧跟 `{` 或非 [标识符字符/`.`] 之后:token 引用(size={iconSize.md})
         // 与含数字的标识符(size={size2x})不命中,size={19} / size={x ? 19 : y} 仍命中。
         if (/\bsize=\{(?:[^}]*[^\w.])?\d/.test(line)) {
-          violations.push(`${rel}:${i + 1} literal icon size -> use iconSize token`);
+          violations.push(
+            `${rel}:${i + 1} literal icon size -> use iconSize token`,
+          );
         }
         if (/strokeWidth=\{[^}]*\d/.test(line)) {
-          violations.push(`${rel}:${i + 1} literal strokeWidth -> use iconStroke token`);
+          violations.push(
+            `${rel}:${i + 1} literal strokeWidth -> use iconStroke token`,
+          );
         }
         if (/borderRadius:\s*\d/.test(line)) {
-          violations.push(`${rel}:${i + 1} literal borderRadius -> use radius token`);
+          violations.push(
+            `${rel}:${i + 1} literal borderRadius -> use radius token`,
+          );
         }
         // token 算术逃逸(typeScale.title - 1 / radius.control + 2 等):产出阶梯外幽灵值,
         // 等同字面量。需要新档位回 tokens.ts 扩档(17 已有 bodyLarge)。
         // spacing 刻意不入列:它有大量合法布局算式(列宽均分、多段 padding 求和)。
-        if (/(?:typeScale|lineHeight|iconSize|iconStroke|radius)\.\w+\s*[-+*]\s*\d/.test(line)) {
-          violations.push(`${rel}:${i + 1} token arithmetic -> use an existing ladder step or extend tokens.ts`);
+        if (
+          /(?:typeScale|lineHeight|iconSize|iconStroke|radius)\.\w+\s*[-+*]\s*\d/.test(
+            line,
+          )
+        ) {
+          violations.push(
+            `${rel}:${i + 1} token arithmetic -> use an existing ladder step or extend tokens.ts`,
+          );
         }
       });
     }
@@ -103,9 +156,11 @@ describe('design token discipline (iconSize / iconStroke / radius / colors)', ()
 
     // ALLOWLIST 陈旧检测:上面整仓扫描后仍 0 命中的登记项已随代码演进失效,必须同步删除,
     // 否则残留条目会静默放行未来同名违规。
-    const stale = ALLOWLIST
-      .filter((entry) => (allowlistHits.get(entry) ?? 0) === 0)
-      .map((entry) => `stale allowlist entry: ${entry.file} :: ${entry.snippet}`);
+    const stale = ALLOWLIST.filter(
+      (entry) => (allowlistHits.get(entry) ?? 0) === 0,
+    ).map(
+      (entry) => `stale allowlist entry: ${entry.file} :: ${entry.snippet}`,
+    );
     expect(stale).toEqual([]);
   });
 
@@ -118,7 +173,9 @@ describe('design token discipline (iconSize / iconStroke / radius / colors)', ()
         // 命中 color/backgroundColor/borderColor/shadowColor/tintColor 等
         // 样式键或 JSX color= prop 上的字面 hex / rgba。
         if (/olor(:\s*|=\{?\s*)['"`](#[0-9a-fA-F]|rgba?\()/.test(line)) {
-          violations.push(`${rel}:${i + 1} literal color -> use useTheme().colors / token`);
+          violations.push(
+            `${rel}:${i + 1} literal color -> use useTheme().colors / token`,
+          );
         }
       });
     }

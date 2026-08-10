@@ -79,6 +79,10 @@ import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../
 import { scanPiCustomizations } from './customization-scanner.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
+import {
+  assertReviewMessageContentPaths,
+  buildReviewReadGrants,
+} from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
@@ -535,6 +539,7 @@ export class PiAgent extends BaseAgent {
         message: 'pi sessions are local-only for now',
       });
     }
+    const reviewMode = opts.reviewMode === true;
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
     // 缺省 → 空,只有网关 provider `cindy`(现状不变)。失败不致命,降级为无原生 provider。
@@ -756,10 +761,12 @@ export class PiAgent extends BaseAgent {
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
-    await fs.writeFile(
-      path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME),
-      CINDY_SUBAGENT_EXTENSION_SOURCE,
-    );
+    if (!reviewMode) {
+      await fs.writeFile(
+        path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME),
+        CINDY_SUBAGENT_EXTENSION_SOURCE,
+      );
+    }
 
     // 权限档文件:extension 每次 tool_call 现读(热切换);读不到按 ask fail-closed。
     const runtimeDir = path.join(agentHome, 'runtime');
@@ -810,8 +817,16 @@ export class PiAgent extends BaseAgent {
     // 桥内行为同 ask(非只读全部冒泡)。其余档(default/acceptEdits/plan)归 ask 最严。
     const normalizePermissionMode = (mode: string | undefined): 'ask' | 'auto' | 'bypassPermissions' =>
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
-    let permissionMode = normalizePermissionMode(opts.permissionMode);
+    let permissionMode = reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    const reviewReadGrants = reviewMode
+      ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? [])
+      : [];
+    const reviewReadPaths = reviewReadGrants.map((grant) => grant.realPath);
+    // Keep ordinary permission files shape-compatible with older Cindy/Pi
+    // sessions. The Review-only marker is capability-like: absence means the
+    // normal bridge, while `true` selects the restricted Review bridge.
+    const reviewPathSnapshot = reviewMode ? { reviewReadPaths, reviewOnly: true as const } : {};
     // 与 Claude / Codex 一致，运行期 Orca 身份更新必须原地落在同一个对象上。
     // Desktop Pi MCP bridge 在 startSession 时持有这个引用；start_team 成功后 host
     // 调 setVendorOptions，后续 create_worker 等工具才能立即读到最新 Lead 身份。
@@ -819,16 +834,20 @@ export class PiAgent extends BaseAgent {
     type PermissionSnapshot = {
       mode: 'ask' | 'auto' | 'bypassPermissions';
       readOnlyRoots: string[];
+      reviewReadPaths?: string[];
+      reviewOnly?: true;
     };
     const permissionPrivilege = (mode: PermissionSnapshot['mode']): number =>
       mode === 'bypassPermissions' ? 2 : mode === 'auto' ? 1 : 0;
     let requestedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      ...reviewPathSnapshot,
     };
     let persistedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      ...reviewPathSnapshot,
     };
     // 权限档写入串行化 + 代际跳过。并发/连续切档(本地与远程控制端同时切,或用户快速连点)时,
     // 无串行的 fs.writeFile 可能让较早的 Full-access 写在较新的 Ask 写之后落盘 —— bridge 每次
@@ -841,6 +860,7 @@ export class PiAgent extends BaseAgent {
       requestedPermissionSnapshot = {
         mode: next.mode,
         readOnlyRoots: [...next.readOnlyRoots],
+        ...reviewPathSnapshot,
       };
       // 收紧必须立刻约束 host 侧审批门；等待磁盘 I/O 才改闭包会留下一个 Full access
       // 的窗口。放宽反过来只能等对应快照成功落盘，避免 host 已放行而 bridge 仍是旧档。
@@ -849,7 +869,11 @@ export class PiAgent extends BaseAgent {
       }
       const gen = ++permissionWriteGen;
       // 排队时刻捕获意图快照;运行时若已被更晚的写取代则跳过(旧内容不得在新内容之后落盘)。
-      const snapshot = { ...requestedPermissionSnapshot, readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots] };
+      const snapshot = {
+        ...requestedPermissionSnapshot,
+        readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots],
+        ...reviewPathSnapshot,
+      };
       const run = permissionWriteChain.then(async () => {
         if (gen !== permissionWriteGen) return;
         try {
@@ -864,6 +888,7 @@ export class PiAgent extends BaseAgent {
               // 放宽失败时 permissionMode 仍是旧的已提交 mode，同样达到回滚效果。
               mode: permissionMode,
               readOnlyRoots: [...persistedPermissionSnapshot.readOnlyRoots],
+              ...reviewPathSnapshot,
             };
           }
           throw error;
@@ -876,6 +901,7 @@ export class PiAgent extends BaseAgent {
           persistedPermissionSnapshot = {
             mode: snapshot.mode,
             readOnlyRoots: [...snapshot.readOnlyRoots],
+            ...reviewPathSnapshot,
           };
         }
       });
@@ -911,7 +937,7 @@ export class PiAgent extends BaseAgent {
      * 用它当"撤销开关"(上一版就是这么用的,那是个空操作,review 连点两轮)。运行期要收回子代理
      * 能力只有一条可证明有效的路:终止会话。
      */
-    let subagentRoutingEnabled = true;
+    let subagentRoutingEnabled = !reviewMode;
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean },
     ): Promise<boolean> => {
@@ -943,7 +969,7 @@ export class PiAgent extends BaseAgent {
       }
     };
     // 会话暴露前先落初始快照(await:模型第一次调 subagent 时文件必须已经在)。
-    if (!(await writeSubagentRuntimeFile({ model: opts.model, provider: initialProvider }))) {
+    if (subagentRoutingEnabled && !(await writeSubagentRuntimeFile({ model: opts.model, provider: initialProvider }))) {
       subagentRoutingEnabled = false;
     }
 
@@ -956,7 +982,7 @@ export class PiAgent extends BaseAgent {
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
     const registeredMcpServerNames = new Set<string>();
-    if (this.deps.preparePiExtraSpawnConfig) {
+    if (!reviewMode && this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
           sessionId: opts.sessionId,
@@ -987,6 +1013,7 @@ export class PiAgent extends BaseAgent {
     // 记忆(进 FTS 可 memory_search 检索,但排除出 MEMORY.md / system prompt,不污染
     // curated 记忆)。gate 与 CC 同口径;best-effort,失败只 warn,绝不阻断会话。
     const compactionMemoryEnabled =
+      !reviewMode &&
       (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true &&
       (this.memoryOverride ?? true) === true &&
       !!this.deps.makerMemory;
@@ -1020,12 +1047,13 @@ export class PiAgent extends BaseAgent {
 
     // 追加而非替换:pi 默认 prompt(工具用法/工程约定)原样保留,只追加 host 产品段
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
-    const ghostRosterPrompt =
-      this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
+    const ghostRosterPrompt = reviewMode
+      ? ''
+      : this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
     const appendSections = [
       this.deps.runtimeConfig.systemPrompt?.trim(),
       ghostRosterPrompt.trim(),
-      opts.userPrompt?.trim(),
+      reviewMode ? undefined : opts.userPrompt?.trim(),
       piExtraDirsPrompt(mutableExtraDirs),
     ].filter((s): s is string => !!s && s.length > 0);
     const appendSystemPrompt = appendSections.join('\n\n');
@@ -1049,8 +1077,9 @@ export class PiAgent extends BaseAgent {
       '--session-dir', sessionDir,
       '--provider', initialProvider,
       '--model', opts.model,
+      ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
-      ...(planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+      ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
@@ -1791,6 +1820,13 @@ export class PiAgent extends BaseAgent {
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         let providerAccepted = false;
         try {
+          if (reviewMode) {
+            await assertReviewMessageContentPaths(
+              message.content,
+              opts.workingDir,
+              reviewReadGrants,
+            );
+          }
           const { text, images } = await buildPiPrompt(message);
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
@@ -1823,6 +1859,13 @@ export class PiAgent extends BaseAgent {
       async steer(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'steer');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
+        if (reviewMode) {
+          await assertReviewMessageContentPaths(
+            message.content,
+            opts.workingDir,
+            reviewReadGrants,
+          );
+        }
         const { text, images } = await buildPiPrompt(message);
         rejectIfCancelled(sendOpts, 'steer');
         assertImageInputSupported(images);
@@ -1894,6 +1937,7 @@ export class PiAgent extends BaseAgent {
       },
 
       async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
+        if (reviewMode) return;
         // 会话级串行闸:整段"写待切换快照 → set_model RPC → 落定/回滚"必须是一个临界区。
         // 并发或连点切换(本地 + 远程控制端同时切)若交错,A 写 pending、B 写 pending、A 落定 B 的
         // 内容,盘上就会出现没人确认过的组合。串行化之后每次切换都看到确定的前一状态,
@@ -1905,6 +1949,7 @@ export class PiAgent extends BaseAgent {
       },
 
       async setEffort(effort: Effort): Promise<void> {
+        if (reviewMode) return;
         assertStartupEffortAllowed(activeEffortSnapshot, effort);
         if (activeEffortSnapshot?.length === 0) return;
         const resp = await proc.request({
@@ -1915,6 +1960,12 @@ export class PiAgent extends BaseAgent {
       },
 
       async setPermissionMode(mode): Promise<void> {
+        if (reviewMode) {
+          deps.logger.debug('pi setPermissionMode ignored for hard read-only Review session', {
+            requested: mode,
+          });
+          return;
+        }
         // ask/auto/bypass 三档;extension 每次 tool_call 现读,写完即生效。
         // auto 的差异在 Cindy 侧 dispatcher(handleExtensionUiRequest),bridge 无感知。
         const nextMode = normalizePermissionMode(mode);
@@ -1954,6 +2005,7 @@ export class PiAgent extends BaseAgent {
       },
 
       async setExtraDirs(dirs: string[]): Promise<void> {
+        if (reviewMode) return;
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
           readOnlyRoots: [...dirs],
@@ -1971,6 +2023,7 @@ export class PiAgent extends BaseAgent {
       },
 
       async setPlanMode(enabled: boolean): Promise<void> {
+        if (reviewMode) return;
         if (!planModeExtAvailable) {
           deps.logger.warn('pi setPlanMode ignored: plan-mode extension not available');
           return;
@@ -2528,6 +2581,24 @@ export class PiAgent extends BaseAgent {
           return true;
         }
       })();
+      const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const hostApprovalPresentation = (() => {
+        const presenter = this.deps.getMcpToolApprovalPresentation;
+        if (!presenter || !mcpTarget) return undefined;
+        try {
+          return presenter({
+            serverName: mcpTarget.serverName,
+            toolName: mcpTarget.toolName,
+            toolParams: input,
+          });
+        } catch (err) {
+          this.deps.logger.error('MCP approval presentation threw -> generic copy', {
+            serverName: mcpTarget.serverName,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          return undefined;
+        }
+      })();
       /**
        * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
        * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
@@ -2564,6 +2635,12 @@ export class PiAgent extends BaseAgent {
             requestId: id,
             toolName,
             input,
+            ...(hostApprovalPresentation?.title
+              ? { title: hostApprovalPresentation.title }
+              : {}),
+            ...(hostApprovalPresentation?.description
+              ? { description: hostApprovalPresentation.description }
+              : {}),
           })).then((decision) => {
             if (decision.kind !== 'permission') {
               this.deps.logger.warn('pi permission got mismatched decision kind', {
@@ -2640,24 +2717,23 @@ export class PiAgent extends BaseAgent {
         const mcpPolicy = ((): 'auto-approve' | 'prompt' | 'prompt-each-time' | null => {
           const classifier = this.deps.getMcpToolApprovalPolicy;
           if (!classifier) return null;
-          const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
-          if (!target) return null;
+          if (!mcpTarget) return null;
           try {
             const policy = classifier({
-              serverName: target.serverName,
-              toolName: target.toolName,
+              serverName: mcpTarget.serverName,
+              toolName: mcpTarget.toolName,
               toolParams: input,
             });
             if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
               return policy;
             }
             this.deps.logger.error('invalid MCP approval policy -> user confirmation', {
-              serverName: target.serverName,
+              serverName: mcpTarget.serverName,
               policy,
             });
           } catch (err) {
             this.deps.logger.error('MCP approval policy threw -> user confirmation', {
-              serverName: target.serverName,
+              serverName: mcpTarget.serverName,
               message: err instanceof Error ? err.message : String(err),
             });
           }

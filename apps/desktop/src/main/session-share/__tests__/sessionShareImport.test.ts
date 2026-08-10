@@ -13,6 +13,8 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DB_TRANSPORT_OUTCOME_UNKNOWN } from '../../localDb/client/DbTransport.js';
+
 const tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'xdtshare-import-test-'));
 const projectsRoot = path.join(tmpRoot, 'claude-home', 'projects');
 const newWorkdir = path.join(tmpRoot, 'their-proj');
@@ -27,6 +29,8 @@ const dbMock = vi.hoisted(() => ({
   queryCalls: [] as Array<{ sql: string; params: unknown[] }>,
   txCalls: [] as Array<{ name: string; args: unknown }>,
   txError: null as Error | null,
+  afterTxResolve: null as (() => void) | null,
+  drizzle: { scope: 'stable-import-db' },
 }));
 const codexMock = vi.hoisted(() => ({
   importCalls: [] as unknown[],
@@ -45,6 +49,7 @@ const codexMock = vi.hoisted(() => ({
 const cindyMediaMock = vi.hoisted(() => ({
   ingestCalls: [] as Array<{ buffer: Buffer; mimeType: string; refs: Array<Record<string, unknown>> }>,
   removeSessionRefsCalls: [] as string[],
+  removeSessionRefsIfDeletedCalls: [] as string[],
   removeSessionRefsErrorFor: null as string | null,
   /** 置为 Error 让 ingest 全部失败(测回落老目录路径)。 */
   ingestError: null as Error | null,
@@ -58,6 +63,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
+    drizzle: dbMock.drizzle,
     queryOne: async (sql: string, params: unknown[]) => {
       dbMock.queryCalls.push({ sql, params });
       if (dbMock.conflictForResumeId != null) {
@@ -80,6 +86,7 @@ vi.mock('../../localDb/client/current.js', () => ({
     tx: async (name: string, args: unknown) => {
       if (dbMock.txError) throw dbMock.txError;
       dbMock.txCalls.push({ name, args });
+      dbMock.afterTxResolve?.();
       return { messageCount: (args as { messages: unknown[] }).messages.length };
     },
   }),
@@ -165,6 +172,13 @@ vi.mock('../../cindy-media/ledger.js', () => ({
     }
     return 0;
   },
+  removeSessionRefsIfDeleted: async (sessionId: string) => {
+    cindyMediaMock.removeSessionRefsIfDeletedCalls.push(sessionId);
+    if (cindyMediaMock.removeSessionRefsErrorFor === sessionId) {
+      throw new Error('media cleanup failed');
+    }
+    return 0;
+  },
 }));
 const worktreeMock = vi.hoisted(() => ({
   detect: null as
@@ -186,13 +200,25 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({
     worktreeMock.removeCalls.push(sessionId);
   },
 }));
+const sessionShareImportModule = await import('../sessionShareImport.js');
 const {
   inspectShareFile,
   unlockShareDraft,
-  commitShareImport,
   cancelShareDraft,
   cleanupReplacedSessionMediaRefs,
-} = await import('../sessionShareImport.js');
+} = sessionShareImportModule;
+const mockedDbClientModule = await import('../../localDb/client/current.js');
+const rawCommitShareImport = sessionShareImportModule.commitShareImport;
+const commitShareImport = (opts: Parameters<typeof rawCommitShareImport>[0]) =>
+  rawCommitShareImport(opts, {
+    dbClient: mockedDbClientModule.getDbClient(),
+    assertStillValid: () => undefined,
+    refCompensationScope: {
+      journalDir: path.join(tmpRoot, 'ref-compensation'),
+      ownerStorageKey: 'a'.repeat(20),
+      assertStillValid: () => undefined,
+    },
+  });
 const { buildLooseUrl } = await import('../mediaUrlRewrite.pure.js');
 const { buildPlainFile, sealPayload } = await import('../xdtshareCrypto.js');
 
@@ -410,6 +436,7 @@ describe('sessionShareImport', () => {
     dbMock.queryCalls = [];
     dbMock.txCalls = [];
     dbMock.txError = null;
+    dbMock.afterTxResolve = null;
     codexMock.importCalls = [];
     codexMock.removeCalls = [];
     codexMock.importResult = {
@@ -421,6 +448,7 @@ describe('sessionShareImport', () => {
     };
     cindyMediaMock.ingestCalls = [];
     cindyMediaMock.removeSessionRefsCalls = [];
+    cindyMediaMock.removeSessionRefsIfDeletedCalls = [];
     cindyMediaMock.removeSessionRefsErrorFor = null;
     cindyMediaMock.ingestError = null;
     legacyImageMock.removeSessionCalls = [];
@@ -625,6 +653,91 @@ describe('sessionShareImport', () => {
     expect(blobCall).toBeDefined();
     const grantedId = blobCall!.refs[0].refId;
     expect(cindyMediaMock.removeSessionRefsCalls).toEqual([grantedId]);
+  });
+
+  it('preserves staged media and transcripts when the final DB transaction loses its ACK', async () => {
+    dbMock.txError = Object.assign(new Error('db worker transport closed'), {
+      code: DB_TRANSPORT_OUTCOME_UNKNOWN,
+    });
+    const filePath = await writeBundleFile(await buildBundle());
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+
+    await expect(
+      commitShareImport({
+        draftId: inspect.draftId,
+        workingDir: newWorkdir,
+        projectsRootOverride: projectsRoot,
+        sharedMediaRootOverride: sharedMediaRoot,
+      }),
+    ).rejects.toMatchObject({ code: DB_TRANSPORT_OUTCOME_UNKNOWN });
+
+    const importedRef = cindyMediaMock.ingestCalls[0]?.refs[0]?.refId;
+    expect(importedRef).toEqual(expect.any(String));
+    expect(cindyMediaMock.removeSessionRefsCalls).toEqual([]);
+    const key = newWorkdir.replace(/[^a-zA-Z0-9]/g, '-');
+    await expect(fsp.stat(path.join(projectsRoot, key, `${SID}.jsonl`))).resolves.toBeDefined();
+    await expect(
+      fsp.stat(path.join(sharedMediaRoot, importedRef as string, '2-doc.pdf')),
+    ).resolves.toBeDefined();
+  });
+
+  it('does not project a committed import after its captured owner changes', async () => {
+    let ownerCurrent = true;
+    dbMock.afterTxResolve = () => {
+      ownerCurrent = false;
+    };
+    const filePath = await writeBundleFile(await buildBundle());
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    const assertStillValid = () => {
+      if (!ownerCurrent) {
+        throw Object.assign(new Error('owner changed during import'), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }
+    };
+
+    await expect(
+      rawCommitShareImport(
+        {
+          draftId: inspect.draftId,
+          workingDir: newWorkdir,
+          projectsRootOverride: projectsRoot,
+          sharedMediaRootOverride: sharedMediaRoot,
+        },
+        {
+          dbClient: mockedDbClientModule.getDbClient(),
+          assertStillValid,
+          refCompensationScope: {
+            journalDir: path.join(tmpRoot, 'ref-compensation'),
+            ownerStorageKey: 'a'.repeat(20),
+            assertStillValid,
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+    expect(dbMock.txCalls).toHaveLength(1);
+    expect(cindyMediaMock.removeSessionRefsCalls).toEqual([]);
+    expect(legacyImageMock.removeSessionCalls).toEqual([]);
+    expect(codexMock.removeCalls).toEqual([]);
+    expect(worktreeMock.removeCalls).toEqual([]);
+    const importedRef = cindyMediaMock.ingestCalls[0]?.refs[0]?.refId;
+    expect(importedRef).toEqual(expect.any(String));
+    const key = newWorkdir.replace(/[^a-zA-Z0-9]/g, '-');
+    await expect(fsp.stat(path.join(projectsRoot, key, `${SID}.jsonl`))).resolves.toBeDefined();
+    await expect(
+      fsp.stat(path.join(sharedMediaRoot, importedRef as string, '2-doc.pdf')),
+    ).resolves.toBeDefined();
+    await expect(
+      commitShareImport({
+        draftId: inspect.draftId,
+        workingDir: newWorkdir,
+        projectsRootOverride: projectsRoot,
+        sharedMediaRootOverride: sharedMediaRoot,
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   it('encrypted flow: inspect → wrong password → unlock → commit', async () => {
@@ -1400,31 +1513,31 @@ describe('sessionShareImport', () => {
   });
 
   it('overwrite media cleanup removes every replaced session ref after commit', async () => {
-    cindyMediaMock.removeSessionRefsCalls = [];
+    cindyMediaMock.removeSessionRefsIfDeletedCalls = [];
 
     await cleanupReplacedSessionMediaRefs([
       { id: 'old-lead' },
       { id: 'old-worker' },
-    ]);
+    ], {} as never);
 
-    expect(cindyMediaMock.removeSessionRefsCalls).toEqual([
+    expect(cindyMediaMock.removeSessionRefsIfDeletedCalls).toEqual([
       'old-lead',
       'old-worker',
     ]);
   });
 
   it('overwrite media cleanup isolates failures and continues with the remaining graph', async () => {
-    cindyMediaMock.removeSessionRefsCalls = [];
+    cindyMediaMock.removeSessionRefsIfDeletedCalls = [];
     cindyMediaMock.removeSessionRefsErrorFor = 'old-lead';
 
     await expect(
       cleanupReplacedSessionMediaRefs([
         { id: 'old-lead' },
         { id: 'old-worker' },
-      ]),
+      ], {} as never),
     ).resolves.toBeUndefined();
 
-    expect(cindyMediaMock.removeSessionRefsCalls).toEqual([
+    expect(cindyMediaMock.removeSessionRefsIfDeletedCalls).toEqual([
       'old-lead',
       'old-worker',
     ]);

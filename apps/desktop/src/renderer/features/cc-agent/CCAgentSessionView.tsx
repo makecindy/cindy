@@ -111,7 +111,11 @@ import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
 import { useAuth } from '@/contexts/AuthContext';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -160,6 +164,7 @@ import {
   type MessageDeliveryMode,
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
+import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -173,6 +178,7 @@ import {
 } from '@/lib/orcaSessionIdentity';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
+import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
@@ -194,6 +200,7 @@ import {
   saveDraft as saveComposerDraft,
   getDraftPresence as getComposerDraftPresence,
   plainTextToTiptapDoc,
+  restoreRemoteOptimisticDraft,
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
@@ -212,10 +219,7 @@ import {
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
-import {
-  consumePendingRemoteCollab,
-  enableRemoteCollabForSession,
-} from './remoteCollabHandoff';
+import { consumePendingRemoteCollab, enableRemoteCollabForSession } from './remoteCollabHandoff';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
@@ -544,6 +548,54 @@ export function CCAgentSessionView({
       navigate('/settings?tab=providers');
     });
   }, [navigate, sessionId, viewVisible]);
+
+  // A task that has Subagents owns one durable Subagent tab. On history mount
+  // we silently ensure the tab exists; the first live child also reveals the
+  // sidebar, without stealing OS focus or replacing an already-active tab.
+  useEffect(() => {
+    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
+    let disposed = false;
+    const requestOwner = getDataOwnerGeneration();
+    void window.electronAPI.localDb.subagentRuns
+      .list({ sessionId })
+      .then((response) => {
+        if (
+          disposed ||
+          !isDataOwnerGenerationCurrent(requestOwner) ||
+          !response.supported ||
+          response.runs.length === 0
+        ) {
+          return;
+        }
+        return openSubagentsTab(sessionId, {
+          focusTab: false,
+          revealSidebar: false,
+          userInitiated: false,
+        });
+      })
+      .catch(() => undefined);
+    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged(
+      (payload, ownerStamp) => {
+        if (
+          disposed ||
+          !isDataOwnerPushCurrent(ownerStamp) ||
+          payload.runId === null ||
+          payload.sessionId !== sessionId
+        ) {
+          return;
+        }
+        void openSubagentsTab(sessionId, {
+          focusTab: false,
+          revealSidebar: payload.created && payload.firstForSession,
+          userInitiated: false,
+        }).catch(() => undefined);
+      },
+    );
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [ownsWindowRoute, sessionId, viewVisible]);
   // MainLayout 经 Outlet context 下发右栏相关能力(二级路由由 CCAgentFeatureLayout
   // 透传,否则这里会断链拿不到):
   //   - rightSidebarCollapsed:折叠态,用于 useProportionalWidth 的 compact 判定;
@@ -1216,10 +1268,15 @@ export function CCAgentSessionView({
     // (与 ChatInput palette 同源)。否则此 cache 取的是控制端命令,maybeDispatchDesktopSlashCommand
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
-    loadAllCommands(agentKind, wd, {
-      skipAgentSkills: isRemoteSession,
-      sessionId: session?.id,
-    }, remoteDeviceId)
+    loadAllCommands(
+      agentKind,
+      wd,
+      {
+        skipAgentSkills: isRemoteSession,
+        sessionId: session?.id,
+      },
+      remoteDeviceId,
+    )
       .then((cmds) => {
         if (!cancelled) setAllCommands(cmds);
       })
@@ -2378,8 +2435,7 @@ export function CCAgentSessionView({
 
   // /issue 命令的 composer 附件不随命令 payload 走 main IPC 往返 —— AttachedFile 是
   // renderer 层类型(与 render/main 解耦一致),且发送后 composer 会 clearFiles。故在
-  // dispatch 前于 renderer 侧快照,待 main 广播 DESKTOP_COMMAND_TRIGGERED 回流时由
-  // 下方 issue effect 取用(见 pendingIssueFilesRef 的消费点)。
+  // dispatch 前于 renderer 侧快照,待 main 广播 DESKTOP_COMMAND_TRIGGERED 回流时取用。
   const pendingIssueFilesRef = useRef<AttachedFile[] | undefined>(undefined);
 
   const maybeDispatchDesktopSlashCommand = useCallback(
@@ -2392,9 +2448,9 @@ export function CCAgentSessionView({
         workingDirOverride?: string;
         preparePiRuntime?: () => Promise<void>;
       },
-    ): Promise<{ handled: boolean; message: string }> => {
+    ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
-      if (!slashMatch) return { handled: false, message };
+      if (!slashMatch) return { handled: false, accepted: false, message };
       const cmdName = slashMatch[1].toLowerCase();
       const args = slashMatch[2] ?? '';
       const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
@@ -2413,16 +2469,17 @@ export function CCAgentSessionView({
         sessionId: session?.id,
         commandName: cmdName,
         commands,
-        reload: () => loadAllCommands(
-          agentKind,
-          workingDir,
-          {
-            skipAgentSkills: isRemoteSession,
-            sessionId: session?.id,
-            forceReload: true,
-          },
-          remoteDeviceId,
-        ),
+        reload: () =>
+          loadAllCommands(
+            agentKind,
+            workingDir,
+            {
+              skipAgentSkills: isRemoteSession,
+              sessionId: session?.id,
+              forceReload: true,
+            },
+            remoteDeviceId,
+          ),
       };
       const reconciled = options?.piRuntimeRetryDelaysMs
         ? await reconcilePiRuntimeCommandForDispatchWithRetry({
@@ -2439,12 +2496,41 @@ export function CCAgentSessionView({
       if (hit?.kind !== 'desktop') {
         return {
           handled: false,
-          message: agentKind === 'pi'
-            ? rewriteAgentSkillInvocationForDispatch(message, hit)
-            : message,
+          accepted: false,
+          message:
+            agentKind === 'pi' ? rewriteAgentSkillInvocationForDispatch(message, hit) : message,
         };
       }
-      if (!allowDesktopDispatch) return { handled: false, message };
+      if (!allowDesktopDispatch) return { handled: false, accepted: false, message };
+      // Review is handed to Main immediately with this invocation's serialized
+      // attachments. It must not depend on this React view remaining mounted,
+      // nor share a mutable attachment ref with a later command.
+      if (hit.name === 'review') {
+        if (!sessionId) return { handled: true, accepted: false, message };
+        if (remoteDeviceId) {
+          toast.warning(t('review.toast.remoteUnsupported'));
+          return { handled: true, accepted: false, message };
+        }
+        const attachments = files?.length ? serializeAttachedFiles(files) : undefined;
+        try {
+          await window.electronAPI.maker.startReview({
+            sourceSessionId: sessionId,
+            ...(args.trim() ? { focus: args.trim() } : {}),
+            ...(attachments?.length ? { attachments } : {}),
+          });
+          return { handled: true, accepted: true, message };
+        } catch (err) {
+          const ipcError = extractIpcError(err);
+          toast.error(
+            ipcError
+              ? t('review.toast.failed')
+              : err instanceof Error
+                ? err.message
+                : t('review.toast.failed'),
+          );
+          return { handled: true, accepted: false, message };
+        }
+      }
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
       // 其它 desktop 命令(/help /clear /cmd ...)不涉及附件,不写 ref。
       if (hit.name === 'issue') {
@@ -2460,7 +2546,7 @@ export function CCAgentSessionView({
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
       });
-      return { handled: true, message };
+      return { handled: true, accepted: true, message };
     },
     [
       getHelpCommandsSnapshot,
@@ -2470,6 +2556,7 @@ export function CCAgentSessionView({
       session?.workingDir,
       sessionId,
       remoteDeviceId,
+      t,
     ],
   );
 
@@ -2522,7 +2609,7 @@ export function CCAgentSessionView({
             },
           );
           if (slashDispatch.handled) {
-            pending.onDeferredAccepted?.();
+            if (slashDispatch.accepted) pending.onDeferredAccepted?.();
             return;
           }
 
@@ -2540,13 +2627,14 @@ export function CCAgentSessionView({
                 slashDispatch.message,
               )
             : undefined;
-          const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
-            ? rebaseInlineRangesAfterSlashCommandRewrite(
-                pending.slashCommandRanges,
-                pending.message,
-                slashDispatch.message,
-              )
-            : undefined;
+          const pendingSlashCommandRanges =
+            pending.slashCommandRanges !== undefined
+              ? rebaseInlineRangesAfterSlashCommandRewrite(
+                  pending.slashCommandRanges,
+                  pending.message,
+                  slashDispatch.message,
+                )
+              : undefined;
           const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
           const accepted = await dispatch(
             slashDispatch.message,
@@ -2710,15 +2798,16 @@ export function CCAgentSessionView({
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
       const originalMessage = message;
-      const slashDispatch = deliveryMode === 'steer'
-        ? await maybeDispatchDesktopSlashCommand(message, files, {
-            allowDesktopDispatch: false,
-            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-          })
-        : await maybeDispatchDesktopSlashCommand(message, files, {
-            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-          });
-      if (slashDispatch.handled) return;
+      const slashDispatch =
+        deliveryMode === 'steer'
+          ? await maybeDispatchDesktopSlashCommand(message, files, {
+              allowDesktopDispatch: false,
+              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+            })
+          : await maybeDispatchDesktopSlashCommand(message, files, {
+              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+            });
+      if (slashDispatch.handled) return slashDispatch.accepted;
       message = slashDispatch.message;
       if (message !== originalMessage && opts) {
         opts = {
@@ -3287,16 +3376,26 @@ export function CCAgentSessionView({
         // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
         // resolve false / 抛错都保留(见该函数注释)。
         let pendingText = pending.text;
-        const dispatched = await deliverRecoverableHandoff(sessionId, async () => {
-          const slashDispatch = await maybeDispatchDesktopSlashCommand(
-            pending.text,
-            pending.files,
-            { piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS },
-          );
-          pendingText = slashDispatch.message;
-          return slashDispatch.handled;
+        const slashDispatch = await maybeDispatchDesktopSlashCommand(pending.text, pending.files, {
+          piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
         });
-        if (dispatched) return;
+        pendingText = slashDispatch.message;
+        if (slashDispatch.handled) {
+          if (!slashDispatch.accepted) {
+            // NewMaker 已把源草稿移交并清空；Main 没受理 `/review` 时，把正文和附件
+            // 一起放回新会话输入框。复用失败发送的 FIFO 恢复器，避免覆盖用户在
+            // IPC 等待期间已经输入的新内容。恢复成功后 composer/draft 已成为新的
+            // 可靠归宿，旧交接副本必须消费，避免下次空输入框再次恢复过期命令。
+            restoreRemoteOptimisticDraft(sessionId, {
+              clientId: `pending-review:${pending.createdAt}`,
+              text: plainTextToTiptapDoc(pending.text),
+              attachments: pending.files ?? [],
+              browserComments: [],
+            });
+          }
+          await deliverRecoverableHandoff(sessionId, () => true);
+          return;
+        }
         const pendingAgentReferences = pending.agentReferences
           ? rebaseInlineRangesAfterSlashCommandRewrite(
               pending.agentReferences,
@@ -3311,13 +3410,14 @@ export function CCAgentSessionView({
               pendingText,
             )
           : undefined;
-        const pendingSlashCommandRanges = pending.slashCommandRanges !== undefined
-          ? rebaseInlineRangesAfterSlashCommandRewrite(
-              pending.slashCommandRanges,
-              pending.text,
-              pendingText,
-            )
-          : undefined;
+        const pendingSlashCommandRanges =
+          pending.slashCommandRanges !== undefined
+            ? rebaseInlineRangesAfterSlashCommandRewrite(
+                pending.slashCommandRanges,
+                pending.text,
+                pendingText,
+              )
+            : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
         await deliverRecoverableHandoff(sessionId, () =>
@@ -3543,12 +3643,12 @@ export function CCAgentSessionView({
     worktreePreparing ||
     Boolean(
       pendingPlanReview ||
-        pendingPermission ||
-        pendingAskUser ||
-        pendingPluginSetup ||
-        pendingIssueConfirm ||
-        pendingRenameSessionsConfirm ||
-        pendingGhostGrantConfirm,
+      pendingPermission ||
+      pendingAskUser ||
+      pendingPluginSetup ||
+      pendingIssueConfirm ||
+      pendingRenameSessionsConfirm ||
+      pendingGhostGrantConfirm,
     );
   useEffect(() => {
     if (shareSelectionActive && shareSelectionBlocked) shareSelectionStore.exit();
@@ -4181,7 +4281,8 @@ export function CCAgentSessionView({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  disabled={remoteHandoffPreparing}
+                  disabled={remoteHandoffPreparing || session?.source === 'review'}
+                  settingsLocked={session?.source === 'review'}
                   queuePaused={queuePaused}
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}
@@ -4296,10 +4397,7 @@ export function CCAgentSessionView({
                     <Spinner size={12} className="text-[var(--workingdir-icon)]" />
                     <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
                       {t('ccAgent.layout.worktreeCreating', '正在创建 worktree')}{' '}
-                      <code className="font-mono text-11 opacity-80">
-                        {worktreeCreation.name}
-                      </code>
-                      …
+                      <code className="font-mono text-11 opacity-80">{worktreeCreation.name}</code>…
                     </span>
                   </div>
                 ) : worktreeCreation?.status === 'failed' ? (
