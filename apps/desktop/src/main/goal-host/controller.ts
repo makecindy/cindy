@@ -1930,6 +1930,8 @@ export class GoalController {
           // await 期间可能已登出/切账号:不得 clear 行 / emit null 到新账号(Codex P1)。
           if (this.disposed) return;
           await this.deps.storage.clear(sessionId);
+          // clear await 期间登出:旧 controller 不得广播 null 到新账号(Codex P1)。
+          if (this.disposed) return;
           // null emit 属于同一顺序提交；后续新目标必须在它之后再 emit active，
           // 否则旧 completion 的迟到 null 会把新 chip 隐藏。
           this.deps.emitStatus({ sessionId, goal: null });
