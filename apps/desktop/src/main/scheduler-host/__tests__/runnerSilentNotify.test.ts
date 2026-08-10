@@ -119,9 +119,9 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   };
 }
 
-function createFireContext(): FireContext {
+function createFireContext(runId = 'run-1'): FireContext {
   return {
-    runId: 'run-1',
+    runId,
     firedAt: 1_700_000_000_100,
     signal: new AbortController().signal,
     onSessionBound: vi.fn(async () => undefined),
@@ -130,10 +130,14 @@ function createFireContext(): FireContext {
 
 function createRunnerHarness(
   session: Session,
-  opts: { silenced: boolean; abandoned?: boolean },
+  opts: {
+    silenced: boolean;
+    abandoned?: boolean;
+    notifyImpl?: Notifier['notify'];
+  },
 ) {
   const notifier: Notifier & { notify: ReturnType<typeof vi.fn> } = {
-    notify: vi.fn(async () => undefined),
+    notify: vi.fn(opts.notifyImpl ?? (async () => undefined)),
   };
   const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const maker = {
@@ -214,6 +218,59 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(h.session.setVendorOptions).toHaveBeenLastCalledWith({
       [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
     });
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
+  });
+
+  it('旧 fire 收尾不能清掉同一 session 上较新的 run context', async () => {
+    let resolveA!: () => void;
+    let resolveB!: () => void;
+    const notifyA = new Promise<void>((resolve) => {
+      resolveA = resolve;
+    });
+    const notifyB = new Promise<void>((resolve) => {
+      resolveB = resolve;
+    });
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: false,
+      notifyImpl: async (_schedule, run) => (run.id === 'run-a' ? notifyA : notifyB),
+    });
+
+    const fireA = runner.fire(
+      baseSchedule({ id: 'schedule-a' }),
+      createFireContext('run-a'),
+    );
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() =>
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: 'run-a' }),
+      ),
+    );
+
+    // A's turn is done, but its fire is still finalizing notification work.
+    // B is accepted on the same session before A's finally runs.
+    const fireB = runner.fire(
+      baseSchedule({ id: 'schedule-b' }),
+      createFireContext('run-b'),
+    );
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() =>
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: 'run-b' }),
+      ),
+    );
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-b');
+
+    resolveA();
+    await fireA;
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBe('run-b');
+
+    resolveB();
+    await fireB;
     expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
   });
 

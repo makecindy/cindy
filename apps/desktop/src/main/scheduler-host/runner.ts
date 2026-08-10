@@ -317,6 +317,15 @@ interface TurnCompletionWaiterOptions {
 
 export class MakerScheduleRunner implements ScheduleRunner {
   private scheduler: Scheduler | null = null;
+  /**
+   * The vendor option is a single session-level value, so a late finally from
+   * an older fire must not clear a newer fire's binding. The map is the host's
+   * ownership record for that value; it is deliberately not persisted.
+   */
+  private readonly schedulerRunContextOwners = new Map<
+    string,
+    { session: Pick<Session, 'id' | 'setVendorOptions'>; runId: string }
+  >();
 
   constructor(private readonly deps: MakerScheduleRunnerDeps) {}
 
@@ -332,14 +341,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * this is the in-process fallback when that mapping is gone.
    */
   private async bindSchedulerRunContext(
-    session: Pick<Session, 'setVendorOptions'>,
+    session: Pick<Session, 'id' | 'setVendorOptions'>,
     runId: string,
     holder: EphemeralSessionHolder,
   ): Promise<void> {
     if (typeof session.setVendorOptions !== 'function') return;
     try {
       await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: runId });
+      this.schedulerRunContextOwners.set(session.id, { session, runId });
       holder.schedulerRunContextSession = session;
+      holder.schedulerRunContextRunId = runId;
     } catch (err) {
       this.deps.logger.warn?.('[runner] scheduler run context bind failed (non-fatal)', {
         runId,
@@ -350,8 +361,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
   private async clearSchedulerRunContext(holder: EphemeralSessionHolder): Promise<void> {
     const session = holder.schedulerRunContextSession;
+    const runId = holder.schedulerRunContextRunId;
     holder.schedulerRunContextSession = undefined;
-    if (!session || typeof session.setVendorOptions !== 'function') return;
+    holder.schedulerRunContextRunId = undefined;
+    if (!session || !runId || typeof session.setVendorOptions !== 'function') return;
+    const owner = this.schedulerRunContextOwners.get(session.id);
+    if (owner?.session !== session || owner.runId !== runId) {
+      // Another fire now owns the shared session-level option. Do not let this
+      // older fire erase the newer run's auto-resume context.
+      return;
+    }
+    this.schedulerRunContextOwners.delete(session.id);
     try {
       await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined });
     } catch (err) {
@@ -1303,7 +1323,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
           setSessionProvider(session.id, verdict.providerId);
         }
       }
-      await this.bindSchedulerRunContext(session, ctx.runId, holder);
       const sendResult = await session.send(outgoingMessage as never, {
         origin,
         planMode: false,
@@ -1313,6 +1332,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // turn 误标成 headless；只在本轮 send 真正跨过接受边界后 acquire。
           // fire 已收口后才到达的迟发 callback 由 guard 拒绝，避免重新污染 session。
           if (!holder.headlessGhostSetupTurn?.markDispatched()) return;
+          // Bind only after Session.send accepts this turn. A competing fire
+          // rejected with SESSION_RUNNING must not overwrite the active run's
+          // shared auto-resume context before it is rejected.
+          await this.bindSchedulerRunContext(session, ctx.runId, holder);
           turnAccepted = true;
           // turn 已被会话接受 → 此刻才落定 sessionId → 本轮 runId 反向映射(供按
           // session 静默解析)。在 send 被接受这一刻写,被 SESSION_RUNNING 拒的并发 run
@@ -2562,7 +2585,8 @@ interface EphemeralSessionHolder {
   /** heartbeat direct-send route lock; released immediately after Session.send settles. */
   releaseAgentSwitchLock?: () => void;
   /** session context carrying the current scheduler run id until fire settles. */
-  schedulerRunContextSession?: Pick<Session, 'setVendorOptions'>;
+  schedulerRunContextSession?: Pick<Session, 'id' | 'setVendorOptions'>;
+  schedulerRunContextRunId?: string;
 }
 
 interface HeadlessGhostSetupTurnGuard {

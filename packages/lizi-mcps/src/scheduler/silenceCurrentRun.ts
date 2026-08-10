@@ -20,9 +20,8 @@
  */
 
 import { z } from 'zod';
-import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 
-import { withScheduler } from './_shared.js';
+import { resolveSchedulerRunIdCandidates, withScheduler } from './_shared.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 
@@ -47,39 +46,25 @@ export function registerScheduleSilenceCurrentRunTool(
     },
     handler: async ({ runId }) =>
       withScheduler(deps, async (scheduler) => {
-        // 优先按 host-owned runId 回连 autoResume 仍在同一 session 中执行的本轮;
-        // 没有它时按调用方 session 解析(忽略 agent 传入的 runId,杜绝传参漂移),
-        // 再没有 session 才回退到显式 runId。
-        const sessionContext = getSessionContext?.();
-        const sessionId = sessionContext?.sessionId;
-        const hostOwnedRunId = sessionContext?.vendorOptions?.[SCHEDULER_RUN_ID_VENDOR_OPTION];
-        let targetRunId: string | undefined;
-        if (typeof hostOwnedRunId === 'string' && hostOwnedRunId.length > 0) {
-          targetRunId = hostOwnedRunId;
-        } else if (sessionId) {
-          targetRunId = scheduler.resolveInflightRunForSession(sessionId);
-          if (!targetRunId) {
-            // 消息含 "not found" → classifySchedulerError 归为 NOT_FOUND
-            throw new Error(
-              'in-flight run not found for current session — silence can only be called while this session has an automation run executing',
-            );
-          }
-        } else {
-          targetRunId = runId;
-          if (!targetRunId) {
-            throw new Error(
-              'in-flight run not found: cannot resolve current session and no runId provided',
-            );
+        const { sessionId, runIds } = resolveSchedulerRunIdCandidates(
+          scheduler,
+          getSessionContext?.(),
+          runId,
+        );
+        for (const targetRunId of runIds) {
+          if (scheduler.silenceRun(targetRunId)) {
+            return { silenced: true, runId: targetRunId };
           }
         }
-
-        const ok = scheduler.silenceRun(targetRunId);
-        if (!ok) {
+        if (sessionId) {
+          // 消息含 "not found" → classifySchedulerError 归为 NOT_FOUND
           throw new Error(
-            `in-flight run not found: ${targetRunId} — silence can only be called while this run is executing`,
+            'in-flight run not found for current session — silence can only be called while this session has an automation run executing',
           );
         }
-        return { silenced: true, runId: targetRunId };
+        throw new Error(
+          `in-flight run not found: ${runIds[0] ?? 'unknown'} — silence can only be called while this run is executing`,
+        );
       }),
   });
 }
