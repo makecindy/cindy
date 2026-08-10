@@ -575,6 +575,16 @@ export function CustomProviderDialog({
     [savedBaselineFor],
   );
 
+  const changeAuthMode = useCallback((mode: CustomProviderAuthMode) => {
+    setAuthMode(mode);
+    if (mode !== 'apiKey') return;
+    setRtSynced((prev) =>
+      Object.fromEntries(
+        AGENTS.map((agent) => [agent, restoreHydratedKey(agent, prev[agent])]),
+      ) as Record<DialogAgentKind, RuntimeFields>,
+    );
+  }, [restoreHydratedKey, setRtSynced]);
+
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
@@ -1620,7 +1630,7 @@ export function CustomProviderDialog({
                   key={m}
                   type="button"
                   onClick={() => {
-                    setAuthMode(m);
+                    changeAuthMode(m);
                     setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
                   }}
                   className={cn(

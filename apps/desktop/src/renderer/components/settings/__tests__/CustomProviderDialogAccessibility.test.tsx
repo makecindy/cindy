@@ -159,6 +159,43 @@ describe('CustomProviderDialog accessibility', () => {
     expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[1]).toEqual({});
   });
 
+  it('restores an untouched hydrated key when returning to API-key mode on the saved endpoint', async () => {
+    const initial: CustomProviderConfig = {
+      id: 'existing-provider',
+      name: 'Existing provider',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://old.example.test/v1',
+          models: [{ id: 'test-model', name: 'Test Model' }],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('old-secret');
+
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    const apiKey = await screen.findByPlaceholderText(
+      'settings.providers.custom.fields.apiKeyEditPlaceholder',
+    );
+    const baseUrl = screen.getByPlaceholderText(
+      'settings.providers.custom.fields.baseUrlPlaceholder',
+    );
+
+    await user.clear(baseUrl);
+    await user.type(baseUrl, 'https://new.example.test/v1');
+    await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.authMode.none' }));
+    await user.clear(baseUrl);
+    await user.type(baseUrl, 'https://old.example.test/v1');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.authMode.apiKey' }));
+
+    const restoredApiKey = await screen.findByPlaceholderText(
+      'settings.providers.custom.fields.apiKeyEditPlaceholder',
+    );
+    expect((restoredApiKey as HTMLInputElement).value).toBe('old-secret');
+  });
+
   it('blocks an endpoint save when that runtime key could not be read', async () => {
     const initial: CustomProviderConfig = {
       id: 'existing-provider',
