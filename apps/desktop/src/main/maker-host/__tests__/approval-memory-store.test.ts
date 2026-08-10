@@ -21,7 +21,7 @@ const digest = (text: string): string =>
 
 async function fixture(options: {
   now?: () => number;
-  processIncarnation?: (pid: number) => string | null;
+  processIncarnation?: (pid: number) => string | null | Promise<string | null>;
 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-approval-memory-'));
   directories.push(directory);
@@ -435,6 +435,27 @@ describe('approval-memory-store', () => {
     },
     5_000,
   );
+
+  it('锁竞争中的 incarnation 查询走异步 reader，并按同一 owner 缓存重试', async () => {
+    const reader = vi.fn(async () => 'current-process-incarnation');
+    const { target, memory } = await fixture({ processIncarnation: reader });
+    const lockPath = `${target}.lock`;
+    await writeFile(lockPath, JSON.stringify({
+      pid: process.pid,
+      ownerId: randomUUID(),
+      incarnation: 'current-process-incarnation',
+    }), 'utf8');
+
+    const loadPromise = memory.store.load('/repo');
+    await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(2));
+    // Let several retry intervals elapse while the lock bytes stay unchanged. The owner lookup
+    // is asynchronous and must be reused, rather than spawning one process probe per retry.
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(reader).toHaveBeenCalledTimes(2);
+
+    await rm(lockPath, { force: true });
+    await expect(loadPromise).resolves.toEqual(new Set());
+  }, 5_000);
 
   it('陈旧锁检查后换主时恢复新 owner，不被回收者删除', async () => {
     const currentIncarnation = 'current-process-incarnation';

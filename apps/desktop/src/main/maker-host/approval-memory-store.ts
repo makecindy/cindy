@@ -6,9 +6,10 @@
  * maker-core 负责动作安全边界；这里负责有界存储、跨进程串行和原子替换。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promises as fs, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import type {
   ApprovalMemoryOrigin,
@@ -29,6 +30,7 @@ const FLUSH_DELAY_MS = 1_000;
 const LOCK_RETRY_MS = 20;
 const LOCK_RETRY_LIMIT = 50;
 const HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const execFileAsync = promisify(execFile);
 
 interface ApprovalRecord {
   origin: ApprovalMemoryOrigin;
@@ -332,33 +334,37 @@ interface FileLockOwner {
   incarnation: string;
 }
 
-type ProcessIncarnationReader = (pid: number) => string | null;
+type ProcessIncarnationReader = (pid: number) => string | null | Promise<string | null>;
+type OwnerIncarnationProvider = () => Promise<string>;
 
 interface FileLockOptions {
   processIncarnation?: ProcessIncarnationReader;
   platform?: NodeJS.Platform;
   /** Cache the current process identity once per store instead of spawning ps/PowerShell per lock. */
-  ownerIncarnation?: string;
+  ownerIncarnation?: string | OwnerIncarnationProvider;
 }
 
-function readLinuxProcessIncarnation(pid: number): string | null {
+async function readLinuxProcessIncarnation(pid: number): Promise<string | null> {
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const [stat, bootRaw] = await Promise.all([
+      fs.readFile(`/proc/${pid}/stat`, 'utf8'),
+      fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8'),
+    ]);
     const afterCommand = stat.slice(stat.lastIndexOf(')') + 2);
     const fields = afterCommand.trim().split(/\s+/);
     // `/proc/<pid>/stat` field 22 (starttime) is index 19 after pid/comm/state.
     const startTime = fields[19];
-    const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    const bootId = bootRaw.trim();
     return startTime && bootId ? `linux:${bootId}:${startTime}` : null;
   } catch {
     return null;
   }
 }
 
-function readWindowsProcessIncarnation(pid: number): string | null {
+async function readWindowsProcessIncarnation(pid: number): Promise<string | null> {
   try {
     const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-    const startTime = execFileSync(
+    const result = await execFileAsync(
       powershell,
       [
         '-NoProfile',
@@ -368,35 +374,54 @@ function readWindowsProcessIncarnation(pid: number): string | null {
           + '($p | Select-Object -ExpandProperty StartTime).ToUniversalTime().Ticks',
       ],
       { encoding: 'utf8', timeout: 1_000, windowsHide: true, maxBuffer: 4 * 1024 },
-    ).trim();
+    );
+    const startTime = String(result.stdout).trim();
     return startTime ? `windows:${startTime}` : null;
   } catch {
     return null;
   }
 }
 
-function readPosixProcessIncarnation(pid: number): string | null {
+async function readPosixProcessIncarnation(pid: number): Promise<string | null> {
   try {
-    const startTime = execFileSync(
-      'ps',
-      ['-p', String(pid), '-o', 'lstart='],
-      { encoding: 'utf8', timeout: 1_000, maxBuffer: 4 * 1024 },
-    ).trim();
-    const boot = execFileSync(
-      'sysctl',
-      ['-n', 'kern.boottime'],
-      { encoding: 'utf8', timeout: 1_000, maxBuffer: 4 * 1024 },
-    ).trim();
+    const [startResult, bootResult] = await Promise.all([
+      execFileAsync(
+        'ps',
+        ['-p', String(pid), '-o', 'lstart='],
+        { encoding: 'utf8', timeout: 1_000, maxBuffer: 4 * 1024 },
+      ),
+      execFileAsync(
+        'sysctl',
+        ['-n', 'kern.boottime'],
+        { encoding: 'utf8', timeout: 1_000, maxBuffer: 4 * 1024 },
+      ),
+    ]);
+    const startTime = String(startResult.stdout).trim();
+    const boot = String(bootResult.stdout).trim();
     return startTime && boot ? `posix:${boot}:${startTime}` : null;
   } catch {
     return null;
   }
 }
 
-function readProcessIncarnation(pid: number, platform = process.platform): string | null {
+async function readProcessIncarnation(
+  pid: number,
+  platform = process.platform,
+): Promise<string | null> {
   if (platform === 'linux') return readLinuxProcessIncarnation(pid);
   if (platform === 'win32') return readWindowsProcessIncarnation(pid);
   return readPosixProcessIncarnation(pid);
+}
+
+async function safelyReadProcessIncarnation(
+  reader: ProcessIncarnationReader,
+  pid: number,
+): Promise<string | null> {
+  try {
+    return await reader(pid);
+  } catch {
+    return null;
+  }
 }
 
 function parseLockOwner(raw: string): FileLockOwner | null {
@@ -526,9 +551,15 @@ async function withFileLock<T>(
   await fs.mkdir(path.dirname(target), { recursive: true });
   const identifyProcess = options.processIncarnation
     ?? ((pid: number) => readProcessIncarnation(pid, options.platform));
-  const ownerIncarnation = options.ownerIncarnation
-    ?? identifyProcess(process.pid)
-    ?? 'unknown';
+  const ownerIncarnation = options.ownerIncarnation === undefined
+    ? (await safelyReadProcessIncarnation(identifyProcess, process.pid) ?? 'unknown')
+    : typeof options.ownerIncarnation === 'function'
+      ? await options.ownerIncarnation()
+      : options.ownerIncarnation;
+  // Identity lookup may invoke PowerShell/ps. Cache by the exact observed lock bytes so a
+  // contended retry never starts another synchronous (or duplicate async) probe for the same
+  // owner; a changed lock is intentionally re-checked.
+  const observedIncarnationCache = new Map<string, Promise<string | null>>();
   for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt++) {
     const owner: FileLockOwner = {
       pid: process.pid,
@@ -543,7 +574,12 @@ async function withFileLock<T>(
           if (await reclaimObservedLock(lockPath, observed)) continue;
         }
         if (activeOwner && activeOwner.incarnation !== 'unknown') {
-          const liveIncarnation = identifyProcess(activeOwner.pid);
+          let liveIncarnationPromise = observedIncarnationCache.get(observed);
+          if (!liveIncarnationPromise) {
+            liveIncarnationPromise = safelyReadProcessIncarnation(identifyProcess, activeOwner.pid);
+            observedIncarnationCache.set(observed, liveIncarnationPromise);
+          }
+          const liveIncarnation = await liveIncarnationPromise;
           if (liveIncarnation && liveIncarnation !== activeOwner.incarnation) {
             // The OS reused this PID for a different process. Quarantine the exact observed lock
             // atomically so a replacement owner cannot be deleted by a read/unlink race.
@@ -593,9 +629,15 @@ export function createApprovalMemoryFileStore(
   const now = options.now ?? Date.now;
   const identifyProcess = options.processIncarnation
     ?? ((pid: number) => readProcessIncarnation(pid, options.platform));
+  let ownerIncarnationPromise: Promise<string> | undefined;
+  const ownerIncarnation = async (): Promise<string> => {
+    ownerIncarnationPromise ??= safelyReadProcessIncarnation(identifyProcess, process.pid)
+      .then((value) => value ?? 'unknown');
+    return ownerIncarnationPromise;
+  };
   const lockOptions: FileLockOptions = {
     processIncarnation: identifyProcess,
-    ownerIncarnation: identifyProcess(process.pid) ?? 'unknown',
+    ownerIncarnation,
   };
   const pendingAdds: PendingAdd[] = [];
   const clearListeners = new Set<(workspaceKey?: string) => void>();

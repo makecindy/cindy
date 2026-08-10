@@ -617,6 +617,17 @@ const FILE_PRODUCER_NAMES: ReadonlySet<string> = new Set([
 
 const PIPELINE_FILE_SINK_NAMES: ReadonlySet<string> = new Set(['tee', 'sponge']);
 
+/**
+ * stdin 内容会直接离开本机或驱动远端写入的网络接收端。
+ *
+ * 这里只列能静态确认“stdin 本身就是待发送 payload”的工具，不泛化成网络命令白名单：
+ * ssh/rsync 等可从 stdin 读取协议或交互数据，但命令文本本身不足以证明 stdin 会被消费；
+ * curl/wget 的文件输入则由各自的 option parser 单独覆盖。
+ */
+const PIPELINE_NETWORK_SINK_NAMES: ReadonlySet<string> = new Set([
+  'nc', 'netcat', 'ncat', 'socat',
+]);
+
 function consumesMutableInput(args: readonly string[]): boolean {
   // Help/version output is deterministic and does not consume stdin or a file. Everything else
   // in this deliberately small producer set either reads an operand or falls back to stdin.
@@ -680,7 +691,7 @@ function hasOutputFileRedirection(segment: string): boolean {
   return false;
 }
 
-function pipelineHasMutableFileWrite(command: string): boolean {
+function pipelineHasMutableFileSideEffect(command: string): boolean {
   const segments = commandExecutableSegments(command);
   for (let index = 0; index < segments.length; index++) {
     let start = index;
@@ -688,10 +699,11 @@ function pipelineHasMutableFileWrite(command: string): boolean {
     let end = index;
     while (end < segments.length - 1 && segments[end]?.separatorAfter === 'pipe') end++;
     const pipeline = segments.slice(start, end + 1);
-    const writesFile = pipeline.some(({ name, args, text }) =>
+    const hasSideEffectSink = pipeline.some(({ name, args, text }) =>
       hasOutputFileRedirection(text)
-      || (PIPELINE_FILE_SINK_NAMES.has(name) && hasFileOperand(args)));
-    if (!writesFile) continue;
+      || (PIPELINE_FILE_SINK_NAMES.has(name) && hasFileOperand(args))
+      || PIPELINE_NETWORK_SINK_NAMES.has(name));
+    if (!hasSideEffectSink) continue;
     if (pipeline.some(({ name, args }) =>
       FILE_PRODUCER_NAMES.has(name) && consumesMutableInput(args))) return true;
   }
@@ -701,7 +713,7 @@ function pipelineHasMutableFileWrite(command: string): boolean {
 export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (MUTABLE_EXECUTION_ENV_PATTERN.test(command)) return true;
   if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
-  if (pipelineHasMutableFileWrite(command)) return true;
+  if (pipelineHasMutableFileSideEffect(command)) return true;
   const invocations = commandExecutableInvocations(command);
   if (invocations.some(({ name, args }) =>
     name === 'curl' && curlMayLoadMutableFileState(args))) return true;
