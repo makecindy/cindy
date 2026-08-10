@@ -13,7 +13,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: { name?: string }) =>
       (key === 'settings.ghosts.market.detailsAria' ||
-        key === 'settings.ghosts.market.conflictAria') &&
+        key === 'settings.ghosts.market.replaceAria') &&
       options?.name
         ? `${key}:${options.name}`
         : key,
@@ -389,7 +389,7 @@ describe('MarketPluginCard', () => {
     ).toBeTruthy();
     expect(
       screen.getByRole('button', {
-        name: 'settings.ghosts.market.conflictAria:GitHub',
+        name: 'settings.ghosts.market.detailsAria:GitHub',
       }),
     ).toBeTruthy();
   });
@@ -415,30 +415,33 @@ describe('MarketPluginCard', () => {
     expect(screen.getByText('Cindy').className).toContain('truncate');
   });
 
-  it('distinguishes unavailable conflicts from busy market operations', () => {
+  it('offers explicit replacement while still blocking actions during busy operations', () => {
+    const onInstall = vi.fn();
     const { rerender } = render(
       <MarketPluginCard
         item={{ ...marketPlugin, installState: 'conflict' }}
         busy={false}
         onSelect={vi.fn()}
-        onInstall={vi.fn()}
+        onInstall={onInstall}
         onIconLoadError={vi.fn()}
       />,
     );
 
     const cardBody = screen.getByRole('button', { name: 'Google Calendar' });
-    expect((cardBody as HTMLButtonElement).disabled).toBe(true);
-    expect(cardBody.className).toContain('cursor-not-allowed');
+    expect((cardBody as HTMLButtonElement).disabled).toBe(false);
+    expect(cardBody.className).toContain('cursor-pointer');
     expect(cardBody.className).not.toContain('cursor-wait');
-    const conflictDescription = screen.getByText('settings.ghosts.market.conflictDescription');
-    expect(conflictDescription.id).toBeTruthy();
-    expect(cardBody.getAttribute('aria-describedby')).toBe(conflictDescription.id);
-    const conflictAction = screen.getByRole('button', {
-      name: 'settings.ghosts.market.conflictAria:Google Calendar',
+    const replacementDescription = screen.getByText('settings.ghosts.market.replaceDescription');
+    expect(replacementDescription.id).toBeTruthy();
+    expect(cardBody.getAttribute('aria-describedby')).toBe(replacementDescription.id);
+    const replaceAction = screen.getByRole('button', {
+      name: 'settings.ghosts.market.replaceAria:Google Calendar',
     });
-    expect((conflictAction as HTMLButtonElement).disabled).toBe(true);
-    expect(conflictAction.getAttribute('aria-describedby')).toBe(conflictDescription.id);
-    expect(screen.getByRole('status').textContent).toBe('settings.ghosts.market.conflict');
+    expect((replaceAction as HTMLButtonElement).disabled).toBe(false);
+    expect(replaceAction.getAttribute('aria-describedby')).toBe(replacementDescription.id);
+    expect(replaceAction.textContent).toBe('settings.ghosts.market.replace');
+    fireEvent.click(replaceAction);
+    expect(onInstall).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.page.installAria' })).toBeNull();
     expect(screen.queryByText(marketPlugin.description ?? '')).toBeNull();
 
@@ -600,6 +603,10 @@ describe('LegacyGhostRecoveryNotice', () => {
 describe('PluginRecoveryNotice', () => {
   const proposal = {
     proposalId: 'a'.repeat(64),
+    counts: { ready: 1, review: 1, deferred: 1 },
+    totalCount: 3,
+    truncated: false,
+    notificationMuted: false,
     candidates: [
       {
         candidateId: 'b'.repeat(64),
@@ -608,40 +615,74 @@ describe('PluginRecoveryNotice', () => {
         name: 'Test Plugin',
         version: '1.0.0',
         sourceType: 'server' as const,
+        readiness: 'ready' as const,
+        reason: 'exact-match' as const,
+      },
+      {
+        candidateId: 'd'.repeat(64),
+        pluginId: `c${'d'.repeat(24)}`,
+        ghostId: 'cindy-review',
+        name: 'Review Plugin',
+        version: '1.0.0',
+        sourceType: 'legacy' as const,
+        readiness: 'review' as const,
+        reason: 'legacy-unverifiable' as const,
+      },
+      {
+        candidateId: 'e'.repeat(64),
+        pluginId: `c${'e'.repeat(24)}`,
+        ghostId: 'cindy-deferred',
+        name: 'Deferred Plugin',
+        version: '1.0.0',
+        sourceType: 'git-market' as const,
+        readiness: 'deferred' as const,
+        reason: 'source-unavailable' as const,
       },
     ],
   };
 
-  it('offers retry without silently resolving a pending proposal', () => {
+  it('shows every recovery class and supports individual and safe batch restore', () => {
     const onRetry = vi.fn();
+    const onRestore = vi.fn();
     render(
       <PluginRecoveryNotice
         status={{ state: 'pending', proposal }}
         busy={false}
         onRetry={onRetry}
         onKeep={vi.fn()}
+        onRestore={onRestore}
       />,
     );
 
+    expect(screen.getByText('settings.ghosts.recovery.reason.exact-match')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.recovery.reason.legacy-unverifiable')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.recovery.reason.source-unavailable')).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.recovery.inline.restoreOne' }),
+    );
+    expect(onRestore).toHaveBeenCalledWith(['b'.repeat(64)]);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.recovery.inline.restoreAll' }),
+    );
+    expect(onRestore).toHaveBeenLastCalledWith();
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.recovery.inline.retry' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(
-      screen.queryByRole('button', { name: 'settings.ghosts.recovery.inline.keep' }),
-    ).toBeNull();
   });
 
-  it('allows an explicit keep decision only for manual-review candidates', () => {
+  it('keeps the persistent recovery area available when reminders are muted', () => {
     const onKeep = vi.fn();
     render(
       <PluginRecoveryNotice
-        status={{ state: 'review', proposal }}
+        status={{ state: 'pending', proposal: { ...proposal, notificationMuted: true } }}
         busy={false}
         onRetry={vi.fn()}
         onKeep={onKeep}
+        onRestore={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.recovery.inline.keep' }));
+    expect(screen.getByText('Test Plugin')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.recovery.inline.muted' }));
     expect(onKeep).toHaveBeenCalledTimes(1);
   });
 });

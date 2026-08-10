@@ -21,6 +21,10 @@ describe('Plugin Market IPC error boundary', () => {
     resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const ghostPluginPageSource = readFileSync(
+    resolve(process.cwd(), 'src/renderer/features/plugin/GhostPluginPage.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   it('preserves structured errors and normalizes unexpected failures', () => {
     const start = registerSource.indexOf('async function invokePluginMarket');
@@ -68,7 +72,7 @@ describe('Plugin Market IPC error boundary', () => {
     expect(signalBody).not.toContain('getAllWindows');
   });
 
-  it('keeps recovery candidates in Main and accepts only an opaque proposal decision', () => {
+  it('keeps recovery records in Main and accepts only bounded opaque candidate ids', () => {
     const start = registerSource.indexOf("ipcMain.handle('plugin-market:recovery-status'");
     const end = registerSource.indexOf("ipcMain.handle('plugin-market:detail'", start);
     const body = registerSource.slice(start, end);
@@ -77,7 +81,9 @@ describe('Plugin Market IPC error boundary', () => {
     expect(body).toContain("requireString(payload.proposalId, 'proposalId')");
     expect(body).toContain('/^[a-f0-9]{64}$/.test(proposalId)');
     expect(body).toContain("decision !== 'restore' && decision !== 'keep'");
-    expect(body).not.toContain('candidateId');
+    expect(body).toContain('candidateIds.length > 50');
+    expect(body).toContain('/^[a-f0-9]{64}$/.test(id)');
+    expect(body).toContain('new Set(candidateIds).size !== candidateIds.length');
     expect(body).not.toContain('ghostId');
 
     const signalStart = registerSource.indexOf('function signalRecoveryAvailable()');
@@ -112,11 +118,21 @@ describe('Plugin Market IPC error boundary', () => {
     expect(syncBody).toContain('await snapshotAndSignalRemovalNotice();');
     expect(syncBody).toContain("log.warn('default plugin startup sync failed'");
 
-    const snapshotStart = registerSource.indexOf('async function snapshotAndSignalRemovalNotice()');
+    const snapshotStart = registerSource.indexOf(
+      'async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOptions)',
+    );
     const snapshotEnd = registerSource.indexOf('\n}\n\n/**', snapshotStart);
     const snapshotBody = registerSource.slice(snapshotStart, snapshotEnd);
     expect(snapshotBody).toContain('finally {');
     expect(snapshotBody).toContain('signalRemovalNoticeAvailable();');
+    expect(snapshotBody).toContain('signalUpgradeNoticeAvailable();');
+
+    expect(registerSource).toContain('deferDefaultReconciliation: true');
+    expect(registerSource).toContain('onDeferredReconciliationSettled: () => {');
+    expect(ghostPluginPageSource).toContain(
+      'window.electronAPI.pluginMarket.onUpgradeNoticeAvailable(() => {',
+    );
+    expect(ghostPluginPageSource).toContain('void refreshMarket(true).catch(() => undefined);');
 
     const ownerSyncStart = bootstrapSource.indexOf(
       'function syncDefaultPluginsForActiveOwner(): void',

@@ -634,8 +634,8 @@
         "zh-CN": "簡體中文",
         "en": "English",
         "ja": "日本語",
-    "ko": "한국어",
-    "zh-TW": "繁體中文"
+        "ko": "한국어",
+        "zh-TW": "繁體中文"
       }
     },
     "userProfile": {
@@ -1444,6 +1444,63 @@
           "clearAll": "清空",
           "empty": "沒有匹配的模型",
           "confirm": "填入所選模型（{{count}}）"
+        },
+        "runtimeFill": {
+          "action": "填入其他 Runtime",
+          "reviewTitle": "填入其他 Runtime",
+          "reviewSubtitle": "先查看欄位差異；每個 Runtime 仍會獨立儲存。",
+          "confirmTitle": "確認覆蓋",
+          "confirmSubtitle": "選擇要從 {{source}} 複製的欄位。",
+          "source": "來源",
+          "columns": { "field": "欄位", "source": "來源值", "target": "目前值" },
+          "fields": {
+            "endpointBundle": "端點與 API 協議",
+            "baseUrl": "基礎 URL",
+            "requestPath": "請求路徑",
+            "wireProtocol": "API 協議",
+            "apiKey": "API 金鑰",
+            "models": "模型",
+            "headers": "進階請求標頭",
+            "modelsUrl": "模型列表端點"
+          },
+          "values": {
+            "empty": "空白",
+            "default": "預設／推斷",
+            "configured": "已設定",
+            "secretSet": "已設定（值已隱藏）",
+            "models_one": "{{count}} 個模型",
+            "models_other": "{{count}} 個模型",
+            "headers_one": "{{count}} 個請求標頭",
+            "headers_other": "{{count}} 個請求標頭"
+          },
+          "targetConflict_one": "{{count}} 個既有欄位不同",
+          "targetConflict_other": "{{count}} 個既有欄位不同",
+          "targetReady_one": "可填入 {{count}} 個欄位",
+          "targetReady_other": "可填入 {{count}} 個欄位",
+          "targetIncompatible_one": "{{count}} 個欄位不相容",
+          "targetIncompatible_other": "{{count}} 個欄位不相容",
+          "status": { "needsConfirm": "需要確認", "ready": "可以填入", "incompatible": "不相容" },
+          "secretIndependent": "複製到 {{target}} 的獨立本機金鑰",
+          "overwriteCurrent": "取代目前值",
+          "fillEmpty": "填入目前空白欄位",
+          "incompatibleProtocol": "未複製：{{target}} 不支援此 API 協議",
+          "incompatibleHeaders": "未複製：{{target}} 需要無法在此安全複製的請求標頭",
+          "incompatibleEndpoint": "未複製：{{target}} 無法使用此端點設定",
+          "noSelectableFields": "此 Runtime 沒有可相容填入的欄位。",
+          "endpointBundleNote": "填入 {{target}} 時，基礎 URL、請求路徑和 API 協議會成組複製，避免端點組合不符。",
+          "oauthPiUnavailable": "Pi 原生 Runtime 不支援 OAuth 供應商，因此不會作為填入目標。",
+          "independentNote": "這是一次性填入；之後各 Runtime 不會同步。API 金鑰仍使用獨立 safeStorage 記錄。",
+          "continue": "查看覆蓋項目",
+          "apply": "確認填入",
+          "applyOverwrite": "覆蓋並填入",
+          "back": "返回差異",
+          "nothingToFill": "請先填寫目前 Runtime 的可重用欄位",
+          "alreadySame": "其他 Runtime 中可填入的欄位已經一致",
+          "loadingKeys": "請等待已儲存的 API 金鑰載入完成，再填入其他 Runtime",
+          "keysUnavailable": "無法讀取已儲存的 API 金鑰，暫時無法填入其他 runtime",
+          "modelsBusy": "請先完成正在進行的模型列表獲取或選擇，再填入其他 Runtime",
+          "noCompatibleFields": "其他 Runtime 不支援目前 Runtime 中可重用的欄位",
+          "filledToast": "已填入 {{targets}}；各 Runtime 仍保持獨立"
         },
         "authMode": {
           "label": "鑑權方式",
@@ -2255,6 +2312,9 @@
         "title": "Codex Subagent 護欄",
         "enableHint": "允許 Codex 在執行任務時建立一次性 Subagent。關閉後對舊版（V1）和 Sol / Terra（V2）都生效。",
         "enableAria": "允許 Codex 使用 Subagent",
+        "cindyPolicyLabel": "使用 Cindy 自定義 Subagent 策略",
+        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃和委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
+        "cindyPolicyAria": "使用 Cindy 自定義 Subagent 策略",
         "concurrencyLabel": "Subagent 併發上限",
         "concurrencyHint": "同時執行的 Subagent 數量上限。每個 Subagent 都會消耗模型配額，調低更省；Ultra 檔位下併發達到 8 時 Codex 會發出用量警告。",
         "concurrencyFollowDefault": "跟隨 Codex 預設（舊版 V1 為 6，Sol / Terra 為 3）",
@@ -2263,6 +2323,9 @@
         "nestedLabel": "允許 Subagent 再建立 Subagent",
         "nestedHint": "僅舊版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）會忽略此設定。",
         "nestedAria": "允許 Subagent 再建立 Subagent",
+        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
+        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃與委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
+        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略",
         "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。"
       },
       "toast": {
@@ -2468,7 +2531,7 @@
       },
       "android": {
         "title": "Android 自動化",
-          "description": "讓 Agent 透過 ADB 檢查並操作已連線的 Android 裝置",
+        "description": "讓 Agent 透過 ADB 檢查並操作已連線的 Android 裝置",
         "toggleAria": "切換 Android 自動化",
         "refresh": "重新檢查",
         "toggleHint": "這個全域性開關只對之後新建的 Agent 會話生效；已在執行的 Agent 會話不受影響。",
@@ -3268,10 +3331,11 @@
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
-        "conflict": "暫不可用",
-        "conflictAria": "{{name}} 存在插件標識衝突",
-        "conflictDescription": "插件標識已被佔用，當前無法安裝",
+        "replace": "替換",
+        "replaceAria": "使用此市場版本替換 {{name}}",
+        "replaceDescription": "已安裝相同標識的插件；繼續安裝會使用此市場版本替換，並保留插件資料。",
         "unavailable": "插件市場暫時不可用；已安裝插件仍可正常管理和使用。",
+        "customSourcesUnavailable": "以下自訂市場暫時不可用：{{names}}。其他市場不受影響。",
         "authenticationRequired": "登入 Cindy 後才能檢視插件市場。",
         "notConfigured": "當前環境未配置插件市場；已安裝插件仍可正常管理和使用。",
         "upgradeNotice": {
@@ -3385,6 +3449,7 @@
           "reviewRemaining_other": "{{count}} 個插件的內容或來源無法安全核對，已原樣保留，可在插件頁繼續處理。",
           "failed": "未能完成插件恢復檢查。插件和配置未被改動，可在插件頁重試。"
         },
+        "reminder": "部分插件可能需要恢復，請到插件頁查看 {{count}} 個候選項。",
         "inline": {
           "title": "插件恢復需要處理",
           "pending": "有 {{count}} 個插件仍在本機，等待你確認恢復。",
@@ -3397,7 +3462,20 @@
           "failed": "恢復檢查沒有完成。插件和配置未被改動，可以重試。",
           "retry": "重新檢查",
           "retrying": "正在檢查…",
-          "keep": "保持現狀且不再提示"
+          "keep": "不再提醒",
+          "muted": "已關閉提醒",
+          "restoreOne": "恢復",
+          "restoreAll": "恢復安全匹配項（{{count}}）",
+          "truncated": "共有 {{count}} 個候選項，目前展示各類候選的安全樣本；處理後可重新檢查。"
+        },
+        "reason": {
+          "exact-match": "來源和本機記錄一致；恢復前 Cindy 還會逐一核對檔案。",
+          "source-mismatch": "記錄的來源已不一致。請從可信來源重新安裝，或保持現狀。",
+          "manifest-mismatch": "本機清單與安裝記錄不一致，已保持原樣。",
+          "legacy-unverifiable": "舊記錄無法證明原始來源，已保持原樣。",
+          "source-unavailable": "來源暫時不可用。重新連線後再檢查。",
+          "content-unavailable": "暫時無法完整讀取本機插件，請稍後再檢查。",
+          "content-mismatch": "完整檔案核對與記錄來源不一致，已保持原樣。"
         },
         "notice": {
           "single": "已恢復插件「{{name}}」",
@@ -3729,13 +3807,6 @@
         "title": "全部更新 · {{count}} 個插件",
         "description": "權限無變化的更新會自動完成；涉及權限變更的需要你逐項確認。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "權限有變更",
-        "reviewOutdated": "權限差異已過期",
-        "rereview": "重新審閱",
-        "reviewDiff": "檢視並確認",
-        "collapseDiff": "收起",
-        "approve": "同意並更新",
-        "skip": "跳過此項",
         "statusPending": "排隊中",
         "statusInstalling": "更新中…",
         "statusDone": "已更新",
@@ -5437,6 +5508,7 @@
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在設定裡配置 API key 才能使用",
       "hidden": "已隱藏",
+      "modelListAria": "模型列表",
       "subscriptionDirectDisabled": {
         "chatgpt": "訂閱直連的 GPT 模型協議暫不支援 SSH 遠端會話",
         "xai": "訂閱直連的 Grok 模型協議暫不支援 SSH 遠端會話",
@@ -5587,6 +5659,7 @@
     },
     "worktree": {
       "detecting": "檢測環境中…",
+      "detectFailed": "環境檢測失敗，worktree 暫不可用",
       "gitMissing": "未檢測到 git，請先安裝",
       "notGitRepo": "當前目錄不是 git 倉庫",
       "alreadyInWorktree": "已在 worktree 中，禁止巢狀",
@@ -6448,6 +6521,7 @@
           "sourceConversationChanged": "來源任務已變更，請針對當前任務重新執行 /review。",
           "sourceFilesChanged": "來源任務的檔案已變更，請針對當前成果重新執行 /review。",
           "artifactChanged": "審查成果已變更，請針對當前成果重新執行 /review。",
+          "artifactUnavailable": "Cindy 無法安全讀取審查成果，請檢查工作區或附件後重新執行 /review。",
           "providerFailed": "審查任務執行失敗"
         }
       }

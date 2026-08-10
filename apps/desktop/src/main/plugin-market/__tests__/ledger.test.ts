@@ -79,12 +79,12 @@ describe('PluginMarketLedger', () => {
     const expected = ledger.installationForGhost(first.ghostId);
 
     expect(expected).not.toBeNull();
-    expect(ledger.restoreInstallation(expected!, 'user-a')).toBe(true);
+    expect(ledger.recoverInstallation(expected!, 'user-a')).toBe(true);
     expect(ledger.installationForGhost(first.ghostId)?.installed).toBe(true);
     expect(ledger.isDefaultInstallSuppressed('user-a', first.pluginId)).toBe(false);
     expect(ledger.isDefaultInstallSuppressed('user-a', second.pluginId)).toBe(true);
     expect(ledger.isDefaultInstallSuppressed('user-b', first.pluginId)).toBe(true);
-    expect(ledger.restoreInstallation(expected!, 'user-a')).toBe(false);
+    expect(ledger.recoverInstallation(expected!, 'user-a')).toBe(false);
   });
 
   it('rejects recovery when any installation field changed after review', () => {
@@ -99,7 +99,7 @@ describe('PluginMarketLedger', () => {
       sha256: 'e'.repeat(64),
     });
 
-    expect(ledger.restoreInstallation(expected!, 'user-a')).toBe(false);
+    expect(ledger.recoverInstallation(expected!, 'user-a')).toBe(false);
     expect(ledger.installationForGhost('cindy-test')).toMatchObject({
       installed: false,
       sha256: 'e'.repeat(64),

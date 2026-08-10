@@ -7,7 +7,7 @@
  *   1. strip model 前缀 → 真实 model id
  *   2. translateRequest → OpenAI Responses 请求
  *   3. 注入 OAuth headers(provider.buildHeaders 拿最新凭证)→ POST 上游 /responses
- *   4. 逐条把上游 Responses SSE 翻译成 Anthropic Messages SSE 写回 res
+ *   4. 按调用方的 stream 模式把上游 Responses SSE / JSON 翻译成 Anthropic Messages SSE / JSON
  *
  * 会话态(effort / Fast)由 host 的 routingTransform 在决策点解析后经 `prefs` 闭包传入,
  * 不走任何伪 header。响应是**翻译流**(非字节透传)——这是本包与 compat-proxy 引擎的分工:
@@ -19,6 +19,7 @@
 
 import type { ServerResponse } from 'node:http';
 
+import { AnthropicMessageCollector } from './anthropic-message-collector.js';
 import { translateRequest, type ResponsesReasoningEffort } from './translate-request.js';
 import { SseTranslator, type AnthropicSseEvent } from './translate-sse.js';
 import type {
@@ -97,6 +98,52 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 
 function writeSseEvent(res: ServerResponse, ev: AnthropicSseEvent): void {
   res.write(`event: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`);
+}
+
+const MAX_NON_STREAM_BODY_BYTES = 16 * 1024 * 1024;
+
+async function readBodyWithLimit(response: Response, limitBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = '';
+  let bytesRead = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > limitBytes) {
+        await reader.cancel();
+        throw new Error(`upstream response exceeds ${limitBytes} bytes`);
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+    return body;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * 按 SSE 规范切事件:空行分隔事件,**同一事件的多条 `data:` 行先以 `\n` 拼成一个负载**
+ * 再解析。逐行独立 JSON.parse 会把「合法但跨多行」的事件当成坏帧,整个非流式 fallback
+ * 被判成 502(review 反馈)。与 responses-anthropic-bridge 的 parseSseBlock 同口径。
+ */
+function parseSsePayloads(body: string): unknown[] {
+  const payloads: unknown[] = [];
+  for (const block of body.split(/\r?\n\r?\n/)) {
+    const data: string[] = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) continue;
+    const payload = data.join('\n').trim();
+    if (!payload || payload === '[DONE]') continue;
+    payloads.push(JSON.parse(payload) as unknown);
+  }
+  return payloads;
 }
 
 /** image block 的粗估 token 占位(Anthropic 图像典型 ~1100-1600 tok;粗估用中值,免 stringify 整段 base64)。 */
@@ -257,6 +304,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // 保证同一会话逐轮请求带同一份工具列表(前缀稳定)。
     const serverSideTools = provider.serverSideTools?.(realModel);
 
+    const downstreamStreaming = parsed.stream !== false;
     const responsesReq = translateRequest(parsed, {
       model: realModel,
       promptCacheKey: sessionId,
@@ -277,7 +325,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         headers: {
           ...providerHeaders,
           'content-type': 'application/json',
-          accept: 'text/event-stream',
+          accept: downstreamStreaming ? 'text/event-stream' : 'application/json',
         },
         body: JSON.stringify(responsesReq),
         signal: abort.signal,
@@ -291,7 +339,12 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     if (!upstream.ok || !upstream.body) {
       const text = upstream.body ? await upstream.text().catch(() => '') : '';
-      log.warn?.('upstream non-2xx', { reqId, status: upstream.status, body: text.slice(0, 2000) });
+      const status = upstream.ok ? 502 : upstream.status;
+      log.warn?.(upstream.ok ? 'upstream 2xx without response body' : 'upstream non-2xx', {
+        reqId,
+        status: upstream.status,
+        body: text.slice(0, 2000),
+      });
       if (!upstream.ok && provider.onUpstreamError) {
         try {
           await provider.onUpstreamError({
@@ -308,9 +361,16 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           });
         }
       }
-      writeJson(res, upstream.status, {
+      writeJson(res, status, {
         type: 'error',
-        error: { type: anthropicErrorType(upstream.status), message: text.slice(0, 2000) || `upstream ${upstream.status}` },
+        error: {
+          type: anthropicErrorType(status),
+          message: text.slice(0, 2000) || (
+            upstream.ok
+              ? 'provider returned a successful response without a body'
+              : `upstream ${upstream.status}`
+          ),
+        },
       });
       return;
     }
@@ -327,12 +387,53 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       }
     }
 
+    const upstreamContentType = upstream.headers.get('content-type') ?? '';
+    const upstreamIsSse = upstreamContentType.toLowerCase().includes('event-stream');
+
+    // Claude Code 的 stream watchdog 会以 stream:false 做 fallback。该调用方要求一个完整
+    // Anthropic Message JSON;上游正常会返回 Responses JSON,但仍兼容忽略 stream:false 的 SSE 源。
+    if (!downstreamStreaming) {
+      const translator = new SseTranslator(wireModel);
+      const collector = new AnthropicMessageCollector();
+      const collect = (event: AnthropicSseEvent): void => collector.push(event);
+      try {
+        const body = await readBodyWithLimit(upstream, MAX_NON_STREAM_BODY_BYTES);
+        if (!body.trim()) throw new Error('provider returned an empty response body');
+        if (upstreamIsSse) {
+          for (const event of parseSsePayloads(body)) {
+            for (const output of translator.push(event)) collect(output);
+          }
+          for (const output of translator.finish()) collect(output);
+        } else {
+          const responseJson = JSON.parse(body) as unknown;
+          for (const output of translator.pushJson(responseJson)) collect(output);
+        }
+      } catch (err) {
+        // 客户端已断开(res close → abort):上游读取抛错只是取消的副作用,不写响应。
+        if (abort.signal.aborted) return;
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn?.('upstream non-stream response invalid', { reqId, error: message });
+        writeJson(res, 502, {
+          type: 'error',
+          error: { type: 'api_error', message: `invalid upstream response: ${message}` },
+        });
+        return;
+      }
+
+      const result = collector.finish();
+      if (!result.ok) {
+        writeJson(res, 502, { type: 'error', error: result.error });
+        return;
+      }
+      writeJson(res, 200, result.message);
+      return;
+    }
+
     // 上游 2xx 但 content-type 不是 SSE(反代/网关吐 JSON 或 HTML):大概率整流翻不出
     // 任何事件,先留一条 warn ——零事件收尾时的合成 error 会带上正文前缀(#941)。
     // 判定大小写不敏感(HTTP header 值的 media type 不区分大小写);真实状态码进日志,
     // 本路径接受任意 2xx,不硬编码 200(review 反馈)。
-    const upstreamContentType = upstream.headers.get('content-type') ?? '';
-    if (!upstreamContentType.toLowerCase().includes('event-stream')) {
+    if (!upstreamIsSse) {
       log.warn?.('upstream 2xx with non-SSE content-type', {
         reqId,
         status: upstream.status,
@@ -364,26 +465,30 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       writeSseEvent(res, ev);
     };
     const finalizeStream = (): void => {
-      for (const outEv of translator.finish()) writeOut(outEv);
-      if (eventsWritten > 0) return;
-      const bodyPrefix = rawPrefix.trim().slice(0, 300);
-      log.warn?.('upstream stream yielded no translatable events', {
-        reqId,
-        contentType: upstreamContentType || '(missing)',
-        bodyPrefix,
-      });
-      writeOut({
-        event: 'error',
-        data: {
-          type: 'error',
-          error: {
-            type: 'api_error',
-            message:
-              `upstream returned HTTP ${upstream.status} but produced no translatable SSE events ` +
-              `(content-type: ${upstreamContentType || 'missing'}${bodyPrefix ? `; body: ${bodyPrefix}` : ''})`,
+      if (eventsWritten === 0) {
+        const bodyPrefix = rawPrefix.trim().slice(0, 300);
+        log.warn?.('upstream stream yielded no translatable events', {
+          reqId,
+          contentType: upstreamContentType || '(missing)',
+          bodyPrefix,
+        });
+        writeOut({
+          event: 'error',
+          data: {
+            type: 'error',
+            error: {
+              type: 'api_error',
+              message:
+                `upstream returned HTTP ${upstream.status} but produced no translatable SSE events ` +
+                `(content-type: ${upstreamContentType || 'missing'}${bodyPrefix ? `; body: ${bodyPrefix}` : ''})`,
+            },
           },
-        },
-      });
+        });
+        return;
+      }
+      // 至少有一个事件但没有 response.completed / response.incomplete:finish() 产出
+      // stream_truncated error,绝不把 clean EOF 伪装成正常 message_stop。
+      for (const outEv of translator.finish()) writeOut(outEv);
     };
     try {
       for (;;) {
@@ -414,8 +519,8 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         }
         if (start > 0) buf = buf.slice(start);
       }
-      // 上游正常结束但没走 response.completed(极少)→ 兜底收尾;整流零事件时合成
-      // 带上游信息的 error 事件,绝不空 200 收尾。
+      // 上游干净结束:零事件时合成带上游信息的 error 事件;有事件但没走
+      // response.completed 时按截断报错。两条路径都绝不以空 200 / 伪装完成收尾。
       finalizeStream();
     } catch (err) {
       if (!abort.signal.aborted) {

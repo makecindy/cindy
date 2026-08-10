@@ -1257,8 +1257,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resolveRecovery: (
       proposalId: string,
       decision: import('../shared/pluginMarket').PluginRecoveryDecision,
+      candidateIds?: string[],
     ): Promise<import('../shared/pluginMarket').PluginRecoveryResolution> =>
-      ipcRenderer.invoke('plugin-market:resolve-recovery', { proposalId, decision }),
+      ipcRenderer.invoke('plugin-market:resolve-recovery', { proposalId, decision, candidateIds }),
     onRecoveryAvailable: fanOutPluginRecoveryAvailable,
     consumeRecoveryNotice: (): Promise<
       import('../shared/pluginMarket').PluginRecoveryUserNotice | null
@@ -6354,7 +6355,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onH264Frame: (callback: (payload: IOSSimulatorH264FramePush) => void) =>
         fanOutIOSSimulatorH264Frame((payload) => callback(payload as IOSSimulatorH264FramePush)),
       onRouteStatus: (callback: (payload: IOSSimulatorRouteStatusPush) => void) =>
-        fanOutIOSSimulatorRouteStatus((payload) => callback(payload as IOSSimulatorRouteStatusPush)),
+        fanOutIOSSimulatorRouteStatus((payload) =>
+          callback(payload as IOSSimulatorRouteStatusPush),
+        ),
       onFocusRequest: (callback: (request: IOSSimulatorFocusRequest) => void) =>
         fanOutIOSSimulatorFocusRequest((request) => callback(request as IOSSimulatorFocusRequest)),
     },

@@ -3,8 +3,8 @@ import os from 'node:os';
 import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
-import type { GhostManifest } from '../../shared/ghost.js';
 import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';
+import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { sendToTrustedAppWindows, setGhostUninstallLedgerPreparer } from '../cindy-brain/index.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -12,7 +12,7 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
 import { parseMarketSource } from './sources/parse.js';
 import { LocalIconRequestGate } from './localIconRequestGate.js';
 import { PluginMarketPackagePermissionReviewBridge } from './packagePermissionReviewBridge.js';
-import { PluginMarketService } from './service.js';
+import { PluginMarketService, type PluginMarketSnapshotOptions } from './service.js';
 
 const log = createLogger('plugin-market-ipc');
 let registered = false;
@@ -51,9 +51,9 @@ function signalRecoveryNoticeAvailable(): void {
   sendToTrustedAppWindows(RECOVERY_NOTICE_AVAILABLE_CHANNEL, undefined);
 }
 
-async function snapshotAndSignalRemovalNotice() {
+async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOptions) {
   try {
-    return await service().snapshot();
+    return await service().snapshot(options);
   } finally {
     // 清理已成功但后续默认安装等步骤失败时，pending 仍必须通知 Renderer；
     // snapshot 的原始异常继续向上抛，不把通知信号伪装成整轮成功。
@@ -115,7 +115,17 @@ export function registerPluginMarketIpc(): void {
   setGhostUninstallLedgerPreparer((ghostId) => service().prepareLocalUninstallTracking(ghostId));
   ipcMain.handle('plugin-market:snapshot', (event) => {
     assertTrustedAppRendererEvent(event);
-    return invokePluginMarket(() => snapshotAndSignalRemovalNotice());
+    return invokePluginMarket(() =>
+      snapshotAndSignalRemovalNotice({
+        deferDefaultReconciliation: true,
+        onDeferredReconciliationSettled: () => {
+          signalRemovalNoticeAvailable();
+          signalUpgradeNoticeAvailable();
+          signalRecoveryAvailable();
+          signalRecoveryNoticeAvailable();
+        },
+      }),
+    );
   });
   ipcMain.handle('plugin-market:consume-removal-notice', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -140,8 +150,23 @@ export function registerPluginMarketIpc(): void {
     if (decision !== 'restore' && decision !== 'keep') {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin recovery decision');
     }
+    const candidateIds = payload.candidateIds;
+    if (
+      candidateIds !== undefined &&
+      (!Array.isArray(candidateIds) ||
+        candidateIds.length === 0 ||
+        candidateIds.length > 50 ||
+        candidateIds.some((id) => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) ||
+        new Set(candidateIds).size !== candidateIds.length)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin recovery candidates');
+    }
     return invokePluginMarket(async () => {
-      const result = await service().resolveRecovery(proposalId, decision);
+      const result = await service().resolveRecovery(
+        proposalId,
+        decision,
+        candidateIds as string[] | undefined,
+      );
       signalRecoveryAvailable();
       signalRecoveryNoticeAvailable();
       return result;
@@ -184,32 +209,32 @@ export function registerPluginMarketIpc(): void {
       typeof options === 'object' && options !== null
         ? (options as {
             expectedReleaseId?: unknown;
-            expectedManifest?: unknown;
-            allowPermissionExpansion?: unknown;
-            reviewedBaseline?: unknown;
+            allowSourceReplacement?: unknown;
           })
         : null;
     const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
-    const expectedManifest = requireObject(obj?.expectedManifest);
-    const allowPermissionExpansion = obj?.allowPermissionExpansion === true;
-    // 扩权批准的审阅基线:只收字符串,野值按缺席处理(缺席 = 保持旧行为)。
-    const reviewedBaseline =
-      typeof obj?.reviewedBaseline === 'string' ? obj.reviewedBaseline : undefined;
+    const allowSourceReplacement = obj?.allowSourceReplacement;
+    if (typeof allowSourceReplacement !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'allowSourceReplacement must be a boolean');
+    }
     return invokePluginMarket(() =>
       service().install(
         requireString(pluginId, 'pluginId'),
         {
           expectedReleaseId,
-          expectedManifest: expectedManifest as unknown as GhostManifest,
-          allowPermissionExpansion,
-          ...(reviewedBaseline !== undefined ? { reviewedBaseline } : {}),
+          allowSourceReplacement,
         },
         (facts) =>
-          packagePermissionReviewBridge.request(event.sender.id, facts, (request) => {
-            if (event.sender.isDestroyed()) return false;
-            event.sender.send(PACKAGE_PERMISSION_REVIEW_CHANNEL, request);
-            return true;
-          }),
+          packagePermissionReviewBridge.request(
+            event.sender.id,
+            facts,
+            getActiveDataOwnerPushStamp(),
+            (request) => {
+              if (event.sender.isDestroyed()) return false;
+              event.sender.send(PACKAGE_PERMISSION_REVIEW_CHANNEL, request);
+              return true;
+            },
+          ),
       ),
     );
   });

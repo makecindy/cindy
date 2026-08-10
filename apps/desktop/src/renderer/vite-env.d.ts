@@ -1554,6 +1554,7 @@ interface ElectronAPI {
     resolveRecovery: (
       proposalId: string,
       decision: import('../shared/pluginMarket').PluginRecoveryDecision,
+      candidateIds?: string[],
     ) => Promise<import('../shared/pluginMarket').PluginRecoveryResolution>;
     onRecoveryAvailable: (callback: () => void) => () => void;
     consumeRecoveryNotice: () => Promise<

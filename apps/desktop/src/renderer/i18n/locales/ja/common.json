@@ -1468,6 +1468,67 @@
         },
         "advanced": {
           "label": "詳細設定（モデル / リクエストヘッダー）"
+        },
+        "runtimeFill": {
+          "action": "他の runtime に入力",
+          "reviewTitle": "他の runtime に入力",
+          "reviewSubtitle": "差分を確認してください。各 runtime は個別に保存されます。",
+          "confirmTitle": "上書きを確認",
+          "confirmSubtitle": "{{source}} からコピーする項目を選択してください。",
+          "source": "コピー元",
+          "columns": { "field": "項目", "source": "コピー元", "target": "現在値" },
+          "fields": {
+            "endpointBundle": "エンドポイントと API プロトコル",
+            "baseUrl": "ベース URL",
+            "requestPath": "リクエストパス",
+            "wireProtocol": "API プロトコル",
+            "apiKey": "API キー",
+            "models": "モデル",
+            "headers": "追加ヘッダー",
+            "modelsUrl": "モデル一覧 URL"
+          },
+          "values": {
+            "empty": "空",
+            "default": "既定/推測",
+            "configured": "設定済み",
+            "secretSet": "設定済み（非表示）",
+            "models_one": "{{count}} モデル",
+            "models_other": "{{count}} モデル",
+            "headers_one": "{{count}} ヘッダー",
+            "headers_other": "{{count}} ヘッダー"
+          },
+          "targetConflict_one": "既存の {{count}} 項目が異なります",
+          "targetConflict_other": "既存の {{count}} 項目が異なります",
+          "targetReady_one": "{{count}} 項目を入力できます",
+          "targetReady_other": "{{count}} 項目を入力できます",
+          "targetIncompatible_one": "{{count}} 項目は互換性がありません",
+          "targetIncompatible_other": "{{count}} 項目は互換性がありません",
+          "status": {
+            "needsConfirm": "確認が必要",
+            "ready": "入力可能",
+            "incompatible": "互換性なし"
+          },
+          "secretIndependent": "{{target}} の個別キーとしてコピー",
+          "overwriteCurrent": "現在値を置換",
+          "fillEmpty": "空の項目を入力",
+          "incompatibleProtocol": "コピーされません：{{target}} はこの API プロトコルをサポートしていません",
+          "incompatibleHeaders": "コピーされません：{{target}} にはここで安全にコピーできないヘッダーが必要です",
+          "incompatibleEndpoint": "コピーされません：{{target}} ではこのエンドポイント設定を使用できません",
+          "noSelectableFields": "この runtime に入力できる互換項目はありません。",
+          "endpointBundleNote": "{{target}} には、ベース URL、リクエストパス、API プロトコルを一括コピーし、不整合を防ぎます。",
+          "oauthPiUnavailable": "Pi のネイティブ runtime は OAuth プロバイダーをサポートしないため、入力先から除外されます。",
+          "independentNote": "これは一度だけの入力です。以後 runtime 間で同期されません。キーは個別の safeStorage に保存されます。",
+          "continue": "上書きを確認",
+          "apply": "入力を確定",
+          "applyOverwrite": "上書きして入力",
+          "back": "差分に戻る",
+          "nothingToFill": "現在の runtime に再利用可能な項目を入力してください",
+          "alreadySame": "他の runtime と同じです",
+          "loadingKeys": "保存済み API キーの読み込み完了後に、他の runtime へ入力してください",
+          "keysUnavailable": "保存済み API キーを読み込めなかったため、ほかの runtime には入力できません",
+          "modelsBusy": "モデル一覧の取得または選択を完了してから、他の runtime へ入力してください",
+          "noCompatibleFields": "現在の runtime の再利用可能な項目は、他の runtime でサポートされていません",
+          "filledToast": "{{targets}} に入力しました"
         }
       },
       "models": {
@@ -2255,6 +2316,9 @@
         "title": "Codex サブエージェントガードレール",
         "enableHint": "Codex がタスク実行中に使い捨てのサブエージェントを作成することを許可します。オフにすると旧版マルチエージェント（V1）と Sol / Terra（V2）の両方に適用されます。",
         "enableAria": "Codex のサブエージェントを許可",
+        "cindyPolicyLabel": "Cindy のカスタムサブエージェントポリシーを使用",
+        "cindyPolicyHint": "オンにすると、Cindy は探索タスクで Codex がサブエージェントを積極的に使用するよう促すガイダンスを注入します。すでに計画と委任を得意とするモデルでは、追加のガイダンスが逆効果になる可能性があります。オフにすると注入を停止し、Codex のネイティブな既定動作を使用します。",
+        "cindyPolicyAria": "Cindy のカスタムサブエージェントポリシーを使用",
         "concurrencyLabel": "サブエージェントの同時実行上限",
         "concurrencyHint": "同時に実行できるサブエージェント数の上限です。サブエージェントはそれぞれモデルのクォータを消費します。Ultra 段階で同時実行が 8 に達すると Codex が警告します。",
         "concurrencyFollowDefault": "Codex の既定に従う（旧版 V1 は 6、Sol / Terra は 3）",
@@ -3268,10 +3332,11 @@
         "update": "マーケットから更新",
         "updateTo": "v{{version}} に更新",
         "installed": "インストール済み",
-        "conflict": "利用不可",
-        "conflictAria": "{{name}} にプラグイン ID の競合があります",
-        "conflictDescription": "このプラグイン ID は使用中のため、インストールできません。",
+        "replace": "置き換え",
+        "replaceAria": "{{name}} をこのマーケット版で置き換える",
+        "replaceDescription": "同じ ID のプラグインがすでにインストールされています。続行するとこのマーケット版で置き換え、プラグインのデータは保持されます。",
         "unavailable": "プラグインマーケットを一時的に利用できません。インストール済みプラグインは引き続き利用できます。",
+        "customSourcesUnavailable": "次のカスタムマーケットは一時的に利用できません：{{names}}。他のマーケットには影響しません。",
         "authenticationRequired": "プラグインマーケットを表示するには Cindy にログインしてください。",
         "notConfigured": "この環境ではプラグインマーケットが設定されていません。インストール済みプラグインは引き続き利用できます。",
         "upgradeNotice": {
@@ -3385,6 +3450,7 @@
           "reviewRemaining_other": "{{count}} 個のプラグインは内容またはソースを安全に照合できませんでした。変更せず保持され、プラグインページで確認できます。",
           "failed": "プラグインの復元を確認できませんでした。プラグインと設定は変更されていません。プラグインページから再試行できます。"
         },
+        "reminder": "復元が必要な可能性があるプラグインがあります。プラグインページで {{count}} 件の候補を確認してください。",
         "inline": {
           "title": "プラグインの復元を確認してください",
           "pending": "{{count}} 個のプラグインがこのデバイスに残っており、復元の確認を待っています。",
@@ -3397,7 +3463,20 @@
           "failed": "復元確認を完了できませんでした。プラグインと設定は変更されていません。再試行できます。",
           "retry": "もう一度確認",
           "retrying": "確認中…",
-          "keep": "そのままにして今後は確認しない"
+          "keep": "今後は通知しない",
+          "muted": "通知を停止しました",
+          "restoreOne": "復元",
+          "restoreAll": "安全に一致した項目を復元（{{count}}）",
+          "truncated": "候補は {{count}} 件あります。各種類の安全なサンプルを表示しています。処理後に再確認してください。"
+        },
+        "reason": {
+          "exact-match": "ソースとローカル記録が一致しています。復元前に Cindy が全ファイルを確認します。",
+          "source-mismatch": "記録されたソースと一致しません。信頼できるソースから再インストールするか、そのままにしてください。",
+          "manifest-mismatch": "ローカルのマニフェストがインストール記録と異なるため、変更していません。",
+          "legacy-unverifiable": "古い記録では元のソースを証明できないため、変更していません。",
+          "source-unavailable": "ソースを利用できません。再接続してから再確認してください。",
+          "content-unavailable": "ローカルプラグインを完全に読み取れません。後でもう一度確認してください。",
+          "content-mismatch": "全ファイルの確認結果が記録されたソースと一致しないため、変更していません。"
         },
         "notice": {
           "single": "「{{name}}」を復元しました",
@@ -3727,15 +3806,8 @@
       },
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
-        "description": "権限に変更がない更新は自動で完了します。権限が拡張される更新は項目ごとに確認が必要です。",
+        "description": "通常の更新は自動で完了し、検証済みの実パッケージが新しい権限を要求する場合のみ個別に確認します。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "権限に変更あり",
-        "reviewOutdated": "権限の差分が古くなりました",
-        "rereview": "再確認",
-        "reviewDiff": "確認する",
-        "collapseDiff": "閉じる",
-        "approve": "同意して更新",
-        "skip": "スキップ",
         "statusPending": "待機中",
         "statusInstalling": "更新中…",
         "statusDone": "更新済み",
@@ -5437,6 +5509,7 @@
     "modelSelector": {
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
       "hidden": "非表示",
+      "modelListAria": "モデル一覧",
       "subscriptionDirectDisabled": {
         "chatgpt": "サブスクリプション直結の GPT モデルは SSH リモートセッションに未対応です",
         "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",
@@ -5587,6 +5660,7 @@
     },
     "worktree": {
       "detecting": "環境を検出中…",
+      "detectFailed": "環境の検出に失敗しました。worktree は現在使用できません",
       "gitMissing": "git が検出されません。先にインストールしてください",
       "notGitRepo": "現在のディレクトリは git リポジトリではありません",
       "alreadyInWorktree": "すでに worktree 内です。ネストは禁止です",
@@ -6448,6 +6522,7 @@
           "sourceConversationChanged": "元のタスクが変更されました。現在のタスクに対して /review をもう一度実行してください。",
           "sourceFilesChanged": "元のタスクのファイルが変更されました。現在の成果に対して /review をもう一度実行してください。",
           "artifactChanged": "レビュー対象の成果が変更されました。現在の成果に対して /review をもう一度実行してください。",
+          "artifactUnavailable": "Cindy はレビュー対象の成果を安全に読み取れませんでした。ワークスペースまたは添付ファイルを確認して、/review をもう一度実行してください。",
           "providerFailed": "レビュータスクの実行に失敗しました"
         }
       }

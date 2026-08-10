@@ -14,6 +14,8 @@ export type PluginRemovalIntent = 'user-uninstall' | 'server-purge';
 interface RecoveryDecision {
   decision: PluginRecoveryDecisionRecord;
   decidedAt: string;
+  /** Reminder preference is orthogonal to recovery classification. */
+  mutedAt?: string;
 }
 
 interface RemovalReceipt {
@@ -107,6 +109,10 @@ function parseData(text: string | null): PluginRecoveryStoreData {
         out.decisions[key] = {
           decision: decision.decision,
           decidedAt: decision.decidedAt,
+          ...((decision.decision === 'keep' || validIsoDate(decision.mutedAt)) && {
+            mutedAt:
+              decision.decision === 'keep' ? decision.decidedAt : (decision.mutedAt as string),
+          }),
         };
       }
     }
@@ -179,7 +185,12 @@ export class PluginRecoveryStore {
   }
 
   decisionFor(record: PluginMarketInstallationRecord): PluginRecoveryDecisionRecord | null {
-    return this.read().decisions[pluginRecoveryCandidateKey(record)]?.decision ?? null;
+    const decision = this.read().decisions[pluginRecoveryCandidateKey(record)]?.decision ?? null;
+    return decision === 'keep' ? null : decision;
+  }
+
+  isNoticeMuted(record: PluginMarketInstallationRecord): boolean {
+    return this.read().decisions[pluginRecoveryCandidateKey(record)]?.mutedAt !== undefined;
   }
 
   recordDecision(
@@ -187,9 +198,12 @@ export class PluginRecoveryStore {
     decision: PluginRecoveryDecisionRecord,
   ): void {
     const data = this.read();
-    data.decisions[pluginRecoveryCandidateKey(record)] = {
+    const key = pluginRecoveryCandidateKey(record);
+    const previous = data.decisions[key];
+    data.decisions[key] = {
       decision,
       decidedAt: new Date().toISOString(),
+      ...(previous?.mutedAt ? { mutedAt: previous.mutedAt } : {}),
     };
     this.write(data);
   }
@@ -201,7 +215,21 @@ export class PluginRecoveryStore {
     const data = this.read();
     const decidedAt = new Date().toISOString();
     for (const record of records) {
-      data.decisions[pluginRecoveryCandidateKey(record)] = { decision, decidedAt };
+      const key = pluginRecoveryCandidateKey(record);
+      const previous = data.decisions[key];
+      if (decision === 'keep') {
+        data.decisions[key] = {
+          decision: previous?.decision === 'review' ? 'review' : 'keep',
+          decidedAt: previous?.decidedAt ?? decidedAt,
+          mutedAt: decidedAt,
+        };
+      } else {
+        data.decisions[key] = {
+          decision,
+          decidedAt,
+          ...(previous?.mutedAt ? { mutedAt: previous.mutedAt } : {}),
+        };
+      }
     }
     this.write(data);
   }

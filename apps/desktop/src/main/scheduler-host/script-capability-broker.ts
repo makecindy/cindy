@@ -199,7 +199,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
     resolveDefaultModelRoute?: (
       agent: Schedule['agentKind'],
       preferredProviderId?: string | null,
-    ) => Promise<{ model: string; providerId: string } | null>;
+    ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
   } = {}) {}
 
   /**

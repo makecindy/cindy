@@ -94,6 +94,17 @@ describe('PluginRecoveryStore', () => {
     expect(fs.readFileSync(h.recoveryPath, 'utf8')).not.toContain(sourceKey);
   });
 
+  it('treats keep as reminder-only mute without erasing review classification', () => {
+    const h = harness();
+    const candidate = record();
+    h.store.recordDecision(candidate, 'review');
+    h.store.recordDecisions([candidate], 'keep');
+
+    const reopened = new PluginRecoveryStore(h.ledgerPath);
+    expect(reopened.decisionFor(candidate)).toBe('review');
+    expect(reopened.isNoticeMuted(candidate)).toBe(true);
+  });
+
   it('fails closed for malformed or future store data', () => {
     const h = harness();
     fs.mkdirSync(path.dirname(h.recoveryPath), { recursive: true });

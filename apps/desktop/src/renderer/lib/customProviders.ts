@@ -63,7 +63,9 @@ export function setCustomProviderModelReasoning(
   return models.map((model, index) => {
     if (index !== targetIndex) return model;
     if (!reasoning) {
-      const { reasoning: _reasoning, reasoningEfforts: _reasoningEfforts, ...rest } = model;
+      const rest = { ...model };
+      delete rest.reasoning;
+      delete rest.reasoningEfforts;
       return rest;
     }
     return {
@@ -147,6 +149,7 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
       ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
         ? { headers: { ...routing.headerOverride } }
         : {}),
+      ...(routing?.headerOverrideState ? { headersState: routing.headerOverrideState } : {}),
       ...(routing?.modelsUrl ? { modelsUrl: routing.modelsUrl } : {}),
     };
   }
@@ -189,21 +192,18 @@ export function appendDiscoveredCustomProviderModels(
 }
 
 /**
- * 读取该自定义供应商**某 runtime** 本机已存的明文密钥（用户自己的 key）；无 / 读失败返回 null。
+ * 读取该自定义供应商**某 runtime** 本机已存的明文密钥（用户自己的 key）；无密钥返回 null，
+ * IPC 读取失败则向调用方抛出，避免把“无法读取”误当成“没有密钥”。
  * 用于编辑态回填(「能看」)与已保存探测。明文仅在 renderer 本地用于回显 / 核对,不外发。
  */
 export async function readCustomProviderKey(
   providerId: string,
   agent: AgentKind,
 ): Promise<string | null> {
-  try {
-    const v = await window.electronAPI.safeStorageRead(
-      customProviderSecretStorageKey(providerId, agent),
-    );
-    return v && v.length > 0 ? v : null;
-  } catch {
-    return null;
-  }
+  const value = await window.electronAPI.safeStorageRead(
+    customProviderSecretStorageKey(providerId, agent),
+  );
+  return value && value.length > 0 ? value : null;
 }
 
 // 鉴权请求头是 main-only 密文(isRendererAccessibleSafeStorageKey 明确拒 provider_headers_

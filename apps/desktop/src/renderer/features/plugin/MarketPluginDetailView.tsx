@@ -38,16 +38,14 @@ export function MarketPluginDetailView({
       : detail.installState === 'installed'
         ? 'settings.ghosts.market.installed'
         : detail.installState === 'conflict'
-          ? 'settings.ghosts.market.conflict'
+          ? 'settings.ghosts.market.replace'
           : 'settings.ghosts.market.install';
-  const actionDisabled =
-    busy || detail.installState === 'installed' || detail.installState === 'conflict';
-  // 冲突态的行动按钮只说「暂不可用」,原因必须在详情页也给出——列表卡片同一处理。
-  // 详情可能是先以非冲突态打开、随后目录或本地安装状态变化才转冲突的。
-  const conflictDescriptionId = useId();
-  const conflictDescription =
+  const actionDisabled = busy || detail.installState === 'installed';
+  // 同 id 已装时仍展示明确的替换语义；用户点击后才会进入真实包事务。
+  const replacementDescriptionId = useId();
+  const replacementDescription =
     detail.installState === 'conflict'
-      ? t('settings.ghosts.market.conflictDescription')
+      ? t('settings.ghosts.market.replaceDescription')
       : undefined;
 
   return (
@@ -92,7 +90,9 @@ export function MarketPluginDetailView({
               type="button"
               onClick={onInstall}
               disabled={actionDisabled}
-              aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
+              aria-describedby={
+                replacementDescription ? replacementDescriptionId : undefined
+              }
               className={cn(
                 'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -106,10 +106,10 @@ export function MarketPluginDetailView({
             </button>
           </div>
           <p
-            id={conflictDescription ? conflictDescriptionId : undefined}
+            id={replacementDescription ? replacementDescriptionId : undefined}
             className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]"
           >
-            {conflictDescription ?? (detail.description || detail.ghostId)}
+            {replacementDescription ?? (detail.description || detail.ghostId)}
           </p>
         </header>
 

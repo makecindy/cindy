@@ -1,12 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
@@ -43,10 +35,6 @@ export interface ConfirmOptions {
    * 破坏性确认(删除/重置等)请保持默认。
    */
   autoFocusConfirm?: boolean;
-  /** Escape/outside dismissal is blocked; the user must choose a visible action. */
-  requireExplicitChoice?: boolean;
-  /** Abort a queued or visible confirmation when its owner/scope becomes stale. */
-  signal?: AbortSignal;
 }
 
 const DONT_SHOW_AGAIN_PREFIX = 'confirm-dialog.skip:';
@@ -76,10 +64,7 @@ export interface ConfirmThreeOptions extends ConfirmOptions {
 }
 
 /** 带业务复选框的 confirm(如装意识的"立即开启"):返回确认与勾选态。 */
-export interface ConfirmWithCheckboxOptions extends Omit<
-  ConfirmOptions,
-  'dontShowAgainKey' | 'dontShowAgainLabel'
-> {
+export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontShowAgainKey' | 'dontShowAgainLabel'> {
   /** 复选框文案。复用 ConfirmDialog 的复选框管线,但不写 localStorage(纯本次语义)。 */
   checkboxLabel: string;
   /** 复选框初始勾选态,缺省 false;每次弹出都复位到该值。 */
@@ -87,13 +72,11 @@ export interface ConfirmWithCheckboxOptions extends Omit<
 }
 
 interface ConfirmDialogContextValue {
-  confirm: (options: ConfirmOptions) => Promise<boolean>;
+  confirm: (options: ConfirmOptions, signal?: AbortSignal) => Promise<boolean>;
   /** 三状态 confirm — 用于「保存 / 不保存 / 取消」这类需要区分 cancel 与 negative 的场景。 */
   confirmThree: (options: ConfirmThreeOptions) => Promise<ConfirmThreeResult>;
   /** 带业务复选框(初始勾选态由 checkboxDefaultChecked 决定,缺省不勾;取消时 checked 恒为 false)。 */
-  confirmWithCheckbox: (
-    options: ConfirmWithCheckboxOptions,
-  ) => Promise<{ ok: boolean; checked: boolean }>;
+  confirmWithCheckbox: (options: ConfirmWithCheckboxOptions) => Promise<{ ok: boolean; checked: boolean }>;
 }
 
 interface QueueItem {
@@ -103,7 +86,6 @@ interface QueueItem {
     checkboxDefaultChecked?: boolean;
   };
   resolve: (value: ConfirmThreeResult, dontShowAgain?: boolean) => void;
-  cleanupAbort?: () => void;
 }
 
 const ConfirmDialogContext = createContext<ConfirmDialogContextValue | null>(null);
@@ -134,11 +116,11 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     clearStaleSkipsOnce();
   }
   const queueRef = useRef<QueueItem[]>([]);
+  const currentItemRef = useRef<QueueItem | null>(null);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
   const [open, setOpen] = useState(false);
   const isShowingRef = useRef(false);
   const resolvedRef = useRef(false);
-  const currentItemRef = useRef<QueueItem | null>(null);
 
   const processNext = useCallback(() => {
     const next = queueRef.current.shift();
@@ -151,77 +133,71 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const cancelItem = useCallback((item: QueueItem) => {
-    const queuedIndex = queueRef.current.indexOf(item);
-    if (queuedIndex >= 0) {
-      queueRef.current.splice(queuedIndex, 1);
-      item.cleanupAbort?.();
-      item.resolve('cancel');
-      return;
-    }
-    if (currentItemRef.current === item && !resolvedRef.current) {
-      resolvedRef.current = true;
-      item.cleanupAbort?.();
-      item.resolve('cancel');
-      setOpen(false);
-    }
-  }, []);
-
   const confirm = useCallback(
-    (options: ConfirmOptions): Promise<boolean> => {
+    (options: ConfirmOptions, signal?: AbortSignal): Promise<boolean> => {
+      if (signal?.aborted) return Promise.resolve(false);
       // 用户曾勾过"下次不再提示" → 直接当成 confirm,不弹窗、不入队。
       if (options.dontShowAgainKey && isSkipped(options.dontShowAgainKey)) {
         return Promise.resolve(true);
       }
-      if (options.signal?.aborted) return Promise.resolve(false);
       return new Promise<boolean>((resolve) => {
+        let settled = false;
         // 二状态调用复用同一队列:把 'confirm'→true,其它→false 透传给原 boolean 契约。
         // 用户勾上"下次不再提示"且点 confirm 时,把 key 写入 localStorage。
         const item: QueueItem = {
           options,
           resolve: (r, dontShowAgain) => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener('abort', abort);
             if (r === 'confirm' && dontShowAgain && options.dontShowAgainKey) {
               markSkipped(options.dontShowAgainKey);
             }
             resolve(r === 'confirm');
           },
         };
-        if (options.signal) {
-          const abort = () => cancelItem(item);
-          options.signal.addEventListener('abort', abort, { once: true });
-          item.cleanupAbort = () => options.signal?.removeEventListener('abort', abort);
-        }
+        const abort = () => {
+          const queuedIndex = queueRef.current.indexOf(item);
+          if (queuedIndex >= 0) {
+            queueRef.current.splice(queuedIndex, 1);
+            item.resolve('cancel');
+            return;
+          }
+          if (currentItemRef.current === item && !resolvedRef.current) {
+            resolvedRef.current = true;
+            item.resolve('cancel');
+            setOpen(false);
+          }
+        };
         queueRef.current.push(item);
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
         if (!isShowingRef.current) {
           processNext();
         }
       });
     },
-    [cancelItem, processNext],
+    [processNext],
   );
 
   const confirmThree = useCallback(
     (options: ConfirmThreeOptions): Promise<ConfirmThreeResult> => {
-      if (options.signal?.aborted) return Promise.resolve('cancel');
       return new Promise<ConfirmThreeResult>((resolve) => {
         const item: QueueItem = { options, resolve };
-        if (options.signal) {
-          const abort = () => cancelItem(item);
-          options.signal.addEventListener('abort', abort, { once: true });
-          item.cleanupAbort = () => options.signal?.removeEventListener('abort', abort);
-        }
         queueRef.current.push(item);
         if (!isShowingRef.current) {
           processNext();
         }
       });
     },
-    [cancelItem, processNext],
+    [processNext],
   );
 
   const confirmWithCheckbox = useCallback(
     (options: ConfirmWithCheckboxOptions): Promise<{ ok: boolean; checked: boolean }> => {
-      if (options.signal?.aborted) return Promise.resolve({ ok: false, checked: false });
       return new Promise((resolve) => {
         const item: QueueItem = {
           options,
@@ -229,25 +205,19 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           // 这里只是换个语义消费;取消路径拿不到勾选态,按未勾处理。
           resolve: (r, checked) => resolve({ ok: r === 'confirm', checked: Boolean(checked) }),
         };
-        if (options.signal) {
-          const abort = () => cancelItem(item);
-          options.signal.addEventListener('abort', abort, { once: true });
-          item.cleanupAbort = () => options.signal?.removeEventListener('abort', abort);
-        }
         queueRef.current.push(item);
         if (!isShowingRef.current) {
           processNext();
         }
       });
     },
-    [cancelItem, processNext],
+    [processNext],
   );
 
   const handleConfirm = useCallback(
     (opts?: { dontShowAgain?: boolean }) => {
       if (!resolvedRef.current) {
         resolvedRef.current = true;
-        currentItem?.cleanupAbort?.();
         currentItem?.resolve('confirm', opts?.dontShowAgain);
         setOpen(false);
       }
@@ -258,7 +228,6 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   const handleTertiary = useCallback(() => {
     if (!resolvedRef.current) {
       resolvedRef.current = true;
-      currentItem?.cleanupAbort?.();
       currentItem?.resolve('tertiary');
       // tertiary 按钮不是 AlertDialog.Action / Cancel,不会自动关 dialog,这里手动触发。
       setOpen(false);
@@ -271,7 +240,6 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
         // Fallback: if not yet resolved (overlay click / Escape), resolve as cancel
         if (!resolvedRef.current) {
           resolvedRef.current = true;
-          currentItem?.cleanupAbort?.();
           currentItem?.resolve('cancel');
         }
         setOpen(false);
@@ -314,10 +282,9 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}
-          requireExplicitChoice={currentItem.options.requireExplicitChoice}
           dontShowAgainLabel={
             currentItem.options.dontShowAgainKey
-              ? (currentItem.options.dontShowAgainLabel ?? '下次不再提示')
+              ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'
               : currentItem.options.checkboxLabel
           }
           checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}

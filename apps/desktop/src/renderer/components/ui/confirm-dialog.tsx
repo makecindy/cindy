@@ -47,8 +47,6 @@ export interface ConfirmDialogProps {
    * 把这个开关打开,让默认焦点落到主按钮,避免取消按钮天然带 focus ring。
    */
   autoFocusConfirm?: boolean;
-  /** Block Escape/outside dismissal when every exit must carry an explicit decision. */
-  requireExplicitChoice?: boolean;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
   /** 嵌套在其它 Dialog 内时提升层级；普通确认继续使用默认层级。 */
@@ -96,7 +94,6 @@ export function ConfirmDialog({
   dontShowAgainLabel,
   checkboxDefaultChecked = false,
   autoFocusConfirm,
-  requireExplicitChoice = false,
   confirmDisabled = false,
   confirmVariant = 'default',
   confirmIcon,
@@ -157,9 +154,7 @@ export function ConfirmDialog({
             'data-[state=open]:animate-confirm-content-in',
             'data-[state=closed]:animate-confirm-content-out',
           )}
-          style={
-            { WebkitAppRegion: 'no-drag', maxWidth: maxWidth ?? 400, zIndex } as React.CSSProperties
-          }
+          style={{ WebkitAppRegion: 'no-drag', maxWidth: maxWidth ?? 400, zIndex } as React.CSSProperties}
           {...(describeContent && content
             ? // 指向滚动区(含 description 与 content):开场朗读覆盖清单全文。
               { 'aria-describedby': bodyId }
@@ -167,7 +162,7 @@ export function ConfirmDialog({
               ? { 'aria-describedby': undefined }
               : {})}
           onEscapeKeyDown={(e) => {
-            if (loading || requireExplicitChoice) e.preventDefault();
+            if (loading) e.preventDefault();
           }}
           onOpenAutoFocus={
             autoFocusConfirm
@@ -181,10 +176,7 @@ export function ConfirmDialog({
           }
         >
           <AlertDialog.Title
-            className={cn(
-              'shrink-0 text-lg font-medium text-[var(--confirm-title)]',
-              textClassName,
-            )}
+            className={cn('shrink-0 text-lg font-medium text-[var(--confirm-title)]', textClassName)}
           >
             {title}
           </AlertDialog.Title>
