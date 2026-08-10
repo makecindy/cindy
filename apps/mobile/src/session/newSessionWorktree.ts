@@ -404,12 +404,12 @@ export function worktreeEligibilityCaptionKey(
   }
 }
 
-/** suggest-name 失败时的兜底名(对齐桌面 `auto-` + 时间戳 base36 后 6 位;过工作端 [a-z0-9-] 白名单)。 */
+/** suggest-name 失败时的兼容兜底名；旧 Desktop host 仍要求 create 的 name 非空且合法。 */
 export function fallbackWorktreeName(now = Date.now()): string {
   return `auto-${now.toString(36).slice(-6)}`;
 }
 
-/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余走兜底名。 */
+/** 归一工作端 suggest-name 回包:非空字符串取 trim,其余走兼容 auto-* 兜底。 */
 export function normalizeSuggestedWorktreeName(value: unknown, now?: number): string {
   if (typeof value === 'string' && value.trim().length > 0) return value.trim();
   return fallbackWorktreeName(now);
@@ -479,6 +479,7 @@ export function buildWorktreeCreateRequest(input: {
   sourceBranch?: string | null;
   suggestedName: string | null | undefined;
   recoveryKey: string;
+  /** 仅供测试固定 fallback；不进入 wire request。 */
   now?: number;
 }): WorktreeCreateRequest {
   return {

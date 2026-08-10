@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { clearWorkersCache } from '@/features/cc-agent/hooks/useWorkers';
+import { setSelectedMachineOwner } from '@/features/device-link/selectedMachineStore';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import {
@@ -96,6 +97,7 @@ function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
+  setSelectedMachineOwner(dataOwnerId);
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }
 

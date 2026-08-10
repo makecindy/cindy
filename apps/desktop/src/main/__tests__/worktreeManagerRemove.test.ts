@@ -124,6 +124,20 @@ describe('removeWorktreeForSession', () => {
     expect(gitExecMock).not.toHaveBeenCalled();
   });
 
+  it('reads and recycles a historical auto-* worktree without renaming it', async () => {
+    const meta = makeMeta('legacy-auto', 'auto-abc123');
+    storeMap.set(meta.sessionId, meta);
+
+    expect(manager.getForSession(meta.sessionId)).toEqual(meta);
+    await manager.removeWorktreeForSession(meta.sessionId);
+
+    expect(gitExecMock).toHaveBeenCalledWith(
+      ['worktree', 'remove', '--force', meta.path],
+      BASE_REPO,
+    );
+    expect(storeMap.has(meta.sessionId)).toBe(false);
+  });
+
   it('suggestName reserves current and legacy names from local and origin branches', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
