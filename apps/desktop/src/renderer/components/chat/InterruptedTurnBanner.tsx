@@ -69,7 +69,7 @@ export function InterruptedTurnBanner({
     <BannerSlide>
       <div
         className={cn(
-          'flex select-none items-start gap-2 rounded-md px-3 py-2',
+          'flex gap-3 rounded-md px-3 py-2',
           'border bg-[var(--error-bg)] border-[var(--error-border)]',
           className,
         )}
@@ -77,33 +77,41 @@ export function InterruptedTurnBanner({
         data-testid="interrupted-turn-banner"
         data-banner-kind="interrupted"
       >
-      <CirclePause size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {t('chat.interruptedBanner.text')}
-      </span>
-      <button
-        type="button"
-        onClick={() => void handleContinue()}
-        disabled={sending}
-        className={cn(
-          'shrink-0 flex items-center gap-1 text-xs font-medium',
-          'text-[var(--error-fg-strong)]',
-          'hover:opacity-70 transition-opacity',
-          'disabled:opacity-50 disabled:cursor-not-allowed',
-        )}
-        title={t('chat.interruptedBanner.continueTitle')}
-      >
-        <Play size={12} />
-        {sending ? t('chat.interruptedBanner.continuing') : t('chat.interruptedBanner.continueAction')}
-      </button>
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
-        title={t('chat.interruptedBanner.dismissTitle')}
-      >
-        <X size={14} />
-      </button>
+        <div className="shrink-0 mt-0.5">
+          <CirclePause size={14} className="text-[var(--error-fg)]" />
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+          <div className="flex items-start gap-2">
+            <p className="flex-1 text-sm font-medium break-all text-[var(--error-fg)] select-none">
+              {t('chat.interruptedBanner.text')}
+            </p>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
+              title={t('chat.interruptedBanner.dismissTitle')}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void handleContinue()}
+              disabled={sending}
+              className={cn(
+                'flex items-center gap-1 text-xs font-medium',
+                'text-[var(--error-fg-strong)]',
+                'hover:opacity-70 transition-opacity',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
+              )}
+              title={t('chat.interruptedBanner.continueTitle')}
+            >
+              <Play size={12} />
+              {sending ? t('chat.interruptedBanner.continuing') : t('chat.interruptedBanner.continueAction')}
+            </button>
+          </div>
+        </div>
       </div>
     </BannerSlide>,
   );

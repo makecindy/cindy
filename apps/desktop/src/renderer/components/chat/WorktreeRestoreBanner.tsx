@@ -182,52 +182,59 @@ export function WorktreeRestoreBanner({
     <BannerSlide>
       <div
         className={cn(
-          'flex items-start gap-2 rounded-md px-3 py-2',
+          'flex gap-3 rounded-md px-3 py-2',
           'border bg-[var(--error-bg)] border-[var(--error-border)]',
           className,
         )}
         style={style}
         data-testid="worktree-restore-banner"
       >
-      <FolderX size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {pending
-          ? t('chat.worktreeRestoreBanner.textPendingSnapshot')
-          : t('chat.worktreeRestoreBanner.text')}
-      </span>
-      <button
-        type="button"
-        onClick={() => void handleRestore()}
-        disabled={restoring}
-        className={cn(
-          'shrink-0 flex items-center gap-1 text-xs font-medium',
-          'text-[var(--error-fg-strong)]',
-          'hover:opacity-70 transition-opacity',
-          'disabled:opacity-50 disabled:cursor-not-allowed',
-        )}
-        title={t('chat.worktreeRestoreBanner.restoreTitle')}
-      >
-        <span className={cn('inline-flex', restoring && 'animate-spin motion-reduce:animate-none')}>
-          <RefreshCw size={12} />
-        </span>
-        {restoring
-          ? t('chat.worktreeRestoreBanner.restoring')
-          : pending
-            ? t('chat.worktreeRestoreBanner.applySnapshotAction')
-            : t('chat.worktreeRestoreBanner.restoreAction')}
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setPhase('hidden');
-          // 用户主动忽略 = 处置(本视图内),清红点。重开会话自查再命中会重新打上。
-          if (sessionId) clearOwnAttentionFor(sessionId);
-        }}
-        className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
-        title={t('chat.worktreeRestoreBanner.dismissTitle')}
-      >
-        <X size={14} />
-      </button>
+        <div className="shrink-0 mt-0.5">
+          <FolderX size={14} className="text-[var(--error-fg)]" />
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+          <div className="flex items-start gap-2">
+            <p className="flex-1 text-sm font-medium break-all text-[var(--error-fg)] select-none">
+              {pending
+                ? t('chat.worktreeRestoreBanner.textPendingSnapshot')
+                : t('chat.worktreeRestoreBanner.text')}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setPhase('hidden');
+                if (sessionId) clearOwnAttentionFor(sessionId);
+              }}
+              className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
+              title={t('chat.worktreeRestoreBanner.dismissTitle')}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void handleRestore()}
+              disabled={restoring}
+              className={cn(
+                'flex items-center gap-1 text-xs font-medium',
+                'text-[var(--error-fg-strong)]',
+                'hover:opacity-70 transition-opacity',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
+              )}
+              title={t('chat.worktreeRestoreBanner.restoreTitle')}
+            >
+              <span className={cn('inline-flex', restoring && 'animate-spin motion-reduce:animate-none')}>
+                <RefreshCw size={12} />
+              </span>
+              {restoring
+                ? t('chat.worktreeRestoreBanner.restoring')
+                : pending
+                  ? t('chat.worktreeRestoreBanner.applySnapshotAction')
+                  : t('chat.worktreeRestoreBanner.restoreAction')}
+            </button>
+          </div>
+        </div>
       </div>
     </BannerSlide>,
   );

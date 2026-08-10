@@ -246,48 +246,55 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
     <BannerSlide>
       <div
         className={cn(
-          'flex select-none items-start gap-2 rounded-md px-3 py-2',
+          'flex gap-3 rounded-md px-3 py-2',
           'border bg-[var(--upgrade-banner-bg)] border-[var(--upgrade-banner-border)]',
           className,
         )}
         style={style}
       >
-      {upgrading ? (
-        <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
-      ) : (
-        <ArrowUpCircle size={14} className="shrink-0 mt-[2px] text-[var(--upgrade-banner-fg)]" />
-      )}
-      <span className="text-xs text-[var(--upgrade-banner-fg)] flex-1 break-all">
-        {upgrading
-          ? t('chat.upgradeBanner.upgrading', { hostId })
-          : t('chat.upgradeBanner.description', { hostId })}
-      </span>
-      {!upgrading && (
-        <button
-          type="button"
-          onClick={() => void handleUpgrade()}
-          className={cn(
-            'shrink-0 flex items-center gap-1 text-xs font-medium',
-            'text-[var(--upgrade-banner-fg)]',
-            'hover:opacity-70 transition-opacity',
+        <div className="shrink-0 mt-0.5">
+          {upgrading ? (
+            <Spinner size={14} className="text-[var(--upgrade-banner-fg)]" />
+          ) : (
+            <ArrowUpCircle size={14} className="text-[var(--upgrade-banner-fg)]" />
           )}
-          title={t('chat.upgradeBanner.upgradeTitle')}
-        >
-          <ArrowUpCircle size={12} />
-          {t('chat.upgradeBanner.upgrade')}
-        </button>
-      )}
-      {/* 关闭:纯 X,尺寸与不透明度对齐其它提示条的关闭按钮(2026-07 统一)。 */}
-      {!upgrading && (
-        <button
-          type="button"
-          onClick={() => void handleDismiss()}
-          className="shrink-0 text-[var(--upgrade-banner-fg)] opacity-60 hover:opacity-100 transition-opacity"
-          title={t('chat.upgradeBanner.dismissTitle')}
-        >
-          <X size={14} />
-        </button>
-      )}
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+          <div className="flex items-start gap-2">
+            <p className="flex-1 text-sm font-medium break-all text-[var(--upgrade-banner-fg)] select-none">
+              {upgrading
+                ? t('chat.upgradeBanner.upgrading', { hostId })
+                : t('chat.upgradeBanner.description', { hostId })}
+            </p>
+            {!upgrading && (
+              <button
+                type="button"
+                onClick={() => void handleDismiss()}
+                className="shrink-0 text-[var(--upgrade-banner-fg)] opacity-60 hover:opacity-100 transition-opacity"
+                title={t('chat.upgradeBanner.dismissTitle')}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          {!upgrading && (
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void handleUpgrade()}
+                className={cn(
+                  'flex items-center gap-1 text-xs font-medium',
+                  'text-[var(--upgrade-banner-fg)]',
+                  'hover:opacity-70 transition-opacity',
+                )}
+                title={t('chat.upgradeBanner.upgradeTitle')}
+              >
+                <ArrowUpCircle size={12} />
+                {t('chat.upgradeBanner.upgrade')}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </BannerSlide>,
   );

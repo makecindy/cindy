@@ -94,31 +94,42 @@ export function CredentialSwitchWaitBanner({
     <BannerSlide>
       <div
         className={cn(
-          'flex select-none items-start gap-2 rounded-md px-3 py-2',
+          'flex gap-3 rounded-md px-3 py-2',
           'bg-[var(--upgrade-banner-bg)] border border-[var(--upgrade-banner-border)]',
           className,
         )}
         style={style}
       >
-        <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
-        <span className="flex-1 min-w-0 text-xs text-[var(--upgrade-banner-fg)] break-all">
-          {message}
-        </span>
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            className={cn(
-              'shrink-0 flex items-center gap-1 text-xs font-medium',
-              'text-[var(--upgrade-banner-fg)]',
-              'hover:opacity-70 transition-opacity',
-            )}
-            title={t('chat.credentialSwitchWait.cancelTitle')}
-          >
-            <X size={12} />
-            {t('chat.credentialSwitchWait.cancel')}
-          </button>
-        )}
+        <div className="shrink-0 mt-0.5">
+          <Spinner size={14} className="text-[var(--upgrade-banner-fg)]" />
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+          <p className="text-sm font-medium text-[var(--upgrade-banner-fg)] break-all select-none">
+            {message}
+          </p>
+          {displayTitles.length > 0 && (
+            <p className="text-xs text-[var(--upgrade-banner-fg)] opacity-70 break-all select-none">
+              {joinedTitles}
+            </p>
+          )}
+          {onCancel && (
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onCancel}
+                className={cn(
+                  'flex items-center gap-1 text-xs font-medium',
+                  'text-[var(--upgrade-banner-fg)]',
+                  'hover:opacity-70 transition-opacity',
+                )}
+                title={t('chat.credentialSwitchWait.cancelTitle')}
+              >
+                <X size={12} />
+                {t('chat.credentialSwitchWait.cancel')}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </BannerSlide>,
   );
