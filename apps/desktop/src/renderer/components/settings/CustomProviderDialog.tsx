@@ -1262,6 +1262,10 @@ export function CustomProviderDialog({
       toast.error(t('settings.providers.custom.errors.nameRequired'));
       return;
     }
+    if (editing && authMode === 'apiKey' && !keyHydrationReady) {
+      toast.info(t('settings.providers.custom.runtimeFill.loadingKeys'));
+      return;
+    }
     if (editing && authMode === 'apiKey') {
       const failedEndpointEdit = VISIBLE_AGENTS.find((agent) => {
         if (!keyHydrationFailed[agent]) return false;

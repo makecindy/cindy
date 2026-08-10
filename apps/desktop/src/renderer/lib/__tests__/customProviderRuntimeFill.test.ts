@@ -183,11 +183,12 @@ describe('custom provider runtime fill', () => {
     ).toBe(true);
     expect(diffs.find((diff) => diff.field === 'modelsUrl')?.targetState).toBe('conflict');
     expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([]);
+    expect(normalizeRuntimeFillSelection(['apiKey'], diffs)).toEqual([]);
     expect(
       applyRuntimeFillFields(
         target,
         source,
-        ['baseUrl', 'requestPath', 'wireProtocol', 'modelsUrl'],
+        ['baseUrl', 'requestPath', 'wireProtocol', 'modelsUrl', 'apiKey'],
         {
           sourceAgent: 'codex',
           targetAgent: 'pi',
@@ -198,6 +199,7 @@ describe('custom provider runtime fill', () => {
       wireProtocol: target.wireProtocol,
       requestPath: '',
       modelsUrl: source.modelsUrl,
+      apiKey: target.apiKey,
     });
 
     const piSource = draft({

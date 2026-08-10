@@ -451,11 +451,21 @@ export function normalizeRuntimeFillSelection(
       selected.has(field),
     )
   ) {
-    for (const field of runtimeFillFieldsForToggle(selectedImplicitClear?.field ?? 'baseUrl', diffs)) {
+    const bundle = runtimeFillFieldsForToggle(selectedImplicitClear?.field ?? 'baseUrl', diffs);
+    if (selectedImplicitClear && bundle.length === 0) {
+      selected.delete(selectedImplicitClear.field);
+    }
+    for (const field of bundle) {
       selected.add(field);
     }
   }
-  return RUNTIME_FILL_FIELD_ORDER.filter((field) => selected.has(field));
+  return RUNTIME_FILL_FIELD_ORDER.filter(
+    (field) =>
+      selected.has(field) &&
+      diffs.some(
+        (diff) => diff.field === field && diff.targetState !== 'incompatible',
+      ),
+  );
 }
 
 export function runtimeFillHasUnreviewedConflict(
@@ -533,6 +543,7 @@ export function applyRuntimeFillFields(
   const copyBaseUrl = copyEndpoint && copyableEndpointFields.includes('baseUrl');
   const copyRequestPath = copyEndpoint && copyableEndpointFields.includes('requestPath');
   const copyWireProtocol = copyEndpoint && copyableEndpointFields.includes('wireProtocol');
+  const copyApiKey = selected.has('apiKey') && (!endpointSelected || copyEndpoint);
   const clearTargetApiKeyWithEndpoint =
     copyEndpoint &&
     target.apiKey.trim().length > 0 &&
@@ -556,7 +567,7 @@ export function applyRuntimeFillFields(
         : copyRequestPath
           ? source.requestPath
           : target.requestPath,
-    apiKey: selected.has('apiKey')
+    apiKey: copyApiKey
       ? source.apiKey
       : clearTargetApiKeyWithEndpoint
         ? ''
