@@ -1242,4 +1242,45 @@ describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () =
     // but the survivor active (b) IS persisted
     expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: b.id });
   });
+
+  it('settles queued writes before deleting a row converted to preview (round 27l Xw9-h)', async () => {
+    // A normal tab with a queued patchTabState write behind another tab's
+    // active write, then converts to preview: the deletion must NOT race ahead
+    // of the queued upsert (which would recreate the row). settleTabStateWrites
+    // runs first inside syncEphemeralStatus so the delete happens after the
+    // pump finishes.
+    const other = await store.addTab('s1', 'web-browser', { url: 'https://o.example/' });
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.upsert.mockClear();
+    ipc.close.mockClear();
+    // Defer the upsert pump so the queued write is still pending when the
+    // conversion runs — then release it; the delete must wait for it.
+    let resolveUpsert!: () => void;
+    ipc.upsert.mockImplementationOnce(() => new Promise((r) => (resolveUpsert = r)));
+    const pendingPatch = store.patchTabState('s1', other.id, (s) => ({ ...(s as object), title: 'queued' }));
+    await new Promise((r) => setTimeout(r, 0)); // let the write enqueue
+    ipc.upsert.mockImplementation(async () => ({ ok: true }));
+    const convert = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    await new Promise((r) => setTimeout(r, 0)); // let conversion start (settles the queue)
+    resolveUpsert();
+    await Promise.all([pendingPatch, convert]);
+    await vi.waitFor(() => expect(ipc.close).toHaveBeenCalledWith({ id: tab.id }));
+    // After the conversion the row must NOT be re-created by a later upsert.
+    expect(ipc.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: tab.id, state: expect.objectContaining({ url: PREVIEW_URL }) }),
+    );
+  });
+
+  it('persists activation when an active preview tab becomes ordinary (round 27l Xw9-l)', async () => {
+    // The active tab is a preview; it navigates to an ordinary URL. The
+    // conversion re-creates the row and must also persist active — otherwise
+    // the previously active persistent tab stays active in SQLite.
+    const a = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    const p = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    await store.setActiveTab('s1', p.id);
+    ipc.setActive.mockClear();
+    ipc.upsert.mockClear();
+    await store.patchTabState('s1', p.id, (s) => ({ ...(s as object), url: 'https://p.example/' }));
+    expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: p.id });
+  });
 });
