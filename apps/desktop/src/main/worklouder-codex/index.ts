@@ -4,6 +4,7 @@ import path from 'node:path';
 import { utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
+import { focusMainWindow, openMainWindowSession } from '../deepLink.js';
 import {
   WorkLouderCodexHostClient,
   type WorkLouderSdkLocation,
@@ -54,4 +55,10 @@ const hostClient = new WorkLouderCodexHostClient({
   log,
 });
 
-export const workLouderCodexLightingController = new WorkLouderCodexLightingController(hostClient);
+export const workLouderCodexLightingController = new WorkLouderCodexLightingController(
+  hostClient,
+  (sessionId) => {
+    focusMainWindow();
+    openMainWindowSession(sessionId);
+  },
+);

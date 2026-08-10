@@ -51,8 +51,13 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private disposePromise: Promise<void> | null = null;
   private finishDispose: (() => void) | null = null;
   private disposeTimer: ReturnType<typeof setTimeout> | null = null;
+  private agentKeyPressHandler: ((slot: number) => void) | null = null;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
+
+  setAgentKeyPressHandler(handler: ((slot: number) => void) | null): void {
+    this.agentKeyPressHandler = handler;
+  }
 
   update(frame: WorkLouderCodexLightingFrame): void {
     if (this.disposed) return;
@@ -158,6 +163,10 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     if (message.kind === 'log') {
       this.deps.log[message.level](`[host] ${message.message}`);
+      return;
+    }
+    if (message.kind === 'agent-key') {
+      this.agentKeyPressHandler?.(message.slot);
       return;
     }
     if (message.status === this.lastStatus) return;

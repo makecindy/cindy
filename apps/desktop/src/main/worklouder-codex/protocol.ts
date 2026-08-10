@@ -34,6 +34,8 @@ export interface WorkLouderCodexLightingFrame {
   threads: WorkLouderThreadLighting[];
 }
 
+export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 6;
+
 export type WorkLouderCodexHostRequest =
   | { kind: 'init'; sdkEntry: string }
   | { kind: 'apply'; frame: WorkLouderCodexLightingFrame }
@@ -41,6 +43,7 @@ export type WorkLouderCodexHostRequest =
 
 export type WorkLouderCodexHostMessage =
   | { kind: 'state'; status: 'connected' | 'not-detected' | 'error' }
+  | { kind: 'agent-key'; slot: number }
   | { kind: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; message: string }
   | { kind: 'stopped' };
 
@@ -73,7 +76,7 @@ const PHASE_PRIORITY: Readonly<Record<AgentIslandSessionActivity['phase'], numbe
 export function createWorkLouderCodexLightingFrame(
   activity: readonly AgentIslandSessionActivity[],
 ): WorkLouderCodexLightingFrame {
-  const visible = activity.filter(isLightingVisibleActivity).slice(0, 6);
+  const visible = selectWorkLouderCodexSlotActivity(activity);
   const aggregate = visible.reduce<AgentIslandSessionActivity['phase'] | null>(
     (current, item) =>
       current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
@@ -85,8 +88,26 @@ export function createWorkLouderCodexLightingFrame(
   return {
     ambient: aggregate ? ambientForPhase(aggregate) : { ...OFF_SIDE },
     keys: aggregate ? keysForPhase(aggregate) : { ...OFF_SIDE },
-    threads: Array.from({ length: 6 }, (_, id) => threadForActivity(id, visible[id])),
+    threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) =>
+      threadForActivity(id, visible[id]),
+    ),
   };
+}
+
+/** The ordered task assignment shared by the six LEDs and their physical keys. */
+export function selectWorkLouderCodexSlotActivity(
+  activity: readonly AgentIslandSessionActivity[],
+): AgentIslandSessionActivity[] {
+  return activity.filter(isLightingVisibleActivity).slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+}
+
+/** Accept only press events for the six official Agent keys (AG00 through AG05). */
+export function parseWorkLouderCodexAgentKeyPress(value: unknown): number | null {
+  if (!value || typeof value !== 'object') return null;
+  const event = value as { key?: unknown; act?: unknown };
+  if (event.act !== 1 || typeof event.key !== 'string') return null;
+  const match = /^AG0([0-5])$/.exec(event.key);
+  return match ? Number(match[1]) : null;
 }
 
 export function isWorkLouderCodexLightingFrameOff(frame: WorkLouderCodexLightingFrame): boolean {
@@ -101,6 +122,15 @@ export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLoude
   if (!value || typeof value !== 'object') return false;
   const message = value as { kind?: unknown; status?: unknown; level?: unknown; message?: unknown };
   if (message.kind === 'stopped') return true;
+  if (message.kind === 'agent-key') {
+    const slot = (message as { slot?: unknown }).slot;
+    return (
+      typeof slot === 'number' &&
+      Number.isInteger(slot) &&
+      slot >= 0 &&
+      slot < WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+    );
+  }
   if (message.kind === 'state') {
     return (
       message.status === 'connected' ||

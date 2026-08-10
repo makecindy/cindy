@@ -76,6 +76,7 @@ describe('internal main-window navigation', () => {
       show: vi.fn(),
       restore: vi.fn(),
       focus: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
       webContents: {
         isLoading: () => false,
         send,
@@ -88,6 +89,8 @@ describe('internal main-window navigation', () => {
     expect(mainWindow.show).toHaveBeenCalledOnce();
     expect(mainWindow.restore).toHaveBeenCalledOnce();
     expect(mainWindow.focus).toHaveBeenCalledOnce();
+    expect(mainWindow.setAlwaysOnTop).toHaveBeenNthCalledWith(1, true);
+    expect(mainWindow.setAlwaysOnTop).toHaveBeenNthCalledWith(2, false);
     expect(send).toHaveBeenCalledWith('deep-link:navigate', {
       type: 'settings',
       tab: 'providers',

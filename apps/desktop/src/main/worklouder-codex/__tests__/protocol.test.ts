@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { AgentIslandSessionActivity } from '../../../shared/agentIsland.js';
 import {
   createWorkLouderCodexLightingFrame,
+  isWorkLouderCodexHostMessage,
   isWorkLouderCodexLightingFrameOff,
+  parseWorkLouderCodexAgentKeyPress,
   WorkLouderLightingEffect,
 } from '../protocol.js';
 
@@ -60,5 +62,22 @@ describe('createWorkLouderCodexLightingFrame', () => {
 
     expect(frame.threads.map((thread) => thread.id)).toEqual([0, 1, 2, 3, 4, 5]);
     expect(frame.threads.every((thread) => thread.brightness > 0)).toBe(true);
+  });
+});
+
+describe('Work Louder Agent key protocol', () => {
+  it('maps only press events from the six Agent keys', () => {
+    expect(parseWorkLouderCodexAgentKeyPress({ key: 'AG00', act: 1 })).toBe(0);
+    expect(parseWorkLouderCodexAgentKeyPress({ key: 'AG05', act: 1, agent: 99 })).toBe(5);
+    expect(parseWorkLouderCodexAgentKeyPress({ key: 'AG03', act: 0 })).toBeNull();
+    expect(parseWorkLouderCodexAgentKeyPress({ key: 'ENC_CW', act: 2 })).toBeNull();
+    expect(parseWorkLouderCodexAgentKeyPress({ key: 'AG06', act: 1 })).toBeNull();
+  });
+
+  it('accepts only in-range Agent key messages from the utility process', () => {
+    expect(isWorkLouderCodexHostMessage({ kind: 'agent-key', slot: 0 })).toBe(true);
+    expect(isWorkLouderCodexHostMessage({ kind: 'agent-key', slot: 5 })).toBe(true);
+    expect(isWorkLouderCodexHostMessage({ kind: 'agent-key', slot: 6 })).toBe(false);
+    expect(isWorkLouderCodexHostMessage({ kind: 'agent-key', slot: 1.5 })).toBe(false);
   });
 });

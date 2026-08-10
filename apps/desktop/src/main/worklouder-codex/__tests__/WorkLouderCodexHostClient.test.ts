@@ -85,6 +85,31 @@ describe('WorkLouderCodexHostClient', () => {
     expect(child.kill).toHaveBeenCalledOnce();
   });
 
+  it('forwards a validated Agent key press from the isolated host', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    const onAgentKeyPress = vi.fn();
+    client.setAgentKeyPressHandler(onAgentKeyPress);
+    client.update(
+      createWorkLouderCodexLightingFrame([
+        {
+          sessionId: 'session-1',
+          phase: 'running',
+          compactDetail: '',
+          attention: false,
+        },
+      ]),
+    );
+
+    child.emit('message', { kind: 'agent-key', slot: 4 });
+
+    expect(onAgentKeyPress).toHaveBeenCalledWith(4);
+  });
+
   it('restarts the isolated host after a native-process crash', async () => {
     vi.useFakeTimers();
     try {

@@ -288,9 +288,9 @@ export function handleIncomingShareFile(filePath: string, source: string): void 
 }
 
 /**
- * 把主窗口拉回前台 (show + restore + focus)。Windows 的外部协议唤起需要先
- * 激活应用并提升目标窗口 z-order；macOS 额外使用 app.focus steal——
- * 从浏览器等其它前台应用手里抢焦点，单靠 win.focus() 不可靠。
+ * 把主窗口拉回前台。Windows 的外部协议唤起需要先激活应用并提升目标窗口
+ * z-order；其它平台短暂置顶后 focus，macOS 再使用 app.focus steal 从其它
+ * 前台应用手里抢回焦点。
  * 窗口不存在 / 已销毁时返回 false,调用方自行决定是否忽略。
  */
 export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
@@ -305,8 +305,15 @@ export function focusMainWindow(platform: NodeJS.Platform = process.platform): b
     // 不会把后台 Ghost workspace 请求扩大为强制抢前台。
     app.focus();
     win.moveTop();
+    win.focus();
+    return true;
   }
-  win.focus();
+  win.setAlwaysOnTop(true);
+  try {
+    win.focus();
+  } finally {
+    if (!win.isDestroyed()) win.setAlwaysOnTop(false);
+  }
   if (platform === 'darwin') app.focus({ steal: true });
   return true;
 }
@@ -348,20 +355,14 @@ function dispatchDeepLink(payload: DeepLinkPayload): void {
     }
     pendingDeepLink = payload;
     log.debug('buffered pending deep link until renderer pull', payload);
-    if (win && !win.isDestroyed()) {
-      // 把窗口拉前台(用户点链接 / 右键的意图就是 focus app)
-      if (!win.isVisible()) win.show();
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
+    // 把窗口拉前台(用户点链接 / 右键的意图就是 focus app)
+    focusMainWindow();
     return;
   }
   // 已运行场景:listener 必然挂着(MainLayout 已 mount),直接 send,不进 pending。
   // 同时把窗口拉前台 — open-url / second-instance 本身不会唤起,用户点链接的
   // 意图就是要看到 app。
-  if (!win.isVisible()) win.show();
-  if (win.isMinimized()) win.restore();
-  win.focus();
+  focusMainWindow();
   win.webContents.send('deep-link:navigate', payload);
 }
 

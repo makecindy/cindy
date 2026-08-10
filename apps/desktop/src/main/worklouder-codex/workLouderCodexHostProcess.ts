@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 
 import {
   isWorkLouderCodexLightingFrameOff,
+  parseWorkLouderCodexAgentKeyPress,
   type WorkLouderCodexHostMessage,
   type WorkLouderCodexHostRequest,
   type WorkLouderCodexLightingFrame,
@@ -32,6 +33,7 @@ interface WorkLouderApi {
     config: Pick<WorkLouderCodexLightingFrame, 'ambient' | 'keys'>,
   ): Promise<boolean>;
   sendThreadsLighting(threads: WorkLouderCodexLightingFrame['threads']): Promise<boolean>;
+  onHidReceived?(listener: (event: unknown) => void): (() => void) | void;
 }
 
 interface WorkLouderSdk {
@@ -58,6 +60,7 @@ let sdk: WorkLouderSdk | null = null;
 let sdkEntry: string | null = null;
 let comm: WorkLouderComm | null = null;
 let api: WorkLouderApi | null = null;
+let unsubscribeHid: (() => void) | null = null;
 let latestFrame: WorkLouderCodexLightingFrame | null = null;
 let applyPending = false;
 let applying = false;
@@ -190,8 +193,18 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   const nextComm = new loaded.WLDeviceCommImpl(sdkLogger);
   if (!(await nextComm.connect(device))) return null;
   comm = nextComm;
-  api = new loaded.RPCApiOAI(nextComm, sdkLogger);
-  return api;
+  const nextApi = new loaded.RPCApiOAI(nextComm, sdkLogger);
+  if (typeof nextApi.onHidReceived === 'function') {
+    const unsubscribe = nextApi.onHidReceived((event) => {
+      const slot = parseWorkLouderCodexAgentKeyPress(event);
+      if (slot !== null) post({ kind: 'agent-key', slot });
+    });
+    unsubscribeHid = typeof unsubscribe === 'function' ? unsubscribe : null;
+  } else {
+    hostLog('warn', 'Work Louder SDK does not expose Agent key events');
+  }
+  api = nextApi;
+  return nextApi;
 }
 
 function scheduleRetry(): void {
@@ -212,6 +225,15 @@ function clearRetry(): void {
 }
 
 async function disconnect(): Promise<void> {
+  const unsubscribe = unsubscribeHid;
+  unsubscribeHid = null;
+  if (unsubscribe) {
+    try {
+      unsubscribe();
+    } catch {
+      // Subscription teardown is best effort before closing the HID transport.
+    }
+  }
   const current = comm;
   comm = null;
   api = null;
