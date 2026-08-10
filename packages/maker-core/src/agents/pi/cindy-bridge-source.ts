@@ -441,14 +441,51 @@ function reviewSearchPathTouchesCredential(candidate: string, baseDir = process.
   }
 }
 
-function reviewSearchPathHasMultipleLinks(candidate: string, baseDir = process.cwd()): boolean {
+function reviewSearchPathHasUnsafeLinkLayout(
+  candidate: string,
+  allowedPaths: string[],
+  baseDir = process.cwd(),
+): boolean {
   try {
-    const target = realpathSync(path.resolve(baseDir, candidate));
-    const stat = statSync(target);
-    return stat.isFile() && stat.nlink > 1;
+    const requested = path.resolve(baseDir, candidate);
+    const target = realpathSync(requested);
+    const targetStat = statSync(target);
+    if (!targetStat.isFile() || targetStat.nlink <= 1) return false;
+    const safeWithinGrant = allowedPaths.some((allowedPath) => {
+      try {
+        const allowed = realpathSync(allowedPath);
+        const allowedStat = statSync(allowed);
+        return (
+          allowedStat.isDirectory()
+          && isInsideRoot(target, allowed)
+          && reviewFileLinkLayoutIsSafe(target, targetStat, allowed)
+        );
+      } catch {
+        return false;
+      }
+    });
+    if (!safeWithinGrant) return true;
+    const finalTarget = realpathSync(requested);
+    const finalStat = statSync(finalTarget);
+    return (
+      path.resolve(finalTarget) !== path.resolve(target)
+      || !reviewStatsReferToSameFile(targetStat, finalStat)
+      || finalStat.nlink !== targetStat.nlink
+    );
   } catch {
     return true;
   }
+}
+
+function reviewSearchPathIsVisible(
+  candidate: string,
+  allowedPaths: string[],
+  baseDir = process.cwd(),
+): boolean {
+  return (
+    !reviewSearchPathTouchesCredential(candidate, baseDir)
+    && !reviewSearchPathHasUnsafeLinkLayout(candidate, allowedPaths, baseDir)
+  );
 }
 
 function reviewGrepOutputPath(line: string): string | null {
@@ -456,7 +493,7 @@ function reviewGrepOutputPath(line: string): string | null {
   return match?.[1] ?? null;
 }
 
-function filterReviewGrepResult(result: any, input: unknown): any {
+function filterReviewGrepResult(result: any, input: unknown, allowedPaths: string[]): any {
   if (!result || typeof result !== 'object' || !Array.isArray(result.content)) {
     return { content: [{ type: 'text', text: 'No matches found' }], details: undefined };
   }
@@ -478,8 +515,7 @@ function filterReviewGrepResult(result: any, input: unknown): any {
     const lines = item.text.split('\n').filter((line: string) => {
       const candidate = reviewGrepOutputPath(line);
       if (!candidate) return true;
-      if (reviewSearchPathTouchesCredential(candidate, resultBase)) return false;
-      if (reviewSearchPathHasMultipleLinks(candidate, resultBase)) return false;
+      if (!reviewSearchPathIsVisible(candidate, allowedPaths, resultBase)) return false;
       visibleMatch = true;
       return true;
     });
@@ -807,7 +843,8 @@ function rgGlob(
   options: { ignore: string[]; limit: number },
 ): Promise<string[]> {
   return new Promise((resolve, reject) => {
-    const reviewOnly = currentPermissionState().reviewOnly;
+    const permission = currentPermissionState();
+    const reviewOnly = permission.reviewOnly;
     const limit = Number.isFinite(options.limit) ? Math.max(1, Math.floor(options.limit)) : 1000;
     const args = ['--files', '--hidden', '--no-require-git'];
     for (const ignored of options.ignore) args.push('--glob', '!' + ignored);
@@ -829,8 +866,7 @@ function rgGlob(
     reader.on('line', (line) => {
       if (!line || lines.length >= limit) return;
       const relative = line.replace(/\r$/, '');
-      if (reviewOnly && reviewSearchPathTouchesCredential(relative, cwd)) return;
-      if (reviewOnly && reviewSearchPathHasMultipleLinks(relative, cwd)) return;
+      if (reviewOnly && !reviewSearchPathIsVisible(relative, permission.reviewReadPaths, cwd)) return;
       // 完整镜像 Pi 上游 fd 规则：无 slash 时匹配 basename；有 slash 时启用
       // full-path，且相对 pattern 自动加 **/，让 src/** 同时命中 monorepo 子包。
       let candidate = path.basename(relative);
@@ -878,9 +914,11 @@ export default async function cindyBridge(pi: any) {
     execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) => {
       // Fail closed before Pi upstream ensureTool can fall back to cwd/PATH lookup.
       managedRipgrepPath();
-      const reviewOnly = currentPermissionState().reviewOnly;
+      const permission = currentPermissionState();
       const result = await grepTool.execute(id, params as any, signal, onUpdate as any);
-      return reviewOnly ? filterReviewGrepResult(result, params) : result;
+      return permission.reviewOnly
+        ? filterReviewGrepResult(result, params, permission.reviewReadPaths)
+        : result;
     },
   });
 
