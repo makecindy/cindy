@@ -306,6 +306,18 @@ os.system("".join(reversed("ECIVED nwodtuhs ltcmis nurxc")))
 PY`,
     `python3 - <<'PY'
 import os
+os.system(chr(60*2)+chr(99)+chr(114)+chr(117)+chr(110)+chr(32)+chr(115)+chr(105)+chr(109)+chr(99)+chr(116)+chr(108))
+PY`,
+    `python3 - <<'PY'
+import os
+os.system("".join(chr(c) for c in [60*2, 99, 114, 117, 110, 32, 115, 105, 109, 99, 116, 108]))
+PY`,
+    `python3 - <<'PY'
+import os
+os.system("".join(chr(c) for c in (60*2, 99, 114, 117, 110)))
+PY`,
+    `python3 - <<'PY'
+import os
 os.system(" ".join("ECIVED nwodtuhs ltcmis nurxc".split()[::-1]))
 PY`,
     `node - <<'JS'
@@ -473,6 +485,19 @@ print(colors)
 PY`,
     `python3 - <<'PY'
 print(chr(65))
+PY`,
+    `python3 - <<'PY'
+print(chr(65+0))
+PY`,
+    `python3 - <<'PY'
+print(chr(n))
+PY`,
+    `python3 - <<'PY'
+print([1*2, 3+4])
+PY`,
+    `python3 - <<'PY'
+def g(n): return n
+print(chr(g(65)))
 PY`,
     `python3 - <<'PY'
 print("\\x78foo")

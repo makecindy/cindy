@@ -1453,17 +1453,34 @@ function cmdsubTokens(text: string): string[] {
   return tokens;
 }
 
+/** Evaluate a constant integer expression made of literals and arithmetic. */
+function evalConstantInt(expr: string): number | null {
+  const normalized = expr
+    .replace(/\s+/g, '')
+    .replace(/0x([0-9a-fA-F]+)/g, (_, hex) => String(parseInt(hex, 16)));
+  if (!/^[\d()+\-*/%]+$/.test(normalized)) return null;
+  try {
+    const value = Function(`"use strict"; return (${normalized});`)();
+    return typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Decode statically resolvable character-producing constructs: `chr(120)`,
- * `String.fromCharCode(120, 99, ...)`, integer arrays `[120, 99, ...]`, and
- * `\xHH`/`\uHHHH` escapes. Runtime values (variables, file contents) have no
- * static text and stay outside command-text policy.
+ * `String.fromCharCode(120, 99, ...)`, integer arrays `[120, 99, ...]`,
+ * constant arithmetic (`chr(60*2)`, `[0x3c*2, ...]`), and `\xHH`/`\uHHHH`
+ * escapes. Runtime values (variables, file contents) have no static text and
+ * stay outside command-text policy.
  */
 function decodedCharCodePieces(value: string): string[] {
   const pieces: string[] = [];
-  const pushNumber = (number: string): void => {
-    const code = parseInt(number, 0) & 0xffff;
-    if (code > 0) pieces.push(String.fromCharCode(code));
+  const pushConstant = (expr: string): boolean => {
+    const code = evalConstantInt(expr);
+    if (code === null) return false;
+    if (code > 0) pieces.push(String.fromCharCode(code & 0xffff));
+    return true;
   };
   // Reversed string literals (`"..."[::-1]`, `reversed("...")`, node's
   // `"..." .split("").reverse()`) reassemble an executor the literal scan
@@ -1493,17 +1510,13 @@ function decodedCharCodePieces(value: string): string[] {
       .split(',')
       .map((part) => part.trim())
       .filter((part) => part !== '');
-    if (numbers.length > 0 && numbers.every((n) => /^-?(?:\d+|0x[0-9a-f]+)$/i.test(n))) {
-      for (const number of numbers) pushNumber(number);
-    }
+    for (const number of numbers) pushConstant(number);
   }
-  for (const match of value.matchAll(/\[([0-9,\s]+)\]|\(([0-9,\s]+)\)/g)) {
+  for (const match of value.matchAll(/\[([0-9+\-*/%(),\s]*?)\]|\(([0-9+\-*/%(),\s]*?)\)/g)) {
     const body = (match[1] ?? match[2] ?? '').trim();
     if (!body) continue;
     const numbers = body.split(',').map((part) => part.trim());
-    if (numbers.every((n) => /^-?(?:\d+|0x[0-9a-f]+)$/i.test(n))) {
-      for (const number of numbers) pushNumber(number);
-    }
+    for (const number of numbers) pushConstant(number);
   }
   // Command substitutions emitting a literal (`$(printf xcr)`, `$(echo un)`)
   // assemble an executor their output is invisible to; decode the literal.
