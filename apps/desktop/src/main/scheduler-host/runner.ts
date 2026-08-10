@@ -266,11 +266,15 @@ export interface MakerScheduleRunnerDeps {
     defaultEffort: string | null;
     supportsFastMode: boolean;
   } | null>;
-  /** Pi 空模型的实时默认路由；model/providerId 必须来自同一连接来源快照。 */
+  /**
+   * Headless 默认路由的实时快照。Pi 空模型用它成对解析 model/providerId；
+   * Claude fresh session 传 modelId，把隐式来源物化为真实 provider，避免凭证 fallback。
+   */
   resolveDefaultModelRoute?: (
     agent: AgentKind,
     preferredProviderId?: string | null,
-  ) => Promise<{ model: string; providerId: string } | null>;
+    modelId?: string,
+  ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
 }
 
 /**
@@ -700,19 +704,50 @@ export class MakerScheduleRunner implements ScheduleRunner {
         : undefined;
     const explicitProviderId = schedule.providerId?.trim() ? schedule.providerId.trim() : null;
     const defaultRouteProviderId = explicitProviderId ?? (isHeartbeat ? heartbeatProviderId : null);
-    const dynamicDefaultRoute =
-      !rawModel?.trim() && effectiveAgentKind === 'pi'
-        ? ((await this.deps.resolveDefaultModelRoute?.(
-            effectiveAgentKind,
-            defaultRouteProviderId,
-          )) ?? null)
-        : null;
+    const modelHint = rawModel?.trim() ? rawModel : defaultModelFor(effectiveAgentKind);
+    // Fresh Claude schedules must freeze the same provider rail the UI would use for this model.
+    // Leaving providerId null delegates credential selection to the legacy auth fallback, which can
+    // silently choose the Cindy gateway even when the only usable source is an Anthropic subscription.
+    const shouldMaterializeFreshClaudeProvider =
+      !isHeartbeat && effectiveAgentKind === 'claude-code' && !explicitProviderId;
+    let dynamicDefaultRoute: {
+      model: string;
+      providerId: string | null;
+      catalogKnown?: boolean;
+    } | null = null;
+    if (!modelHint && effectiveAgentKind === 'pi') {
+      dynamicDefaultRoute =
+        (await this.deps.resolveDefaultModelRoute?.(
+          effectiveAgentKind,
+          defaultRouteProviderId,
+        )) ?? null;
+    } else if (shouldMaterializeFreshClaudeProvider) {
+      dynamicDefaultRoute =
+        (await this.deps.resolveDefaultModelRoute?.(
+          effectiveAgentKind,
+          defaultRouteProviderId,
+          modelHint,
+        )) ?? null;
+    }
     const model = rawModel?.trim()
       ? rawModel
       : (dynamicDefaultRoute?.model ?? defaultModelFor(effectiveAgentKind));
     if (!model) {
       throw new Error('schedule route unavailable: Pi has no connected model source');
     }
+    if (
+      shouldMaterializeFreshClaudeProvider &&
+      this.deps.resolveDefaultModelRoute &&
+      (!dynamicDefaultRoute ||
+        (dynamicDefaultRoute.providerId === null && dynamicDefaultRoute.catalogKnown !== false))
+    ) {
+      throw new Error(
+        `schedule route unavailable: Claude Code has no connected source for model "${model}"`,
+      );
+    }
+    const materializedDefaultProviderId = shouldMaterializeFreshClaudeProvider
+      ? (dynamicDefaultRoute?.providerId ?? null)
+      : null;
     const permissionMode = defaultPermissionModeForSchedule();
     // fastMode 对 Codex / Pi 生效（claude-code agent 忽略此字段）；Claude 恒不传，
     // 确保「不影响 Claude」。heartbeat 沿用 session meta 里的 fast 态，非 heartbeat 取 schedule。
@@ -794,7 +829,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 隐式改道(reroutedProviderId)也是本次 fire 的落地来源:跨凭证家族的改道
       // (如停用 XD 默认 → 改道 Anthropic)若不进本判定,会复用旧凭证 spawn 的
       // live session,请求仍走旧轨道或直接鉴权失败(PR #744 review 第二十三轮)。
-      const nextProviderId = explicitProviderId ?? reroutedProviderId ?? currentProviderId;
+      const nextProviderId =
+        explicitProviderId ??
+        reroutedProviderId ??
+        materializedDefaultProviderId ??
+        currentProviderId;
       if (
         liveSession &&
         shouldCloseSessionForCredentialSwitch({
@@ -977,8 +1016,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     //   - heartbeat 且留空 → 沿用绑定会话的来源:hydrate 只在内存无条目时写,**不覆盖**
     //     用户在聊天里刚切的更新值(runner 绕过了 register 的 hydrate funnel,冷 resume
     //     时内存为空,这一步把 DB 里的 provider_id 补回来 → honor 聊天所选来源)。
-    //   - 非 heartbeat 且留空 → fresh session 保持默认(null)→ 原生默认路由,不动它。
-    // null 的字节级不变性见 session-provider-store 契约;空值全程不进新分支(no-break)。
+    //   - 非 heartbeat Claude 且留空 → 把实时解析出的默认来源显式写入，确保 spawn
+    //     credential mode、proxy 路由、coordinator baseline 与落库使用同一个 provider。
+    //   - 其它非 heartbeat 且留空 → 保持既有默认路由语义。
     if (explicitProviderId) {
       setSessionProvider(session.id, explicitProviderId);
     } else if (reroutedProviderId) {
@@ -987,6 +1027,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 心跳生效,否则照旧经停用的隐式默认派发(PR #744 review 第十四轮)。fresh
       // spawn 时与 opts.providerId 幂等。
       setSessionProvider(session.id, reroutedProviderId);
+    } else if (materializedDefaultProviderId) {
+      setSessionProvider(session.id, materializedDefaultProviderId);
     } else if (isHeartbeat) {
       hydrateSessionProvider(session.id, heartbeatProviderId);
     }
@@ -1029,10 +1071,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 下次 fire 读到的 meta.model 必须跟实际运行一致（4.4.1 已 setModel）。
         // 同 effort: 复用路径 setModel 失败时跳过, 留给下次 fire 重试。
         model: heartbeatModelChanged && modelSwitchApplied ? model : undefined,
-        // 任务级显式选了来源时落 sessions.provider_id —— 让聊天里打开这个会话时
-        // 来源 picker 与下次 fire / 冷 resume 的路由一致(register hydrate funnel 读它)。
-        // 留空(沿用默认 / 沿用会话)时不写,保留会话自己的 provider_id 不动(no-break)。
-        providerId: explicitProviderId ?? undefined,
+        // 显式来源或 fresh Claude 物化出的默认来源都要落 sessions.provider_id ——
+        // 聊天 picker、下次 heartbeat / 冷 resume 与本轮真实凭证/endpoint 才不会漂移。
+        // heartbeat 留空时仍不写,保留绑定会话自己的 provider_id。
+        providerId: explicitProviderId ?? materializedDefaultProviderId ?? undefined,
         // 回退分配了对话工作区的会话按 'dialogue' 落库 —— 侧边栏才会归入
         // "对话"分组(覆盖存量 workspaceKind='project' 但无目录的旧任务)。
         workspaceKind: !isHeartbeat

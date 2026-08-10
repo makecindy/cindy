@@ -395,13 +395,27 @@ async function finishDarwin({
       });
     }
     console.log('==> Signing (Developer ID)...');
-    signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity, {
-      keychainAccessGroup,
-    });
+    const iosSimulatorHelperSigned = signMacAppWithIdentity(
+      appPath,
+      helperEntitlementsPath,
+      mainEntitlementsPath,
+      identity,
+      { keychainAccessGroup, arch },
+    );
+    if (requireNativeReleaseGate && !iosSimulatorHelperSigned) {
+      throw new Error(
+        'CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE=1 requires a packaged Native Helper',
+      );
+    }
     console.log('==> Notarizing...');
     notarizeMacApp(appPath, identity);
     signingMode = 'developer-id+notarized';
-    runIOSSimulatorReleaseGate(appPath, arch, 'verified', requireNativeReleaseGate);
+    runIOSSimulatorReleaseGate(
+      appPath,
+      arch,
+      iosSimulatorHelperSigned ? 'verified' : 'untrusted',
+      requireNativeReleaseGate,
+    );
 
     const dmgPath = path.join(artifactDir, `${baseName}-${arch}.dmg`);
     console.log('==> Creating DMG...');
@@ -420,7 +434,7 @@ async function finishDarwin({
     // 版本无关(或显式放行)→ ad-hoc 签名,产出 .app 的 zip 供本机/内部试用。
     writeMacEntitlements(helperEntitlementsPath);
     writeMacEntitlements(mainEntitlementsPath, { appleEvents: true });
-    adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath);
+    adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch);
     if (requireNativeReleaseGate) {
       throw new Error(
         'CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE=1 requires a Developer ID signed and notarized package',

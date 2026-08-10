@@ -19,6 +19,7 @@ import {
   brandExecutableName,
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
+import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 
 const _require = createRequire(__filename);
@@ -679,54 +680,6 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
     }
     console.log(`[forge:postPackage] mac display name → Cindy (${appDir}/Contents/Info.plist)`);
   }
-}
-
-const IOS_SIMULATOR_HELPER_BUNDLE = 'Cindy iOS Simulator Helper.app';
-const IOS_SIMULATOR_HELPER_EXECUTABLE = 'ios-simulator-sidecar';
-
-/**
- * Forge first copies the Host-owned helper through extraResource, then this
- * postPackage step moves it into the canonical nested-code location. Raw dev
- * binaries and the temporary helper staging directory must not remain in the
- * final application bundle.
- */
-function stageMacIOSSimulatorHelper(buildPath: string, platform: string): void {
-  if (platform !== 'darwin' && platform !== 'mas') return;
-  const apps = fs.readdirSync(buildPath).filter((name) => name.endsWith('.app'));
-  if (apps.length !== 1) {
-    throw new Error(
-      `[forge:postPackage] expected one macOS app while staging iOS Simulator helper, found ${apps.length}`,
-    );
-  }
-
-  const appContents = path.join(buildPath, apps[0], 'Contents');
-  const resourceRoot = path.join(appContents, 'Resources', 'ios-simulator');
-  const sourceBundle = path.join(resourceRoot, 'helper', IOS_SIMULATOR_HELPER_BUNDLE);
-  const destinationBundle = path.join(appContents, 'Helpers', IOS_SIMULATOR_HELPER_BUNDLE);
-  const sourceExecutable = path.join(
-    sourceBundle,
-    'Contents',
-    'MacOS',
-    IOS_SIMULATOR_HELPER_EXECUTABLE,
-  );
-  if (!fs.existsSync(sourceExecutable)) {
-    throw new Error(
-      `[forge:postPackage] staged iOS Simulator helper executable missing at ${sourceExecutable}`,
-    );
-  }
-
-  fs.mkdirSync(path.dirname(destinationBundle), { recursive: true });
-  fs.rmSync(destinationBundle, { recursive: true, force: true });
-  fs.renameSync(sourceBundle, destinationBundle);
-  fs.rmSync(path.join(resourceRoot, 'helper'), { recursive: true, force: true });
-  fs.rmSync(path.join(resourceRoot, 'native'), { recursive: true, force: true });
-  fs.chmodSync(
-    path.join(destinationBundle, 'Contents', 'MacOS', IOS_SIMULATOR_HELPER_EXECUTABLE),
-    0o755,
-  );
-  console.log(
-    `[forge:postPackage] staged ${IOS_SIMULATOR_HELPER_BUNDLE} in ${apps[0]}/Contents/Helpers`,
-  );
 }
 
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
@@ -1442,7 +1395,7 @@ const config: ForgeConfig = {
         const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
         console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
         signPackagedExes(buildPath);
-        stageMacIOSSimulatorHelper(buildPath, opts.platform);
+        stageMacIOSSimulatorHelper(buildPath, opts.platform, opts.arch);
         applyMacPackagedDisplayName(buildPath, opts.platform);
       }
     },

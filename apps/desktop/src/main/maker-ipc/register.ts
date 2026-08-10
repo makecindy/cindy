@@ -596,8 +596,6 @@ import {
 import {
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
-  providerRouteRequiresExplicitSelection,
-  type OrcaWorkerProviderRoutingContext,
 } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionExecutionConfig,
@@ -658,13 +656,7 @@ import {
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
 } from '../maker-host/createDesktopProviderService.js';
-import {
-  connectedProvidersForAgent,
-  effectiveSourceIdForModel,
-  findModelRegistryRoute,
-  isModelSelectableForNewRoute,
-  type ProviderView,
-} from '@cindy/model-providers';
+import { readOrcaWorkerProviderRoutingContext } from './orcaProviderRoutingContext.js';
 import {
   getSessionProvider,
   hydrateSessionProvider,
@@ -9141,67 +9133,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   orcaTeamServiceForEvents = orcaTeamService;
 
-  async function getProviderRoutingContext(): Promise<OrcaWorkerProviderRoutingContext> {
-    const catalog = getDesktopSelectableCatalog();
-    const views = await getDesktopProviderService().listProviders({
-      allowSideEffects: true,
-      catalog,
+  const getProviderRoutingContext = () =>
+    readOrcaWorkerProviderRoutingContext({
+      providerService: getDesktopProviderService(),
+      getCatalog: getActiveCatalog,
     });
-    const modelRegistry = catalog.modelRegistry;
-    // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
-    // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
-    // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
-    // create_worker / send_to_session 点名它们会在创建前结构化失败，而不是静默
-    // 路由过去。停用的供应商已在 connectedProvidersForAgent(suspended) 一层出局。
-    // models/fastModels/effortMetaByModel 是两个创建入口唯一能看到的 provider 维度
-    // 快照；同 id 模型跨来源的能力可能分叉，不能只看 Maker 的拍平首见条目。
-    const routableModels = (provider: ProviderView, agent: AgentKind) =>
-      (provider.models[agent] ?? []).filter((model) =>
-        isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
-      );
-    const availabilityFor = (agent: AgentKind) =>
-      connectedProvidersForAgent(views, agent).map((provider) => {
-        const models = routableModels(provider, agent);
-        const registryIdentityByModel = Object.fromEntries(
-          models.flatMap((model) => {
-            const matched = findModelRegistryRoute(
-              modelRegistry,
-              provider.id,
-              model.id,
-              agent === 'pi' ? undefined : agent,
-            );
-            return matched ? [[model.id, matched.entry.id]] : [];
-          }),
-        );
-        return {
-          id: provider.id,
-          name: provider.name,
-          models: models.map((model) => model.id),
-          registryIdentityByModel,
-          fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
-          effortMetaByModel: Object.fromEntries(
-            models.map((model) => [
-              model.id,
-              { efforts: model.efforts, defaultEffort: model.defaultEffort },
-            ]),
-          ),
-          requiresExplicitRoute: providerRouteRequiresExplicitSelection(
-            provider.routing[agent]?.authStrategy,
-          ),
-          chatBridgedCodex:
-            agent === 'codex' && provider.routing[agent]?.wireProtocol === 'openai-chat',
-        };
-      });
-    return {
-      availability: {
-        'claude-code': availabilityFor('claude-code'),
-        codex: availabilityFor('codex'),
-        pi: availabilityFor('pi'),
-      },
-      resolveDefaultProviderIdForModel: (agent, model) =>
-        effectiveSourceIdForModel(views, null, model, agent),
-    };
-  }
 
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
     getActiveTeamByLead,

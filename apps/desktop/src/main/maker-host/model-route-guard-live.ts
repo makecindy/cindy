@@ -6,13 +6,15 @@
  *   - scheduler runner 经 deps 注入(测试最小 harness 不接线 = 不裁决);
  *   - help / sessionTaskSummary 的 agent one-shot 兜底用 isAgentOneShotRouteDisabled。
  * 目录读取失败降级为 override-only 保守裁决(见 overrideOnlyVerdict)——不把目录
- * 故障升级成全体用户的功能不可用,也不给配置过停用的用户开绕过口。纯读
- * (allowSideEffects 缺省 false),自愈另有主进程业务入口负责。
+ * 故障升级成全体用户的功能不可用,也不给配置过停用的用户开绕过口。普通裁决纯读
+ * (allowSideEffects 缺省 false)；scheduler 默认来源解析是可信主进程业务入口，
+ * 会显式允许认领已有原生订阅凭证。
  */
 
 import {
   getModel,
   connectedProvidersForAgent,
+  effectiveSourceIdForModel,
   isModelSelectableForNewRoute,
   isModelDisabled,
   isProviderDisabled,
@@ -63,15 +65,45 @@ function tombstoneGuardOptions(
 }
 
 /**
- * 无模型的 headless 调度不能给 Pi 硬塞 Claude 型号：Pi 的可用面由实时连接来源
- * 决定。按模型选择器同一 rail（已连接、runtime 可用、未停用）取首个可聊天模型，
- * 并把 providerId 与 model 成对返回，避免 BYOM 同名模型落到 Cindy 默认路由。
+ * Headless 调度的实时来源快照：
+ * - 给定 modelId 时按模型选择器同一 rail 物化实际 provider；
+ * - 未给 modelId 时为 Pi 取首个可聊天模型，并把 providerId/model 成对返回。
+ * 这样 spawn 凭证、proxy endpoint 与会话持久化不会各自重新猜一次默认来源。
  */
 export async function resolveDefaultScheduleRoute(
   agent: AgentKind,
   preferredProviderId?: string | null,
-): Promise<{ model: string; providerId: string } | null> {
-  const views = await listRouteGuardProviders();
+  modelId?: string,
+): Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null> {
+  // Scheduler fire is a trusted main-process operation, not an untrusted status projection.
+  // Allow the provider service to claim an existing native subscription before materializing
+  // the route; otherwise legacy/local owners can look disconnected until another UI read heals it.
+  const views = await getDesktopProviderService().listProviders({
+    allowSideEffects: true,
+    waitForDiscovery: true,
+    getCatalog: getActiveCatalog,
+  });
+  const preferredModelId = modelId?.trim();
+  if (preferredModelId) {
+    const providerId = effectiveSourceIdForModel(
+      views,
+      preferredProviderId,
+      preferredModelId,
+      agent,
+    );
+    if (providerId) return { model: preferredModelId, providerId };
+
+    // A schedule may intentionally name a model newer than the current catalog. Keep
+    // the legacy null-provider/native-default path for that case; a catalog-known
+    // model with no connected source must still fail closed in the scheduler.
+    const catalogKnown = views.some((provider) =>
+      (provider.models[agent] ?? []).some((model) => model.id === preferredModelId),
+    );
+    if (!catalogKnown && agent === 'claude-code') {
+      return { model: preferredModelId, providerId: null, catalogKnown: false };
+    }
+    return null;
+  }
   const connected = connectedProvidersForAgent(views, agent);
   const candidates = preferredProviderId
     ? connected.filter((provider) => provider.id === preferredProviderId)
