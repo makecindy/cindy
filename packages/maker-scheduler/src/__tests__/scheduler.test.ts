@@ -225,6 +225,60 @@ describe('Scheduler', () => {
     expect(list).toHaveLength(1);
   });
 
+  it('normalizes, validates, partially updates, and clears sessionTitleTemplate', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      sessionTitleTemplate: '  {date} {scheduleName}  ',
+    });
+    expect(sch.sessionTitleTemplate).toBe('{date} {scheduleName}');
+
+    const promptOnly = await h.scheduler.update(sch.id, { prompt: 'changed' });
+    expect(promptOnly.sessionTitleTemplate).toBe('{date} {scheduleName}');
+
+    const clearedWithNull = await h.scheduler.update(sch.id, {
+      sessionTitleTemplate: null,
+    });
+    expect(clearedWithNull.sessionTitleTemplate).toBeUndefined();
+    const restored = await h.scheduler.update(sch.id, {
+      sessionTitleTemplate: '{isoWeek}',
+    });
+    expect(restored.sessionTitleTemplate).toBe('{isoWeek}');
+    const clearedWithBlank = await h.scheduler.update(sch.id, {
+      sessionTitleTemplate: '   ',
+    });
+    expect(clearedWithBlank.sessionTitleTemplate).toBeUndefined();
+
+    await expect(
+      h.scheduler.update(sch.id, { sessionTitleTemplate: '{notAllowed}' }),
+    ).rejects.toThrow(/Invalid session title template/);
+    await expect(
+      h.scheduler.create({
+        ...baseInput,
+      sessionTitleTemplate: '{date:dd/MM/yyyy}',
+      }),
+    ).rejects.toThrow(/Invalid session title template/);
+  });
+
+  it('passes the original automatic slot and run-now source through FireContext', async () => {
+    const sch = await h.scheduler.create({ ...baseInput });
+    const planned = sch.nextFireAt as number;
+    h.clock.setTo(planned + 5_000);
+    await h.scheduler.tick();
+    expect(h.fireCalls[0]?.ctx).toMatchObject({
+      source: 'automatic',
+      scheduledFor: planned,
+      firedAt: planned + 5_000,
+    });
+
+    h.clock.advance(7_000);
+    await h.scheduler.runNow(sch.id);
+    expect(h.fireCalls[1]?.ctx).toMatchObject({
+      source: 'run-now',
+      scheduledFor: planned + 12_000,
+      firedAt: planned + 12_000,
+    });
+  });
+
   it('marks skipped child runs as zero-cost', async () => {
     const childHarness = makeHarness({
       runnerImpl: async (_schedule, ctx) => {

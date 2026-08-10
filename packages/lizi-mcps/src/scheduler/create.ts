@@ -129,6 +129,12 @@ export function registerScheduleCreateTool(
         .boolean()
         .optional()
         .describe('true → 第一次 fire 后自动把新建 session 的 id 回写到 targetSessionId,后续 fire 持续在同一 session 中运行（拥有完整上下文）。默认 false。'),
+      sessionTitleTemplate: z
+        .string()
+        .optional()
+        .describe(
+          '仅在本轮新建任务时使用的安全标题模板；绑定/复用任务不改名。例 "{date:yyyy-MM-dd} {scheduleName}"。支持 {scheduleName}、{date}、{date:yyyy-MM-dd}、{date:yyyyMMdd}、{date:yyyy年MM月dd日}、{date:MM-dd}、{date:MM月dd日}、{time}、{time:HH:mm}、{time:HHmm}、{weekday}、{isoWeek}、{month}、{quarter}、{trigger}、{projectName}、{runId:short}；用 {{ 输出 {，用 }} 输出 }。',
+        ),
       silentWhenIdle: z
         .boolean()
         .optional()

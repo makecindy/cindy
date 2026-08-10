@@ -324,6 +324,7 @@ function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState
     workspaceKind: 'project',
     workingDir: '/repo/project',
     useWorktree: true,
+    sessionTitleTemplate: '',
     targetSessionId: '',
     persistentSession: false,
     silentWhenIdle: false,
@@ -482,6 +483,15 @@ describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create
   it('透传静默运行开关', () => {
     expect(buildScheduleInput(makeForm()).silentWhenIdle).toBe(false);
     expect(buildScheduleInput(makeForm({ silentWhenIdle: true })).silentWhenIdle).toBe(true);
+  });
+
+  it('trims and clears the new-session title template with an explicit key', () => {
+    expect(
+      buildScheduleInput(makeForm({ sessionTitleTemplate: '  {date} report  ' })),
+    ).toMatchObject({ sessionTitleTemplate: '{date} report' });
+    const cleared = buildScheduleInput(makeForm({ sessionTitleTemplate: '   ' }));
+    expect(hasKey(cleared, 'sessionTitleTemplate')).toBe(true);
+    expect(cleared.sessionTitleTemplate).toBeUndefined();
   });
 });
 

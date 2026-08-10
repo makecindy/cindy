@@ -238,6 +238,8 @@ export interface Schedule {
    * → 维持旧行为 pause 整条 schedule。
    */
   persistentSession?: boolean;
+  /** Optional safe template used only when a scheduler run creates a new session. */
+  sessionTitleTemplate?: string;
   /**
    * 静默运行:true → 成功 run 默认不发通知、不产生未读小红点;任务 prompt 可自行说明
    * 哪些业务条件值得提醒,agent 在满足时调用 schedule_notify_current_run 主动上报。
@@ -348,6 +350,8 @@ export interface CreateScheduleInput {
   targetSessionId?: string;
   /** 默认 false。详见 Schedule.persistentSession。 */
   persistentSession?: boolean;
+  /** Optional safe template used only when a scheduler run creates a new session. */
+  sessionTitleTemplate?: string;
   /** 默认 false。详见 Schedule.silentWhenIdle("静默运行")。 */
   silentWhenIdle?: boolean;
   /** Execution mode; defaults to agent for legacy schedules. */
@@ -365,7 +369,10 @@ export interface CreateScheduleInput {
   expireAt?: number;
 }
 
-export type UpdateScheduleInput = Partial<CreateScheduleInput>;
+export type UpdateScheduleInput = Partial<Omit<CreateScheduleInput, 'sessionTitleTemplate'>> & {
+  /** null is the JSON-boundary clear form; the engine normalizes it to undefined. */
+  sessionTitleTemplate?: string | null;
+};
 
 export interface ListFilter {
   status?: ScheduleStatus;
@@ -476,6 +483,7 @@ export interface ScheduleTemplate {
   fastMode?: boolean;
   useWorktree?: boolean;
   persistentSession?: boolean;
+  sessionTitleTemplate?: string;
   silentWhenIdle?: boolean;
   notify?: ScheduleNotifyConfig;
 

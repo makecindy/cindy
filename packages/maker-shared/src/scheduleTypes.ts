@@ -39,6 +39,8 @@ export interface RemoteScheduleWriteInput {
   useWorktree: boolean;
   targetSessionId?: string;
   persistentSession?: boolean;
+  /** null clears the saved title template across the JSON device-link boundary. */
+  sessionTitleTemplate?: string | null;
   silentWhenIdle?: boolean;
   notify: RemoteScheduleNotifyConfig;
 }
@@ -71,6 +73,7 @@ export interface RemoteScheduleTemplate {
   fastMode?: boolean;
   useWorktree?: boolean;
   persistentSession?: boolean;
+  sessionTitleTemplate?: string;
   notify?: RemoteScheduleNotifyConfig;
   parameters?: RemoteTemplateParameter[];
   createdAt?: number;
@@ -109,6 +112,7 @@ export interface RemoteSchedule {
   useWorktree?: boolean;
   targetSessionId?: string;
   persistentSession?: boolean;
+  sessionTitleTemplate?: string;
   silentWhenIdle?: boolean;
   notify?: RemoteScheduleNotifyConfig;
   status: RemoteScheduleStatus;

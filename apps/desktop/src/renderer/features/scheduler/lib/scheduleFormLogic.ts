@@ -141,6 +141,8 @@ export interface ScheduleFormState {
    * RunMode 三态中它是 persistent 与 bound 的判别器(bound 恒为 false)。
    */
   persistentSession: boolean;
+  /** Safe title template applied only when a run creates a new task. */
+  sessionTitleTemplate: string;
   /** 静默运行:true → 成功 run 默认不提醒;AI 主动上报时才按通知渠道提醒。 */
   silentWhenIdle: boolean;
   /** 前置检查脚本开关。false = 未启用,保存时 preRunHook 清空(写 NULL)。 */
@@ -518,6 +520,10 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     workspaceKind: form.workspaceKind,
     useWorktree: !isScript && form.workspaceKind === 'project' && form.useWorktree,
     persistentSession: !isScript && form.persistentSession,
+    // Keep the key in full-form updates so clearing the input clears the DB column.
+    // Script mode does not create a session, so the runner ignores this field; preserving it
+    // avoids erasing a user's template when they temporarily switch execution modes.
+    sessionTitleTemplate: form.sessionTitleTemplate.trim() || undefined,
     silentWhenIdle: !isScript && form.silentWhenIdle,
     targetSessionId: !isScript ? (form.targetSessionId.trim() || undefined) : undefined,
     preRunHook: buildPreRunHook(form),

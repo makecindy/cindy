@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
+import { Check, ChevronDown, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -18,7 +18,15 @@ import type { UtilityTextAttemptReason, UtilityTextFailure } from '../../../../s
 import { useFeishuBot } from '@/hooks/useFeishuBot';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
-import type { Schedule, CreateScheduleInput, ScheduleTemplate, UpdateScheduleInput } from '@cindy/maker-scheduler';
+import {
+  renderSessionTitleTemplate,
+  SESSION_TITLE_TEMPLATE_TOKENS,
+  validateSessionTitleTemplate,
+  type Schedule,
+  type CreateScheduleInput,
+  type ScheduleTemplate,
+  type UpdateScheduleInput,
+} from '@cindy/maker-scheduler';
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 
@@ -66,6 +74,9 @@ print(json.dumps({
     "type": "complete",
     "resultText": "done"
 }))`;
+
+const SESSION_TITLE_TEMPLATE_INPUT_ID = 'schedule-session-title-template';
+const SESSION_TITLE_TEMPLATE_PANEL_ID = 'schedule-session-title-template-panel';
 
 /** i18n suffix for every credential-safe utility candidate diagnostic. */
 const UTILITY_ATTEMPT_REASON_KEY: Record<UtilityTextAttemptReason, string> = {
@@ -150,6 +161,7 @@ export function ScheduleFormDialog({
   const hideWorkspaceFields = runMode === 'bound' || isBound;
   const [submitting, setSubmitting] = useState(false);
   const [mode, setMode] = useState<'gallery' | 'form'>('form');
+  const [showSessionTitleTemplate, setShowSessionTitleTemplate] = useState(false);
   // 前置检查「测试运行」状态:结果只在弹窗内展示,不落任何记录。
   const [hookTesting, setHookTesting] = useState(false);
   const [hookTestResult, setHookTestResult] = useState<Awaited<
@@ -163,6 +175,43 @@ export function ScheduleFormDialog({
   const [hookGenFailure, setHookGenFailure] = useState<UtilityTextFailure | null>(null);
   // 命令输入框的拖拽悬停态(高亮提示可放置)。
   const [hookDragOver, setHookDragOver] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const initialTemplateValue =
+      initialValues?.sessionTitleTemplate ?? initial?.sessionTitleTemplate ?? '';
+    setShowSessionTitleTemplate(Boolean(initialTemplateValue.trim()));
+  }, [open, initial?.id, initial?.sessionTitleTemplate, initialValues?.sessionTitleTemplate]);
+
+  const sessionTitleTemplateValidation = useMemo(
+    () => validateSessionTitleTemplate(form.sessionTitleTemplate),
+    [form.sessionTitleTemplate],
+  );
+  const sessionTitlePreview = useMemo(() => {
+    if (!sessionTitleTemplateValidation.valid || !sessionTitleTemplateValidation.template) {
+      return '';
+    }
+    try {
+      return renderSessionTitleTemplate(sessionTitleTemplateValidation.template, {
+        scheduleName: form.name.trim() || t('scheduler.editor.sessionTitleTemplate.sampleName'),
+        timezone: form.timezone.trim() || 'Asia/Shanghai',
+        scheduledFor: Date.now(),
+        source: 'automatic',
+        workspaceKind: form.workspaceKind,
+        workingDir: form.workingDir,
+        runId: '12345678-preview',
+      });
+    } catch {
+      return '';
+    }
+  }, [
+    form.name,
+    form.timezone,
+    form.workspaceKind,
+    form.workingDir,
+    sessionTitleTemplateValidation,
+    t,
+  ]);
 
   /** 选中/拖入脚本文件 → 按扩展名+平台生成调用命令并回填(纯代码映射,见 scheduleFormLogic)。 */
   const applyHookScriptFile = useCallback(
@@ -361,6 +410,10 @@ export function ScheduleFormDialog({
       setField('targetSessionId', '');
     }
     if (template.persistentSession !== undefined) setField('persistentSession', template.persistentSession);
+    if (template.sessionTitleTemplate !== undefined) {
+      setField('sessionTitleTemplate', template.sessionTitleTemplate);
+      setShowSessionTitleTemplate(Boolean(template.sessionTitleTemplate.trim()));
+    }
     if (template.silentWhenIdle !== undefined) setField('silentWhenIdle', template.silentWhenIdle);
     if (template.notify) {
       setField('notifyDesktop', template.notify.desktop);
@@ -639,10 +692,11 @@ export function ScheduleFormDialog({
 
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
             // 固定高度对齐表单模式"默认(未勾前置检查)"的常态内容高,空白/模板两个 tab 来回切不跳变。
-            // 546 = pt18 + 名称块68(label16+gap8+input44) + gap18 + 计划行34 + gap18 + 运行会话行34
-            //     + gap18 + 前置检查行34 + gap18 + 提示词块264(label16+gap8+编辑框240) + pb22。
+            // 586 = pt18 + 名称块68(label16+gap8+input44) + gap18 + 计划行34 + gap18 + 运行会话行34
+            //     + 运行会话区内 gap10 + 标题模板折叠入口30 + gap18 + 前置检查行34
+            //     + gap18 + 提示词块264(label16+gap8+编辑框240) + pb22。
             // 表单新增/删除常驻区块时需同步更新此值;前置检查勾选等临时展开态与画廊的高度差属预期。
-            <div className="h-[546px] min-h-0 overflow-y-auto px-6 pt-[18px] pb-[22px]">
+            <div className="h-[586px] min-h-0 overflow-y-auto px-6 pt-[18px] pb-[22px]">
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
@@ -1035,6 +1089,90 @@ export function ScheduleFormDialog({
                 reference={boundSessionReference}
               />
             )}
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSessionTitleTemplate((value) => !value)}
+                aria-expanded={showSessionTitleTemplate}
+                aria-controls={SESSION_TITLE_TEMPLATE_PANEL_ID}
+                className={cn(
+                  'inline-flex h-[30px] w-fit items-center gap-1.5 rounded-md px-1.5',
+                  'text-12 text-[var(--cmd-palette-item-meta)] transition-colors',
+                  'hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)]',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                )}
+              >
+                <ChevronDown
+                  size={14}
+                  className={cn(
+                    'transition-transform',
+                    showSessionTitleTemplate && 'rotate-180',
+                  )}
+                />
+                {t('scheduler.editor.sessionTitleTemplate.toggle')}
+              </button>
+              {showSessionTitleTemplate && (
+                <div
+                  id={SESSION_TITLE_TEMPLATE_PANEL_ID}
+                  className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3"
+                >
+                  <label
+                    htmlFor={SESSION_TITLE_TEMPLATE_INPUT_ID}
+                    className="text-13 font-medium text-[var(--msg-assistant-text)]"
+                  >
+                    {t('scheduler.editor.sessionTitleTemplate.label')}
+                  </label>
+                  <input
+                    id={SESSION_TITLE_TEMPLATE_INPUT_ID}
+                    value={form.sessionTitleTemplate}
+                    onChange={(event) => setField('sessionTitleTemplate', event.target.value)}
+                    placeholder={t('scheduler.editor.sessionTitleTemplate.placeholder')}
+                    className={cn(
+                      'h-9 w-full rounded-full border bg-[var(--surface-elevated)] px-3 text-13',
+                      'border-[var(--border-default)] text-[var(--msg-assistant-text)]',
+                      'placeholder:text-[var(--text-placeholder)] focus:outline-none',
+                      'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    )}
+                  />
+                  <p className="text-12 leading-5 text-[var(--cmd-palette-item-meta)]">
+                    {t('scheduler.editor.sessionTitleTemplate.help')}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {SESSION_TITLE_TEMPLATE_TOKENS.map(({ token }) => (
+                      <button
+                        key={token}
+                        type="button"
+                        onClick={() =>
+                          setField(
+                            'sessionTitleTemplate',
+                            `${form.sessionTitleTemplate}${token}`,
+                          )
+                        }
+                        className={cn(
+                          'rounded-full border border-[var(--border-default)] px-2 py-1 font-mono text-11',
+                          'text-[var(--cmd-palette-item-meta)] transition-colors',
+                          'hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)]',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                        )}
+                      >
+                        {token}
+                      </button>
+                    ))}
+                  </div>
+                  {!sessionTitleTemplateValidation.valid ? (
+                    <p className="text-12 text-[hsl(var(--destructive))]">
+                      {t('scheduler.editor.sessionTitleTemplate.invalid')}
+                    </p>
+                  ) : sessionTitlePreview ? (
+                    <p className="text-12 text-[var(--cmd-palette-item-meta)]">
+                      {t('scheduler.editor.sessionTitleTemplate.preview', {
+                        title: sessionTitlePreview,
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </div>
             </div>
             )}
 

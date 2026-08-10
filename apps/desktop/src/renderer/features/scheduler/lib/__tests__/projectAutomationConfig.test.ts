@@ -36,6 +36,7 @@ function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState
     useWorktree: true,
     targetSessionId: '',
     persistentSession: false,
+    sessionTitleTemplate: '',
     silentWhenIdle: false,
     preRunHookEnabled: false,
     preRunHookCommand: '',
@@ -76,5 +77,17 @@ describe('project automation providerId serialization', () => {
       'auto-provider',
     );
     expect(config.providerId).toBe('openai');
+  });
+});
+
+describe('project automation session title template serialization', () => {
+  it('trims configured values and omits cleared values', () => {
+    expect(
+      formToProjectConfig(makeForm({ sessionTitleTemplate: '  {isoWeek} review  ' }), 'title')
+        .sessionTitleTemplate,
+    ).toBe('{isoWeek} review');
+    expect(
+      formToProjectConfig(makeForm({ sessionTitleTemplate: '   ' }), 'clear').sessionTitleTemplate,
+    ).toBeUndefined();
   });
 });

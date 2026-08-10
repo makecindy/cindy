@@ -115,12 +115,13 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   };
 }
 
-function createFireContext(): FireContext {
+function createFireContext(overrides: Partial<FireContext> = {}): FireContext {
   return {
     runId: 'run-1',
     firedAt: 1_700_000_000_100,
     signal: new AbortController().signal,
     onSessionBound: vi.fn(async () => undefined),
+    ...overrides,
   };
 }
 
@@ -163,8 +164,9 @@ async function fireToCompletion(
   runner: MakerScheduleRunner,
   schedule: Schedule,
   h: FakeSessionHarness,
+  ctx: FireContext = createFireContext(),
 ): Promise<void> {
-  const firePromise = runner.fire(schedule, createFireContext());
+  const firePromise = runner.fire(schedule, ctx);
   await vi.waitFor(() => {
     expect(mocks.createMessage).toHaveBeenCalled();
   });
@@ -289,6 +291,62 @@ describe('MakerScheduleRunner workingDir fallback(未指定目录回退 dialogue
     expect(mocks.resolveWorkingDir).toHaveBeenCalledTimes(1);
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ workingDir: '/wt/dir' }),
+    );
+  });
+
+  it('keeps the byte-compatible legacy title when no template is configured', async () => {
+    const h = createSessionHarness();
+    const { runner, createSession } = createRunnerHarness(h.session);
+    const longName = `legacy-${'x'.repeat(160)}`;
+
+    await fireToCompletion(runner, baseSchedule({ name: longName, workingDir: '/repo' }), h);
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ title: `[Schedule] ${longName}` }),
+    );
+  });
+
+  it('renders a custom title from the planned slot and configured root, not the worktree path', async () => {
+    const h = createSessionHarness();
+    const { runner, createSession } = createRunnerHarness(h.session);
+    const scheduledFor = Date.UTC(2026, 7, 10, 1, 2);
+
+    await fireToCompletion(
+      runner,
+      baseSchedule({
+        name: 'review',
+        workingDir: 'C:\\repos\\stable-project',
+        useWorktree: true,
+        sessionTitleTemplate: '{date:yyyyMMdd}-{time:HHmm} {projectName} {trigger}',
+      }),
+      h,
+      createFireContext({
+        firedAt: scheduledFor + 30_000,
+        scheduledFor,
+        source: 'automatic',
+      }),
+    );
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workingDir: '/wt/dir',
+        title: '20260810-0902 stable-project scheduled',
+      }),
+    );
+  });
+
+  it('fails open to the untruncated legacy title for corrupted template data', async () => {
+    const h = createSessionHarness();
+    const { runner, createSession } = createRunnerHarness(h.session);
+
+    await fireToCompletion(
+      runner,
+      baseSchedule({ name: 'fallback', sessionTitleTemplate: '{broken}' }),
+      h,
+    );
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '[Schedule] fallback' }),
     );
   });
 });

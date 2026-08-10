@@ -56,6 +56,13 @@ export function registerScheduleUpdateTool(
         .optional()
         .describe('true → 由代码把 targetSessionId 改绑为**当前调用方会话**(跟进"这条对话"的标准用法)。设了它就别再传 targetSessionId,也无需调 get_current_session_id —— 避免 agent 复用上下文里过期的 session id 绑错会话。无法识别当前会话时本工具报错而非绑错。'),
       persistentSession: z.boolean().optional(),
+      sessionTitleTemplate: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          '新建任务标题模板。例 "{isoWeek} {scheduleName}"；语法见 schedule_create。省略 = 不修改，传 null 或空字符串 = 清空并恢复旧标题。',
+        ),
       silentWhenIdle: z
         .boolean()
         .optional()
@@ -110,6 +117,9 @@ export function registerScheduleUpdateTool(
           // cronExpr 壁钟槽位语义。引擎遵循真 partial 契约(没带 key 就不动),
           // 这是 JSON 边界唯一的清空表达。
           input = { ...input, intervalMs: undefined };
+        }
+        if ((patch as { sessionTitleTemplate?: string | null }).sessionTitleTemplate === null) {
+          input = { ...input, sessionTitleTemplate: undefined };
         }
         // 无条件校验本次 patch 显式带的 cronExpr / timezone(函数对缺省字段是
         // no-op)。不能只在 patch 带 intervalMs 数值时校验:任务已有 intervalMs、

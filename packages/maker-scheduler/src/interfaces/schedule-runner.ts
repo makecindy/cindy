@@ -1,4 +1,4 @@
-import type { PreRunHookRunResult, RunStatus, Schedule } from '../types.js';
+import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleFireSource } from '../types.js';
 
 export interface ChildRunInput {
   sessionId?: string;
@@ -10,6 +10,10 @@ export interface ChildRunInput {
 export interface FireContext {
   runId: string;
   firedAt: number;
+  /** Trigger source. Optional for backwards-compatible third-party/test runners. */
+  source?: ScheduleFireSource;
+  /** Planned automatic slot, or firedAt for Run now. */
+  scheduledFor?: number;
   /**
    * 由 Scheduler 创建并 own 的 AbortSignal。当用户在 UI 上 delete/pause 这条 schedule 时,
    * Scheduler 会对所有 in-flight 的 runner.fire() 触发 abort。

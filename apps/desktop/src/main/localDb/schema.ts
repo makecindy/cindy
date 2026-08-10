@@ -859,6 +859,8 @@ export const schedules = sqliteTable(
      * `@cindy/maker-scheduler` Schedule.persistentSession。默认 false 维持旧行为。
      */
     persistentSession: integer('persistent_session', { mode: 'boolean' }).notNull().default(false),
+    /** Safe title template used only when a scheduler run creates a new session. */
+    sessionTitleTemplate: text('session_title_template'),
     /**
      * 静默运行开关。true → 成功 run 默认不提醒;任务 agent 可在需要用户关注时
      * 调 schedule_notify_current_run 主动上报;

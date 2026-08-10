@@ -236,6 +236,22 @@ export function normalizeNullableIntervalMs<T extends { intervalMs?: number | nu
   return { ...input, intervalMs: undefined };
 }
 
+/** JSON-boundary clear semantics for sessionTitleTemplate, parallel to intervalMs. */
+export function normalizeNullableSessionTitleTemplate<
+  T extends { sessionTitleTemplate?: string | null },
+>(input: T): Omit<T, 'sessionTitleTemplate'> & { sessionTitleTemplate?: string } {
+  if (input.sessionTitleTemplate !== null) {
+    return input as Omit<T, 'sessionTitleTemplate'> & { sessionTitleTemplate?: string };
+  }
+  return { ...input, sessionTitleTemplate: undefined };
+}
+
+export function normalizeNullableScheduleFields<
+  T extends { intervalMs?: number | null; sessionTitleTemplate?: string | null },
+>(input: T) {
+  return normalizeNullableSessionTitleTemplate(normalizeNullableIntervalMs(input));
+}
+
 /**
  * 版本错位兼容的另一半:**旧版 mobile** 清空间隔靠「全量表单不带 intervalMs key +
  * 引擎隐式清空」表达;真 partial 语义下省略 key 变成「不修改」,旧 mobile 的清空
@@ -267,7 +283,7 @@ function findTemplate(id: string): ScheduleTemplate | null {
   return listAllTemplates().find((template) => template.id === id) ?? null;
 }
 
-function buildCreateScheduleInput(
+export function buildCreateScheduleInput(
   template: ScheduleTemplate,
   prompt: string,
   overrides: Partial<CreateScheduleInput>,
@@ -289,6 +305,9 @@ function buildCreateScheduleInput(
     useWorktree: overrides.useWorktree ?? template.useWorktree ?? false,
     targetSessionId: overrides.targetSessionId,
     persistentSession: overrides.persistentSession ?? template.persistentSession,
+    sessionTitleTemplate: Object.prototype.hasOwnProperty.call(overrides, 'sessionTitleTemplate')
+      ? overrides.sessionTitleTemplate
+      : template.sessionTitleTemplate,
     silentWhenIdle: overrides.silentWhenIdle ?? template.silentWhenIdle,
     preRunHook: overrides.preRunHook,
     notify: overrides.notify ?? template.notify ?? { desktop: true, feishu: false },
@@ -337,7 +356,12 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     requireObject(input, 'input');
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
-        normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
+        normalizeNullableScheduleFields(
+          input as CreateScheduleInput & {
+            intervalMs?: number | null;
+            sessionTitleTemplate?: string | null;
+          },
+        ),
         hookPathDeps,
       );
       return scheduler.create(normalized);
@@ -352,8 +376,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         stabilizePreRunHookForUpdate(
           existing,
           normalizeLegacyDeviceLinkIntervalClear(
-            normalizeNullableIntervalMs(
-              patch as UpdateScheduleInput & { intervalMs?: number | null },
+            normalizeNullableScheduleFields(
+              patch as UpdateScheduleInput & {
+                intervalMs?: number | null;
+                sessionTitleTemplate?: string | null;
+              },
             ),
             isDeviceLinkInvoke(),
           ),
@@ -639,8 +666,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         : {};
     const overrides =
       body.overrides && typeof body.overrides === 'object'
-        ? normalizeNullableIntervalMs(
-            body.overrides as Partial<CreateScheduleInput> & { intervalMs?: number | null },
+        ? normalizeNullableScheduleFields(
+            body.overrides as Partial<CreateScheduleInput> & {
+              intervalMs?: number | null;
+              sessionTitleTemplate?: string | null;
+            },
           )
         : {};
     return withScheduler(({ scheduler }) => {

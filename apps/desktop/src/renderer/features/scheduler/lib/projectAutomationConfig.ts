@@ -23,6 +23,7 @@ export interface ProjectScheduleConfig {
   fastMode?: boolean;
   useWorktree?: boolean;
   persistentSession?: boolean;
+  sessionTitleTemplate?: string;
   silentWhenIdle?: boolean;
   /**
    * 前置检查脚本(Pre-run Hook)。省略 = 未启用;reconcile 时恒带 key,
@@ -64,6 +65,7 @@ export function scheduleToProjectConfig(
     fastMode: schedule.fastMode,
     useWorktree: schedule.useWorktree,
     persistentSession: schedule.persistentSession,
+    sessionTitleTemplate: schedule.sessionTitleTemplate,
     silentWhenIdle: schedule.silentWhenIdle,
     preRunHook: schedule.preRunHook?.command
       ? { command: schedule.preRunHook.command, timeoutMs: schedule.preRunHook.timeoutMs }
@@ -94,6 +96,7 @@ export function formToProjectConfig(
     fastMode: (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? true : undefined,
     useWorktree: form.useWorktree,
     persistentSession: form.persistentSession,
+    sessionTitleTemplate: form.sessionTitleTemplate.trim() || undefined,
     silentWhenIdle: form.silentWhenIdle,
     // 与 buildScheduleInput 同源:未启用为 undefined(JSON 序列化时省略该字段;
     // 类型上抹掉 null——那是 update patch 的清空语义,config 文件里用"字段缺席"表达)

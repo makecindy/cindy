@@ -47,4 +47,12 @@ describe('makeFormFromSchedule interval mode', () => {
     expect(form.cronExpr).toBe('*/5 * * * *');
     expect(form.intervalMs).toBeUndefined();
   });
+
+  it('backfills the saved new-session title template into the hidden advanced field', () => {
+    expect(
+      makeFormFromSchedule(makeSchedule({ sessionTitleTemplate: '{isoWeek} review' }))
+        .sessionTitleTemplate,
+    ).toBe('{isoWeek} review');
+    expect(makeFormFromSchedule(makeSchedule()).sessionTitleTemplate).toBe('');
+  });
 });
