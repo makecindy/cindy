@@ -63,6 +63,8 @@ let api: WorkLouderApi | null = null;
 let unsubscribeHid: (() => void) | null = null;
 let latestFrame: WorkLouderCodexLightingFrame | null = null;
 let applyPending = false;
+let listenPending = false;
+let hidListeningRequested = false;
 let applying = false;
 let applyTask: Promise<void> | null = null;
 let stopping = false;
@@ -74,6 +76,9 @@ if (parentPort) {
     const request = event.data as WorkLouderCodexHostRequest;
     if (request?.kind === 'init') {
       sdkEntry = request.sdkEntry;
+    } else if (request?.kind === 'listen') {
+      hidListeningRequested = true;
+      requestListen();
     } else if (request?.kind === 'apply') {
       latestFrame = request.frame;
       requestApply();
@@ -127,13 +132,32 @@ function requestApply(): void {
   }
 }
 
+function requestListen(): void {
+  if (stopping) return;
+  listenPending = true;
+  if (!applying) {
+    const task = drainApplyQueue();
+    applyTask = task;
+    const clearApplyTask = () => {
+      if (applyTask === task) applyTask = null;
+    };
+    void task.then(clearApplyTask, clearApplyTask);
+  }
+}
+
 async function drainApplyQueue(): Promise<void> {
   applying = true;
   try {
-    while (applyPending && !stopping) {
-      applyPending = false;
-      const frame = latestFrame;
-      if (frame) await applyFrame(frame);
+    while ((applyPending || listenPending) && !stopping) {
+      if (listenPending) {
+        listenPending = false;
+        await listenForAgentKeys();
+      }
+      if (applyPending) {
+        applyPending = false;
+        const frame = latestFrame;
+        if (frame) await applyFrame(frame);
+      }
     }
   } finally {
     applying = false;
@@ -141,7 +165,7 @@ async function drainApplyQueue(): Promise<void> {
 }
 
 async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
-  if (!api && isWorkLouderCodexLightingFrameOff(frame)) {
+  if (!api && isWorkLouderCodexLightingFrameOff(frame) && !hidListeningRequested) {
     clearRetry();
     return;
   }
@@ -166,6 +190,29 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
     if (message !== lastLoggedError) {
       lastLoggedError = message;
       hostLog('error', `lighting apply failed: ${message}`);
+    }
+    await disconnect();
+    post({ kind: 'state', status: 'error' });
+    scheduleRetry();
+  }
+}
+
+async function listenForAgentKeys(): Promise<void> {
+  try {
+    const deviceApi = await ensureConnected();
+    if (!deviceApi) {
+      post({ kind: 'state', status: 'not-detected' });
+      scheduleRetry();
+      return;
+    }
+    clearRetry();
+    lastLoggedError = null;
+    post({ kind: 'state', status: 'connected' });
+  } catch (error) {
+    const message = safeErrorMessage(error);
+    if (message !== lastLoggedError) {
+      lastLoggedError = message;
+      hostLog('error', `HID listening failed: ${message}`);
     }
     await disconnect();
     post({ kind: 'state', status: 'error' });
@@ -208,12 +255,18 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
 }
 
 function scheduleRetry(): void {
-  if (retryTimer || stopping || !latestFrame || isWorkLouderCodexLightingFrameOff(latestFrame)) {
+  if (
+    retryTimer ||
+    stopping ||
+    (!latestFrame && !hidListeningRequested) ||
+    (latestFrame && isWorkLouderCodexLightingFrameOff(latestFrame) && !hidListeningRequested)
+  ) {
     return;
   }
   retryTimer = setTimeout(() => {
     retryTimer = null;
-    requestApply();
+    if (hidListeningRequested) requestListen();
+    if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
   }, RETRY_MS);
   retryTimer.unref?.();
 }
@@ -248,6 +301,8 @@ async function disconnect(): Promise<void> {
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
+  listenPending = false;
+  hidListeningRequested = false;
   clearRetry();
   try {
     await applyTask;

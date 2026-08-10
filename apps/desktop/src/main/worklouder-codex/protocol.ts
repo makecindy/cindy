@@ -38,6 +38,7 @@ export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 6;
 
 export type WorkLouderCodexHostRequest =
   | { kind: 'init'; sdkEntry: string }
+  | { kind: 'listen' }
   | { kind: 'apply'; frame: WorkLouderCodexLightingFrame }
   | { kind: 'stop' };
 

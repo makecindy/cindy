@@ -58,6 +58,21 @@ describe('WorkLouderCodexHostClient', () => {
     expect(child.postMessage).toHaveBeenCalledWith({ kind: 'apply', frame });
   });
 
+  it('starts HID listening even when there is no lighting activity', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    client.setAgentKeyPressHandler(vi.fn());
+
+    expect(fork).toHaveBeenCalledWith('/sdk');
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
   it('asks the host to turn lighting off before shutdown', async () => {
     const child = new FakeChild();
     const client = new WorkLouderCodexHostClient({

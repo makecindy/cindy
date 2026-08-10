@@ -52,11 +52,14 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private finishDispose: (() => void) | null = null;
   private disposeTimer: ReturnType<typeof setTimeout> | null = null;
   private agentKeyPressHandler: ((slot: number) => void) | null = null;
+  private wantsHidInput = false;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
 
   setAgentKeyPressHandler(handler: ((slot: number) => void) | null): void {
     this.agentKeyPressHandler = handler;
+    this.wantsHidInput = handler !== null;
+    if (this.wantsHidInput) this.requestHidListening();
   }
 
   update(frame: WorkLouderCodexLightingFrame): void {
@@ -66,7 +69,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
-    if (!this.child && isWorkLouderCodexLightingFrameOff(frame)) return;
+    if (!this.child && isWorkLouderCodexLightingFrameOff(frame) && !this.wantsHidInput) return;
     const child = this.ensureChild();
     if (!child) return;
     const request: WorkLouderCodexHostRequest = { kind: 'apply', frame };
@@ -155,6 +158,26 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
   }
 
+  private requestHidListening(): void {
+    if (this.disposed || !this.wantsHidInput) return;
+    const child = this.ensureChild();
+    if (!child) return;
+    try {
+      const request: WorkLouderCodexHostRequest = { kind: 'listen' };
+      child.postMessage(request);
+    } catch (error) {
+      this.deps.log.warn('failed to start Work Louder HID listening', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        child.kill();
+      } catch {
+        // A failed message channel commonly means the child already exited.
+      }
+      this.handleExit(child, 1);
+    }
+  }
+
   private handleMessage(child: WorkLouderCodexChildLike, message: unknown): void {
     if (this.child !== child || !isWorkLouderCodexHostMessage(message)) return;
     if (message.kind === 'stopped') {
@@ -196,8 +219,10 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private scheduleRestart(): void {
     if (
       this.restartTimer ||
-      !this.latestFrame ||
-      isWorkLouderCodexLightingFrameOff(this.latestFrame)
+      (!this.latestFrame && !this.wantsHidInput) ||
+      (this.latestFrame &&
+        isWorkLouderCodexLightingFrameOff(this.latestFrame) &&
+        !this.wantsHidInput)
     ) {
       return;
     }
@@ -210,7 +235,9 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
       const frame = this.latestFrame;
-      if (frame && !this.disposed) this.update(frame);
+      if (this.disposed) return;
+      if (this.wantsHidInput) this.requestHidListening();
+      if (frame) this.update(frame);
     }, delayMs);
     this.restartTimer.unref?.();
   }
