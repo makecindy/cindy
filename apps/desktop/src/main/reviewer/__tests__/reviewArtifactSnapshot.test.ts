@@ -107,6 +107,77 @@ describe('materializeReviewArtifactSnapshots', () => {
     await materialized.cleanup();
   });
 
+  it('snapshots an explicit scoped pnpm mirror inside the source workspace', async () => {
+    if (process.platform === 'win32') return;
+    const workingDir = await tempDir();
+    const packageRoot = path.join(workingDir, 'packages', 'maker-core');
+    const sourcePath = path.join(packageRoot, 'src', 'index.ts');
+    const mirrorPath = path.join(
+      workingDir,
+      'node_modules',
+      '@cindy',
+      'maker-core',
+      'src',
+      'index.ts',
+    );
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.mkdir(path.dirname(mirrorPath), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, 'package.json'), '{"name":"@cindy/maker-core"}');
+    await fs.writeFile(sourcePath, 'export const value = 1;');
+    await fs.link(sourcePath, mirrorPath);
+    const artifactPath = await fs.realpath(sourcePath);
+
+    const materialized = await materializeReviewArtifactSnapshots({
+      workingDir,
+      grant: await grantFor([artifactPath]),
+      owner: TEST_OWNER,
+    });
+    const snapshotPath = materialized.grant.snapshotPaths?.get(artifactPath);
+    if (!snapshotPath) throw new Error('expected snapshot path');
+    await expect(fs.readFile(snapshotPath, 'utf8')).resolves.toBe('export const value = 1;');
+    await materialized.cleanup();
+  });
+
+  it('rejects a pnpm mirror replaced with an outside link after validation', async () => {
+    if (process.platform === 'win32') return;
+    const workingDir = await tempDir();
+    const outsideDir = await tempDir();
+    const packageRoot = path.join(workingDir, 'packages', 'maker-core');
+    const sourcePath = path.join(packageRoot, 'src', 'index.ts');
+    const mirrorPath = path.join(
+      workingDir,
+      'node_modules',
+      '@cindy',
+      'maker-core',
+      'src',
+      'index.ts',
+    );
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.mkdir(path.dirname(mirrorPath), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, 'package.json'), '{"name":"@cindy/maker-core"}');
+    await fs.writeFile(sourcePath, 'export const value = 1;');
+    await fs.link(sourcePath, mirrorPath);
+    const artifactPath = await fs.realpath(sourcePath);
+    const grant = await grantFor([artifactPath]);
+    let replaced = false;
+
+    await expect(
+      materializeReviewArtifactSnapshots({
+        workingDir,
+        grant,
+        owner: TEST_OWNER,
+        openFile: async (filePath, flags) => {
+          if (filePath === artifactPath && !replaced) {
+            replaced = true;
+            await fs.unlink(mirrorPath);
+            await fs.link(sourcePath, path.join(outsideDir, 'outside-link.ts'));
+          }
+          return fs.open(filePath, flags);
+        },
+      }),
+    ).rejects.toBeInstanceOf(ReviewArtifactAuthorizationError);
+  });
+
   it('rejects a symlink substituted after the original path was authorized', async () => {
     if (process.platform === 'win32') return;
     const workingDir = await tempDir();
