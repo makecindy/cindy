@@ -1088,13 +1088,15 @@ function consumesStdinAsProgram(tokens: string[]): boolean {
 /**
  * Quoted delimiters may contain any character except whitespace and the
  * quoting character itself (`<<'END.SH'`, `<<'END!'`, `<<"END$"`); unquoted
- * delimiters are shell words and stay restricted. `<<-` permits leading tabs
- * on the delimiter line, a plain `<<` does not.
+ * delimiters are shell words and stay restricted to characters with no shell
+ * meaning in word position (`:` and `+` are ordinary word characters, so
+ * `<<PY:` is a legal unquoted delimiter). `<<-` permits leading tabs on the
+ * delimiter line, a plain `<<` does not.
  */
 const HEREDOC_MARKER =
-  /<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z0-9_.-]+))/g;
+  /<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z0-9_.:+-]+))/g;
 const HEREDOC_MARKER_START =
-  /^<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z0-9_.-]+))/;
+  /^<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z0-9_.:+-]+))/;
 
 interface HeredocRegion {
   /** Line index of the line that opens the heredoc. */
