@@ -21,7 +21,7 @@ function readSource(relativePath: string): string {
 const SCREEN = 'app/sessions/[sessionId].tsx';
 
 describe('mobile optimistic composer while session is not ready', () => {
-  it('keeps the composer out of the read-only slot and only gates remote controls until the session exists', () => {
+  it('keeps the composer out of the read-only slot while gating remote controls separately', () => {
     const source = readSource(SCREEN);
 
     // composer 只认真正的协作只读理由。
@@ -42,10 +42,14 @@ describe('mobile optimistic composer while session is not ready', () => {
     const stopStart = source.indexOf('const stopSession = () => {');
     const stopEnd = source.indexOf('\n  };', stopStart);
     const stop = source.slice(stopStart, stopEnd);
+    const stopButtonStart = source.indexOf('const renderComposerStopButton = () => (');
+    const stopButtonEnd = source.indexOf('\n  );', stopButtonStart);
+    const stopButton = source.slice(stopButtonStart, stopButtonEnd);
 
-    // 模型 / effort / fast / 权限 / plan 继续可点;RPC 失败走既有乐观回滚。
+    // 模型 / effort / fast / 权限 / plan / Stop 都需要实时访问被控端，明确断线时禁用。
     expect(source).toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession);');
-    expect(source).not.toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession)\n    ||');
+    expect(source).toContain("const remoteRealtimeControlsUnavailable = status !== 'online'");
+    expect(source).toContain('const canUseRemoteSessionControls = canUseComposer\n    && !sessionSettingsLocked\n    && !remoteRealtimeControlsUnavailable;');
     // UI error 可独立清理；transport hold 只在权威 sync 成功后解除，不再借共享 error
     // 充当 outbox 门禁。
     expect(source).toContain('const [outboxTransportHold, setOutboxTransportHold] = useState<');
@@ -66,19 +70,28 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(queueGate).not.toContain('remoteUnavailableReason');
     expect(queueGate).not.toContain('outboxConnectionDispatchBlocked');
     // Stop 保持可见,但明确断线时不发送 RPC,只进入自动恢复提示。
-    expect(source).toContain("status !== 'online' || targetAvailableForDispatch === false");
+    expect(source).toContain("const remoteRealtimeControlsUnavailable = status !== 'online'");
     const dispatchPresenceStart = source.indexOf('const targetAvailableForDispatch =');
     const dispatchPresenceEnd = source.indexOf(';', dispatchPresenceStart);
     const dispatchPresence = source.slice(dispatchPresenceStart, dispatchPresenceEnd);
     expect(dispatchPresence).toContain('getPresenceAvailability(deviceId)');
     expect(dispatchPresence).not.toContain('lastPresenceSnapshot');
     expect(dispatchPresence).not.toContain('targetAvailableRef');
-    expect(source).toContain('canStop: canUseRemoteSessionControls && canStopComposer,');
+    expect(source).toContain('canStop: canStopComposer,');
+    expect(source).toContain(
+      'const composerStopDisabled = composerLayout.stop.disabled || !canUseRemoteSessionControls;',
+    );
+    expect(stopButton).toContain('disabled={composerStopDisabled}');
     expect(stop).toContain('if (remoteStopUnavailable) {');
     expect(stop).toContain("'[DEVICE_OFFLINE]'");
     expect(stop).toContain("'[NOT_CONNECTED]'");
     expect(stop).not.toContain('target device unavailable');
     expect(stop).not.toContain('relay reconnecting');
+    const runtimePillStart = source.indexOf('function ComposerRuntimePill({');
+    const runtimePillEnd = source.indexOf('\nfunction ComposerActivityStatus', runtimePillStart);
+    const runtimePill = source.slice(runtimePillStart, runtimePillEnd);
+    expect(runtimePill).toContain('disabled = false,');
+    expect(runtimePill).toContain('disabled={disabled}');
   });
 
   it('publishes every transport-side presence availability transition to context consumers', () => {
@@ -129,42 +142,41 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('if (!dispatchBlockedAtSend && !currentSession.workingDir) {');
   });
 
-  it('restores legacy plan only after outbox enqueue acceptance and blocks FIFO while offline', () => {
+  it('keeps legacy Plan out of deferred delivery without affecting the modern Plan path', () => {
     const source = readSource(SCREEN);
-    const dispatchStart = source.indexOf('const dispatchOutboxItem = async');
-    const prepareStart = source.indexOf('queued = await prepareMobileQueuedSessionReferences(', dispatchStart);
-    const rearmStart = source.indexOf("maker.setPermissionMode(item.sessionId, 'plan')", dispatchStart);
-    const enqueueStart = source.indexOf('projection = await maker.input.enqueue', dispatchStart);
-    const acceptedBarrierStart = source.indexOf('const acceptedBarrier: MobileOutboxItem = {', enqueueStart);
-    const acceptedRestoreStart = source.indexOf(
-      'await restoreLegacyPlanAfterEnqueue(acceptedBarrier)',
-      acceptedBarrierStart,
-    );
+    const guardStart = source.indexOf('const legacyPlanRequiresLiveDispatch =');
+    const optimisticClearStart = source.indexOf('if (text) applyComposerDocument(documentAfterOptimisticClear);');
+    const outboxStart = source.indexOf('if (useLocalOutbox) {', guardStart);
+    const guard = source.slice(guardStart, outboxStart);
 
+    expect(guardStart).toBeGreaterThan(-1);
+    expect(guardStart).toBeLessThan(optimisticClearStart);
+    expect(guard).toContain("runtimeOptions?.planModeSupported !== true");
+    expect(guard).toContain('const useLocalOutbox = shouldUseLocalOutbox && !legacyPlanRequiresLiveDispatch;');
+    expect(guard).toContain('dispatchBlockedAtSend || outboxRef.current.length > 0 || outboxPumpBusyRef.current');
+    expect(guard).toContain("setError(t('session.menu.aiRenameOffline'));");
     expect(source).toContain(
-      'legacyPlanRestore,\n          legacyPlanArmEpochAtSend,\n          readyAttachments,',
+      'const recovery = recoverOutboxItemsToComposerDraft([capturedDraftRecoveryItem()], {',
     );
-    expect(source).toContain('legacyPlanArmEpochAtSend,');
-    expect(prepareStart).toBeGreaterThan(dispatchStart);
-    expect(rearmStart).toBeGreaterThan(prepareStart);
-    expect(enqueueStart).toBeGreaterThan(rearmStart);
-    expect(acceptedBarrierStart).toBeGreaterThan(enqueueStart);
-    expect(acceptedRestoreStart).toBeGreaterThan(enqueueStart);
-    expect(source).toContain('if (item.restoreOnly) return restoreLegacyPlanAfterEnqueue(item);');
-    expect(source).toContain('restoreOnly: true,');
-    expect(source).toContain('outboxItems.filter((item) => !item.restoreOnly)');
-    expect(source).toContain('const unsentItems = items.filter((item) => !item.restoreOnly);');
-    expect(source).not.toContain("from '@/session/legacyPlanRecovery'");
+    expect(source).toContain('applyComposerDocument(recovery.document);');
+    expect((source.match(/restoreDirectSendDraftAfterFailure\(\)/g) ?? [])).toHaveLength(4);
+    expect(source).toContain(
+      'if (shouldWaitForOutboxEnqueueRecovery(err) && !legacyPlanRequiresLiveDispatch) {',
+    );
+    expect(source).toContain('maker.setPlanMode(sessionId, next)');
+    expect(source).not.toContain('restoreOnly');
+    expect(source).not.toContain('legacyPlanRecovery');
+    expect(source).not.toContain('legacyPlanRestore');
+  });
 
-    const optimisticOutboxStart = source.indexOf('const legacyPlanRestore = legacyPlanRestoreAtDecision;');
-    const optimisticOutboxBuild = source.indexOf('updateOutbox((items) => [...items, buildOutboxItem({', optimisticOutboxStart);
-    const optimisticOutboxSetup = source.slice(optimisticOutboxStart, optimisticOutboxBuild);
-    expect(optimisticOutboxSetup).toContain('consumeLegacyPlanLocally(legacyPlanRestore);');
-    expect(optimisticOutboxSetup).not.toContain('maker.setPermissionMode');
-    expect(source).toContain("const legacyPlanRestoreAtDecision = permissionModeAtDecision === 'plan'");
-    expect(source).toContain('|| legacyPlanRestoreAtDecision !== null)) {');
-    expect(source).toContain('legacyPlanArmEpochBySessionRef.current.set(');
-    expect(source).toContain('items.some((entry) => entry.clientId === acceptedBarrier.clientId)');
+  it('preserves a new-session legacy Plan draft until live dispatch is available', () => {
+    const source = readSource('app/sessions/new.tsx');
+
+    expect(source).toContain('!planModeCapability');
+    expect(source).toContain("draft.permissionMode === 'plan'");
+    expect(source).toContain("deviceLinkStatus !== 'online'");
+    expect(source).toContain('getPresenceAvailability(selectedDeviceId) === false');
+    expect(source).toContain("setError(t('session.menu.aiRenameOffline'));");
   });
 
   it('defers disconnect races instead of turning them into failed or falsely delivered messages', () => {
@@ -174,8 +186,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     const recoveryHelper = source.slice(recoveryHelperStart, recoveryHelperEnd);
 
     expect(source).toContain('const waitForConnection = (');
-    expect(source).toContain('waitingItem: MobileOutboxItem = item,');
-    expect(source).toContain('outboxItemWaitingForConnection(waitingItem)');
+    expect(source).toContain('const waiting = outboxItemWaitingForConnection(item);');
     expect(source).toContain("if (result === 'deferred' || result === 'stopped') return;");
     expect(source).toContain("return 'stopped' as const;");
     expect(source).toContain('isSafelyUnsentOutboxEnqueueError(err)');
@@ -183,7 +194,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(recoveryHelper).toContain('isAutoRecoveringRemoteError(err)');
     // direct 与 outbox-originated enqueue 都必须用同一判据，把回执不确定项保留在
     // 原 clientId 上自动重试；不能一条自动等、另一条退回草稿生成新 id。
-    expect((source.match(/if \(shouldWaitForOutboxEnqueueRecovery\(err\)\)/g) ?? []))
+    expect((source.match(/shouldWaitForOutboxEnqueueRecovery\(err\)/g) ?? []))
       .toHaveLength(2);
     expect((source.match(/按「无法证明已送达」处理。\n\s+return false;/g) ?? [])).toHaveLength(2);
     expect(source).not.toContain('const authorityAdvanced = remoteSessionStore.captureInputProjectionAuthorityEpoch(');
@@ -227,7 +238,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     const source = readSource(SCREEN);
 
     expect(source).toContain('const recoverCapturedDraftForScopeExit = () => {');
-    expect(source).toContain('restoreRecoverableItemsToDraft(sessionId, [{');
+    expect(source).toContain('restoreRecoverableItemsToDraft(sessionId, [capturedDraftRecoveryItem()]);');
     expect(source).toContain('const hydratedDocumentAtSend = await hydrateComposerMessageReferenceBodies(');
     expect(source).toContain('if (!sendScopeStillAlive()) {\n      recoverCapturedDraftForScopeExit();');
     expect(source).toContain('await waitForPastePlaceholdersSettled();\n          if (!sendScopeStillAlive()) {');
@@ -366,10 +377,10 @@ describe('mobile optimistic composer while session is not ready', () => {
     const fnEnd = screen.indexOf('\n\n  // Context 面板', fnStart);
     expect(fnEnd).toBeGreaterThan(fnStart);
     const fn = screen.slice(fnStart, fnEnd);
-    expect(fn).toContain('if (sessionSettingsLocked) return false;');
+    expect(fn).toContain('if (!canUseRemoteSessionControls) return false;');
     // 锁进依赖,回调不会停留在「未锁」那一帧。
     expect(fn).toContain('outboxConnectionDispatchBlocked,');
-    expect(fn).toContain('sessionSettingsLocked,');
+    expect(fn).toContain('canUseRemoteSessionControls,');
   });
 
   it('binds sticky/locked derived state to the thing it belongs to', () => {
@@ -394,9 +405,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('return !row || row.pendingLocalCreation === true;');
     // 1) 渲染:按钮灰态。
     expect(source).toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession);');
-    expect(source).toContain('disabled={!canUseComposer || controlBusy || sessionSettingsLocked}');
+    expect(source).toContain('disabled={controlBusy || !canUseRemoteSessionControls}');
     // 2) 会话设置 RPC 的硬门(统一入口,覆盖全部 runControlAction 调用点)。
-    expect(source).toContain('if (sessionSettingsLocked) return;\n    setControlBusy(true);');
+    expect(source).toContain('if (!canUseRemoteSessionControls) return;\n    setControlBusy(true);');
     // 3) 消息派发:复合判据,「不存在」是它的子集。
     expect(source).toContain('if (isRemoteSessionMissing(row)) return true;');
     expect(source).not.toContain('const sessionSettingsLocked = currentSession?.pendingLocalCreation === true;');

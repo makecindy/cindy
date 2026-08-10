@@ -419,6 +419,7 @@ export default function NewRemoteSessionScreen() {
   const router = useRouter();
   const auth = useAuth();
   const {
+    getPresenceAvailability,
     invoke,
     openLink,
     subscribe,
@@ -3801,6 +3802,19 @@ export default function NewRemoteSessionScreen() {
       setError(t('session.new.selectDeviceError'));
       return;
     }
+    // 旧协议 Plan 依赖会话级 permissionMode，不能安全进入断线创建 / 离线 FIFO。
+    // 保留草稿与 Plan 选择，等 relay 和目标电脑恢复后再走原有在线兼容路径。
+    if (
+      !planModeCapability
+      && draft.permissionMode === 'plan'
+      && (
+        deviceLinkStatus !== 'online'
+        || getPresenceAvailability(selectedDeviceId) === false
+      )
+    ) {
+      setError(t('session.menu.aiRenameOffline'));
+      return;
+    }
     if (
       worktreeApplicable
       && (
@@ -4321,10 +4335,12 @@ export default function NewRemoteSessionScreen() {
     agentAuthVerdict,
     auth.user?.id,
     confirmAgentUnauthenticated,
+    deviceLinkStatus,
     selectedDeviceId,
     selectedDeviceName,
     draft,
     finishVoiceRecording,
+    getPresenceAvailability,
     maker,
     openLink,
     planModeCapability,

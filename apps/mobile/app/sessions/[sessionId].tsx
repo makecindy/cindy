@@ -200,7 +200,6 @@ import {
   dismissNewSessionCreation,
   prepareNewSessionCreationForEdit,
   getNewSessionCreationTask,
-  retryNewSessionLegacyPlanRestore,
   retryNewSessionCreation,
   shouldBlockSessionSync,
   stashNewSessionDraftForEdit,
@@ -1222,11 +1221,10 @@ export default function SessionScreen() {
       if (items.length === 0) return;
       outboxRef.current = [];
       setOutboxItems([]);
-      const unsentItems = items.filter((item) => !item.restoreOnly);
       // 草稿按条目自身归属写回(而非本 effect 捕获的 sessionId):防御性一致。
       // 引用正文同步恢复 quote store，输入框只接收剥过 marker 的可见文字。
-      restoreOutboxItemsToDraft(unsentItems);
-      for (const item of unsentItems) {
+      restoreOutboxItemsToDraft(items);
+      for (const item of items) {
         for (const localId of [...item.waitingIds, ...item.failedIds]) removePendingUpload(localId);
         for (const attachment of outboxItemAttachments(item)) {
           discardMobileUploadedAttachment(attachment, {
@@ -1452,13 +1450,6 @@ export default function SessionScreen() {
   // 同步真源(上传回调 / 派发循环 / send 同步段都要读最新值),state 只驱动渲染。
   const [outboxItems, setOutboxItems] = useState<readonly MobileOutboxItem[]>([]);
   const outboxRef = useRef<readonly MobileOutboxItem[]>([]);
-  // 页面内代次只用于保护同一屏生命周期内「旧消息恢复」与「用户重新打开 Plan」
-  // 的竞态；不做跨页面、跨进程持久化，边界与现有 outbox 一致。
-  const legacyPlanArmEpochBySessionRef = useRef(new Map<string, number>());
-  const prePlanPermissionModeRef = useRef<{ sessionId: string; mode: string | null }>({
-    sessionId,
-    mode: null,
-  });
   // 派发循环重入锁 + 路由函数的 ref 中转(onUploaded 闭包声明在组件前部,实际
   // 路由/派发逻辑声明在 send() 附近,经 ref 断开声明顺序依赖,同 composerAnnotationsRef)。
   const outboxPumpBusyRef = useRef(false);
@@ -1790,10 +1781,6 @@ export default function SessionScreen() {
   // lastPresenceSnapshot 与下方 ref 只用于 false→true 的 resync edge，不能作为门禁：
   // 它们会跨 epoch 保留，旧 offline 否则会把新连接永久卡死。
   const targetAvailableForDispatch = getPresenceAvailability(deviceId);
-  // 对齐 Desktop:断线恢复期间设置入口仍可操作,但明确知道电脑不可达时拦下停止任务。
-  // presence 未知时仍允许尝试,避免旧缓存把停止入口永久锁死。
-  const remoteStopUnavailable =
-    status !== 'online' || targetAvailableForDispatch === false;
   const screenAutoRecoveringError = connectionError && isAutoRecoveringRemoteError(connectionError)
     ? connectionError
     : null;
@@ -1817,6 +1804,13 @@ export default function SessionScreen() {
         : { deviceId, error: screenAutoRecoveringError }
     ));
   }, [connectionError, deviceId, screenAutoRecoveringError]);
+  // 对齐 Desktop：输入与发送仍可排队，但模型、权限、Plan、停止等需要即时访问
+  // 被控端的操作在明确断线时禁用。presence unknown 仍允许，避免旧缓存永久锁死入口。
+  const remoteRealtimeControlsUnavailable = status !== 'online'
+    || targetAvailableForDispatch === false
+    || isDeviceUnresponsive
+    || activeOutboxTransportError !== null;
+  const remoteStopUnavailable = remoteRealtimeControlsUnavailable;
   const outboxConnectionState: MobileOutboxConnectionState = {
     relayOnline: status === 'online',
     targetAvailable: targetAvailableForDispatch,
@@ -2002,10 +1996,10 @@ export default function SessionScreen() {
   const pendingCreationReason = currentSession?.pendingLocalCreation
     ? t('session.screen.composerCreating')
     : null;
-  // 会话设置类动作(model / effort / fast / permission / plan)仅在会话尚未建成时不可用。
-  // 对齐 Desktop,暂时断线时入口继续可点:现有乐观 RPC 会在失败后回滚并展示提示。
-  // cacheSeeded 不锁——那种会话在被控端是存在的,只是本地行还是瘦身缓存。
-  // 硬门在 runControlAction 里,这里供按钮表达灰态。
+  // 会话尚未建成时，所有远端实时控制都不可用。cacheSeeded 不锁——那种会话在
+  // 被控端是存在的，只是本地行还是瘦身缓存。断线门另由
+  // remoteRealtimeControlsUnavailable 表达；两者在 canUseRemoteSessionControls
+  // 汇合，但不影响 composer 输入和 outbox 排队。
   // 判据与命令式路径共用 isRemoteSessionMissing(见其注释):这里是渲染需要的
   // reactive 形态,send / runControlAction 用读 store 的 Now 形态。
   const sessionSettingsLocked = isRemoteSessionMissing(currentSession);
@@ -2054,7 +2048,9 @@ export default function SessionScreen() {
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
   const canUseComposer = sessionOperationLayout.canUseComposer;
-  const canUseRemoteSessionControls = canUseComposer && !sessionSettingsLocked;
+  const canUseRemoteSessionControls = canUseComposer
+    && !sessionSettingsLocked
+    && !remoteRealtimeControlsUnavailable;
   // 共享模型自造的那两条禁发理由是中文直出,而它会经 composer 与队列行的
   // accessibility hint 读给用户 —— 按 locale 翻译后再用,否则读屏在 en / ja / ko
   // 下念混语(#530 review)。调用方自己传进去的理由(离线 / 只读 / 同步中)已本地化,
@@ -2311,7 +2307,8 @@ export default function SessionScreen() {
     // pending(乐观上传中)计入:拍完照 / 选完文件立即可点发送,send() 内部会等落定。
     attachmentCount: attachments.length + pendingUploads.length,
     attachmentPickerOpen: false,
-    canStop: canUseRemoteSessionControls && canStopComposer,
+    // Stop 的可见性跟随真实运行 / 队列状态；断线时只单独禁用交互。
+    canStop: canStopComposer,
     draftText: draft,
     queueBusy,
     quoteCount: composerQuoteCount,
@@ -2322,7 +2319,6 @@ export default function SessionScreen() {
     attachments.length,
     pendingUploads.length,
     canStopComposer,
-    canUseRemoteSessionControls,
     canUseComposer,
     composerQuoteCount,
     composerSendUnavailableReason,
@@ -2357,6 +2353,10 @@ export default function SessionScreen() {
   // 只有确定性不可用(撤权 / 关闭远控等)才禁发送；普通断线与自动恢复状态仍可发，
   // 消息进入本地 outbox 等连接恢复。输入框在两类状态下都保持可编辑与持久化。
   const composerSendDisabled = composerLayout.send.disabled;
+  const composerStopDisabled = composerLayout.stop.disabled || !canUseRemoteSessionControls;
+  const composerStopDisabledReason = !canUseRemoteSessionControls
+    ? remoteUnavailableReason ?? t('session.menu.aiRenameOffline')
+    : composerLayout.stop.disabledReason;
   const composerShowInlineStop = composerLayout.stop.visible && !composerSendSlotIsStop && !sending;
   const composerHasPayload = composerHasText || attachments.length > 0 || pendingUploads.length > 0 || composerQuoteCount > 0;
   // send.visible 在语音生命周期内恒 true(sessionOperation.ts),这里不再按
@@ -2712,7 +2712,7 @@ export default function SessionScreen() {
       {renderSessionPermissionButton()}
       {planModeOn ? (
         <PlanModeChip
-          disabled={!canUseComposer || controlBusy || sessionSettingsLocked}
+          disabled={controlBusy || !canUseRemoteSessionControls}
           onExit={() => togglePlanMode(false)}
           testID="session.planModeChip"
         />
@@ -2720,6 +2720,7 @@ export default function SessionScreen() {
       <ComposerToolbarSpacer />
       {composerRuntimeSummary ? (
         <ComposerRuntimePill
+          disabled={controlBusy || !canUseRemoteSessionControls}
           fastOn={composerPillFastOn}
           label={composerRuntimeLabel}
           leading={agentSwitchIntent ? (
@@ -3781,13 +3782,9 @@ export default function SessionScreen() {
     const prev = prevCreationStatusRef.current;
     const status = creationTask?.status ?? null;
     prevCreationStatusRef.current = status;
-    if (status === 'restoring-plan') {
-      setError(creationTask?.error ?? null);
-      return;
-    }
     if (status === prev) return;
     if (status === null) {
-      if (prev === 'running' || prev === 'restoring-plan') {
+      if (prev === 'running') {
         setError(null);
         void load();
       }
@@ -4126,11 +4123,7 @@ export default function SessionScreen() {
         identity: retryIdentity,
         attempt: retryState.attempt + 1,
       };
-      if (creationTask?.status === 'restoring-plan') {
-        retryNewSessionLegacyPlanRestore(sessionId);
-      } else {
-        void load();
-      }
+      void load();
     }, connectionRecoverySyncRetryDelayMs(retryState.attempt));
     return () => clearTimeout(timer);
   }, [
@@ -4142,7 +4135,6 @@ export default function SessionScreen() {
     load,
     loading,
     connectionEpoch,
-    creationTask?.status,
     sessionId,
     status,
     targetAvailableForDispatch,
@@ -5431,9 +5423,6 @@ export default function SessionScreen() {
    * 没有在途任务要清。
    */
   const salvageOutboxItem = (item: MobileOutboxItem) => {
-    // 已接受/已取消消息留下的隐藏恢复屏障不是草稿，也不再持有附件资源。
-    // 页面离场后按现有 outbox 生命周期丢弃，不扩成跨页面恢复机制。
-    if (item.restoreOnly) return;
     restoreOutboxItemsToDraft([item]);
     for (const attachment of outboxItemAttachments(item)) {
       discardMobileUploadedAttachment(attachment, {
@@ -5466,72 +5455,21 @@ export default function SessionScreen() {
           : [outboxItemWithEnqueueFailure(item, message), ...items]
       ));
     };
-    const waitForConnection = (
-      error: unknown,
-      waitingItem: MobileOutboxItem = item,
-    ) => {
+    const waitForConnection = (error: unknown) => {
       // 与失败回插同一归属边界：离场后不能把旧会话气泡塞进当前页面，降级回该
       // 会话的持久草稿；仍在本页则恢复为 uploading/ready，留在 FIFO 队首。
-      if (outboxSessionAliveRef.current !== waitingItem.sessionId) {
-        salvageOutboxItem(waitingItem);
+      if (outboxSessionAliveRef.current !== item.sessionId) {
+        salvageOutboxItem(item);
         return;
       }
-      const waiting = outboxItemWaitingForConnection(waitingItem);
+      const waiting = outboxItemWaitingForConnection(item);
       updateOutbox((items) => (
-        items.some((existing) => existing.clientId === waitingItem.clientId)
+        items.some((existing) => existing.clientId === item.clientId)
           ? replaceOutboxItem(items, waiting)
           : [waiting, ...items]
       ));
       setError(formatRemoteError(error));
     };
-    const resolveLegacyPlanRestoreTarget = (restoreItem: MobileOutboxItem): string | null => {
-      if (!restoreItem.legacyPlanRestore) return null;
-      const latestArmEpoch = legacyPlanArmEpochBySessionRef.current.get(restoreItem.sessionId) ?? 0;
-      if (latestArmEpoch > restoreItem.legacyPlanArmEpochAtSend) return 'plan';
-      const currentMode = remoteSessionStore.getSessions()
-        .find((entry) => entry.id === restoreItem.sessionId)?.permissionMode;
-      return currentMode && currentMode !== 'plan'
-        ? currentMode
-        : restoreItem.legacyPlanRestore;
-    };
-    const removeRestoreBarrier = (acceptedItem: MobileOutboxItem) => {
-      if (outboxSessionAliveRef.current !== acceptedItem.sessionId) return;
-      updateOutbox((items) => items.filter((entry) => entry.clientId !== acceptedItem.clientId));
-    };
-    const restoreLegacyPlanOffPage = async (restoreItem: MobileOutboxItem) => {
-      const restoreMode = resolveLegacyPlanRestoreTarget(restoreItem);
-      if (!restoreMode) return;
-      try {
-        await withTransientRemoteRetry(
-          () => maker.setPermissionMode(restoreItem.sessionId, restoreMode),
-          { maxAttempts: 2 },
-        );
-      } catch {
-        // 页面生命周期边界内的 best-effort。
-      }
-    };
-    const restoreLegacyPlanAfterEnqueue = async (acceptedItem: MobileOutboxItem) => {
-      const restoreMode = resolveLegacyPlanRestoreTarget(acceptedItem);
-      if (!restoreMode) {
-        removeRestoreBarrier(acceptedItem);
-        return;
-      }
-      try {
-        await withTransientRemoteRetry(
-          () => maker.setPermissionMode(acceptedItem.sessionId, restoreMode),
-        );
-      } catch (err) {
-        if (isAutoRecoveringRemoteError(err)) {
-          waitForConnection(err, acceptedItem);
-          return 'deferred' as const;
-        }
-        // 恢复沿用旧实现的 best-effort 语义：确定性拒绝不应永久挡住后续消息。
-        removeRestoreBarrier(acceptedItem);
-        return;
-      }
-      removeRestoreBarrier(acceptedItem);
-    };
-    if (item.restoreOnly) return restoreLegacyPlanAfterEnqueue(item);
     const sessionNow = remoteSessionStore.getSessions().find((entry) => entry.id === item.sessionId);
     if (!sessionNow) {
       failItem(t('session.screen.sessionNotFoundResync'));
@@ -5574,30 +5512,6 @@ export default function SessionScreen() {
       return;
     }
     if (outboxSessionAliveRef.current !== item.sessionId) return 'stopped' as const;
-    if (item.legacyPlanRestore) {
-      try {
-        // 引用材料准备完成后才显式武装，缩小“远端已是 plan、消息尚未越过
-        // enqueue”的窗口。每条旧协议 Plan 都要单独武装：上一条的恢复会把 live
-        // session 切回普通档，而旧端不会从 queued.createOpts 重放该快照。
-        await withTransientRemoteRetry(() => maker.setPermissionMode(item.sessionId, 'plan'));
-      } catch (err) {
-        // set RPC 的回执也可能丢失，不能假定远端没有切到 plan。
-        if (outboxSessionAliveRef.current !== item.sessionId) {
-          await restoreLegacyPlanOffPage(item);
-          return 'stopped' as const;
-        }
-        if (isAutoRecoveringRemoteError(err)) {
-          waitForConnection(err);
-          return 'deferred' as const;
-        }
-        failItem(formatRemoteError(err));
-        return;
-      }
-      if (outboxSessionAliveRef.current !== item.sessionId) {
-        await restoreLegacyPlanOffPage(item);
-        return 'stopped' as const;
-      }
-    }
     // 乐观交接:进本地 pendingQueue 的同一同步段把条目移出 outbox,气泡原位从
     // 「发送中」变「排队中」不闪断;enqueue 成功后用权威 projection 覆盖 reconcile。
     const projectionBeforeSend = remoteSessionStore.getInputProjection(item.sessionId);
@@ -5674,40 +5588,12 @@ export default function SessionScreen() {
           return 'deferred' as const;
         }
         failItem(formatRemoteError(err));
-        return;
       }
       // applied:消息已在桌面队列,按成功继续(不回滚、不报错)。
     } finally {
       // 落定(入队确认 / 回 outbox 标失败)后收掉转圈:失败条目的气泡由 outbox 侧
       // 重新持有(它自己画错误徽标),排队行里不该留下悬空的在途标记。
       clearQueueItemSending(queued.clientId);
-    }
-    if (item.legacyPlanRestore) {
-      // 消息已经被接受：原条目转换为隐藏的恢复屏障。它留在同一页 outbox 的 FIFO
-      // 队首，只重试权限恢复，绝不再次 enqueue 消息或在离场时回填草稿。
-      const acceptedBarrier: MobileOutboxItem = {
-        ...item,
-        text: '',
-        attachmentSlots: [],
-        slotMeta: [],
-        slotByLocalId: {},
-        waitingIds: [],
-        failedIds: [],
-        enqueueError: null,
-        restoreOnly: true,
-        phase: 'dispatching',
-      };
-      if (outboxSessionAliveRef.current === item.sessionId) {
-        // 用户可能在 arm / enqueue 在途时删除了可见条目，删除路径会先留下同
-        // clientId 的恢复屏障；此处原位替换，不能再插入第二个屏障。
-        updateOutbox((items) => (
-          items.some((entry) => entry.clientId === acceptedBarrier.clientId)
-            ? replaceOutboxItem(items, acceptedBarrier)
-            : [acceptedBarrier, ...items]
-        ));
-      }
-      const restoreResult = await restoreLegacyPlanAfterEnqueue(acceptedBarrier);
-      if (restoreResult === 'deferred') return restoreResult;
     }
     // enqueue / 对账期间离场时，成功路径无需恢复草稿，但旧 pump 也绝不能接着
     // 消费新任务的 outbox；失败路径已由 failItem / waitForConnection 按 A 收口。
@@ -5794,21 +5680,7 @@ export default function SessionScreen() {
     const item = outboxRef.current.find((entry) => entry.clientId === clientId);
     if (!item) return;
     setQueueSelectedClientId(null);
-    const restoreBarrier = item.legacyPlanRestore ? {
-      ...item,
-      text: '',
-      attachmentSlots: [],
-      slotMeta: [],
-      slotByLocalId: {},
-      waitingIds: [],
-      failedIds: [],
-      enqueueError: null,
-      restoreOnly: true,
-      phase: 'uploading' as const,
-    } : null;
-    updateOutbox((items) => items.flatMap((entry) => (
-      entry.clientId !== clientId ? [entry] : restoreBarrier ? [restoreBarrier] : []
-    )));
+    updateOutbox((items) => items.filter((entry) => entry.clientId !== clientId));
     for (const localId of [...item.waitingIds, ...item.failedIds]) removePendingUpload(localId);
     for (const attachment of outboxItemAttachments(item)) {
       discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
@@ -5817,10 +5689,7 @@ export default function SessionScreen() {
     void pumpOutbox();
   };
 
-  const outboxDisplayItems = useMemo(
-    () => outboxItems.filter((item) => !item.restoreOnly).map(outboxDisplayItem),
-    [outboxItems],
-  );
+  const outboxDisplayItems = useMemo(() => outboxItems.map(outboxDisplayItem), [outboxItems]);
 
   /**
    * 取出并清空某会话的 outbox 条目(创建失败的两条收尾路径都要用)。
@@ -5840,11 +5709,9 @@ export default function SessionScreen() {
     targetSessionId: string,
     uploads: 'release-to-tray' | 'cancel',
   ): { items: MobileOutboxItem[]; cancelledUploadCount: number } => {
-    const owned = outboxRef.current.filter((item) => item.sessionId === targetSessionId);
-    if (owned.length === 0) return { items: [], cancelledUploadCount: 0 };
-    updateOutbox((items) => items.filter((item) => item.sessionId !== targetSessionId));
-    const taken = owned.filter((item) => !item.restoreOnly);
+    const taken = outboxRef.current.filter((item) => item.sessionId === targetSessionId);
     if (taken.length === 0) return { items: [], cancelledUploadCount: 0 };
+    updateOutbox((items) => items.filter((item) => item.sessionId !== targetSessionId));
     const pendingLocalIds = taken.flatMap((item) => [...item.waitingIds, ...item.failedIds]);
     if (uploads === 'release-to-tray') {
       // 已就绪附件的中转对象由调用方决定是否随草稿保留,不在这里回收。
@@ -6069,21 +5936,6 @@ export default function SessionScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionEpoch, outboxDispatchBlocked]);
 
-  const readLegacyPlanRestoreMode = () => {
-    const fallback = runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
-    const remembered = prePlanPermissionModeRef.current.sessionId === sessionId
-      ? prePlanPermissionModeRef.current.mode
-      : null;
-    return remembered && remembered !== 'plan' ? remembered : fallback;
-  };
-
-  const consumeLegacyPlanLocally = (restoreMode: string | null) => {
-    if (!restoreMode) return;
-    remoteSessionStore.applySessionPatch(deviceId, sessionId, {
-      permissionMode: restoreMode,
-    });
-  };
-
   async function send(options: {
     draftOverride?: string;
     documentOverride?: ComposerDocument;
@@ -6172,6 +6024,22 @@ export default function SessionScreen() {
     const sessionRefsAtSend = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand
       ? extractMobileSessionReferences(text, remoteSessionStore.getSessionDeviceId)
       : [];
+    const dispatchBlockedAtSend = outboxDispatchBlockedNow();
+    const legacyPlanRequiresLiveDispatch = outboxEligible
+      && !earlyLocalCommand
+      && !earlyDesktopCommand
+      && runtimeOptions?.planModeSupported !== true
+      && permissionModeOrAsk((readSessionRowNow() ?? currentSession).permissionMode) === 'plan';
+    // 旧协议 Plan 依赖会话级 permissionMode，不能排在既有本地消息后，也不能在
+    // 已知断线时托管给自动恢复。必须在乐观清空和任何 await 前拒绝，原草稿原位保留。
+    if (legacyPlanRequiresLiveDispatch && (
+      dispatchBlockedAtSend || outboxRef.current.length > 0 || outboxPumpBusyRef.current
+    )) {
+      if (dispatchBlockedAtSend) setError(t('session.menu.aiRenameOffline'));
+      sendInFlightRef.current = false;
+      setSending(false);
+      return;
+    }
     pendingSkillSelectionRef.current = null;
     // 乐观第一拍:点发送立刻清空输入框并跟到底部,不等任何网络往返(enqueue 是
     // device-link 远程调用,弱网下数秒;文字已捕获进 text)。失败时若输入框仍为空
@@ -6186,6 +6054,13 @@ export default function SessionScreen() {
             nodes: documentAtSend.nodes.filter((node) => node.type === 'quote'),
           })
         : emptyComposerDocument();
+    const capturedDraftRecoveryItem = (): MobileRecoverableDraftItem => ({
+      text,
+      quotesEncoded: quotesEncodedAtSend,
+      agentReferences: agentReferencesAtSend,
+      pastedTextRanges: pastedTextRangesAtSend,
+      slashCommandRanges: slashCommandRangesAtSend ?? [],
+    });
     const restoreDraftAfterFailure = () => {
       // 走持久化写回(setComposerDraft 而非 restoreComposerDraft):乐观清空那拍已把
       // 草稿库删除并打了 cleared 标,只回内存的话 remount 后草稿读到 null、原文丢失
@@ -6195,6 +6070,26 @@ export default function SessionScreen() {
         applyComposerDocument(documentBeforeSend);
       }
     };
+    const restoreDirectSendDraftAfterFailure = () => {
+      if (
+        !legacyPlanRequiresLiveDispatch
+        || composerDocumentsEqual(composerDocumentRef.current, documentAfterOptimisticClear)
+      ) {
+        restoreDraftAfterFailure();
+        return;
+      }
+      // 在线旧协议 Plan 的直发路径仍可能在 await 期间断线。用户若已继续输入，
+      // 不能用旧草稿覆盖新草稿，也不能把旧消息静默丢掉；按发送顺序前置合并。
+      const currentDocument = composerDocumentRef.current;
+      const currentSerialized = serializeComposerDocument(currentDocument);
+      const recovery = recoverOutboxItemsToComposerDraft([capturedDraftRecoveryItem()], {
+        visibleText: composerDocumentProjectedText(currentDocument),
+        encodedBody: currentSerialized.text,
+        quotes: [],
+        document: currentDocument,
+      });
+      applyComposerDocument(recovery.document);
+    };
     let scopeExitDraftRecovered = false;
     const sendScopeStillAlive = () => outboxSessionAliveRef.current === sessionId;
     const recoverCapturedDraftForScopeExit = () => {
@@ -6202,13 +6097,7 @@ export default function SessionScreen() {
       scopeExitDraftRecovered = true;
       // 乐观清空已持久删除 A 草稿；切到 B 后不能再读写共享 composer ref。
       // 直接按捕获的发送快照合并回 A 的草稿库，并保留 A 期间新输入的后续文字。
-      restoreRecoverableItemsToDraft(sessionId, [{
-        text,
-        quotesEncoded: quotesEncodedAtSend,
-        agentReferences: agentReferencesAtSend,
-        pastedTextRanges: pastedTextRangesAtSend,
-        slashCommandRanges: slashCommandRangesAtSend ?? [],
-      }]);
+      restoreRecoverableItemsToDraft(sessionId, [capturedDraftRecoveryItem()]);
     };
     if (text) applyComposerDocument(documentAfterOptimisticClear);
     // A pasted message link is committed to the editor synchronously, while
@@ -6251,20 +6140,14 @@ export default function SessionScreen() {
     // 在途消息,破坏 FIFO(review P1);计入 pump busy 让它同样进 outbox 排队。
     // 会话参数未就绪(缓存种入 / 新建在途)同样走本分支:此刻 enqueue 不可用,但消息
     // 照常上屏,由派发循环在就绪后按序发出——composer 不再为此进只读档。
-    const dispatchBlockedAtSend = outboxDispatchBlockedNow();
-    const sessionForDispatchDecision = readSessionRowNow() ?? currentSession;
-    const permissionModeAtDecision = permissionModeOrAsk(
-      sessionForDispatchDecision.permissionMode,
-    );
-    const legacyPlanRestoreAtDecision = permissionModeAtDecision === 'plan'
-      ? readLegacyPlanRestoreMode()
-      : null;
-    if (outboxEligible && !earlyLocalCommand && !earlyDesktopCommand
+    const shouldUseLocalOutbox = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand
       && (sessionRefsAtSend.length > 0 || uploadsInFlight > 0 || outboxRef.current.length > 0
-        || outboxPumpBusyRef.current || dispatchBlockedAtSend
-        // 旧协议 Plan 一律经 outbox 串行武装 → enqueue → 恢复，避免 chip 的乐观
-        // setPermissionMode 与直发 enqueue 竞速。
-        || legacyPlanRestoreAtDecision !== null)) {
+        || outboxPumpBusyRef.current || dispatchBlockedAtSend);
+    // 旧协议 Plan 依赖会话级 permissionMode，无法安全跨断线 / 页面生命周期托管。
+    // 本 PR 的本地 FIFO 因此只接普通消息与现代 Plan；连接正常且队列为空时，
+    // 旧协议 Plan 即使含附件 / 引用也回落到下方原有在线路径，等待材料后直接派发。
+    const useLocalOutbox = shouldUseLocalOutbox && !legacyPlanRequiresLiveDispatch;
+    if (useLocalOutbox) {
       try {
         // workingDir 校验只对「此刻就能派发」的消息前置:dialogue 会话的工作目录由
         // 被控端在创建时分配,合成行此刻本就为空,而 dispatchOutboxItem 会在真正派发
@@ -6309,14 +6192,13 @@ export default function SessionScreen() {
         setAttachmentError(null);
         // plan 一次性语义:权限档快照进条目(派发按快照发),chip 立即恢复——
         // 不等附件上传完,与「消息已发出」的乐观语义一致。
-        const permissionModeAtSend = permissionModeAtDecision;
-        const legacyPlanRestore = legacyPlanRestoreAtDecision;
-        const legacyPlanArmEpochAtSend = legacyPlanRestore
-          ? legacyPlanArmEpochBySessionRef.current.get(sessionId) ?? 0
-          : 0;
-        // 本地立即消费一次性 Plan，后续输入按恢复档快照；远端必须保持 plan 到
-        // 本条真正 enqueue，恢复动作由 dispatchOutboxItem 在确认入队后执行。
-        consumeLegacyPlanLocally(legacyPlanRestore);
+        const permissionModeAtSend = permissionModeOrAsk(currentSession.permissionMode);
+        if (permissionModeAtSend === 'plan') {
+          const fallback = runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
+          const remembered = prePlanPermissionModeRef.current;
+          const restored = remembered && remembered !== 'plan' ? remembered : fallback;
+          void maker.setPermissionMode(sessionId, restored).catch(() => undefined);
+        }
         updateOutbox((items) => [...items, buildOutboxItem({
           clientId: createOutboxClientId(),
           sessionId,
@@ -6327,8 +6209,6 @@ export default function SessionScreen() {
           pastedTextRanges: pastedTextRangesAtSend,
           slashCommandRanges: slashCommandRangesAtSend ?? [],
           permissionModeAtSend,
-          legacyPlanRestore,
-          legacyPlanArmEpochAtSend,
           readyAttachments,
           readyPreviews,
           claimedUploads,
@@ -6351,7 +6231,7 @@ export default function SessionScreen() {
         return;
       }
       if (failedCount > 0) {
-        restoreDraftAfterFailure();
+        restoreDirectSendDraftAfterFailure();
         return;
       }
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
@@ -6362,12 +6242,8 @@ export default function SessionScreen() {
       // currentSession 同理是等待前的快照:上传等待期间(sending 不锁控制面板)用户
       // 可能已切 model / effort / permission / fast,重读 store 拿最新会话字段,
       // 排队消息与 UI 显示的运行时保持一致(codex review R19)。
-      const latestSessionAtSend = remoteSessionStore.getSessions().find((item) => item.id === sessionId)
+      const sessionAtSend = remoteSessionStore.getSessions().find((item) => item.id === sessionId)
         ?? currentSession;
-      const sessionAtSend = {
-        ...latestSessionAtSend,
-        permissionMode: permissionModeAtDecision,
-      };
       const hasAttachments = sendAttachments.length > 0;
       if (!text && !hasAttachments) return;
       // 排队消息编辑态:发送按钮语义变为「保存修改」——整条内容(文本+附件)替换回
@@ -6537,7 +6413,7 @@ export default function SessionScreen() {
       const desktopCommand = hasAttachments ? null : earlyDesktopCommand;
       if (!sessionAtSend.workingDir && !localSystemCommand && !desktopCommand) {
         setError(t('session.screen.missingWorkingDir'));
-        restoreDraftAfterFailure();
+        restoreDirectSendDraftAfterFailure();
         return;
       }
       if (desktopCommand?.name === 'learn') {
@@ -6616,7 +6492,7 @@ export default function SessionScreen() {
           deviceId,
         );
       } catch (err) {
-        restoreDraftAfterFailure();
+        restoreDirectSendDraftAfterFailure();
         throw err;
       }
       // 乐观第二拍:附件落定后立即把 queued 追加进本地 projection,消息气泡当帧上屏、
@@ -6726,7 +6602,7 @@ export default function SessionScreen() {
             salvageOutboxItem(recoverableItem);
             return;
           }
-          if (shouldWaitForOutboxEnqueueRecovery(err)) {
+          if (shouldWaitForOutboxEnqueueRecovery(err) && !legacyPlanRequiresLiveDispatch) {
             // 明确未发出或 enqueue 已到桌面但回执不确定：都把同一 clientId/内容
             // 接回 outbox。恢复后同 id 重试由桌面幂等去重，不能恢复草稿让用户用
             // 新 id 重发，否则第一次其实已执行时会产生重复任务。
@@ -6737,6 +6613,8 @@ export default function SessionScreen() {
             ));
             setError(formatRemoteError(err));
           } else {
+            // 旧协议 Plan 依赖实时会话权限，不能在这里转入恢复后自动重试的 outbox；
+            // 沿用改动前的在线失败收口，把内容与附件完整交还 composer。
             // 合并而非替换(与成功路径的差集清理对称,codex review R11):enqueue 在途期间
             // 新落定的附件已进 attachments / ref,整体覆盖会把它从托盘丢掉且预览映射残留、
             // OSS 中转对象失去 UI 移除路径;恢复本批的同时保留期间新增。
@@ -6747,7 +6625,7 @@ export default function SessionScreen() {
             ];
             attachmentsRef.current = mergeRestored(attachmentsRef.current);
             setAttachments(mergeRestored);
-            restoreDraftAfterFailure();
+            restoreDirectSendDraftAfterFailure();
             throw err;
           }
         }
@@ -6758,10 +6636,18 @@ export default function SessionScreen() {
         // 否则回滚后集合残留、同 clientId 重发时首帧仍是转圈。
         clearQueueItemSending(queued.clientId);
       }
-      const scopeStillAlive = sendScopeStillAlive();
       // 消息已由 A 路径落定；若等待期间切到 B，只停止旧 continuation，不能再用
-      // A 的附件 id 去清理 B 的 composer UI。
-      if (!scopeStillAlive) return;
+      // A 的附件 id / plan 状态去清理 B 的 composer UI。
+      if (!sendScopeStillAlive()) return;
+      if (sessionAtSend.permissionMode === 'plan') {
+        // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
+        // 自动恢复进入前的权限档;本条消息通常已按 plan 派发,切换只影响后续消息。
+        // best-effort:失败不打断发送流程,chip 会保留、用户可手动退出。
+        const fallback = runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
+        const remembered = prePlanPermissionModeRef.current;
+        const restored = remembered && remembered !== 'plan' ? remembered : fallback;
+        void maker.setPermissionMode(sessionId, restored).catch(() => undefined);
+      }
       voiceDictionaryLearningTrackerRef.current?.flush();
       // 只清本次实际发出那批(sendAttachments)的映射:enqueue 在途期间(弱网数秒)
       // composer 全程可交互,期间新落定的附件已写进这两个映射——全量清空会把它们的
@@ -6928,27 +6814,27 @@ export default function SessionScreen() {
   const renderComposerStopButton = () => (
     <RouteActionButton
       accessibilityLabel={t('session.screen.stopSession')}
-      accessibilityHint={composerLayout.stop.disabledReason ?? undefined}
-      disabled={composerLayout.stop.disabled}
+      accessibilityHint={composerStopDisabledReason ?? undefined}
+      disabled={composerStopDisabled}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPress={stopSession}
       pressedStyle={styles.sendButtonPressed}
       style={[
         styles.sendButton,
-        composerLayout.stop.disabled && styles.sendButtonInactive,
+        composerStopDisabled && styles.sendButtonInactive,
       ]}
       testID="session.stopButton"
     >
       {stopPending ? (
-        <ActivityIndicator color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText} size="small" />
+        <ActivityIndicator color={composerStopDisabled ? colors.textSecondary : colors.ctaText} size="small" />
       ) : (
         <Square
-          color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
+          color={composerStopDisabled ? colors.textSecondary : colors.ctaText}
           // 停止钮实心 Square:10px 填充块语义(非阶梯图标),零描边即语义本身
           // (designTokenDiscipline ALLOWLIST 登记豁免)。
           size={10}
           strokeWidth={0}
-          fill={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}
+          fill={composerStopDisabled ? colors.textSecondary : colors.ctaText}
         />
       )}
     </RouteActionButton>
@@ -7431,9 +7317,9 @@ export default function SessionScreen() {
     // 失败并弹错,把「一切正常」的乐观观感打碎。静默忽略(不发 RPC、不写乐观 patch、
     // 不报错),对应入口的按钮同期也是灰的;窗口只有几秒。
     // composer 与发送不受此限:那条路径改走 outbox 排队(见 outboxDispatchBlockedNow)。
-    // 判据与 send 里的命令门同源(sessionSettingsLocked = isRemoteSessionMissing);
-    // 这里用 reactive 形态就够:按钮就是按这一帧的快照渲染的,点击不跨帧竞争。
-    if (sessionSettingsLocked) return;
+    // 按钮与命令式入口共用同一判据：会话未建成或明确断线时都不发 RPC；
+    // composer 与普通消息发送不受这个门影响。
+    if (!canUseRemoteSessionControls) return;
     setControlBusy(true);
     // 不要因一次设置尝试清掉仍在恢复中的连接错误,否则会提前放开 outbox 派发门。
     if (!outboxConnectionDispatchBlocked) setError(null);
@@ -7490,18 +7376,16 @@ export default function SessionScreen() {
     maker,
     outboxConnectionDispatchBlocked,
     sessionId,
-    sessionSettingsLocked,
+    canUseRemoteSessionControls,
   ]);
 
   const writeSessionAgentSwitchIntent = useCallback(async (
     nextIntent: NonNullable<RemoteSession['agentSwitchIntent']>,
   ): Promise<boolean> => {
     if (!deviceId || controlBusy) return false;
-    // 会话建成前不写切换意图:被控端的 switch handler 要求会话行已存在,合成行阶段
-    // 一律 NOT_FOUND。这里是**全部** agent-switch 写入的唯一出口(换模型 / 换 effort /
-    // 换 fast 三条路都经它),门放在这里而不是各调用点,新增入口不会漏(review P1:
-    // 换模型那条路不走 runControlAction,只在那儿加锁就漏了它)。
-    if (sessionSettingsLocked) return false;
+    // 会话未建成或明确断线时不写切换意图。这里是全部 agent-switch 写入的唯一出口，
+    // 门放在这里而不是各调用点，新增入口不会漏。
+    if (!canUseRemoteSessionControls) return false;
     const seq = ++agentSwitchWriteSeqRef.current;
     const previousIntent = normalizeSessionAgentSwitchIntent(
       remoteSessionStore.getSessions().find((item) => item.id === sessionId)?.agentSwitchIntent,
@@ -7566,7 +7450,7 @@ export default function SessionScreen() {
     maker,
     outboxConnectionDispatchBlocked,
     sessionId,
-    sessionSettingsLocked,
+    canUseRemoteSessionControls,
   ]);
 
   // Context 面板「计划模式」开关,双路径(#494 迁移):
@@ -7574,46 +7458,36 @@ export default function SessionScreen() {
   //    状态读 session.planModeEnabled;一次性消耗由被控端执行(下一 turn 消耗武装态,
   //    plan_mode_changed → planModeEnabled=false 经 sessions:patched 回流),手机端不做本地恢复。
   //  - 老被控端兼容(permissionModes 仍含 'plan'):沿用 permissionMode 切换 + 发送后本地恢复。
+  const prePlanPermissionModeRef = useRef<string | null>(null);
   const planModeCapability = runtimeOptions?.planModeSupported === true;
   const legacyPlanSupported = runtimeOptions?.permissionOptions.some((option) => option.id === 'plan') ?? false;
   const planModeSupported = planModeCapability || legacyPlanSupported;
   const legacyPlanModeOn = currentSession?.permissionMode === 'plan';
   const planModeOn = planModeCapability ? currentSession?.planModeEnabled === true : legacyPlanModeOn;
   const togglePlanMode = useCallback((next: boolean) => {
-    // sessionSettingsLocked:会话建成前不动权限档(老协议分支还会写进入前档位，
-    // 提前 return 免得留下没生效的本地记录)。
-    if (!canUseComposer || sessionSettingsLocked || !currentSession) return;
+    // 会话未建成或明确断线时不动权限档；老协议分支还会记录进入前档位，
+    // 因此必须在任何本地 mutation 前返回。
+    if (!canUseRemoteSessionControls || !currentSession) return;
     if (planModeCapability) {
       void runControlAction(() => maker.setPlanMode(sessionId, next), { planModeEnabled: next });
       return;
     }
     if (next) {
-      prePlanPermissionModeRef.current = {
-        sessionId,
-        mode: currentSession.permissionMode ?? null,
-      };
-      legacyPlanArmEpochBySessionRef.current.set(
-        sessionId,
-        (legacyPlanArmEpochBySessionRef.current.get(sessionId) ?? 0) + 1,
-      );
+      prePlanPermissionModeRef.current = currentSession.permissionMode ?? null;
       void runControlAction(() => maker.setPermissionMode(sessionId, 'plan'), { permissionMode: 'plan' });
       return;
     }
     const fallback = runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
-    const remembered = prePlanPermissionModeRef.current.sessionId === sessionId
-      ? prePlanPermissionModeRef.current.mode
-      : null;
+    const remembered = prePlanPermissionModeRef.current;
     const restored = remembered && remembered !== 'plan' ? remembered : fallback;
     void runControlAction(() => maker.setPermissionMode(sessionId, restored), { permissionMode: restored });
-  }, [canUseComposer, currentSession, maker, planModeCapability, runControlAction, runtimeOptions, sessionId, sessionSettingsLocked]);
+  }, [canUseRemoteSessionControls, currentSession, maker, planModeCapability, runControlAction, runtimeOptions, sessionId]);
   // 权限位置(设置面板下拉)不体现 plan(对齐桌面 PR#494 / Cursor):新协议下 permissionMode
   // 本就与 plan 正交,直接展示;仅老被控端 permissionMode='plan' 时替换为进入前的底层权限档
   // (无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
   const displayPermissionMode = legacyPlanModeOn
-    ? ((prePlanPermissionModeRef.current.sessionId === sessionId
-      && prePlanPermissionModeRef.current.mode
-      && prePlanPermissionModeRef.current.mode !== 'plan')
-      ? prePlanPermissionModeRef.current.mode
+    ? ((prePlanPermissionModeRef.current && prePlanPermissionModeRef.current !== 'plan')
+      ? prePlanPermissionModeRef.current
       : runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask')
     : currentSession?.permissionMode ?? 'ask';
   // 权限模式独立浮窗(2026-07-29 用户裁决,对齐 Codex 与新建页):composer 左侧图标钮
@@ -10189,6 +10063,7 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
 });
 
 function ComposerRuntimePill({
+  disabled = false,
   icon: Icon,
   fastOn = false,
   label,
@@ -10197,6 +10072,7 @@ function ComposerRuntimePill({
   testID,
   tone,
 }: {
+  disabled?: boolean;
   icon?: typeof Hand;
   /** Fast 已生效 → label 后缀 Zap 闪电(对齐桌面 trigger)。 */
   fastOn?: boolean;
@@ -10213,6 +10089,7 @@ function ComposerRuntimePill({
   return (
     <RouteActionButton
       accessibilityLabel={label}
+      disabled={disabled}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPress={onPress}
       style={styles.composerRuntimePill}

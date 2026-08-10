@@ -323,7 +323,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const currentTurnStreaming = useMemo(');
     expect(source).toContain('const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)');
     expect(source).toContain('const canStopComposer = canStopQueue || canStopCurrentRun;');
-    expect(source).toContain('canStop: canUseRemoteSessionControls && canStopComposer,');
+    expect(source).toContain('canStop: canStopComposer,');
+    expect(source).toContain(
+      'const composerStopDisabled = composerLayout.stop.disabled || !canUseRemoteSessionControls;',
+    );
     expect(source).not.toContain('canStop: canUseComposer && canStopQueue,');
     expect(source).toContain('const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);');
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
@@ -566,8 +569,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text)');
     expect(source).not.toContain('styles.sendButtonStop');
     expect(source).not.toContain('sendButtonStop:');
-    expect(source).toContain('fill={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}');
-    expect(source).toContain('color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}');
+    expect(source).toContain('fill={composerStopDisabled ? colors.textSecondary : colors.ctaText}');
+    expect(source).toContain('color={composerStopDisabled ? colors.textSecondary : colors.ctaText}');
     expect(source).toContain('pressedStyle={styles.sendButtonPressed}');
     expect(source).toContain('pressedStyle === undefined ? styles.routeButtonPressed : pressedStyle');
     expect(source).not.toContain('composerShowStatusRow');
