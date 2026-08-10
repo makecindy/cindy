@@ -79,13 +79,13 @@ export function Toast({ item }: ToastProps) {
           strokeWidth={2}
         />
       </div>
-      <div className="flex-1 min-w-0 flex flex-col gap-1">
-        <span
+      <div className="flex-1 min-w-0">
+        <div
           className="text-sm font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line max-w-[480px] break-words"
         >
           {item.message}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
+        </div>
+        <div className="mt-1 inline-flex items-center gap-1.5">
           {item.source?.iconDataUrl && (
             <img
               src={item.source.iconDataUrl}
@@ -97,7 +97,7 @@ export function Toast({ item }: ToastProps) {
           <span className="text-xs leading-snug text-[var(--text-tertiary)]">
             {subtitle}
           </span>
-        </span>
+        </div>
       </div>
     </div>
   );
