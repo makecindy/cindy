@@ -45,7 +45,6 @@ import {
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
 import { createLocalPreviewServer } from './local-html-preview-server.js';
-import { setPreviewCleanupImpl } from './preview-cleanup.js';
 import { setLivePreviewOrigin } from './browser-backend/preview-guard.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
@@ -612,19 +611,6 @@ async function closePreviewTabs(revokedOrigin?: string | null): Promise<void> {
     isPreviewUrl,
   });
 }
-
-// Register the preview cleanup with preview-cleanup.ts (round 23, new Codex
-// reviewer): updateService statically imports THAT module — never this one —
-// so the updater does not pull the whole browser runtime (sharp) into its
-// dependency chain, and no runtime dynamic import() is needed (which
-// architecture-invariants.md §2 forbids in Electron main).
-setPreviewCleanupImpl(() => {
-  localPreviewServer.dispose();
-  // Return the tab-close promise so callers that bypass before-quit (updater
-  // force-quit) can boundedly await it before exiting (codex-connector P1,
-  // round 20).
-  return closePreviewTabs();
-});
 
 export function disposeBrowserRuntime(): Promise<void> {
   // Revoke the preview origin + close its listener first, so the SSRF policy
