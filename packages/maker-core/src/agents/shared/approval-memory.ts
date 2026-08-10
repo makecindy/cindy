@@ -533,6 +533,126 @@ function mysqlFamilyMayLoadMutableUserState(
     && MYSQL_MUTABLE_STARTUP_OPTION_PATTERN.test(arg));
 }
 
+/**
+ * MySQL/MariaDB client commands `source file` and `\\. file` execute a local SQL script.
+ * They are client commands rather than SQL, so only recognize them at a statement boundary;
+ * quoted strings and comments must not turn ordinary SQL text into a mutable-input hit.
+ */
+function mysqlScriptCommandLoadsMutableFile(payload: string): boolean {
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  let statementStart = true;
+
+  for (let index = 0; index < payload.length; index++) {
+    const char = payload[index]!;
+    const next = payload[index + 1];
+    const nextNext = payload[index + 2];
+
+    if (lineComment) {
+      if (char === '\n' || char === '\r') {
+        lineComment = false;
+        statementStart = true;
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        if (payload[index + 1] === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === '#'
+      || (char === '-' && next === '-' && /\s/.test(nextNext ?? ''))) {
+      lineComment = true;
+      if (char === '-') index += 1;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      statementStart = false;
+      continue;
+    }
+    if (char === ';' || char === '\n' || char === '\r') {
+      statementStart = true;
+      continue;
+    }
+    if (/\s/.test(char)) continue;
+    if (statementStart) {
+      const remaining = payload.slice(index);
+      const sourceMatch = /^source(?=(?:\s|\\\s))/i.exec(remaining);
+      const dotMatch = /^\\\./.exec(remaining);
+      const commandLength = sourceMatch?.[0].length ?? dotMatch?.[0].length;
+      if (commandLength !== undefined) {
+        let cursor = index + commandLength;
+        while (/\s/.test(payload[cursor] ?? '')
+          || (payload[cursor] === '\\' && /\s/.test(payload[cursor + 1] ?? ''))) {
+          if (payload[cursor] === '\\') cursor += 1;
+          cursor += 1;
+        }
+        // A non-empty operand is the external script path. Keep this conservative: a bare
+        // `source`/`\\.` is not enough evidence to reject a stable SQL command.
+        if (cursor < payload.length && !/[;\r\n]/.test(payload[cursor]!)) return true;
+      }
+    }
+    statementStart = false;
+  }
+  return false;
+}
+
+function mysqlMayLoadMutableScript(args: readonly string[]): boolean {
+  const payloads: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === '-e' || arg === '--execute') {
+      const payload = args[index + 1];
+      if (payload) payloads.push(payload);
+      if (payload && /^(?:source(?=(?:\s|\\\s|$))|\\\.(?=(?:\s|\\\s|$)))/i.test(payload)
+        && args[index + 2]) {
+        payloads.push(`${payload} ${args[index + 2]}`);
+      }
+      continue;
+    }
+    if (arg.startsWith('--execute=')) {
+      payloads.push(arg.slice('--execute='.length));
+      continue;
+    }
+    if (/^-e(?:=|.)/.test(arg) && arg.length > 2) {
+      payloads.push(arg.slice(2).replace(/^=/, ''));
+    }
+    // Position arguments are included as a conservative compatibility path. The paired
+    // keyword+operand form handles shell tokenization of an unquoted `source file.sql`.
+    payloads.push(arg);
+    if (/^(?:source|\\\.)$/i.test(arg) && args[index + 1]) {
+      payloads.push(`${arg} ${args[index + 1]}`);
+    }
+  }
+  return payloads.some(mysqlScriptCommandLoadsMutableFile);
+}
+
 const SECRET_BEARING_PATTERNS: readonly RegExp[] = [
   // HTTP 鉴权头：curl/wget 的 -H、--header、--proxy-header，含空格/等号/紧凑短选项。
   /(?:^|\s)(?:-H\s*=?\s*|--(?:proxy-)?header(?:\s+|=))['"]?\s*(?:authorization|proxy-authorization|cookie|x-api-key|x-auth)/i,
@@ -912,7 +1032,9 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
     && mongoShellMayLoadMutableUserState(args))) return true;
   if (invocations.some(({ name, args }) =>
     MYSQL_FAMILY_OPTION_FILE_CLIENTS.has(name)
-    && mysqlFamilyMayLoadMutableUserState(name, args))) return true;
+    && (mysqlFamilyMayLoadMutableUserState(name, args)
+      || ((name === 'mysql' || name === 'mariadb')
+        && mysqlMayLoadMutableScript(args))))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。

@@ -834,6 +834,17 @@ describe('approvalSignature — 可记忆判据', () => {
       'curl -q https://example.com/deploy.sql | mariadb --no-defaults app',
       'cat deploy.sql | tee audit.sql | mysql --no-defaults --no-login-paths app',
       'true && cat deploy.sql | mysql --no-defaults --no-login-paths app',
+      "mysql --no-defaults --no-login-paths app -e 'source deploy.sql'",
+      "mysql --no-defaults --no-login-paths app --execute='SOURCE ./deploy.sql'",
+      "mysql --no-defaults --no-login-paths app -e\"source deploy.sql\"",
+      "mysql.exe --no-defaults --no-login-paths app -esource\\ deploy.sql",
+      "env mysql --no-defaults --no-login-paths app -e '\\. deploy.sql'",
+      "mysql --no-defaults --no-login-paths app -e '\\.deploy.sql'",
+      "mariadb --no-defaults app --execute '\\. ./deploy.sql'",
+      "mariadb.exe --no-defaults app 'source ./deploy.sql'",
+      "mysql --no-defaults --no-login-paths app -e 'select 1; source deploy.sql'",
+      "mysql --no-defaults --no-login-paths app -e 'select 1'"
+        + " && mariadb --no-defaults app -e 'source deploy.sql'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -854,6 +865,13 @@ describe('approvalSignature — 可记忆判据', () => {
       "printf 'select 1;' | mysql --no-defaults --no-login-paths app",
       "echo 'select 1;' | mariadb --no-defaults app",
       "cat deploy.sql | wc -l && mysql --no-defaults --no-login-paths app -e 'select 1'",
+      "mysql --no-defaults --no-login-paths app -e \"select 'source deploy.sql'\"",
+      "mysql --no-defaults --no-login-paths app -e 'select \\\"\\\\. deploy.sql\\\"'",
+      "mysql --no-defaults --no-login-paths app -e '/* source deploy.sql */ select 1'",
+      "mysql --no-defaults --no-login-paths app -e '-- source deploy.sql\nselect 1'",
+      "mysql --no-defaults --no-login-paths app -e 'source_table deploy.sql'",
+      "mysql --no-defaults --no-login-paths app -e 'source-table deploy.sql'",
+      "mysql --no-defaults --no-login-paths app -e 'source'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
       expect(signature(exec(command)), command).not.toBeNull();
@@ -866,6 +884,8 @@ describe('approvalSignature — 可记忆判据', () => {
       exec("mysql app -e 'select 1'"),
       exec("mariadb app -e 'select 1'"),
       exec('cat deploy.sql | mysql --no-defaults --no-login-paths app'),
+      exec("mysql --no-defaults --no-login-paths app -e 'source deploy.sql'"),
+      exec("mariadb --no-defaults app -e '\\. deploy.sql'"),
     ]) {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
       expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
