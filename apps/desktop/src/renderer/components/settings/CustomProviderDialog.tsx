@@ -421,7 +421,13 @@ export function CustomProviderDialog({
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
   const presetMenuOpen = childLayer?.kind === 'preset-menu';
   const [keyHydrationReady, setKeyHydrationReady] = useState(!editing);
-  const [keyHydrationFailed, setKeyHydrationFailed] = useState(false);
+  const [keyHydrationFailed, setKeyHydrationFailed] = useState<
+    Record<DialogAgentKind, boolean>
+  >({
+    'claude-code': false,
+    codex: false,
+    pi: false,
+  });
   const runtimeFillTriggerRef = useRef<HTMLButtonElement>(null);
   const modelPickerTriggerRef = useRef<HTMLButtonElement>(null);
   const modelFetchInFlightRef = useRef(false);
@@ -638,19 +644,23 @@ export function CustomProviderDialog({
     }
     let cancelled = false;
     setKeyHydrationReady(false);
-    setKeyHydrationFailed(false);
+    setKeyHydrationFailed({ 'claude-code': false, codex: false, pi: false });
     const revisionAtStart = { ...keyEditRevisionRef.current };
     void (async () => {
       const nextHas: Record<DialogAgentKind, boolean> = { 'claude-code': false, codex: false, pi: false };
       const fetched: Partial<Record<DialogAgentKind, string>> = {};
-      let readFailed = false;
+      const failed: Record<DialogAgentKind, boolean> = {
+        'claude-code': false,
+        codex: false,
+        pi: false,
+      };
       for (const a of AGENTS) {
         if (!initial.runtimes[a]) continue;
         let k: string | null = null;
         try {
           k = await readCustomProviderKey(initial.id, a);
         } catch {
-          readFailed = true;
+          failed[a] = true;
         }
         if (k) {
           nextHas[a] = true;
@@ -678,7 +688,7 @@ export function CustomProviderDialog({
           keyEditRevisionRef.current,
         ),
       );
-      setKeyHydrationFailed(readFailed);
+      setKeyHydrationFailed(failed);
       setKeyHydrationReady(true);
     })();
     return () => {
@@ -720,7 +730,7 @@ export function CustomProviderDialog({
       toast.info(t('settings.providers.custom.runtimeFill.loadingKeys'));
       return;
     }
-    if (usesApiKey && keyHydrationFailed) {
+    if (usesApiKey && AGENTS.some((agent) => keyHydrationFailed[agent])) {
       toast.info(t('settings.providers.custom.runtimeFill.keysUnavailable'));
       return;
     }
@@ -1252,6 +1262,23 @@ export function CustomProviderDialog({
       toast.error(t('settings.providers.custom.errors.nameRequired'));
       return;
     }
+    if (editing && authMode === 'apiKey') {
+      const failedEndpointEdit = VISIBLE_AGENTS.find((agent) => {
+        if (!keyHydrationFailed[agent]) return false;
+        const baseline = savedBaselineFor(agent);
+        const draft = rt[agent];
+        return (
+          baseline != null &&
+          (draft.baseUrl.trim() !== baseline.baseUrl.trim() ||
+            draft.modelsUrl.trim() !== baseline.modelsUrl.trim())
+        );
+      });
+      if (failedEndpointEdit) {
+        setActiveTab(failedEndpointEdit);
+        toast.error(t('settings.providers.custom.runtimeFill.keysUnavailable'));
+        return;
+      }
+    }
     // 上下文窗口草稿必须已可提交:输入框还挂着 `1,` / `-5` 这类未完成/非法文本时
     // 点保存,已提交值(或隐式 200K 默认)与用户可见文本不一致——静默存旧值等于
     // 改掉用户显式输入(review P1 ×2)。定位到首个问题 tab 并报错拦下。
@@ -1457,11 +1484,19 @@ export function CustomProviderDialog({
     existingIds,
     onSaved,
     windowDrafts,
+    keyHydrationFailed,
     showAdvanced,
+    savedBaselineFor,
     t,
   ]);
 
-  const keyPlaceholder = hasKey[activeTab]
+  const activeSavedBaseline = savedBaselineFor(activeTab);
+  const activeKeyCanRemainSaved =
+    hasKey[activeTab] &&
+    activeSavedBaseline != null &&
+    f.baseUrl.trim() === activeSavedBaseline.baseUrl.trim() &&
+    f.modelsUrl.trim() === activeSavedBaseline.modelsUrl.trim();
+  const keyPlaceholder = activeKeyCanRemainSaved
     ? t('settings.providers.custom.fields.apiKeyEditPlaceholder')
     : t('settings.providers.custom.fields.apiKeyPlaceholder');
 
@@ -1815,7 +1850,7 @@ export function CustomProviderDialog({
                 <div className="flex items-center gap-2">
                   <FieldLabel>{t('settings.providers.custom.fields.apiKey')}</FieldLabel>
                   {/* 已存密钥时给明确徽标 —— 编辑态字段是遮罩空白(留空=不改),无徽标会让人误以为没存上。 */}
-                  {hasKey[activeTab] && f.apiKey.trim() && (
+                  {activeKeyCanRemainSaved && f.apiKey.trim() && (
                     <span
                       className="flex items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
                       style={{

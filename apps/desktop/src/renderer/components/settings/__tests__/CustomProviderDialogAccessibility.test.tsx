@@ -147,10 +147,44 @@ describe('CustomProviderDialog accessibility', () => {
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
+    expect(
+      screen.queryByText('settings.providers.custom.fields.apiKeySaved'),
+    ).toBeNull();
+    expect(apiKey.getAttribute('placeholder')).toBe(
+      'settings.providers.custom.fields.apiKeyPlaceholder',
+    );
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
     await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
     expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[1]).toEqual({});
+  });
+
+  it('blocks an endpoint save when that runtime key could not be read', async () => {
+    const initial: CustomProviderConfig = {
+      id: 'existing-provider',
+      name: 'Existing provider',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://old.example.test/v1',
+          models: [{ id: 'test-model', name: 'Test Model' }],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockRejectedValue(new Error('safeStorage unavailable'));
+
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
+
+    const baseUrl = screen.getByPlaceholderText(
+      'settings.providers.custom.fields.baseUrlPlaceholder',
+    );
+    await user.clear(baseUrl);
+    await user.type(baseUrl, 'https://new.example.test/v1');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled());
   });
 
   it('does not send a hydrated key to a changed endpoint during an ad-hoc test', async () => {
