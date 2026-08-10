@@ -20,6 +20,7 @@ import path from 'node:path';
 import { ManagerServer } from '../server.js';
 import { SessionRegistry, type SdkQueryFactoryOptions, type SdkQueryLike } from '../session-registry.js';
 import { wireSdkHandlers } from '../sdk-handlers.js';
+import { ensureRemoteClaudeConfigDir } from '../remote-claude-env.js';
 import { CC_MGR_BUNDLE_VERSION, PROTOCOL_VERSION, SERVER_METHODS, type ApprovalRequestParams, type ApprovalRequestResult, type OAuthRefreshParams, type OAuthRefreshResult } from '../protocol.js';
 
 const MANAGER_VERSION = CC_MGR_BUNDLE_VERSION;
@@ -294,6 +295,10 @@ async function runDaemon(socketPath: string): Promise<void> {
   if (stripped.length > 0) {
     console.error('[cc-mgr] stripped sensitive env keys at boot:', stripped.join(', '));
   }
+  // Keep all Cindy-managed Claude state outside the user's repository and
+  // outside the host's global ~/.claude directory. query/start independently
+  // overwrites the per-session env with the same daemon-owned path.
+  process.env.CLAUDE_CONFIG_DIR = ensureRemoteClaudeConfigDir();
 
   // Lazy import the SDK so --version doesn't pay the SDK load cost.
   const sdkModule = await import('@anthropic-ai/claude-agent-sdk');
