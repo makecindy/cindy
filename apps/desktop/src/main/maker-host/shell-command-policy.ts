@@ -1062,18 +1062,33 @@ function consumesStdinAsProgram(tokens: string[]): boolean {
     if (args.some((arg) => arg === '-e' || arg.startsWith('-e'))) return false;
   } else if (PROGRAMMABLE_INTERPRETER.test(executable)) {
     if (/^(?:(?:g|m|n)?awk)$/.test(executable)) {
-      // awk reads its program from a file with `-f progfile`, but `-f -`
-      // reads the program from stdin, which is executable heredoc input.
+      // awk reads its program from stdin when invoked with `-f -` (or the
+      // merged `-f-`) or with no program source at all; `-f progfile` reads
+      // a file and a positional argument is the program string.
       let flagIndex = 0;
       while (flagIndex < args.length) {
         const flag = args[flagIndex]!;
-        if (flag === '-f') return args[flagIndex + 1] === '-';
-        if (/^-[A-Za-z]*f[A-Za-z]*$/.test(flag) && flag.slice(flag.indexOf('f') + 1) === '-') {
-          return true;
+        if (flag === '-f') {
+          const file = args[flagIndex + 1];
+          return file === '-';
         }
-        flagIndex += 1;
+        if (/^-[A-Za-z]*f-$/.test(flag)) return true;
+        if (/^-[A-Za-z]*f[A-Za-z]*$/.test(flag)) return false;
+        if (flag === '-e') return false; // gawk -e program
+        if (flag === '-F' || flag === '-v') {
+          if (args[flagIndex + 1] !== undefined && !args[flagIndex + 1]!.startsWith('-')) {
+            flagIndex += 1;
+          }
+          flagIndex += 1;
+          continue;
+        }
+        if (flag === '--' || flag.startsWith('-')) {
+          flagIndex += 1;
+          continue;
+        }
+        return false;
       }
-      return false;
+      return true;
     }
     if (args.some((arg) => /^(?:-c|-e|-p|-m|--eval|--print|--input-type|--module)$/.test(arg))) {
       return false;
