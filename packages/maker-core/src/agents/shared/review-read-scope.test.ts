@@ -118,17 +118,30 @@ describe("review read scope", () => {
   it.skipIf(!canLink)("resolves symlinks before checking both scope and credential policy", async () => {
     const root = await makeTempDir();
     const workspace = path.join(root, "workspace");
-    const outside = path.join(root, "outside.txt");
-    const outsideLink = path.join(workspace, "outside-link.txt");
+    const outsideDir = path.join(root, "outside");
+    const outside = path.join(outsideDir, "outside.txt");
     const keyDir = path.join(root, ".ssh");
     const key = path.join(keyDir, "id_ed25519");
-    const keyLink = path.join(workspace, "key.png");
     await fs.mkdir(workspace);
+    await fs.mkdir(outsideDir);
     await fs.mkdir(keyDir);
     await fs.writeFile(outside, "outside");
     await fs.writeFile(key, "private-key");
-    await fs.symlink(outside, outsideLink);
-    await fs.symlink(key, keyLink);
+    let outsideLink: string;
+    let keyLink: string;
+    if (process.platform === "win32") {
+      const outsideJunction = path.join(workspace, "outside-link");
+      const keyJunction = path.join(workspace, "key-link");
+      await fs.symlink(outsideDir, outsideJunction, "junction");
+      await fs.symlink(keyDir, keyJunction, "junction");
+      outsideLink = path.join(outsideJunction, path.basename(outside));
+      keyLink = path.join(keyJunction, path.basename(key));
+    } else {
+      outsideLink = path.join(workspace, "outside-link.txt");
+      keyLink = path.join(workspace, "key.png");
+      await fs.symlink(outside, outsideLink);
+      await fs.symlink(key, keyLink);
+    }
 
     const grants = await buildReviewReadGrants(workspace, []);
     expect(

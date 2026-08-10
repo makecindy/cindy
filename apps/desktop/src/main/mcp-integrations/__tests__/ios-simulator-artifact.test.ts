@@ -310,17 +310,18 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     await symlink(targetPath, fixture.executablePath);
     const commandRunner = createCommandRunner(fixture);
 
-    await expect(
-      verifyIOSSimulatorPackagedSidecarArtifact({
-        resourcesPath: fixture.resourcesPath,
-        version: VERSION,
-        architecture: 'arm64',
-        platform: 'darwin',
-        commandRunner,
-      }),
-    ).rejects.toThrow('verification failed');
-    expect(commandRunner).not.toHaveBeenCalled();
-  });
+      await expect(
+        verifyIOSSimulatorPackagedSidecarArtifact({
+          resourcesPath: fixture.resourcesPath,
+          version: VERSION,
+          architecture: 'arm64',
+          platform: 'darwin',
+          commandRunner,
+        }),
+      ).rejects.toThrow('verification failed');
+      expect(commandRunner).not.toHaveBeenCalled();
+    },
+  );
 
   it('fails a final pre-spawn check after the verified executable changes', async () => {
     const fixture = await createFixture();
