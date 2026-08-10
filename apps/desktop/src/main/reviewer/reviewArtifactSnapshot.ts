@@ -503,14 +503,18 @@ export async function prepareStableReviewArtifactSnapshots<T>(input: {
 }): Promise<PreparedStableReviewArtifacts<T>> {
   const holder: { materialized?: MaterializedReviewArtifacts } = {};
   try {
-    const stable = await prepareWithStableReviewArtifacts(input.grant.paths, async () => {
-      holder.materialized = await materializeReviewArtifactSnapshots({
-        workingDir: input.workingDir,
-        grant: input.grant,
-        owner: input.owner,
-      });
-      return input.prepare(holder.materialized.grant);
-    });
+    const stable = await prepareWithStableReviewArtifacts(
+      input.grant.paths,
+      async () => {
+        holder.materialized = await materializeReviewArtifactSnapshots({
+          workingDir: input.workingDir,
+          grant: input.grant,
+          owner: input.owner,
+        });
+        return input.prepare(holder.materialized.grant);
+      },
+      { linkConfinementRoot: input.workingDir },
+    );
     const ready = holder.materialized;
     if (!ready) throw new Error('Review artifact snapshots were not prepared');
     return {

@@ -127,15 +127,48 @@ describe('materializeReviewArtifactSnapshots', () => {
     await fs.link(sourcePath, mirrorPath);
     const artifactPath = await fs.realpath(sourcePath);
 
-    const materialized = await materializeReviewArtifactSnapshots({
+    const prepared = await prepareStableReviewArtifactSnapshots({
       workingDir,
       grant: await grantFor([artifactPath]),
       owner: TEST_OWNER,
+      prepare: async (snapshotGrant) => {
+        const snapshotPath = snapshotGrant.snapshotPaths?.get(artifactPath);
+        if (!snapshotPath) throw new Error('expected snapshot path');
+        return fs.readFile(snapshotPath, 'utf8');
+      },
     });
-    const snapshotPath = materialized.grant.snapshotPaths?.get(artifactPath);
-    if (!snapshotPath) throw new Error('expected snapshot path');
-    await expect(fs.readFile(snapshotPath, 'utf8')).resolves.toBe('export const value = 1;');
-    await materialized.cleanup();
+    expect(prepared.value).toBe('export const value = 1;');
+    await prepared.cleanup();
+  });
+
+  it('keeps a scoped pnpm package-directory focus live while fingerprinting it', async () => {
+    if (process.platform === 'win32') return;
+    const workingDir = await tempDir();
+    const packageRoot = path.join(workingDir, 'packages', 'maker-core');
+    const sourcePath = path.join(packageRoot, 'src', 'index.ts');
+    const mirrorPath = path.join(
+      workingDir,
+      'node_modules',
+      '@cindy',
+      'maker-core',
+      'src',
+      'index.ts',
+    );
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.mkdir(path.dirname(mirrorPath), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, 'package.json'), '{"name":"@cindy/maker-core"}');
+    await fs.writeFile(sourcePath, 'export const value = 1;');
+    await fs.link(sourcePath, mirrorPath);
+    const artifactPath = await fs.realpath(packageRoot);
+
+    const prepared = await prepareStableReviewArtifactSnapshots({
+      workingDir,
+      grant: await grantFor([artifactPath]),
+      owner: TEST_OWNER,
+      prepare: async (snapshotGrant) => snapshotGrant.liveDirectoryPaths,
+    });
+    expect(prepared.value).toEqual([artifactPath]);
+    await prepared.cleanup();
   });
 
   it('rejects a pnpm mirror replaced with an outside link after validation', async () => {

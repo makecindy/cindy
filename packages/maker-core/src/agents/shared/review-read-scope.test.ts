@@ -146,15 +146,14 @@ describe("review read scope", () => {
     if (process.platform === "win32") return;
     const root = await makeTempDir();
     const workspace = path.join(root, "workspace");
-    const source = path.join(
+    const sourcePackage = path.join(
       workspace,
       "apps",
       "mobile",
       "modules",
       "local-module",
-      "src",
-      "index.ts",
     );
+    const source = path.join(sourcePackage, "src", "index.ts");
     const mirror = path.join(
       workspace,
       "node_modules",
@@ -167,7 +166,10 @@ describe("review read scope", () => {
     await fs.writeFile(source, "export const value = 1;");
     await fs.link(source, mirror);
 
-    const grants = await buildReviewReadGrants(workspace, [source]);
+    const grants = await buildReviewReadGrants(workspace, [
+      sourcePackage,
+      source,
+    ]);
     expect(await resolveReviewReadPath(source, workspace, grants)).toBe(
       await fs.realpath(source),
     );
@@ -198,7 +200,10 @@ describe("review read scope", () => {
     await fs.writeFile(source, "export const value = 1;");
     await fs.link(source, mirror);
 
-    const grants = await buildReviewReadGrants(workspace, [source]);
+    const grants = await buildReviewReadGrants(workspace, [
+      packageRoot,
+      source,
+    ]);
     expect(await resolveReviewReadPath(source, workspace, grants)).toBe(
       await fs.realpath(source),
     );

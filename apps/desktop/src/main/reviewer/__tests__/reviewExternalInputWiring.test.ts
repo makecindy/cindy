@@ -51,6 +51,9 @@ describe('Review external input wiring', () => {
     expect(registerSource).toContain(
       'const artifactPaths = [...reviewReadPaths, sourceWorkingDir];',
     );
+    expect(registerSource).toContain(
+      'const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };',
+    );
     expect(registerSource).toContain('const artifactFingerprintIsCurrent = async');
     expect(registerSource).toContain('const completeArtifactFingerprintIsCurrent = ()');
     expect(

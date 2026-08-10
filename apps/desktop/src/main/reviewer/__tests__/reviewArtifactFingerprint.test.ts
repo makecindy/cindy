@@ -262,14 +262,33 @@ describe('review artifact fingerprint', () => {
     await fs.writeFile(manifest, '{"name":"@cindy/maker-core"}');
     await fs.writeFile(sourceFile, 'export const value = 1;');
     await fs.link(sourceFile, dependencyFile);
+    const unrelatedFile = path.join(workspace, 'outside-package.txt');
+    await fs.writeFile(unrelatedFile, 'first');
 
-    await expect(fingerprintReviewArtifacts([workspace])).resolves.toMatch(/^[a-f0-9]{64}$/);
+    const linkOptions = { linkConfinementRoot: workspace };
+    const singleFileFingerprint = await fingerprintReviewArtifacts([sourceFile], linkOptions);
+    const packageFingerprint = await fingerprintReviewArtifacts([sourcePackage], linkOptions);
+    const workspaceFingerprint = await fingerprintReviewArtifacts([workspace], linkOptions);
+    expect(singleFileFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(packageFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(workspaceFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    await fs.writeFile(unrelatedFile, 'second');
+    await expect(fingerprintReviewArtifacts([sourceFile], linkOptions)).resolves.toBe(
+      singleFileFingerprint,
+    );
+    await expect(fingerprintReviewArtifacts([sourcePackage], linkOptions)).resolves.toBe(
+      packageFingerprint,
+    );
+    await expect(fingerprintReviewArtifacts([workspace], linkOptions)).resolves.not.toBe(
+      workspaceFingerprint,
+    );
 
     const outsideManifest = path.join(root, 'outside-package.json');
     await fs.writeFile(outsideManifest, '{"name":"@cindy/maker-core"}');
     await fs.unlink(manifest);
     await fs.symlink(outsideManifest, manifest);
-    await expect(fingerprintReviewArtifacts([workspace])).rejects.toBeInstanceOf(
+    await expect(fingerprintReviewArtifacts([sourceFile], linkOptions)).rejects.toBeInstanceOf(
       ReviewArtifactFingerprintChangedError,
     );
   });
@@ -288,9 +307,9 @@ describe('review artifact fingerprint', () => {
     await fs.link(sourceFile, dependencyFile);
     await fs.link(sourceFile, outsideFile);
 
-    await expect(fingerprintReviewArtifacts([workspace])).rejects.toBeInstanceOf(
-      ReviewArtifactFingerprintChangedError,
-    );
+    await expect(
+      fingerprintReviewArtifacts([sourceFile], { linkConfinementRoot: workspace }),
+    ).rejects.toBeInstanceOf(ReviewArtifactFingerprintChangedError);
   });
 
   it('rejects when a confined dependency mirror is replaced before the source is opened', async () => {
@@ -310,7 +329,8 @@ describe('review artifact fingerprint', () => {
     let replaced = false;
 
     await expect(
-      fingerprintReviewArtifacts([workspace], {
+      fingerprintReviewArtifacts([sourceFile], {
+        linkConfinementRoot: workspace,
         openFile: async (filePath, flags) => {
           if (filePath === canonicalSourceFile && !replaced) {
             replaced = true;

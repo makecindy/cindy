@@ -39,6 +39,8 @@ export interface ReviewArtifactFingerprintOptions {
   maxContentBytes?: number;
   /** Test seam for deterministic lstat/open replacement coverage. */
   openFile?: ReviewArtifactFileOpener;
+  /** Workspace root used only to validate confined pnpm hard-link mirrors. */
+  linkConfinementRoot?: string;
 }
 
 export class ReviewArtifactFingerprintLimitError extends Error {}
@@ -74,6 +76,28 @@ async function resolveFingerprintRoot(rawPath: string): Promise<string> {
   ) {
     throw new ReviewArtifactFingerprintChangedError(
       'A review artifact root changed while its content fingerprint was being prepared',
+    );
+  }
+  return canonicalPath;
+}
+
+async function resolveLinkConfinementRoot(rawPath: string): Promise<string> {
+  if (!path.isAbsolute(rawPath) || isSensitive(rawPath)) {
+    throw new ReviewArtifactFingerprintChangedError(
+      'Review artifact link confinement root is invalid',
+    );
+  }
+  const canonicalPath = await fs.realpath(path.normalize(rawPath)).catch(() => null);
+  const stat = canonicalPath ? await fs.lstat(canonicalPath).catch(() => null) : null;
+  if (
+    !canonicalPath ||
+    isSensitive(canonicalPath) ||
+    !stat ||
+    stat.isSymbolicLink() ||
+    !stat.isDirectory()
+  ) {
+    throw new ReviewArtifactFingerprintChangedError(
+      'Review artifact link confinement root changed while its fingerprint was prepared',
     );
   }
   return canonicalPath;
@@ -115,11 +139,11 @@ async function hashRange(
 async function addFile(
   absolutePath: string,
   relativePath: string,
-  fingerprintRoot: string,
+  linkConfinementRoot: string,
   stat: Stats,
   state: FingerprintState,
 ): Promise<void> {
-  if (!(await reviewFileLinkLayoutIsSafe(absolutePath, fingerprintRoot, stat))) {
+  if (!(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, stat))) {
     throw new ReviewArtifactFingerprintChangedError(
       'Review refused a multiply linked file in its artifact workspace',
     );
@@ -145,7 +169,7 @@ async function addFile(
     if (
       !opened.isFile() ||
       !reviewArtifactPathIdentityMatches(stat, opened) ||
-      !(await reviewFileLinkLayoutIsSafe(absolutePath, fingerprintRoot, opened))
+      !(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, opened))
     ) {
       throw new ReviewArtifactFingerprintChangedError(
         'A review artifact changed while its content fingerprint was being prepared',
@@ -162,7 +186,7 @@ async function addFile(
       afterPath.isSymbolicLink() ||
       !reviewArtifactPathIdentityMatches(opened, afterPath) ||
       afterHandle.nlink !== afterPath.nlink ||
-      !(await reviewFileLinkLayoutIsSafe(absolutePath, fingerprintRoot, afterHandle))
+      !(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, afterHandle))
     ) {
       throw new ReviewArtifactFingerprintChangedError(
         'A review artifact changed while its content fingerprint was being prepared',
@@ -184,7 +208,7 @@ async function addFile(
 async function walk(
   absolutePath: string,
   relativePath: string,
-  fingerprintRoot: string,
+  linkConfinementRoot: string,
   state: FingerprintState,
 ): Promise<void> {
   if (isSensitive(absolutePath, relativePath)) return;
@@ -224,7 +248,7 @@ async function walk(
     await assertCanonicalReviewArtifactPath(absolutePath);
   }
   if (stat.isFile()) {
-    await addFile(absolutePath, relativePath, fingerprintRoot, stat, state);
+    await addFile(absolutePath, relativePath, linkConfinementRoot, stat, state);
     return;
   }
   if (!stat.isDirectory()) {
@@ -249,7 +273,7 @@ async function walk(
   for (const entry of entries) {
     const childRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name;
     if (isSensitive(entry.name, childRelative)) continue;
-    await walk(path.join(absolutePath, entry.name), childRelative, fingerprintRoot, state);
+    await walk(path.join(absolutePath, entry.name), childRelative, linkConfinementRoot, state);
   }
 }
 
@@ -278,6 +302,9 @@ export async function fingerprintReviewArtifacts(
     contentBytesRemaining: maxContentBytes,
     openFile: options.openFile ?? ((filePath, flags) => fs.open(filePath, flags)),
   };
+  const linkConfinementRoot = options.linkConfinementRoot
+    ? await resolveLinkConfinementRoot(options.linkConfinementRoot)
+    : null;
   const canonicalRoots = new Set<string>();
   for (const rawPath of paths) {
     if (!path.isAbsolute(rawPath) || isSensitive(rawPath)) continue;
@@ -292,7 +319,7 @@ export async function fingerprintReviewArtifacts(
   }
   for (const root of effectiveRoots.sort()) {
     addRecord(state, 'root', root);
-    await walk(root, '.', root, state);
+    await walk(root, '.', linkConfinementRoot ?? root, state);
   }
   return state.hash.digest('hex');
 }
@@ -307,10 +334,11 @@ export class ReviewArtifactChangedDuringPreparationError extends Error {}
 export async function prepareWithStableReviewArtifacts<T>(
   paths: readonly string[],
   prepare: () => Promise<T>,
+  options: ReviewArtifactFingerprintOptions = {},
 ): Promise<{ value: T; fingerprint: string }> {
-  const before = await fingerprintReviewArtifacts(paths);
+  const before = await fingerprintReviewArtifacts(paths, options);
   const value = await prepare();
-  const after = await fingerprintReviewArtifacts(paths);
+  const after = await fingerprintReviewArtifacts(paths, options);
   if (after !== before) {
     throw new ReviewArtifactChangedDuringPreparationError(
       'A review artifact changed while evidence was being prepared',

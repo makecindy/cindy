@@ -7078,9 +7078,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // caches or nested-submodule contents, so the reusable result must
           // also bind the complete non-sensitive readable workspace content.
           const artifactPaths = [...reviewReadPaths, sourceWorkingDir];
+          const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
           let artifactFingerprint: string;
           try {
-            artifactFingerprint = await fingerprintReviewArtifacts(artifactPaths);
+            artifactFingerprint = await fingerprintReviewArtifacts(
+              artifactPaths,
+              artifactFingerprintOptions,
+            );
           } catch (error) {
             if (
               error instanceof ReviewArtifactFingerprintChangedError ||
@@ -7098,7 +7102,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             expected: string,
           ): Promise<boolean> => {
             try {
-              return (await fingerprintReviewArtifacts(paths)) === expected;
+              return (
+                (await fingerprintReviewArtifacts(paths, artifactFingerprintOptions)) === expected
+              );
             } catch {
               return false;
             }
