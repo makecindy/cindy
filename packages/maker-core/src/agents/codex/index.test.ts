@@ -316,6 +316,11 @@ function createDeps(
     runtimeConfig,
     binaryPath: process.execPath,
     logger: createNoopLogger(),
+    resolveAutoReviewRoute: async (request) => ({
+      providerId: request.providerId ?? null,
+      model: request.model,
+      routeRevision: 'sha256:test-reviewer-route',
+    }),
     ...overrides,
   };
 }
@@ -428,7 +433,7 @@ function installFakeHost(
     ensureStarted,
     // startSession 的 initialize 直调走限时变体 (codex R13 P1): fake 里
     // 直接委托 ensureStarted (超时语义由 host.test.ts 的真 transport 覆盖)。
-    ensureStartedWithTimeout: vi.fn(async (_timeoutMs: number, _label: string) => ensureStarted()),
+    ensureStartedWithTimeout: vi.fn(async () => ensureStarted()),
     request,
     subscribeThread,
     unsubscribeThread,
@@ -11919,7 +11924,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const askHandlers = askHost.getThreadHandlers();
     if (!askHandlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    const askResolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => (
+    const askResolver = vi.fn(async (): Promise<InteractionDecision> => (
       { kind: 'permission', behavior: 'allow' }
     ));
     askHandle.setInteractionResolver(askResolver);
@@ -11945,7 +11950,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const fullHandlers = fullHost.getThreadHandlers();
     if (!fullHandlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    const fullResolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => (
+    const fullResolver = vi.fn(async (): Promise<InteractionDecision> => (
       { kind: 'permission', behavior: 'allow' }
     ));
     fullHandle.setInteractionResolver(fullResolver);

@@ -45,6 +45,12 @@ export type AutoReviewDecisionSnapshot = AutoReviewDecision & {
 export interface AutoReviewRouteIdentity {
   providerId?: string | null;
   model: string;
+  /**
+   * Host-computed opaque digest of the concrete reviewer route/configuration.
+   * Endpoint, wire protocol, auth strategy, and other route-affecting fields stay out of
+   * approval storage as plaintext while route edits still invalidate earlier approvals.
+   */
+  routeRevision?: string | null;
 }
 
 /** Host-owned route resolver. `null` means the reviewer route is ambiguous or unavailable. */
@@ -73,7 +79,14 @@ export async function resolveAutoReviewRouteSnapshot(
     const resolved = await resolver(request);
     const providerId = resolved?.providerId?.trim();
     const model = resolved?.model?.trim();
-    if (providerId && model) return { providerId, model };
+    const routeRevision = resolved?.routeRevision?.trim();
+    if (providerId && model) {
+      return {
+        providerId,
+        model,
+        ...(routeRevision ? { routeRevision } : {}),
+      };
+    }
   } catch {
     // Route lookup is an optimization preflight. Failure disables memory; normal review still runs.
   }

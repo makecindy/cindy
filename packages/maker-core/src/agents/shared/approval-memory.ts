@@ -881,6 +881,23 @@ const FILE_PRODUCER_NAMES: ReadonlySet<string> = new Set([
   'jq', 'yq', 'sed',
 ]);
 
+/**
+ * 直接读取文件并把内容变换成另一份字节流/文件的压缩工具。
+ *
+ * 只有出现文件操作数才在这里命中：`gzip payload`、`zcat payload.gz > out` 的源文件可在
+ * 两次相同命令间被替换；`printf fixed | gzip -c > out` 的输入则完整绑定在命令文本里，
+ * 不应因为可执行文件名称而误判。stdin 来自文件或其它可变 producer 的形态由既有重定向/
+ * pipeline 判定覆盖。
+ */
+const FILE_TRANSFORM_EXECUTABLES: ReadonlySet<string> = new Set([
+  'gzip', 'gunzip', 'zcat', 'pigz', 'unpigz',
+  'bzip2', 'bunzip2', 'bzcat', 'pbzip2',
+  'xz', 'unxz', 'xzcat', 'pixz',
+  'zstd', 'unzstd', 'zstdcat',
+  'lz4', 'unlz4', 'lz4cat',
+  'brotli',
+]);
+
 const PIPELINE_FILE_SINK_NAMES: ReadonlySet<string> = new Set(['tee', 'sponge']);
 
 /**
@@ -906,7 +923,19 @@ function consumesMutableInput(args: readonly string[]): boolean {
 
 function hasFileOperand(args: readonly string[]): boolean {
   let optionsEnded = false;
+  let skipRedirectionTarget = false;
   for (const arg of args) {
+    if (skipRedirectionTarget) {
+      skipRedirectionTarget = false;
+      continue;
+    }
+    const redirection = /^(?:\d*(?:>>?|<>|<&|>&|>\|)|&>>?)(.*)$/.exec(arg);
+    if (redirection) {
+      // Shell tokenization can leave `>` and its target in argv-like tokens even though neither
+      // reaches the executable. Do not mistake an output target for a mutable input operand.
+      skipRedirectionTarget = redirection[1]?.length === 0;
+      continue;
+    }
     if (!optionsEnded && arg === '--') {
       optionsEnded = true;
       continue;
@@ -1035,6 +1064,8 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
     && (mysqlFamilyMayLoadMutableUserState(name, args)
       || ((name === 'mysql' || name === 'mariadb')
         && mysqlMayLoadMutableScript(args))))) return true;
+  if (invocations.some(({ name, args }) =>
+    FILE_TRANSFORM_EXECUTABLES.has(name) && hasFileOperand(args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。
@@ -1073,7 +1104,10 @@ export function approvalSignature(
   // 就不能查/存：同名 model 后续改由另一 provider 提供时，旧批准不得直接命中。
   const reviewerProviderId = reviewerRoute.providerId?.trim();
   const reviewerModel = reviewerRoute.model.trim();
-  if (!reviewerProviderId || !reviewerModel) return null;
+  const reviewerRouteRevision = reviewerRoute.routeRevision?.trim();
+  // Route resolution is part of the safety proof, not just cache metadata. Older hosts that do
+  // not provide an opaque route revision keep normal review behavior but cannot persist an allow.
+  if (!reviewerProviderId || !reviewerModel || !reviewerRouteRevision) return null;
   // 凭证动作不进记忆:即使落盘只存摘要,凭证会轮换,这类授权也不适合长期复用。
   if (isCredentialBearingCommand(command)) return null;
   // 外层 argv 没变不代表执行内容没变：项目脚本、任务定义、解释器入口或显式路径文件都可能
@@ -1094,11 +1128,12 @@ export function approvalSignature(
   // SHA-256 不是保密存储：知道完整候选输入的人仍可做匹配；文件权限仍由宿主收紧。
   // 命令与 cwd 保持逐字精确:空白在引号和 heredoc 中可能改变语义,不得折叠。
   const payload = JSON.stringify({
-    version: 3,
+    version: 4,
     agentKind,
     reviewerRoute: {
       providerId: reviewerProviderId,
       model: reviewerModel,
+      routeRevision: reviewerRouteRevision,
     },
     workspaceKey,
     workspaceRoots,

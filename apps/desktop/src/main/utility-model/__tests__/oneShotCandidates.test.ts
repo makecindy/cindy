@@ -1168,7 +1168,11 @@ describe('utility one-shot candidates', () => {
     expect(resolveUtilityTextRouteIdentity({
       agentKind: 'codex',
       model: 'unique-mini',
-    })).toEqual({ providerId: 'tapsvc', model: 'unique-mini' });
+    })).toMatchObject({
+      providerId: 'tapsvc',
+      model: 'unique-mini',
+      routeRevision: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
 
     const result = await requestUtilityText(makerMock(false), 'generate', {
       agentKind: 'codex',
@@ -1177,6 +1181,66 @@ describe('utility one-shot candidates', () => {
 
     expect(result).toMatchObject({ ok: true, providerId: 'tapsvc', model: 'unique-mini' });
     expect(fetchMock).toHaveBeenCalledWith('https://custom.example/v1/responses', expect.anything());
+  });
+
+  it('changes the approval route revision when a custom provider route changes', () => {
+    const resolve = (routing: Record<string, unknown>) => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'tapsvc',
+          name: 'Tap Service',
+          source: 'user',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: { codex: routing },
+          models: { codex: [{ id: 'unique-mini', name: 'Unique Mini', contextWindow: 100_000 }] },
+        }],
+      } as never);
+      return resolveUtilityTextRouteIdentity({
+        providerId: 'tapsvc',
+        agentKind: 'codex',
+        model: 'unique-mini',
+      });
+    };
+
+    const initial = resolve({
+      upstream: 'https://custom.example/v1',
+      wireProtocol: 'openai-responses',
+      authStrategy: 'api-key-header',
+      headerOverride: { 'x-route-b': '2', 'x-route-a': '1' },
+    });
+    expect(initial).toMatchObject({ providerId: 'tapsvc', model: 'unique-mini' });
+
+    for (const changed of [
+      resolve({
+        upstream: 'https://other.example/v1',
+        wireProtocol: 'openai-responses',
+        authStrategy: 'api-key-header',
+        headerOverride: { 'x-route-a': '1', 'x-route-b': '2' },
+      }),
+      resolve({
+        upstream: 'https://custom.example/v1',
+        wireProtocol: 'openai-chat',
+        authStrategy: 'api-key-header',
+        headerOverride: { 'x-route-a': '1', 'x-route-b': '2' },
+      }),
+      resolve({
+        upstream: 'https://custom.example/v1',
+        wireProtocol: 'openai-responses',
+        authStrategy: 'none',
+        headerOverride: { 'x-route-a': '1', 'x-route-b': '2' },
+      }),
+    ]) {
+      expect(changed?.routeRevision).not.toBe(initial?.routeRevision);
+    }
+
+    const reordered = resolve({
+      authStrategy: 'api-key-header',
+      headerOverride: { 'x-route-a': '1', 'x-route-b': '2' },
+      wireProtocol: 'openai-responses',
+      upstream: 'https://custom.example/v1',
+    });
+    expect(reordered?.routeRevision).toBe(initial?.routeRevision);
   });
 
   it('does not produce a memory route when an omitted provider is ambiguous', () => {

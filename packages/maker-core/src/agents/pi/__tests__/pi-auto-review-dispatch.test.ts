@@ -215,6 +215,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resolveAutoReviewRoute: (request) => ({
         providerId: 'test-provider',
         model: request.model,
+        routeRevision: 'sha256:test-provider-route',
       }),
     };
   }
@@ -1194,7 +1195,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   it('auto mode blocks a bash request with no command text without consulting the reviewer', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
-    const handle = await start('auto', review);
+    await start('auto', review);
     firePermissionRequest('b7', 'bash', {});
     expect(await waitForResponse('b7')).toEqual({
       type: 'extension_ui_response', id: 'b7', confirmed: false,
@@ -1205,7 +1206,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   it('caches the reviewer verdict for an identical bash command within the session', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
-    const handle = await start('auto', review);
+    await start('auto', review);
     firePermissionRequest('b8', 'bash', { command: 'pnpm --filter desktop run typecheck' });
     expect(await waitForResponse('b8')).toEqual({
       type: 'extension_ui_response', id: 'b8', confirmed: true,
@@ -1374,7 +1375,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       cwd,
       [cwd],
       rememberedIntent,
-      { providerId: 'test-provider', model: 'm' },
+      { providerId: 'test-provider', model: 'm', routeRevision: 'sha256:test-provider-route' },
       process.platform,
     );
     expect(persisted).not.toBeNull();

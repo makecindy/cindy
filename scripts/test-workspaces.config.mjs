@@ -252,8 +252,6 @@ export default {
     noCollectableWorkspace('@cindy/device-link-protocol', 'cindy-protocol/packages/device-link-protocol'),
     requiredUnitWorkspace('@cindy/model-access-protocol', 'cindy-protocol/packages/model-access-protocol'),
     requiredUnitWorkspace('@cindy/plugin-protocol', 'cindy-protocol/packages/plugin-protocol'),
-    requiredUnitWorkspace('@cindy/skill-protocol', 'cindy-protocol/packages/skill-protocol'),
     requiredUnitWorkspace('@cindy/slack-hook-protocol', 'cindy-protocol/packages/slack-hook-protocol'),
-    requiredUnitWorkspace('@cindy/voice-protocol', 'cindy-protocol/packages/voice-protocol'),
   ],
 };

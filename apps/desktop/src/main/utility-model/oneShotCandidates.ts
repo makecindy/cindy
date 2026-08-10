@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   toSdkModelString,
@@ -298,6 +298,37 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   return matches.length === 1 ? matches[0]?.id : undefined;
 }
 
+function canonicalRouteConfig(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalRouteConfig);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.keys(value as Record<string, unknown>)
+    .sort()
+    .reduce<Record<string, unknown>>((result, key) => {
+      const item = (value as Record<string, unknown>)[key];
+      if (item !== undefined) result[key] = canonicalRouteConfig(item);
+      return result;
+    }, {});
+}
+
+/**
+ * Bind approval reuse to the route the reviewer actually uses without copying endpoint/header
+ * configuration into the persisted approval payload. Provider edits preserve provider/model IDs,
+ * so those IDs alone are not a stable reviewer identity.
+ */
+function utilityRouteRevision(
+  provider: ReturnType<typeof getActiveCatalog>['providers'][number],
+  agentKind: AgentKind,
+): string {
+  const payload = JSON.stringify(canonicalRouteConfig({
+    providerId: provider.id,
+    source: provider.source,
+    agentKind,
+    auth: provider.auth,
+    routing: provider.routing[agentKind],
+  }));
+  return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
+}
+
 /**
  * Resolve the exact catalog route that requestUtilityText would use for a task-scoped request.
  * Approval memory calls this before lookup, then pins the returned provider/model onto the actual
@@ -329,7 +360,11 @@ export function resolveUtilityTextRouteIdentity(
   ) {
     return null;
   }
-  return { providerId: provider.id, model };
+  return {
+    providerId: provider.id,
+    model,
+    routeRevision: utilityRouteRevision(provider, agentKind),
+  };
 }
 
 async function requestDefaultUtilityText(

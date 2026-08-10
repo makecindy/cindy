@@ -65,6 +65,11 @@ function createDeps(options: {
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: noopLogger(),
+    resolveAutoReviewRoute: async (request) => ({
+      providerId: request.providerId ?? null,
+      model: request.model,
+      routeRevision: 'sha256:test-reviewer-route',
+    }),
     mcpProviders: (options.mcpProviderNames ?? []).map((name) => ({
       name,
       toClaudeSdkConfig: () => ({ type: 'stdio', command: 'true' }),
