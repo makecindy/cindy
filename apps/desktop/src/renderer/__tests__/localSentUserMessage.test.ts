@@ -704,4 +704,87 @@ describe('isLocalSentUserMessage (#2194)', () => {
     await flushPromises();
     expect(makerChatStore.isLocalSentUserMessage(sid, 'q6')).toBe(false);
   });
+
+  // Greptile review P1（第十四轮）: retry 被 supersede / no-op 时回执里没有
+  // 本次点击的产物——此时并发出现在回执队首的外部 continue 项（如外部入口的
+  // steer-fallback 把新项抬到队首）不得误认。生效（resumed）的回执
+  // error / recovery 必然双空（main 在 unshift 前同步清掉），据此门控。
+  it('Retry 被 supersede（回执 recovery 保留）时队首的外部 continue 项不被误认', async () => {
+    const sid = `retry-super-head-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [],
+        error: 'turn failed',
+        recovery: { kind: 'active-turn', item: queuedItem('failed-turn-x', 'original') },
+      }),
+    );
+    // superseded：main 未处理本次 retry，error / recovery 原样保留；并发窗口里
+    // 外部入口的新 continue 项出现在回执队首。
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('ext-head-continue', 'external continue', {
+            originalSyntheticTrigger: 'continue',
+          }),
+        ],
+        error: 'turn failed',
+        recovery: { kind: 'active-turn', item: queuedItem('failed-turn-x', 'original') },
+      }),
+    );
+
+    await makerChatStore.retryLastError(sid);
+    await flushPromises();
+
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'ext-head-continue')).toBe(false);
+  });
+
+  // Codex review P2（第十四轮）: queue-head 重试的 clientId 点击时刻已知，而
+  // main 的 scheduleDrain 经 queueMicrotask 在返回 projection 前就会跑——重发
+  // 的队首行可能抢在回执回调前落库，必须 IPC 前预登记；IPC 失败时回滚。
+  it('queue-head Retry 在 IPC 回执前同步预登记，生效后保留', async () => {
+    const sid = `retry-qh-pre-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [queuedItem('qh-1', 'stuck head')],
+        error: 'dispatch failed',
+        recovery: { kind: 'queue-head', clientId: 'qh-1' },
+      }),
+    );
+    retryLastError.mockResolvedValueOnce(
+      projection(sid, { pendingQueue: [queuedItem('qh-1', 'stuck head')] }),
+    );
+
+    const p = makerChatStore.retryLastError(sid);
+    // 回执未到，预登记已同步生效。
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'qh-1')).toBe(true);
+
+    await p;
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'qh-1')).toBe(true);
+  });
+
+  it('queue-head Retry IPC 失败时回滚预登记', async () => {
+    const sid = `retry-qh-rej-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [queuedItem('qh-2', 'stuck head')],
+        error: 'dispatch failed',
+        recovery: { kind: 'queue-head', clientId: 'qh-2' },
+      }),
+    );
+    retryLastError.mockRejectedValueOnce(new Error('ipc down'));
+
+    const p = makerChatStore.retryLastError(sid);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'qh-2')).toBe(true);
+
+    await expect(p).rejects.toThrow('ipc down');
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'qh-2')).toBe(false);
+  });
 });

@@ -12269,48 +12269,73 @@ function retryLastError(sessionId: string): Promise<void> {
   const preRetryQueueIds = new Set(
     (sessions.get(sessionId)?.pendingQueue ?? []).map((item) => item.clientId),
   );
+  // queue-head 重试的 clientId 点击时刻已知，但 main 的 scheduleDrain 经
+  // queueMicrotask 在返回 projection 前就会跑，重发的队首行可能抢在回执
+  // 回调前落库、被基线化为外部（Codex review P2）：先预登记，回执确认未
+  // 生效或 IPC 失败再回滚（会话已 purge 时回滚为 no-op）。
+  if (preRetryQueueHeadClientId) {
+    markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+  }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
-  ).then(({ projection }) => {
-    // 扫**回执自带的投影快照**而非当前 state：回执由 main 在 scheduleDrain 之前
-    // 同步生成（agent-input-coordinator.ts performRetryLastError 末尾），必然含
-    // 本次克隆；drain 可能抢在本回调前消费克隆并推送新投影覆盖 state
-    // （Greptile review P1），那时扫 state.pendingQueue 会漏记。
-    // superseded / no-op 时回执队列里没有克隆项，自然不标记。
-    // 会话在 retry settle 前被 purge 时不登记——否则会把 localSentUserMessageIds
-    // 条目重新创建出来（泄漏 + 同 id 会话重建后旧标记复活，Copilot review nit）。
-    if (!sessions.has(sessionId)) return;
-    for (const item of projection.pendingQueue) {
-      if (preRetryQueueIds.has(item.clientId)) continue;
-      if (item.supersedesUserClientId) {
-        markLocalSentUserMessage(sessionId, item.clientId);
-      } else if (
-        item.originalSyntheticTrigger === 'continue' &&
-        item.autoResume !== true &&
-        projection.pendingQueue[0]?.clientId === item.clientId
-      ) {
-        // 有产出人工 retry 的隐藏续跑指令：合成行渲染 null，不登记则续跑产出
-        // 在屏幕外开始（Codex review P1）。auto 自动续跑不标记。
-        // 还须是回执队首：main 的 performRetryLastError 把本次续跑指令
-        // unshift 到队首且回执同步生成（先于 drain）；点击后由外部入口并发
-        // 入队的 continue 项只会追加在队尾，不得误认（Greptile review P1）。
-        markLocalSentUserMessage(sessionId, item.clientId);
+  ).then(
+    ({ projection }) => {
+      // 扫**回执自带的投影快照**而非当前 state：回执由 main 在 scheduleDrain 之前
+      // 同步生成（agent-input-coordinator.ts performRetryLastError 末尾），必然含
+      // 本次克隆；drain 可能抢在本回调前消费克隆并推送新投影覆盖 state
+      // （Greptile review P1），那时扫 state.pendingQueue 会漏记。
+      // 会话在 retry settle 前被 purge 时不登记——否则会把 localSentUserMessageIds
+      // 条目重新创建出来（泄漏 + 同 id 会话重建后旧标记复活，Copilot review nit）。
+      // purge 本身会清掉预登记，这里直接返回即可。
+      if (!sessions.has(sessionId)) return;
+      // 本次 retry 生效（outcome 'resumed'）时 main 在 unshift 前同步清掉
+      // error / recovery，回执必然双空；superseded / no-op 时 recovery 原样
+      // 保留，回执里根本没有本次点击的产物——并发出现在队首的外部 continue
+      // 项不得误认（Greptile review P1）。
+      const retryTookEffect = projection.error === null && projection.recovery === null;
+      if (retryTookEffect) {
+        for (const item of projection.pendingQueue) {
+          if (preRetryQueueIds.has(item.clientId)) continue;
+          if (item.supersedesUserClientId) {
+            markLocalSentUserMessage(sessionId, item.clientId);
+          } else if (
+            item.originalSyntheticTrigger === 'continue' &&
+            item.autoResume !== true &&
+            projection.pendingQueue[0]?.clientId === item.clientId
+          ) {
+            // 有产出人工 retry 的隐藏续跑指令：合成行渲染 null，不登记则续跑产出
+            // 在屏幕外开始（Codex review P1）。auto 自动续跑不标记。
+            // 还须是回执队首：retry 生效时 main 把本次续跑指令 unshift 到队首，
+            // 且 unshift → getProjection 之间无 await（同步），队首必然是本次
+            // 产物；并发的外部入队项只会被压在下面（Greptile review P1）。
+            markLocalSentUserMessage(sessionId, item.clientId);
+          }
+        }
       }
-    }
-    // queue-head 重试：仅当回执确认本次重试生效（error 清空且 recovery 已清）
-    // 且**队首项仍在回执队列**（被本次 retry 重新武装，main 同步 getProjection
-    // 先于 drain）才登记；若已被并发 drain 消费派发（不在队列），本次 retry 实为
-    // superseded，登记会让该外部行落库时误触发强制回底（Greptile review P1）。
-    if (
-      preRetryQueueHeadClientId &&
-      projection.error === null &&
-      projection.recovery === null &&
-      projection.pendingQueue.some((item) => item.clientId === preRetryQueueHeadClientId)
-    ) {
-      markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
-    }
-  });
+      // queue-head 重试的预登记确认：仅当回执确认本次重试生效（error 清空且
+      // recovery 已清）且**队首项仍在回执队列**（被本次 retry 重新武装，main
+      // 同步 getProjection 先于 drain）才保留；若已被并发 drain 消费派发
+      // （不在队列）或本次 retry 实为 superseded / no-op，回滚预登记——留着
+      // 会让该外部行落库时误触发强制回底（Greptile review P1）。
+      if (
+        preRetryQueueHeadClientId &&
+        !(
+          retryTookEffect &&
+          projection.pendingQueue.some((item) => item.clientId === preRetryQueueHeadClientId)
+        )
+      ) {
+        unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+      }
+    },
+    (err) => {
+      // IPC 失败：本次点击没有产生任何效果，回滚 queue-head 预登记。
+      if (preRetryQueueHeadClientId) {
+        unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+      }
+      throw err;
+    },
+  );
 }
 
 /**
