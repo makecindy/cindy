@@ -3997,8 +3997,6 @@ export function CCAgentSessionView({
                   const cancelId = credentialSwitchWait.clientId ?? pendingQueue[0]?.clientId;
                   return cancelId ? () => removeFromQueue(cancelId) : undefined;
                 })()}
-                style={{ width: inputWidth }}
-                className="py-1"
               />
             )}
 
@@ -4022,8 +4020,6 @@ export function CCAgentSessionView({
                 <InterruptedTurnBanner
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
-                  style={{ width: inputWidth }}
-                  className="py-1"
                 />
               ) : (
                 <ErrorTailErrorBanner
@@ -4045,8 +4041,6 @@ export function CCAgentSessionView({
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
-                  style={{ width: inputWidth }}
-                  className="py-1"
                 />
               ))}
 
@@ -4063,8 +4057,6 @@ export function CCAgentSessionView({
                 <InterruptedTurnBanner
                   onContinue={handleSessionInterruptContinue}
                   onDismiss={handleSessionInterruptDismiss}
-                  style={{ width: inputWidth }}
-                  className="py-1"
                 />
               )}
 
@@ -4093,8 +4085,6 @@ export function CCAgentSessionView({
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
-                style={{ width: inputWidth }}
-                className="py-1"
               />
             )}
 
@@ -4104,8 +4094,6 @@ export function CCAgentSessionView({
             {sessionId && !isStreaming && !agentStatus.isRunning && (
               <WorktreeRestoreBanner
                 sessionId={sessionId}
-                style={{ width: inputWidth }}
-                className="py-1"
               />
             )}
 
@@ -4119,15 +4107,13 @@ export function CCAgentSessionView({
               <UpgradeBanner
                 hostId={session.remoteHostId}
                 sessionId={session.id}
-                style={{ width: inputWidth }}
-                className="py-1"
               />
             )}
 
             {/* 零可用模型引导条:与首屏引导卡共享判定与 dismiss(useProviderOnboarding),
               组件自判 visible、不可见渲染 null。device-link 远程会话不出——连接态在被控端。 */}
             {!remoteDeviceId && (
-              <ConnectProviderBanner style={{ width: inputWidth }} className="py-1" />
+              <ConnectProviderBanner />
             )}
 
             <div

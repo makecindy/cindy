@@ -33,6 +33,8 @@ import { FolderX, RefreshCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { useBannerPortal } from '@/components/ui/banner-overlay/BannerOverlay';
+import { BannerSlide } from '@/components/ui/banner-overlay/BannerSlide';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { addSessionAttention } from '@/lib/sessionAttentionStore';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
@@ -66,6 +68,7 @@ export function WorktreeRestoreBanner({
   style?: React.CSSProperties;
 }) {
   const { t } = useTranslation();
+  const portal = useBannerPortal();
   const refreshWorktrees = useRefreshWorktrees();
   const [phase, setPhase] = useState<BannerPhase>('hidden');
   const [variant, setVariant] = useState<BannerVariant>('missing');
@@ -175,16 +178,17 @@ export function WorktreeRestoreBanner({
   const restoring = phase === 'restoring';
   const pending = variant === 'pending';
 
-  return (
-    <div
-      className={cn(
-        'mx-auto flex items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--error-bg)] border-[var(--error-border)]',
-        className,
-      )}
-      style={style}
-      data-testid="worktree-restore-banner"
-    >
+  return portal(
+    <BannerSlide>
+      <div
+        className={cn(
+          'flex items-start gap-2 rounded-md px-3 py-2',
+          'border bg-[var(--error-bg)] border-[var(--error-border)]',
+          className,
+        )}
+        style={style}
+        data-testid="worktree-restore-banner"
+      >
       <FolderX size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
       <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
         {pending
@@ -224,6 +228,7 @@ export function WorktreeRestoreBanner({
       >
         <X size={14} />
       </button>
-    </div>
+      </div>
+    </BannerSlide>,
   );
 }

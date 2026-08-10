@@ -12,6 +12,8 @@ import { useTranslation } from 'react-i18next';
 import type { CSSProperties } from 'react';
 
 import { cn } from '@/lib/utils';
+import { useBannerPortal } from '@/components/ui/banner-overlay/BannerOverlay';
+import { BannerSlide } from '@/components/ui/banner-overlay/BannerSlide';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 
@@ -23,6 +25,7 @@ export function ConnectProviderBanner({
   style?: CSSProperties;
 }) {
   const { t } = useTranslation();
+  const portal = useBannerPortal();
   const navigate = useNavigate();
   const signInToCindy = useSignInToCindy();
   const onboarding = useProviderOnboarding();
@@ -31,16 +34,17 @@ export function ConnectProviderBanner({
 
   const cloudMode = onboarding.authMode === 'cloud';
 
-  return (
-    <div
-      data-testid="connect-provider-banner"
-      className={cn(
-        'mx-auto flex select-none items-center gap-2 rounded-md px-3 py-2',
-        'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-        className,
-      )}
-      style={style}
-    >
+  return portal(
+    <BannerSlide>
+      <div
+        data-testid="connect-provider-banner"
+        className={cn(
+          'flex select-none items-center gap-2 rounded-md px-3 py-2',
+          'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+          className,
+        )}
+        style={style}
+      >
       <Unplug size={14} className="shrink-0 text-[var(--text-secondary)]" />
       <span className="flex-1 text-xs text-[var(--text-secondary)]">
         {t('onboarding.connectProvider.banner.text')}
@@ -62,6 +66,7 @@ export function ConnectProviderBanner({
       >
         <X size={12} />
       </button>
-    </div>
+      </div>
+    </BannerSlide>,
   );
 }

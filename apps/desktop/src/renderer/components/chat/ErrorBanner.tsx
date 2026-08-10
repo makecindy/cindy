@@ -38,6 +38,8 @@ import {
   useCodexSessionExpiredPrompt,
 } from '@/hooks/useCodexSessionExpiredPrompt';
 import { cn } from '@/lib/utils';
+import { useBannerPortal } from '@/components/ui/banner-overlay/BannerOverlay';
+import { BannerSlide } from '@/components/ui/banner-overlay/BannerSlide';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
@@ -131,6 +133,7 @@ export function ErrorBanner({
   className,
 }: ErrorBannerProps) {
   const { t } = useTranslation();
+  const portal = useBannerPortal();
   const { confirm } = useConfirmDialog();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
     // 横幅已说明影响范围；用户点击“重新连接 ChatGPT”后直接进入浏览器连接流程，
@@ -465,15 +468,16 @@ export function ErrorBanner({
   // Retry hide 条件: stale thread / 远端 auth 缺失未同步 / 本地 OAuth auth 缺失
   // (本地没 sync 入口, 用户去 codex login 再来; retry 立刻撞同样 401 没意义)。
   // **API mode 不在 hide 列表里** — gateway key 自动 refresh, retry 大概率成功。
-  return (
-    <div
-      className={cn(
-        'mx-auto flex items-start gap-2 border px-3 py-2',
-        isOpenAiConnectionExpired
-          ? 'rounded-xl bg-[var(--surface-elevated)] border-[var(--border-default)]'
-          : 'rounded-md bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800',
-        className,
-      )}
+  return portal(
+    <BannerSlide>
+      <div
+        className={cn(
+          'flex items-start gap-2 border px-3 py-2',
+          isOpenAiConnectionExpired
+            ? 'rounded-xl bg-[var(--surface-elevated)] border-[var(--border-default)]'
+            : 'rounded-md bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800',
+          className,
+        )}
       style={style}
     >
       {openAiConnectionRecoveredSinceError ? (
@@ -698,5 +702,6 @@ export function ErrorBanner({
         </button>
       )}
     </div>
+    </BannerSlide>,
   );
 }

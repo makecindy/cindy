@@ -34,6 +34,8 @@ import { useState } from 'react';
 import { CirclePause, Play, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { useBannerPortal } from '@/components/ui/banner-overlay/BannerOverlay';
+import { BannerSlide } from '@/components/ui/banner-overlay/BannerSlide';
 import { ErrorBanner } from './ErrorBanner';
 
 export function InterruptedTurnBanner({
@@ -50,6 +52,7 @@ export function InterruptedTurnBanner({
   style?: React.CSSProperties;
 }) {
   const { t } = useTranslation();
+  const portal = useBannerPortal();
   const [sending, setSending] = useState(false);
 
   const handleContinue = async () => {
@@ -62,17 +65,18 @@ export function InterruptedTurnBanner({
     }
   };
 
-  return (
-    <div
-      className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--error-bg)] border-[var(--error-border)]',
-        className,
-      )}
-      style={style}
-      data-testid="interrupted-turn-banner"
-      data-banner-kind="interrupted"
-    >
+  return portal(
+    <BannerSlide>
+      <div
+        className={cn(
+          'flex select-none items-start gap-2 rounded-md px-3 py-2',
+          'border bg-[var(--error-bg)] border-[var(--error-border)]',
+          className,
+        )}
+        style={style}
+        data-testid="interrupted-turn-banner"
+        data-banner-kind="interrupted"
+      >
       <CirclePause size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
       <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
         {t('chat.interruptedBanner.text')}
@@ -100,7 +104,8 @@ export function InterruptedTurnBanner({
       >
         <X size={14} />
       </button>
-    </div>
+      </div>
+    </BannerSlide>,
   );
 }
 

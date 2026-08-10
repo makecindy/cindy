@@ -20,6 +20,7 @@ import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { ToastContainer } from '@/components/ui/toast';
+import { BannerOverlay } from '@/components/ui/banner-overlay';
 import { LegacyMigrationDialog } from '@/components/auth/LegacyMigrationDialog';
 import { Tooltip } from '@/components/ui/tooltip';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -354,6 +355,7 @@ export function App() {
                       </LoginHandoffHost>
                       <FindInPageBar />
                       <ToastContainer />
+                      <BannerOverlay />
                       {/* 首登轻量数据迁移弹窗:只挂主窗(副窗/侧栏窗不重复弹) */}
                       {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
                         <LegacyMigrationDialog />

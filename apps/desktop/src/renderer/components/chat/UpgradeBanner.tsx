@@ -38,6 +38,8 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { useBannerPortal } from '@/components/ui/banner-overlay/BannerOverlay';
+import { BannerSlide } from '@/components/ui/banner-overlay/BannerSlide';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 
@@ -181,6 +183,7 @@ function useCcMgrUpgrade(hostId: string): { currentVersion: string; availableVer
 
 export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBannerProps) {
   const { t } = useTranslation();
+  const portal = useBannerPortal();
   const pending = useCcMgrUpgrade(hostId);
   const [upgrading, setUpgrading] = useState(false);
 
@@ -239,15 +242,16 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
     }
   };
 
-  return (
-    <div
-      className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--upgrade-banner-bg)] border-[var(--upgrade-banner-border)]',
-        className,
-      )}
-      style={style}
-    >
+  return portal(
+    <BannerSlide>
+      <div
+        className={cn(
+          'flex select-none items-start gap-2 rounded-md px-3 py-2',
+          'border bg-[var(--upgrade-banner-bg)] border-[var(--upgrade-banner-border)]',
+          className,
+        )}
+        style={style}
+      >
       {upgrading ? (
         <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
       ) : (
@@ -284,6 +288,7 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
           <X size={14} />
         </button>
       )}
-    </div>
+      </div>
+    </BannerSlide>,
   );
 }

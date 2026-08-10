@@ -17,6 +17,8 @@ import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import * as sessionService from '@/lib/sessionService';
 import { Spinner } from '@/components/ui/spinner';
+import { useBannerPortal } from '@/components/ui/banner-overlay/BannerOverlay';
+import { BannerSlide } from '@/components/ui/banner-overlay/BannerSlide';
 import { cn } from '@/lib/utils';
 
 interface CredentialSwitchWaitBannerProps {
@@ -35,6 +37,7 @@ export function CredentialSwitchWaitBanner({
   className,
 }: CredentialSwitchWaitBannerProps) {
   const { t, i18n } = useTranslation();
+  const portal = useBannerPortal();
   const [blockerTitles, setBlockerTitles] = useState<string[]>([]);
   // projection 每次 emit 都会产出新数组身份(等待期间 2s 重试周期也在 emit),
   // 以内容 key 做依赖,避免标题反复重拉。sessionId 不含逗号,join 无碰撞。
@@ -87,34 +90,36 @@ export function CredentialSwitchWaitBanner({
     ? t('chat.credentialSwitchWait.waitingForNamed', { titles: joinedTitles })
     : t('chat.credentialSwitchWait.waiting');
 
-  return (
-    <div
-      className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
-        'bg-[var(--upgrade-banner-bg)] border border-[var(--upgrade-banner-border)]',
-        className,
-      )}
-      style={style}
-    >
-      <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
-      <span className="flex-1 min-w-0 text-xs text-[var(--upgrade-banner-fg)] break-all">
-        {message}
-      </span>
-      {onCancel && (
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            'shrink-0 flex items-center gap-1 text-xs font-medium',
-            'text-[var(--upgrade-banner-fg)]',
-            'hover:opacity-70 transition-opacity',
-          )}
-          title={t('chat.credentialSwitchWait.cancelTitle')}
-        >
-          <X size={12} />
-          {t('chat.credentialSwitchWait.cancel')}
-        </button>
-      )}
-    </div>
+  return portal(
+    <BannerSlide>
+      <div
+        className={cn(
+          'flex select-none items-start gap-2 rounded-md px-3 py-2',
+          'bg-[var(--upgrade-banner-bg)] border border-[var(--upgrade-banner-border)]',
+          className,
+        )}
+        style={style}
+      >
+        <Spinner size={14} className="mt-[2px] text-[var(--upgrade-banner-fg)]" />
+        <span className="flex-1 min-w-0 text-xs text-[var(--upgrade-banner-fg)] break-all">
+          {message}
+        </span>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className={cn(
+              'shrink-0 flex items-center gap-1 text-xs font-medium',
+              'text-[var(--upgrade-banner-fg)]',
+              'hover:opacity-70 transition-opacity',
+            )}
+            title={t('chat.credentialSwitchWait.cancelTitle')}
+          >
+            <X size={12} />
+            {t('chat.credentialSwitchWait.cancel')}
+          </button>
+        )}
+      </div>
+    </BannerSlide>,
   );
 }
