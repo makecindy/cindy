@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
+import { shouldSkipGhostPackEntry } from './ghostPackageContentRules.js';
 
 /**
  * Host-owned files are not Plugin package contents. They must survive an update,
@@ -46,7 +47,10 @@ function shouldSkipRootEntry(name: string, relBase: string): boolean {
   return relBase === '' && GHOST_CONTENT_DIGEST_SKIP_ROOT_FILES.has(name);
 }
 
-async function snapshotDirectoryPass(rootDir: string): Promise<GhostPackageContentEntry[] | null> {
+async function snapshotDirectoryPass(
+  rootDir: string,
+  shouldSkipEntry: (name: string, relBase: string) => boolean,
+): Promise<GhostPackageContentEntry[] | null> {
   let realRoot: string;
   try {
     realRoot = await fs.promises.realpath(rootDir);
@@ -66,7 +70,7 @@ async function snapshotDirectoryPass(rootDir: string): Promise<GhostPackageConte
     }
     try {
       for await (const entry of handle) {
-        if (shouldSkipRootEntry(entry.name, relBase)) continue;
+        if (shouldSkipEntry(entry.name, relBase)) continue;
         entryCount += 1;
         if (entryCount > MAX_CONTENT_ENTRIES) return false;
         if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) return false;
@@ -112,9 +116,28 @@ async function snapshotDirectoryPass(rootDir: string): Promise<GhostPackageConte
  */
 export async function installedGhostContentDigest(dir: string): Promise<string | null> {
   for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt += 1) {
-    const first = await snapshotDirectoryPass(dir);
+    const first = await snapshotDirectoryPass(dir, shouldSkipRootEntry);
     if (!first) return null;
-    const second = await snapshotDirectoryPass(dir);
+    const second = await snapshotDirectoryPass(dir, shouldSkipRootEntry);
+    if (!second) return null;
+    if (canonicalEntries(first) === canonicalEntries(second)) {
+      return ghostPackageContentDigest(first);
+    }
+  }
+  return null;
+}
+
+/**
+ * Digests the bytes that packGhostDirToFile would include from a custom source
+ * tree. Development artifacts omitted by the packer must not turn a byte-for-
+ * byte installed package into a recovery mismatch.
+ */
+export async function packableGhostSourceContentDigest(dir: string): Promise<string | null> {
+  const skipPackEntry = (name: string): boolean => shouldSkipGhostPackEntry(name);
+  for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt += 1) {
+    const first = await snapshotDirectoryPass(dir, skipPackEntry);
+    if (!first) return null;
+    const second = await snapshotDirectoryPass(dir, skipPackEntry);
     if (!second) return null;
     if (canonicalEntries(first) === canonicalEntries(second)) {
       return ghostPackageContentDigest(first);

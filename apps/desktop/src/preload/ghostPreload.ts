@@ -31,6 +31,8 @@ import { contextBridge, ipcRenderer } from 'electron';
  *   的语法糖;URL 白名单守门在主机侧 previewSlot。
  * - workspace(req):workspace 槽的便捷口——send({type:'workspace-request',
  *   …req}) 的语法糖;目录授权与会话创建守门全在主机侧 workspaceSlot。
+ * - iosSimulator.request(req):ios-simulator 槽的便捷口——只能读取当前台前
+ *   任务的公开状态并打开 Host 内置面板；不提供帧、输入或 Sidecar 权限。
  * - confirm(req):confirm 槽的便捷口——send({type:'confirm-request', …req}) 的
  *   语法糖;主机弹自己那套确认框并把用户的真实点击回给沙箱,资格审/净化/限速/
  *   单飞/超时兜底全在主机侧 confirmSlot 与 ghostConfirmDialogBridge。
@@ -64,7 +66,11 @@ contextBridge.exposeInMainWorld('cindy', {
     errand: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-errand-request', kind: 'run' }),
     queryErrand: (req: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-errand-request', kind: 'query' }),
+      ipcRenderer.invoke('ghost-pipe:send', {
+        ...req,
+        type: 'agent-errand-request',
+        kind: 'query',
+      }),
     // 请用户新建一条自动化(agent.schedule 加档):只能**打开预填好的创建面板**,
     // 建不建由用户在面板上选好模型后亲手保存。{ ok:true } 只表示"请求已被接受并投递",
     // 既不保证面板真开了(用户正编辑另一个表单时本次草稿会被丢弃),也不表示任务已创建
@@ -83,6 +89,10 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'preview-request' }),
   workspace: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'workspace-request' }),
+  iosSimulator: {
+    request: (req: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'ios-simulator-request' }),
+  },
   confirm: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'confirm-request' }),
 });

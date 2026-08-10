@@ -115,6 +115,7 @@ const detail: GhostPluginDetail = {
   enabled: true,
   canUse: true,
   tabPanel: false,
+  hostCapability: null,
   author: 'XD',
   contents: ['code'],
   permissions: [],
@@ -230,6 +231,35 @@ describe('Ghost plugin detail sections', () => {
     expect(backButton?.className).toContain('-ml-3');
     expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
     expect(detailActions?.className).toContain('flex-nowrap');
+  });
+
+  it('renders an enabled Host capability as a conversation action', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onUse = vi.fn();
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={{ ...detail, canUse: false, hostCapability: 'ios-simulator' }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={onUse}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' }));
+    expect(onUse).toHaveBeenCalledTimes(1);
   });
 
   it('routes a projected detail icon failure to market recovery', () => {

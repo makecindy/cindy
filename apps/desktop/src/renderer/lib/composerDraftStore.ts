@@ -57,6 +57,12 @@ export interface ComposerDraft {
   /** Plugin-page handoff consumed by ChatInput after its editor hydration. */
   pendingGhostId?: string;
   /**
+   * Host-capability Plugin handoff. Kept separate from `pendingGhostId`
+   * because command Plugins expand through `ghost_call`, while capability
+   * Plugins are represented by a trusted composer atom and stay Host-owned.
+   */
+  pendingHostCapabilityGhostId?: string;
+  /**
    * One-shot routed-entry intent: hydrate this draft, then place the caret at
    * the final editable position. ChatInput consumes and clears the flag so a
    * later ordinary remount does not steal focus.
@@ -586,6 +592,9 @@ export function saveComposerTextAfterAsyncTransition(
       quotes: existing?.quotes ?? [],
       browserComments: existing?.browserComments ?? [],
       ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+      ...(existing?.pendingHostCapabilityGhostId
+        ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+        : {}),
       ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
     },
     { silent: true, preserveRemoteOptimisticRecovery: true },
@@ -628,6 +637,9 @@ export function restoreRemoteOptimisticDraft(
     quotes: [],
     browserComments: currentComments,
     ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+    ...(existing?.pendingHostCapabilityGhostId
+      ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+      : {}),
     ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
   };
   const rememberBatchSnapshot = (draft: ComposerDraft): void => {

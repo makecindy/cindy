@@ -1398,7 +1398,9 @@ describe('Shared create project picker', () => {
     );
     // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
-    expect(chatInputSource).toContain('hasReferenceDirs={onExtraDirsChange !== undefined}');
+    expect(chatInputSource).toContain(
+      'hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}',
+    );
   });
 
   // #807 review 第二十四轮:`useAttachments.addFiles` 对未知扩展名要先 await peekFileHeader,附件是

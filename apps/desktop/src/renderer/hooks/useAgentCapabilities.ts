@@ -116,6 +116,12 @@ export interface AgentCapabilities {
    */
   supportsOrcaWorkerPermissionMode?: boolean;
   /**
+   * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
+   * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
+   * 上下文环压缩入口据此判定(见 resolveManualCompactChannel),不再硬编码 agentKind 列表。
+   */
+  manualCompact?: CapabilityStatus;
+  /**
    * 每轮 host 权限策略能力门:未声明或 supported.supported !== true 的 Agent 无法
    * 用于「无条件挂逐条权限确认」的渠道(如个人微信)。与 maker-core 的
    * Capabilities.turnPermissionPolicy 同构;device-link 老被控端无此字段 →
@@ -125,6 +131,25 @@ export interface AgentCapabilities {
     supported: CapabilityStatus;
     unsupportedPermissionModes: string[];
   };
+}
+
+/**
+ * 手动压缩调用通道判定 —— 上下文环压缩入口与请求分流的唯一判据(#1927 / #1933 review):
+ *   - 真实 Claude Code 会话 → `claude-input`(输入协调器 maker:input:compact,SDK 斜杠命令通道);
+ *   - 其余 agent 声明 manualCompact.supported(当前仅 pi)→ `compact-session`
+ *     (capability-aware 通用通道 maker:compact-session,本地 IPC / device-link 隧道均可路由);
+ *   - 其余(Codex 等无手动压缩能力)→ null = 无入口。
+ * 刻意不按 agentKind 扩排除列表:新 agent 只需在 maker-core 声明能力即可自动接入。
+ */
+export type CompactChannel = 'claude-input' | 'compact-session';
+
+export function resolveManualCompactChannel(
+  agentKind: AgentKind | null | undefined,
+  capabilities: Pick<AgentCapabilities, 'manualCompact'> | null | undefined,
+): CompactChannel | null {
+  if (agentKind === 'claude-code') return 'claude-input';
+  if (capabilities?.manualCompact?.supported) return 'compact-session';
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -141,6 +166,22 @@ function isOptionalString(value: unknown): boolean {
 
 function isOptionalBoolean(value: unknown): boolean {
   return value === undefined || typeof value === 'boolean';
+}
+
+/** CapabilityStatus 形状校验(与 maker-core types/capabilities.ts 对齐)。 */
+function isCapabilityStatus(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  // supported 必须是布尔;两种分支下可选字段统一只接受 string(undefined 允许)。
+  if (typeof value.supported !== 'boolean') return false;
+  return (
+    (value.reason === undefined || typeof value.reason === 'string') &&
+    (value.upstreamRef === undefined || typeof value.upstreamRef === 'string') &&
+    (value.message === undefined || typeof value.message === 'string')
+  );
+}
+
+function isOptionalCapabilityStatus(value: unknown): boolean {
+  return value === undefined || isCapabilityStatus(value);
 }
 
 function isOptionalFiniteNumber(value: unknown): boolean {
@@ -219,7 +260,8 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !value.permissionModes.every(isNamedDescriptor) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
-    !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode)
+    !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
+    !isOptionalCapabilityStatus(value.manualCompact)
   ) {
     throw new Error('Invalid agent capabilities response');
   }

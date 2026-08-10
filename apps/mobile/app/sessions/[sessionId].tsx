@@ -32,6 +32,11 @@ import {
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
 } from 'expo-audio';
+import {
+  addScreenshotListener,
+  conversationShareNativeRendererAvailable,
+  renderConversationShareHtmlToPng,
+} from 'xdt-screenshot-monitor';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
@@ -90,7 +95,34 @@ import {
   MessageRenderer,
   type MobileMessageActionBusyKind,
   type MobileMessageDraft,
+  type ShareableMessageViewport,
 } from '@/session/MessageRenderer';
+import {
+  ConversationShareWebView,
+  bundledAssetToDataUri,
+  deleteConversationSharePngTemp,
+  writeConversationSharePngTemp,
+  type ConversationShareWebViewHandle,
+} from '@/session/ConversationShareWebView';
+import {
+  buildConversationShareHtml,
+  type ConversationShareMessage,
+} from '@/session/conversationShareWebViewHtml';
+import {
+  collectConversationShareBlockIds,
+  collectConversationShareMessages,
+} from '@/session/conversationShareMessages';
+import {
+  isFoldableBlockExpanded,
+  useFoldableExpandedBlocksSnapshot,
+} from '@/session/expandedBlockMemory';
+import { ShareSelectionBar } from '@/session/ShareSelectionBar';
+import {
+  shareSelectionStore,
+  useShareSelectionActive,
+  useShareSelectionCount,
+  useShareSelectionRevision,
+} from '@/session/shareSelectionStore';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
 import { InlineQueueSection } from '@/session/InlineQueueSection';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
@@ -564,6 +596,15 @@ const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // session-tail-banner「重试」短窗口隐藏的超时兜底(接管信号全部丢失时恢复错误入口);
 // 覆盖 settling 窗口上限(10s)之后仍无任何在途证据的场景。
 const TAIL_RETRY_HIDE_TIMEOUT_MS = 15_000;
+const SCREENSHOT_SHARE_ACTIVATION_DEBOUNCE_MS = 1_200;
+
+// 分享图页脚资源转成 data URI 后再交给 WebView，避免 foreignObject 导出空白。
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareCharacterAsset = require('../../assets/share/cindy-share-character.jpg');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareLogoLightAsset = require('../../assets/login/login-wordmark.png');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareLogoDarkAsset = require('../../assets/login/login-wordmark-dark.png');
 
 /**
  * 排队消息「复用 composer 编辑」的会话内状态:clientId 定位队列条目,
@@ -599,6 +640,27 @@ function buildComposerRuntimeSummary(
 function choiceLabel(options: readonly { id: string; label: string }[], value: string | null | undefined): string {
   if (!value) return '';
   return options.find((option) => option.id === value)?.label ?? value;
+}
+
+function measureViewInWindow(view: View | null): Promise<{
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+} | null> {
+  return new Promise((resolve) => {
+    if (!view) {
+      resolve(null);
+      return;
+    }
+    view.measureInWindow((x, y, width, height) => {
+      if (![x, y, width, height].every(Number.isFinite)) {
+        resolve(null);
+        return;
+      }
+      resolve({ height, width, x, y });
+    });
+  });
 }
 
 /** 会话已读回执的驻留门槛:聚焦本会话且消息已渲染后停满这段时间才算「真实看到」。 */
@@ -771,8 +833,8 @@ function composerDraftScopeKey(sessionId: string, routeDraft: string | null): st
 
 export default function SessionScreen() {
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { colors, mode } = useTheme();
+  const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
     deviceId?: string;
@@ -789,6 +851,9 @@ export default function SessionScreen() {
     visualSearchQuery?: string;
   }>();
   const sessionId = readRouteParam(params.sessionId) ?? '';
+  const shareSelectionActive = useShareSelectionActive(sessionId);
+  const shareSelectionCount = useShareSelectionCount();
+  const shareSelectionRevision = useShareSelectionRevision();
   const deviceId = readRouteParam(params.deviceId) ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
   // 回撤 preview/commit 的「请求代际」。每次发起 +1、每次切 session 也 +1(见下方 reset effect),
   // 异步返回后代际已变则丢弃。比只比较 sessionId 更严谨:仅比 sessionId 无法失效「A 发起 → 切到 B →
@@ -860,6 +925,25 @@ export default function SessionScreen() {
     composerDocumentRef.current = nextScope.document;
     draftRef.current = nextDraft;
   }
+  const conversationShareWebViewRef = useRef<ConversationShareWebViewHandle | null>(null);
+  const topOverlayRef = useRef<View>(null);
+  const bottomOverlayRef = useRef<View>(null);
+  const visibleShareableMessageIdsReaderRef = useRef<(
+    (viewport: ShareableMessageViewport) => Promise<readonly string[]>
+  ) | null>(null);
+  const screenshotBlockedByOverlayRef = useRef(false);
+  const [messageBlockingOverlay, setMessageBlockingOverlay] = useState(false);
+  const shareSelectionActiveRef = useRef(shareSelectionActive);
+  shareSelectionActiveRef.current = shareSelectionActive;
+  const shareSelectionRevisionRef = useRef(shareSelectionRevision);
+  shareSelectionRevisionRef.current = shareSelectionRevision;
+  const lastScreenshotActivationAtRef = useRef(0);
+  const shareOperationSeqRef = useRef(0);
+  const [conversationShareBusy, setConversationShareBusy] = useState(false);
+  const [shareSelectionTriggeredByScreenshot, setShareSelectionTriggeredByScreenshot] = useState(false);
+  const [shareCharacterSrc, setShareCharacterSrc] = useState<string | null>(null);
+  const [shareLogoSrc, setShareLogoSrc] = useState<string | null>(null);
+  const shareLogoModeRef = useRef<string | null>(null);
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
@@ -870,6 +954,97 @@ export default function SessionScreen() {
     appendQuote(sessionId, { text: truncateQuoteText(quote.text) });
     requestAnimationFrame(() => composerInputRef.current?.focus());
   }, [sessionId]);
+  const handleVisibleShareableMessageIdsReaderChange = useCallback((
+    reader: ((viewport: ShareableMessageViewport) => Promise<readonly string[]>) | null,
+  ) => {
+    visibleShareableMessageIdsReaderRef.current = reader;
+  }, []);
+  const handleMessageBlockingOverlayChange = useCallback((blocked: boolean) => {
+    setMessageBlockingOverlay(blocked);
+  }, []);
+  useEffect(() => {
+    shareOperationSeqRef.current += 1;
+    lastScreenshotActivationAtRef.current = 0;
+    setConversationShareBusy(false);
+    setShareSelectionTriggeredByScreenshot(false);
+    shareSelectionStore.exitIfNotSession(sessionId);
+    return () => {
+      shareOperationSeqRef.current += 1;
+      if (shareSelectionStore.getActiveSessionId() === sessionId) shareSelectionStore.exit();
+    };
+  }, [sessionId]);
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'ios' || !sessionId) return undefined;
+      let cancelled = false;
+      const subscription = addScreenshotListener(() => {
+        if (
+          AppState.currentState !== 'active'
+          || shareSelectionActiveRef.current
+          || screenshotBlockedByOverlayRef.current
+        ) return;
+        const now = Date.now();
+        if (now - lastScreenshotActivationAtRef.current < SCREENSHOT_SHARE_ACTIVATION_DEBOUNCE_MS) return;
+        lastScreenshotActivationAtRef.current = now;
+        void (async () => {
+          const [topOverlayFrame, bottomOverlayFrame] = await Promise.all([
+            measureViewInWindow(topOverlayRef.current),
+            measureViewInWindow(bottomOverlayRef.current),
+          ]);
+          if (
+            cancelled
+            || AppState.currentState !== 'active'
+            || shareSelectionActiveRef.current
+            || screenshotBlockedByOverlayRef.current
+          ) return;
+          const reader = visibleShareableMessageIdsReaderRef.current;
+          if (!topOverlayFrame || !bottomOverlayFrame || !reader) return;
+          const measuredClientIds = await reader({
+            visibleBottom: bottomOverlayFrame.y,
+            visibleTop: topOverlayFrame.y + topOverlayFrame.height,
+          });
+          if (
+            cancelled
+            || AppState.currentState !== 'active'
+            || shareSelectionActiveRef.current
+            || screenshotBlockedByOverlayRef.current
+          ) return;
+          const visibleClientIds = [...new Set(measuredClientIds)];
+          if (visibleClientIds.length === 0) return;
+          Keyboard.dismiss();
+          setShareSelectionTriggeredByScreenshot(true);
+          shareSelectionStore.enter(sessionId);
+          shareSelectionStore.setSelection(visibleClientIds);
+        })();
+      });
+      return () => {
+        cancelled = true;
+        subscription?.remove();
+      };
+    }, [sessionId]),
+  );
+  useEffect(() => {
+    if (!shareSelectionActive) return undefined;
+    let cancelled = false;
+    const logoNeedsLoad = shareLogoModeRef.current !== mode || !shareLogoSrc;
+    void Promise.all([
+      shareCharacterSrc
+        ? Promise.resolve(shareCharacterSrc)
+        : bundledAssetToDataUri(shareCharacterAsset, 'image/jpeg'),
+      logoNeedsLoad
+        ? bundledAssetToDataUri(
+            mode === 'dark' ? shareLogoDarkAsset : shareLogoLightAsset,
+            'image/png',
+          )
+        : Promise.resolve(shareLogoSrc),
+    ]).then(([character, logo]) => {
+      if (cancelled) return;
+      shareLogoModeRef.current = mode;
+      setShareCharacterSrc(character);
+      setShareLogoSrc(logo);
+    });
+    return () => { cancelled = true; };
+  }, [mode, shareCharacterSrc, shareLogoSrc, shareSelectionActive]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
@@ -5418,6 +5593,148 @@ export default function SessionScreen() {
     () => (pendingSendItems.length === 0 ? renderItems : [...renderItems, ...pendingSendItems]),
     [pendingSendItems, renderItems],
   );
+  const shareExpandableBlockIds = useMemo(
+    () => (shareSelectionActive ? collectConversationShareBlockIds(messageListItems) : []),
+    [messageListItems, shareSelectionActive],
+  );
+  const shareExpansionSnapshot = useFoldableExpandedBlocksSnapshot(shareExpandableBlockIds);
+  const shareMessages = useMemo(() => {
+    if (!shareSelectionActive) return [];
+    return collectConversationShareMessages(
+      messageListItems,
+      isFoldableBlockExpanded,
+      (origin) => origin.scheduleName
+        ? t('message.renderer.automationOriginNamed', { name: origin.scheduleName })
+        : t('message.renderer.automationOrigin'),
+    );
+  }, [
+    i18nInstance.language,
+    messageListItems,
+    shareExpansionSnapshot,
+    shareSelectionActive,
+  ]);
+  const shareMessageById = useMemo(
+    () => new Map(shareMessages.map((message) => [message.clientId, message])),
+    [shareMessages],
+  );
+  const allShareableIds = useMemo(
+    () => shareMessages.map((message) => message.clientId),
+    [shareMessages],
+  );
+  useEffect(() => {
+    if (!shareSelectionActive) return;
+    const exposedSelectedIds = shareSelectionStore.getSelectedIdsInOrder(allShareableIds);
+    if (exposedSelectedIds.length === shareSelectionStore.count()) return;
+    shareSelectionStore.setSelection(exposedSelectedIds);
+  }, [allShareableIds, shareSelectionActive]);
+  const selectedShareMessages = useMemo(() => {
+    if (!shareSelectionActive) return [];
+    return shareSelectionStore
+      .getSelectedIdsInOrder(allShareableIds)
+      .map((clientId) => shareMessageById.get(clientId))
+      .filter((message): message is ConversationShareMessage => message !== undefined);
+  }, [allShareableIds, shareMessageById, shareSelectionActive, shareSelectionRevision]);
+  const conversationShareHtml = useMemo(() => {
+    if (!shareSelectionActive || selectedShareMessages.length === 0) return '';
+    return buildConversationShareHtml({
+      allShareableIds,
+      characterSrc: shareCharacterSrc ?? undefined,
+      colors: {
+        background: colors.surface,
+        border: colors.border,
+        codeSurface: colors.chatCodeSurface,
+        inlineCode: colors.chatInlineCodeText,
+        surfaceChip: colors.surfaceChip,
+        surfaceElevated: colors.surfaceElevated,
+        syntax: {
+          comment: colors.syntaxComment,
+          function: colors.syntaxFunction,
+          keyword: colors.syntaxKeyword,
+          number: colors.syntaxNumber,
+          property: colors.syntaxProperty,
+          string: colors.syntaxString,
+        },
+        textPrimary: colors.textPrimary,
+        textSecondary: colors.textSecondary,
+        textTertiary: colors.textTertiary,
+        dark: mode === 'dark',
+      },
+      contentWidth: windowDimensions.width,
+      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
+      selectedMessages: selectedShareMessages,
+    });
+  }, [
+    allShareableIds,
+    colors,
+    mode,
+    selectedShareMessages,
+    shareCharacterSrc,
+    shareLogoSrc,
+    shareSelectionActive,
+    windowDimensions.width,
+  ]);
+  const enterShareSelection = useCallback((clientId: string) => {
+    Keyboard.dismiss();
+    setShareSelectionTriggeredByScreenshot(false);
+    shareSelectionStore.enter(sessionId, clientId);
+  }, [sessionId]);
+  const cancelShareSelection = useCallback(() => {
+    shareOperationSeqRef.current += 1;
+    setConversationShareBusy(false);
+    setShareSelectionTriggeredByScreenshot(false);
+    shareSelectionStore.exit();
+  }, []);
+  const exportConversationSharePng = useCallback(async (scale = 2) => {
+    if (!conversationShareHtml) throw new Error('conversation share html is empty');
+    const nativeBase64 = await renderConversationShareHtmlToPng({
+      html: conversationShareHtml,
+      scale,
+      width: windowDimensions.width,
+    });
+    if (nativeBase64) return nativeBase64;
+    const webView = conversationShareWebViewRef.current;
+    if (!webView) throw new Error('conversation share renderer is unavailable');
+    return webView.exportPng({ scale });
+  }, [conversationShareHtml, windowDimensions.width]);
+  const shareSelectedConversation = useCallback(async () => {
+    if (
+      conversationShareBusy
+      || !shareSelectionActive
+      || selectedShareMessages.length === 0
+    ) return;
+    const operationSeq = shareOperationSeqRef.current + 1;
+    shareOperationSeqRef.current = operationSeq;
+    const operationSelectionRevision = shareSelectionRevisionRef.current;
+    const isShareOperationActive = () =>
+      shareOperationSeqRef.current === operationSeq
+      && shareSelectionActiveRef.current
+      && shareSelectionRevisionRef.current === operationSelectionRevision;
+    let localUri: string | null = null;
+    setConversationShareBusy(true);
+    try {
+      if (!isShareOperationActive()) return;
+      const base64 = await exportConversationSharePng();
+      if (!isShareOperationActive()) return;
+      localUri = await writeConversationSharePngTemp(base64);
+      if (!isShareOperationActive()) return;
+      if (!localUri) throw new Error(t('session.screen.shareNoLocalImage'));
+      const sharing = await import('expo-sharing');
+      if (!isShareOperationActive()) return;
+      await sharing.shareAsync(localUri, { mimeType: 'image/png' });
+      if (!isShareOperationActive()) return;
+      setShareSelectionTriggeredByScreenshot(false);
+      shareSelectionStore.exit();
+    } catch (error) {
+      if (!isShareOperationActive()) return;
+      console.warn('[conversation-share] failed to generate or open share image', error);
+      Alert.alert(t('session.screen.shareFailedTitle'), t('session.screen.shareImageFailed'));
+    } finally {
+      if (localUri && Platform.OS !== 'android') {
+        await deleteConversationSharePngTemp(localUri);
+      }
+      if (shareOperationSeqRef.current === operationSeq) setConversationShareBusy(false);
+    }
+  }, [conversationShareBusy, conversationShareHtml, exportConversationSharePng, selectedShareMessages.length, shareSelectionActive, shareSelectionRevision, t]);
   // 解禁唤醒:会话参数就绪(fresh 元数据到达 / 新建管线收口)的那一帧重新 pump,把
   // 未就绪期间攒下的待发消息按 FIFO 发出去。渲染态判据与 outboxDispatchBlockedNow
   // 同构(那个读 store,供异步循环用;这个供 effect 依赖比较用)。
@@ -7388,6 +7705,18 @@ export default function SessionScreen() {
   // chip 长按菜单(浮动面板,ContextSheet/模型选择面板同款):target 即开关。
   const [chipMenuTarget, setChipMenuTarget] = useState<ChatFilePathTarget | null>(null);
   const [chipShareBusy, setChipShareBusy] = useState(false);
+  screenshotBlockedByOverlayRef.current = Boolean(
+    settingsOpen
+    || searchOpen
+    || (sessionTreeOpen && currentSession?.agentKind === 'pi')
+    || contextSheetOpen
+    || chipMenuTarget !== null
+    || (modelSheetOpen && canUseComposer)
+    || (permissionSheetOpen && canUseComposer)
+    || composerPreviewAttachmentId !== null
+    || sessionListDrawerOverlayMounted
+    || messageBlockingOverlay
+  );
 
   // 聊天正文文件 chip 上下文(消息树内 inline chip 经 context 消费,不走多层 prop):
   // stat 走被控端 fs:stat-path(失败由 verdict 层归为 unknown 乐观点亮)。
@@ -7960,7 +8289,7 @@ export default function SessionScreen() {
         keyboardVerticalOffset={nativeShellLayout.keyboardVerticalOffset}
         style={styles.keyboard}
       >
-        <View onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">
+        <View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">
           <TranslucentBackdrop />
           <View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>
             <SessionHeaderBar
@@ -8364,8 +8693,13 @@ export default function SessionScreen() {
                     onForkMessage={collaborationReadOnlyReason ? undefined : forkAtMessage}
                     onLoadEarlier={loadEarlierMessages}
                     onOpenForkOrigin={forkOrigin ? openForkOrigin : undefined}
+                    onBlockingOverlayChange={handleMessageBlockingOverlayChange}
                     onOpenSessionLink={openSessionLink}
                     onPreviewRewind={collaborationReadOnlyReason ? undefined : previewRewindAtMessage}
+                    onEnterShareSelection={enterShareSelection}
+                    onVisibleShareableMessageIdsReaderChange={handleVisibleShareableMessageIdsReaderChange}
+                    shareSelectionActive={shareSelectionActive}
+                    shareSelectionBusy={conversationShareBusy}
                     // chat-text-quote:选中消息文字 → 引用进本会话草稿(截断后写
                     // chatQuoteStore,composer 胶囊即时刷新)。Composer 不可用态不启用;
                     // 回调已 memoize,保持 SelectionQuoteContext value 稳定。
@@ -8417,10 +8751,12 @@ export default function SessionScreen() {
         </View>
 
         <View
+          ref={bottomOverlayRef}
           onLayout={handleBottomOverlayLayout}
           pointerEvents="box-none"
           style={[
             styles.sessionBottomLayer,
+            shareSelectionActive && { overflow: 'visible' },
             { bottom: nativeShellLayout.keyboardBottomInset },
           ]}
           testID="session.bottomLayer"
@@ -8440,7 +8776,7 @@ export default function SessionScreen() {
             ]}
             testID="session.bottomContent"
           >
-          {canUseComposer && composerTrigger.kind === 'slash' ? (
+          {!shareSelectionActive && canUseComposer && composerTrigger.kind === 'slash' ? (
             <ComposerPaletteFrame
               emptyText={t('session.common.noMatchingCommands')}
               errorText={slashPaletteError}
@@ -8467,7 +8803,7 @@ export default function SessionScreen() {
             </ComposerPaletteFrame>
           ) : null}
 
-          {canUseComposer && composerTrigger.kind === 'at' ? (
+          {!shareSelectionActive && canUseComposer && composerTrigger.kind === 'at' ? (
             <ComposerPaletteFrame
               emptyText={atResourcesTruncated ? t('session.common.keepTypingToNarrow') : t('session.common.noMatchingResources')}
               errorText={atPaletteError}
@@ -8493,7 +8829,7 @@ export default function SessionScreen() {
             在等什么、能取消,但不吃掉 composer —— 否则用户既处理不了这张卡又发不
             出消息。高度按 palette 量级收紧,内容超出走内部滚动。
           */}
-          {sessionOperationLayout.pendingInteractionPlacement === 'above-composer' ? (
+          {!shareSelectionActive && sessionOperationLayout.pendingInteractionPlacement === 'above-composer' ? (
             <View
               style={[
                 styles.pendingInteractionSurface,
@@ -8522,7 +8858,7 @@ export default function SessionScreen() {
             </View>
           ) : null}
 
-          {sessionOperationLayout.composerSlot === 'pending-interaction' ? (
+          {shareSelectionActive ? null : sessionOperationLayout.composerSlot === 'pending-interaction' ? (
             <View
               style={[
                 styles.pendingInteractionSurface,
@@ -8791,9 +9127,26 @@ export default function SessionScreen() {
               </View>
             </>
         )}
+          {shareSelectionActive ? (
+            <ShareSelectionBar
+              busy={conversationShareBusy}
+              count={shareSelectionCount}
+              shareableIds={allShareableIds}
+              screenshotTriggered={shareSelectionTriggeredByScreenshot}
+              onCancel={cancelShareSelection}
+              onShare={() => void shareSelectedConversation()}
+            />
+          ) : null}
           </View>
         </View>
       </KeyboardAvoidingView>
+      {shareSelectionActive && conversationShareHtml && !conversationShareNativeRendererAvailable ? (
+        <ConversationShareWebView
+          html={conversationShareHtml}
+          key={conversationShareHtml}
+          ref={conversationShareWebViewRef}
+        />
+      ) : null}
       {wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (
         // 树内 overlay(zIndex 40)盖住顶部 chrome 与底部 composer;树内层叠而非 Modal 的
         // 取舍见 SessionListDrawer 头注释。退出宽屏时也保留到 onClosed,否则退场期旋转/

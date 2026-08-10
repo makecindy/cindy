@@ -33,6 +33,13 @@ vi.mock('@/features/learn/LearnStatusCard', () => ({
   LearnStatusCard: () => null,
 }));
 
+// This suite exercises only the auto-resume rows. Keep the Review card's
+// Markdown dependency out of the fixture so its i18n/bootstrap imports do not
+// leak into this focused component test.
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: () => null,
+}));
+
 import { SystemCard } from '@/components/chat/SystemCard';
 
 afterEach(() => {

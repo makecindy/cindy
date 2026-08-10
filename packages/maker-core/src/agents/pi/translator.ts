@@ -16,7 +16,8 @@
  */
 
 import type { Logger } from '../../interfaces/logger.js';
-import type { AgentEvent, UsageSnapshot } from '../../types/index.js';
+import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
+import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
@@ -88,6 +89,14 @@ export interface PiTranslateContext {
    * 用来算增量,避免同一批用量被反复加进 turn 记账。与其它 turn 计数器同点(agent_start)清空。
    */
   delegatedUsage: Map<string, PiSubagentUsage>;
+  /**
+   * Tool calls explicitly identified as Cindy's PI Subagent extension.
+   *
+   * Preserve the display title across the start/update/end event split so the
+   * terminal update remains self-describing even for consumers that do not
+   * reduce it into the preceding live-card state.
+   */
+  subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -112,6 +121,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     generationHeartbeatTimer: null,
     generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
+    subagentToolCalls: new Map(),
   };
 }
 
@@ -128,6 +138,7 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
 export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.isStreaming = false;
+  ctx.subagentToolCalls.clear();
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -293,6 +304,7 @@ export function translatePiEvent(
       // 与其它 turn 计数器同点清:新 turn 的委派用量不该跟上一 turn 的累计值作差,
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
+      ctx.subagentToolCalls.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -359,16 +371,39 @@ export function translatePiEvent(
     }
 
     case 'tool_execution_start': {
+      const toolUseId = String(event.toolCallId ?? '');
+      const toolName = String(event.toolName ?? 'tool');
+      const toolArgs = (event.args as Record<string, unknown>) ?? {};
       queue.push({
         type: 'tool_use',
         data: {
-          toolUseId: String(event.toolCallId ?? ''),
-          toolName: String(event.toolName ?? 'tool'),
-          input: (event.args as Record<string, unknown>) ?? {},
+          toolUseId,
+          toolName,
+          input: toolArgs,
         },
         source: 'pi',
       });
-      pushStatus(queue, ctx, `Running ${String(event.toolName ?? 'tool')}…`, true);
+      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId) {
+        const rawTitle = toolArgs.agent;
+        const title = typeof rawTitle === 'string' && rawTitle.trim()
+          ? rawTitle.trim().slice(0, 96)
+          : undefined;
+        const update: AgentTaskUpdateEventData = {
+          provider: 'pi',
+          taskId: toolUseId,
+          parentToolUseId: toolUseId,
+          status: 'running',
+          ...(title ? { title } : {}),
+          subagentObservation: {
+            kind: 'spawn',
+            logicalSubagentId: toolUseId,
+            parentToolUseId: toolUseId,
+          },
+        };
+        ctx.subagentToolCalls.set(toolUseId, update);
+        queue.push({ type: 'agent_task_update', data: update, source: 'pi' });
+      }
+      pushStatus(queue, ctx, `Running ${toolName}…`, true);
       return;
     }
 
@@ -378,6 +413,13 @@ export function translatePiEvent(
       // 其它工具的流式中间结果照旧忽略 —— 载荷不带标记时 parse 返回 null。
       const progress = parsePiSubagentProgress(event.partialResult);
       if (progress) {
+        const previousUpdate = ctx.subagentToolCalls.get(progress.update.taskId);
+        if (previousUpdate) {
+          ctx.subagentToolCalls.set(progress.update.taskId, {
+            ...previousUpdate,
+            ...progress.update,
+          });
+        }
         // 委派用量并进本 turn 的记账。子代理是独立 pi 进程,它的请求不走父进程的 usage 流,
         // 不在这里显式并进来,done.data.usage 与 register.ts 持久化的 session token/cost
         // 就会漏掉全部子代理花费(review)。
@@ -390,9 +432,10 @@ export function translatePiEvent(
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');
       const isError = event.isError === true;
+      const fullText = toolResultFullText(event.result);
       queue.push({
         type: 'tool_result_full',
-        data: { toolUseId, fullText: toolResultFullText(event.result), isError },
+        data: { toolUseId, fullText, isError },
         source: 'pi',
       });
       queue.push({
@@ -400,6 +443,33 @@ export function translatePiEvent(
         data: { summary: isError ? 'failed' : 'done', toolUseIds: [toolUseId] },
         source: 'pi',
       });
+      const subagentToolCall = ctx.subagentToolCalls.get(toolUseId);
+      if (subagentToolCall) {
+        ctx.subagentToolCalls.delete(toolUseId);
+        // Progress is the authoritative child lifecycle. A successful batch
+        // tool result can still contain failed children, while cancellation
+        // may finish the wrapper with isError=true after the child stopped.
+        // Only a still-running child is completed/failed by the wrapper frame.
+        const status = subagentToolCall.status === 'running'
+          ? (isError ? 'failed' : 'completed')
+          : subagentToolCall.status;
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            ...subagentToolCall,
+            provider: 'pi',
+            taskId: toolUseId,
+            parentToolUseId: toolUseId,
+            status,
+            subagentObservation: {
+              kind: 'terminal',
+              logicalSubagentId: toolUseId,
+              parentToolUseId: toolUseId,
+            },
+          },
+          source: 'pi',
+        });
+      }
       return;
     }
 
@@ -495,6 +565,13 @@ export function translatePiEvent(
       });
       if (result && typeof result.estimatedTokensAfter === 'number') {
         ctx.contextTokens = result.estimatedTokensAfter;
+      }
+      // #1933 review:手动压缩事件必须闭环。compaction_start 已把 isRunning 置 true,
+      // 若不收口,renderer 圆环会永久卡 running、新 contextTokens 也送不回去。
+      // 仅 manual 收口:auto 压缩发生在活跃 turn 内(turn 结束经 agent_settled 自然收口),
+      // 且若压缩期间用户已开始新 turn(ctx.isStreaming)也不能收口,否则会误杀新 turn。
+      if (event.reason === 'manual' && !ctx.isStreaming) {
+        pushStatus(queue, ctx, 'Done', false);
       }
       return;
     }

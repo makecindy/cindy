@@ -1893,6 +1893,58 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     });
   });
 
+  it('recovers a custom install when its source only differs by packer-excluded artifacts', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const sourcePluginDir = path.join(dir, 'plugins', 'alpha');
+    fs.mkdirSync(path.join(sourcePluginDir, '.git'));
+    fs.mkdirSync(path.join(sourcePluginDir, 'node_modules', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(sourcePluginDir, '.git', 'HEAD'), 'ref: refs/heads/main');
+    fs.writeFileSync(path.join(sourcePluginDir, '.env'), 'TOKEN=not-packaged');
+    fs.writeFileSync(path.join(sourcePluginDir, 'node_modules', 'dep', 'index.js'), 'ignored');
+    fs.writeFileSync(path.join(sourcePluginDir, 'previous.cindy'), 'ignored');
+
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.mkdirSync(installedDir, { recursive: true });
+    fs.writeFileSync(path.join(installedDir, 'ghost.json'), JSON.stringify(ghostManifest('alpha')));
+    fs.writeFileSync(path.join(installedDir, 'main.js'), '// entry');
+    fs.writeFileSync(path.join(installedDir, '.disabled'), '');
+    runtime.ghosts = [{ manifest: ghostManifest('alpha'), dir: installedDir, enabled: false }];
+
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    h.ledger.upsertInstallation({
+      pluginId,
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha')),
+    });
+    h.ledger.markRemoved('alpha', 'user-1');
+
+    await h.service.snapshot();
+    const proposal = h.service.recoveryStatus().proposal;
+    expect(proposal?.candidates).toEqual([
+      expect.objectContaining({ pluginId, ghostId: 'alpha', sourceType: 'local-market' }),
+    ]);
+
+    const result = await h.service.resolveRecovery(proposal!.proposalId, 'restore');
+    expect(result).toMatchObject({ restoredCount: 1, reviewCount: 0 });
+    expect(h.ledger.installationForGhost('alpha')).toMatchObject({
+      installed: true,
+      source: 'local-market',
+    });
+    expect(fs.existsSync(path.join(installedDir, '.disabled'))).toBe(true);
+  });
+
   it('adds a local source only through the native directory picker', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

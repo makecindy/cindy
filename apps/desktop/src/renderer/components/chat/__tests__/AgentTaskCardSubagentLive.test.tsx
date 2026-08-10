@@ -30,6 +30,10 @@ vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
   openBackgroundTasksTab: vi.fn(),
 }));
 
+vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
+  openSubagentsTab: vi.fn(),
+}));
+
 vi.mock('@/features/right-sidebar/plugins/background-tasks/listSessionTasks', () => ({
   extractWorkflowTaskId: () => undefined,
 }));
@@ -101,7 +105,7 @@ describe('AgentTaskCard codex subagent live state', () => {
   });
 
   it('keeps the localized receipt for history replay (no live update)', () => {
-    // 历史回放拿不到 live update(agent_task_update 不落库),回执是唯一可读摘要。
+    // 聊天卡的历史回放不重建 live update；持久详情在独立 Subagent 面板。
     const { container } = render(<AgentTaskCard toolCall={spawnToolCall()} result="/root/scout" />);
     expect(container.textContent ?? '').toContain('chat.agentTask.subagentStarted');
   });

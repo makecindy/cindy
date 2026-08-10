@@ -57,7 +57,12 @@ import type { AgentRuntimeConfig } from '../interfaces/runtime-config.js';
 import type { Logger } from '../interfaces/logger.js';
 import type { McpProvider } from '../interfaces/mcp-provider.js';
 import type { MakerMemoryManager } from '../memory/manager.js';
-import type { CodexModelListItem } from './codex/app-server/protocol.js';
+import type {
+  CodexModelListItem,
+  DynamicToolCallParams,
+  DynamicToolCallResponse,
+  DynamicToolSpec,
+} from './codex/app-server/protocol.js';
 import type {
   ScanAtResourcesOptions,
   ScanAtResourcesResult,
@@ -97,13 +102,28 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
+export interface CodexHostDynamicToolContext {
+  sessionId?: string;
+  workingDir: string;
+  remoteHostId?: string;
+  model: string;
+  providerId?: string | null;
+  vendorOptions: Record<string, unknown>;
+}
+
 /**
- * Metadata for an MCP tool approval decision.
- *
- * Codex fills it from the elicitation `_meta`; Claude fills it by splitting the
- * SDK tool name (`mcp__<server>__<tool>`) and passing the tool input verbatim.
- * Both therefore hand the host the same shape, so one policy answers for both.
+ * Host-owned dynamic tools that must remain directly callable even when the
+ * Codex runtime defers ordinary MCP tool discovery.
  */
+export interface CodexHostDynamicToolProvider {
+  listTools(context: CodexHostDynamicToolContext): readonly DynamicToolSpec[];
+  callTool(
+    params: DynamicToolCallParams,
+    context: CodexHostDynamicToolContext,
+  ): Promise<DynamicToolCallResponse | undefined>;
+}
+
+/** Metadata Codex attaches to an MCP tool approval elicitation. */
 export interface McpToolApprovalContext {
   serverName: string;
   /** Top-level MCP tool name, for example `list_tools` or `call_tool`. */
@@ -116,6 +136,12 @@ export type McpToolApprovalPolicy =
   | 'auto-approve'
   | 'prompt'
   | 'prompt-each-time';
+
+/** Host-owned copy for an MCP permission request that needs a specific risk disclosure. */
+export interface McpToolApprovalPresentation {
+  title?: string;
+  description?: string;
+}
 
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
@@ -495,7 +521,7 @@ export interface AgentDeps {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
       /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
-      hostPurpose?: 'control-plane';
+      hostPurpose?: 'control-plane' | 'review';
     },
   ) => Promise<CodexExtraSpawnConfig>;
 
@@ -645,6 +671,39 @@ export interface AgentDeps {
    * 缺省 / undefined → 走原 dispatchInteraction (弹 UI), 行为与改动前一致。
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+
+  /**
+   * Optional host-owned title and description for an MCP approval card.
+   *
+   * This stays separate from the policy mode: a call can remain
+   * `prompt-each-time` while the Host explains a risk the generic MCP client
+   * cannot infer from the outer `call_tool` envelope.
+   */
+  getMcpToolApprovalPresentation?: (
+    context: McpToolApprovalContext,
+  ) => McpToolApprovalPresentation | undefined;
+
+  /**
+   * Codex-only deterministic tool activation for narrow host capabilities.
+   * Definitions are frozen at thread creation and restored handlers are gated
+   * against the same session-start snapshot.
+   */
+  codexHostDynamicToolProvider?: CodexHostDynamicToolProvider;
+
+  /**
+   * Host-owned shell command policy applied before Codex command approval.
+   * Returning `deny` is an unconditional product guard and therefore wins over
+   * the user's broad Full access permission mode. Returning undefined leaves
+   * the normal Codex approval flow unchanged.
+   *
+   * Product-specific command parsing belongs in the host; maker-core only
+   * carries the decision across the app-server boundary.
+   */
+  getShellCommandPolicy?: (context: {
+    agentKind: 'codex';
+    command: string;
+    cwd?: string;
+  }) => { decision: 'deny'; reason: string } | undefined;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -988,6 +1047,20 @@ export interface StartSessionOptions {
    * 共享 manager 的 enablement 由 host setting 控制，不由 session flag 改写。
    */
   makerMemoryEnabled?: boolean;
+  /**
+   * Host-owned Cindy Review policy. This is not a user permission preset:
+   * adapters must keep the session local, fresh, memory-free and hard
+   * read-only even if a later control request tries to widen permissions.
+   */
+  reviewMode?: true;
+  /**
+   * Exact local files or directories that a host-owned Review may inspect in
+   * addition to workingDir. Adapters must treat files as exact grants and
+   * directories as subtree grants; this is narrower than extraDirs, whose
+   * parent-directory transport semantics are only used to make attachments
+   * visible to the underlying harness.
+   */
+  reviewReadPaths?: string[];
   permissionMode?: PermissionMode;
   /**
    * 计划模式开关（与 permissionMode 正交，见 Capabilities.planMode）。

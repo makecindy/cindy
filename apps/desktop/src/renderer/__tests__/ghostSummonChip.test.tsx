@@ -19,6 +19,7 @@ import '@/i18n';
 import i18n from '@/i18n';
 import { GhostFulfillmentContext, GhostSummonCard } from '@/components/chat/GhostSummonCard';
 import type { GhostDirectiveDisplay } from '@/cindy-brain/ghostCommand';
+import type { HostCapabilityDirectiveDisplay } from '@/cindy-brain/hostCapabilityInvocation';
 
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
   useInstalledGhosts: () => [],
@@ -36,6 +37,15 @@ const mentionDirective: GhostDirectiveDisplay = {
   kind: 'mention',
   ghosts: [{ name: 'XD Feishu', ghostId: 'xd-feishu' }],
   raw: '[插件提示] 消息提及了插件 XD Feishu(id: xd-feishu)',
+};
+
+const hostCapabilityDirective: HostCapabilityDirectiveDisplay = {
+  kind: 'host-capability',
+  capability: 'ios-simulator',
+  route: 'cindy_ios_simulator',
+  name: 'iOS 模拟器',
+  ghostId: 'ios-simulator',
+  raw: '[Cindy Host 能力] iOS 模拟器',
 };
 
 /** 模拟 prefers-reduced-motion 匹配结果(jsdom 默认无 matchMedia)。 */
@@ -86,6 +96,20 @@ describe('GhostSummonCard(chip 形态)', () => {
 
     render(<GhostSummonCard directive={commandDirective} messageClientId="m2" />);
     expect(screen.getByText('已完成')).toBeTruthy();
+  });
+
+  it('renders Host capability selection as the same annotation without claiming ghost_call', () => {
+    const { container } = render(<GhostSummonCard directive={hostCapabilityDirective} running />);
+    expect(screen.getByText('iOS 模拟器')).toBeTruthy();
+    expect(screen.getByText('已选择')).toBeTruthy();
+    expect(screen.queryByText('调用中…')).toBeNull();
+    expect(container.querySelector('.animate-\\[spin_2\\.4s_linear_infinite\\]')).toBeNull();
+    expect(container.querySelector('svg.lucide-check')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('发送给 Agent 的 Cindy 能力路由')).toBeTruthy();
+    expect(screen.getByText('cindy_ios_simulator')).toBeTruthy();
+    expect(screen.getByText(/不要通过 ghost_call 调用/)).toBeTruthy();
   });
 
   it('mounts historic messages directly on the closed static frame', () => {

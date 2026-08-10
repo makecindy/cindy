@@ -67,6 +67,10 @@ export interface RoutableMaker {
   getContextUsage: FullMaker['getContextUsage'];
   setExtraDirs: FullMaker['setExtraDirs'];
   closeSession: FullMaker['closeSession'];
+  // 手动压缩(pi 原生 compact,capability-aware 的 maker:compact-session):
+  // 上下文环 / 会话菜单对 device-link 远程 pi 会话也要隧道到被控端执行
+  // (压缩的是被控端的会话上下文,控制端本机无该 live 会话,固定调本机必 null 静默失败)。
+  compactSession: FullMaker['compactSession'];
   enableOrca: FullMaker['enableOrca'];
   disableOrca: FullMaker['disableOrca'];
   input: Pick<
@@ -163,6 +167,12 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     getContextUsage: t('maker:get-context-usage') as FullMaker['getContextUsage'],
     setExtraDirs: t('maker:set-extra-dirs') as FullMaker['setExtraDirs'],
     closeSession: t('maker:close-session') as FullMaker['closeSession'],
+    compactSession: ((sessionId, instructions) =>
+      invokeRemote(
+        deviceId,
+        'maker:compact-session',
+        instructions === undefined ? [sessionId] : [sessionId, instructions],
+      )) as FullMaker['compactSession'],
     enableOrca: t('maker:session:enable-orca') as FullMaker['enableOrca'],
     disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
     input: {

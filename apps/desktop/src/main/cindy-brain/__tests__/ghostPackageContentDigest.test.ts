@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ghostPackageContentDigest,
   installedGhostContentDigest,
+  packableGhostSourceContentDigest,
   type GhostPackageContentEntry,
 } from '../ghostPackageContentDigest';
 
@@ -62,6 +63,29 @@ describe('installedGhostContentDigest', () => {
 
     fs.writeFileSync(path.join(root, 'main.js'), 'after');
     expect(await installedGhostContentDigest(root)).not.toBe(before);
+  });
+
+  it('matches installed package bytes while ignoring entries excluded by the packer', async () => {
+    const source = tempRoot();
+    const installed = tempRoot();
+    for (const root of [source, installed]) {
+      fs.mkdirSync(path.join(root, 'assets'));
+      fs.writeFileSync(path.join(root, 'ghost.json'), '{}');
+      fs.writeFileSync(path.join(root, 'main.js'), 'installed bytes');
+      fs.writeFileSync(path.join(root, 'assets', 'icon.txt'), 'icon');
+    }
+    fs.mkdirSync(path.join(source, '.git'));
+    fs.mkdirSync(path.join(source, 'node_modules', 'dep'), { recursive: true });
+    fs.mkdirSync(path.join(source, 'assets', '.cache'));
+    fs.writeFileSync(path.join(source, '.git', 'HEAD'), 'ref: refs/heads/main');
+    fs.writeFileSync(path.join(source, '.env'), 'TOKEN=not-packaged');
+    fs.writeFileSync(path.join(source, 'node_modules', 'dep', 'index.js'), 'ignored');
+    fs.writeFileSync(path.join(source, 'assets', '.cache', 'icon.bin'), 'ignored');
+    fs.writeFileSync(path.join(source, 'previous.cindy'), 'ignored');
+
+    expect(await packableGhostSourceContentDigest(source)).toBe(
+      await installedGhostContentDigest(installed),
+    );
   });
 
   it('fails closed when a package file is hard-linked', async () => {

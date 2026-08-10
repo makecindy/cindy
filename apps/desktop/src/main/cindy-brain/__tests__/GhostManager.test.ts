@@ -83,11 +83,11 @@ async function makeCindy(
   return out;
 }
 
-async function expectRejection(
-  result: Awaited<ReturnType<GhostManager['install']>>,
-  code: string,
-): Promise<void> {
-  expect('rejection' in result, JSON.stringify(result)).toBe(true);
+async function expectRejection(result: unknown, code: string): Promise<void> {
+  expect(
+    typeof result === 'object' && result !== null && 'rejection' in result,
+    JSON.stringify(result),
+  ).toBe(true);
   expect((result as { rejection: { code: string } }).rejection.code).toBe(code);
 }
 
@@ -636,6 +636,28 @@ describe('GhostManager · inspect(只验不装)', () => {
     await fs.promises.writeFile(bad, 'nope');
     const result = await manager.inspect(bad);
     expect((result as { rejection: { code: string } }).rejection.code).toBe('file-invalid');
+  });
+
+  it('未来 schema 或未知字符串 capability → 插件合法但当前 Host 不支持', async () => {
+    const futureSchema = await makeCindy('future-schema.cindy', {
+      ...goodManifest(),
+      schemaVersion: 3,
+    });
+    await expectRejection(await manager.inspect(futureSchema), 'host-unsupported');
+
+    const futureCapability = await makeCindy('future-capability.cindy', {
+      ...goodManifest(),
+      slots: ['tool', 'future-host-capability'],
+    });
+    await expectRejection(await manager.inspect(futureCapability), 'host-unsupported');
+  });
+
+  it('slot 形状畸形仍按非法文件拒绝，友好提示不放松安全校验', async () => {
+    const malformed = await makeCindy('malformed-slot.cindy', {
+      ...goodManifest(),
+      slots: ['tool', { name: 'future-host-capability' }],
+    });
+    await expectRejection(await manager.inspect(malformed), 'file-invalid');
   });
 });
 

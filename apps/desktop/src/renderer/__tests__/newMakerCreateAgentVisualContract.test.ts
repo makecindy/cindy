@@ -312,7 +312,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(chatInputSource).not.toContain(
       "vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange",
     );
-    expect(chatInputSource).toContain('hasReferenceDirs={onExtraDirsChange !== undefined}');
+    expect(chatInputSource).toContain(
+      'hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}',
+    );
     expect(extraDirsButtonSource).not.toContain("const isCc = agentKind === 'cc'");
     // ×N 角标在 create-agent(新建草稿)也要外显(2026-07-25 用户定稿):引用目录
     // 扩大 agent 可见范围,收起态不允许静默。不得回退到 icon-only 紧凑态。

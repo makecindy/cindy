@@ -9,6 +9,7 @@ import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_ICON_MAX_BYTES,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
+  GHOST_SLOTS,
   GHOST_SKILL_MD_MAX_BYTES,
   ghostLocalePathFor,
   ghostIconMimeType,
@@ -117,6 +118,7 @@ export interface GhostManagerOptions {
 export type InstallRejection =
   | { code: 'source-not-found'; reason: string }
   | { code: 'file-invalid'; reason: string }
+  | { code: 'host-unsupported'; reason: string }
   | { code: 'already-installed'; reason: string }
   | { code: 'not-installed'; reason: string }
   | { code: 'command-conflict'; reason: string }
@@ -147,6 +149,31 @@ async function packageEntriesContentDigest(
     files.push({ path: rel, bytes, sha256: hash.digest('hex') });
   }
   return ghostPackageContentDigest(files);
+}
+
+/**
+ * 区分“包本身坏了”和“包使用了更新版 Cindy 才认识的契约”。
+ *
+ * 这里只收窄识别两个可证明是 Host 版本差异的形状：未来 schemaVersion，或
+ * 字符串形态的未知 capability slot。其它畸形输入仍交给完整 manifest 校验，
+ * 不能借友好提示放松安装安全边界。
+ */
+export function ghostManifestHostUnsupportedReason(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (
+    typeof record.schemaVersion === 'number' &&
+    Number.isInteger(record.schemaVersion) &&
+    record.schemaVersion > 2
+  ) {
+    return `插件使用了更新的清单格式(schemaVersion ${record.schemaVersion})`;
+  }
+  if (!Array.isArray(record.slots)) return null;
+  const supported = new Set<string>([...GHOST_SLOTS, 'model']);
+  const unknown = [
+    ...new Set(record.slots.filter((slot): slot is string => typeof slot === 'string')),
+  ].filter((slot) => !supported.has(slot));
+  return unknown.length > 0 ? `插件需要当前 Cindy 尚不支持的能力:${unknown.join(' / ')}` : null;
 }
 
 /**
@@ -541,6 +568,10 @@ export class GhostManager {
       return {
         rejection: { code: 'file-invalid', reason: `${GHOST_MANIFEST_FILE} 不是合法 JSON` },
       };
+    }
+    const hostUnsupportedReason = ghostManifestHostUnsupportedReason(manifestRaw);
+    if (hostUnsupportedReason) {
+      return { rejection: { code: 'host-unsupported', reason: hostUnsupportedReason } };
     }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {

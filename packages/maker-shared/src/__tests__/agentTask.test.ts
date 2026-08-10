@@ -4,10 +4,12 @@ import {
   buildAgentTaskCardModel,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  isSubagentSpawnToolName,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
   normalizeWorkflowProgressEntries,
+  subagentSpawnResultIndicatesRunning,
   type AgentTaskUpdate,
   type WorkflowProgressEntry,
 } from '../agentTask.js';
@@ -35,6 +37,26 @@ describe('isAgentTaskToolName', () => {
     expect(isAgentTaskToolName('Subagent')).toBe(false);
     expect(isAgentTaskToolName('subagents')).toBe(false);
     expect(isAgentTaskToolName('sub-agent')).toBe(false);
+  });
+});
+
+describe('isSubagentSpawnToolName', () => {
+  it('separates real launches from Codex control cards', () => {
+    for (const name of ['Task', 'Agent', 'subagent', 'collab:spawn', 'collab:spawnAgent']) {
+      expect(isSubagentSpawnToolName(name)).toBe(true);
+    }
+    for (const name of ['collab:wait', 'collab:sendInput', 'collab:resumeAgent', 'collab:closeAgent']) {
+      expect(isSubagentSpawnToolName(name)).toBe(false);
+      expect(isAgentTaskToolName(name)).toBe(true);
+    }
+  });
+});
+
+describe('subagentSpawnResultIndicatesRunning', () => {
+  it('fails closed when a tool result is missing', () => {
+    expect(subagentSpawnResultIndicatesRunning('Agent', undefined)).toBe(false);
+    expect(subagentSpawnResultIndicatesRunning('Task', null)).toBe(false);
+    expect(subagentSpawnResultIndicatesRunning('collab:spawnAgent', undefined)).toBe(false);
   });
 });
 
@@ -329,6 +351,27 @@ describe('buildAgentTaskCardModel', () => {
       toolName: 'Agent',
       toolInput: { run_in_background: true, prompt: 'keep working' },
       result: 'Async agent launched successfully.',
+      update: {
+        provider: 'claude-code',
+        taskId: 'agent-1',
+        parentToolUseId: 'agent-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it('REPRO: recognizes the full async Claude Agent launch receipt', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { run_in_background: true, prompt: 'keep working' },
+      result: [
+        'Async agent launched successfully.',
+        "agentId: agent-1 (internal ID - do not mention to user. Use SendMessage with to: 'agent-1' to continue this agent.)",
+        'The agent is working in the background. You will be notified automatically when it completes.',
+        'Briefly tell the user what you launched and end your response.',
+      ].join('\n'),
       update: {
         provider: 'claude-code',
         taskId: 'agent-1',

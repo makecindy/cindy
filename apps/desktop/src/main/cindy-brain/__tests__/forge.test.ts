@@ -114,9 +114,9 @@ describe('packGhostDir', () => {
     });
     expect(await zip.file('assets/icon.png')!.async('nodebuffer')).toEqual(iconPng);
 
-    expect(JSON.parse(await fs.promises.readFile(path.join(dir, 'ghost.json'), 'utf8'))).not.toHaveProperty(
-      'icon',
-    );
+    expect(
+      JSON.parse(await fs.promises.readFile(path.join(dir, 'ghost.json'), 'utf8')),
+    ).not.toHaveProperty('icon');
     await expect(fs.promises.stat(path.join(dir, 'assets/icon.png'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -132,7 +132,9 @@ describe('packGhostDir', () => {
       'main.js': '// brain',
     });
 
-    await expect(packGhostDir(dir, { iconPng: Buffer.alloc(512 * 1024 + 1) })).resolves.toMatchObject({
+    await expect(
+      packGhostDir(dir, { iconPng: Buffer.alloc(512 * 1024 + 1) }),
+    ).resolves.toMatchObject({
       ok: false,
       errorCode: 'TOO_LARGE',
     });
@@ -156,26 +158,30 @@ describe('packGhostDir', () => {
     sourceZip.file('main.js', '// brain');
     sourceZip.file('assets/icon.png', originalIcon);
     const { privateKey } = crypto.generateKeyPairSync('ed25519');
-    const signed = await signGhostPackage(
-      await sourceZip.generateAsync({ type: 'nodebuffer' }),
-      { publisherName: 'Forge Test Publisher', privateKey },
-    );
+    const signed = await signGhostPackage(await sourceZip.generateAsync({ type: 'nodebuffer' }), {
+      publisherName: 'Forge Test Publisher',
+      privateKey,
+    });
     const signedZip = await JSZip.loadAsync(signed);
     const signatureBytes = await signedZip.file(GHOST_SIGNATURE_FILE)!.async('nodebuffer');
     await fs.promises.writeFile(path.join(dir, GHOST_SIGNATURE_FILE), signatureBytes);
 
-    await expect(packGhostDir(dir, { iconPng: Buffer.from('replacement') })).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'MANIFEST_INVALID',
-      message: expect.stringContaining('已签名插件不能使用 AI 图标覆盖'),
-    });
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('replacement') })).resolves.toMatchObject(
+      {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: expect.stringContaining('已签名插件不能使用 AI 图标覆盖'),
+      },
+    );
 
     const fallback = await packGhostDir(dir);
     expect(fallback.ok, JSON.stringify(fallback)).toBe(true);
     if (!fallback.ok) return;
     const fallbackZip = await JSZip.loadAsync(await fs.promises.readFile(fallback.cindyPath));
     expect(await fallbackZip.file('assets/icon.png')!.async('nodebuffer')).toEqual(originalIcon);
-    expect(await fallbackZip.file(GHOST_SIGNATURE_FILE)!.async('nodebuffer')).toEqual(signatureBytes);
+    expect(await fallbackZip.file(GHOST_SIGNATURE_FILE)!.async('nodebuffer')).toEqual(
+      signatureBytes,
+    );
 
     const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
     expect(await manager.inspect(fallback.cindyPath)).toMatchObject({
@@ -255,18 +261,23 @@ describe('packGhostDir', () => {
     });
     // 模拟"校验通过后、写入 zip 前"目录被并发改写:保 id/version,偷加权限声明。
     // 若打包时重读磁盘,包里的 manifest 会与返回值(安装侧审阅比对的依据)分叉。
-    const tampered = JSON.stringify({ ...GOOD_MANIFEST, slots: ['tool', 'network'], network: { allow: ['x.test'] } });
+    const tampered = JSON.stringify({
+      ...GOOD_MANIFEST,
+      slots: ['tool', 'network'],
+      network: { allow: ['x.test'] },
+    });
     const realRead = fs.promises.readFile;
     let ghostReads = 0;
-    const spy = vi
-      .spyOn(fs.promises, 'readFile')
-      .mockImplementation(((target: unknown, ...rest: unknown[]) => {
-        if (String(target).endsWith('ghost.json')) {
-          ghostReads += 1;
-          if (ghostReads > 1) return Promise.resolve(Buffer.from(tampered));
-        }
-        return (realRead as (...args: unknown[]) => unknown)(target, ...rest);
-      }) as typeof fs.promises.readFile);
+    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation(((
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (String(target).endsWith('ghost.json')) {
+        ghostReads += 1;
+        if (ghostReads > 1) return Promise.resolve(Buffer.from(tampered));
+      }
+      return (realRead as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof fs.promises.readFile);
     try {
       const r = await packGhostDir(dir);
       expect(r.ok, JSON.stringify(r)).toBe(true);
@@ -282,20 +293,23 @@ describe('packGhostDir', () => {
     }
   });
 
-  it.skipIf(!canSymlink)('ghost.json 为符号链接 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
-    // 符号链接:目标是合法清单也不放行——“符号链接一律不穿透”覆盖身份卡本身,
-    // 否则打包输入目录里一根链接就能把目录外的文件读进打包管道。
-    const outside = path.join(workDir, 'outside-ghost.json');
-    await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
-    const linked = path.join(workDir, 'src-linked');
-    await fs.promises.mkdir(linked, { recursive: true });
-    await fs.promises.symlink(outside, path.join(linked, 'ghost.json'));
-    await fs.promises.writeFile(path.join(linked, 'main.js'), '// brain');
-    expect(await packGhostDir(linked)).toMatchObject({
-      ok: false,
-      errorCode: 'MANIFEST_INVALID',
-    });
-  });
+  it.skipIf(!canSymlink)(
+    'ghost.json 为符号链接 → MANIFEST_INVALID(与市场发现/安装同一把闸)',
+    async () => {
+      // 符号链接:目标是合法清单也不放行——“符号链接一律不穿透”覆盖身份卡本身,
+      // 否则打包输入目录里一根链接就能把目录外的文件读进打包管道。
+      const outside = path.join(workDir, 'outside-ghost.json');
+      await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
+      const linked = path.join(workDir, 'src-linked');
+      await fs.promises.mkdir(linked, { recursive: true });
+      await fs.promises.symlink(outside, path.join(linked, 'ghost.json'));
+      await fs.promises.writeFile(path.join(linked, 'main.js'), '// brain');
+      expect(await packGhostDir(linked)).toMatchObject({
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+      });
+    },
+  );
 
   it('ghost.json 超限 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
     // 超限:JSON 本身合法(合法清单 + 尾随空白撑体积),必须在读取层按大小拒,
@@ -355,20 +369,13 @@ describe('packGhostDir', () => {
     await fs.promises.mkdir(staged, { recursive: true });
     const pluginDir = path.join(staged, 'alpha');
     await fs.promises.mkdir(pluginDir, { recursive: true });
-    await fs.promises.writeFile(
-      path.join(pluginDir, 'ghost.json'),
-      JSON.stringify(GOOD_MANIFEST),
-    );
+    await fs.promises.writeFile(path.join(pluginDir, 'ghost.json'), JSON.stringify(GOOD_MANIFEST));
     await fs.promises.writeFile(path.join(pluginDir, 'main.js'), '// brain');
     // 调用方(安装管道)校验时拿到的规范根。
     const expectedRealDir = await fs.promises.realpath(pluginDir);
     // 校验之后被换成指向外部目录的链接(外部目录留着同样的 ghost.json)。
     await fs.promises.rm(pluginDir, { recursive: true, force: true });
-    await fs.promises.symlink(
-      await fs.promises.realpath(outside),
-      pluginDir,
-      directoryLinkType,
-    );
+    await fs.promises.symlink(await fs.promises.realpath(outside), pluginDir, directoryLinkType);
 
     const dest = path.join(workDir, 'out.cindy');
     const r = await packGhostDirToFile(pluginDir, dest, expectedRealDir);
@@ -451,11 +458,12 @@ describe('packGhostDir', () => {
         ja: 'locales/ja.json',
       },
     };
-    const locale = (name: string, description: string, tool: string) => JSON.stringify({
-      name,
-      description,
-      tools: { do_thing: { description: tool } },
-    });
+    const locale = (name: string, description: string, tool: string) =>
+      JSON.stringify({
+        name,
+        description,
+        tools: { do_thing: { description: tool } },
+      });
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify(manifest),
       'main.js': '// brain',
@@ -598,13 +606,16 @@ describe('scaffoldGhostDir', () => {
     '生成 %s 模板，随后可以直接打包并通过装入检查',
     async (template) => {
       const dir = path.join(workDir, template);
-      const result = await scaffoldGhostDir({
-        dir,
-        template,
-        id: `demo-${template}`,
-        name: `演示 ${template}`,
-        description: `${template} 起步插件`,
-      }, { sessionWorkdir: workDir });
+      const result = await scaffoldGhostDir(
+        {
+          dir,
+          template,
+          id: `demo-${template}`,
+          name: `演示 ${template}`,
+          description: `${template} 起步插件`,
+        },
+        { sessionWorkdir: workDir },
+      );
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, dir, template });
       if (!result.ok) return;
       expect(result.files).toContain('ghost.json');
@@ -649,23 +660,29 @@ describe('scaffoldGhostDir', () => {
     await fs.promises.mkdir(existing);
     await fs.promises.writeFile(path.join(existing, 'keep.txt'), 'keep me');
     expect(
-      await scaffoldGhostDir({
-        dir: existing,
-        template: 'plain',
-        id: 'existing',
-        name: 'Existing',
-      }, { sessionWorkdir: workDir }),
+      await scaffoldGhostDir(
+        {
+          dir: existing,
+          template: 'plain',
+          id: 'existing',
+          name: 'Existing',
+        },
+        { sessionWorkdir: workDir },
+      ),
     ).toMatchObject({ ok: false, errorCode: 'TARGET_EXISTS' });
     expect(await fs.promises.readFile(path.join(existing, 'keep.txt'), 'utf8')).toBe('keep me');
 
     const invalid = path.join(workDir, 'invalid');
     expect(
-      await scaffoldGhostDir({
-        dir: invalid,
-        template: 'plain',
-        id: 'INVALID_ID',
-        name: 'Invalid',
-      }, { sessionWorkdir: workDir }),
+      await scaffoldGhostDir(
+        {
+          dir: invalid,
+          template: 'plain',
+          id: 'INVALID_ID',
+          name: 'Invalid',
+        },
+        { sessionWorkdir: workDir },
+      ),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
     await expect(fs.promises.stat(invalid)).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -680,12 +697,15 @@ describe('scaffoldGhostDir', () => {
         return;
       }
       expect(
-        await scaffoldGhostDir({
-          dir: path.join(workDir, 'out', 'plugin'),
-          template: 'plain',
-          id: 'escape',
-          name: 'Escape',
-        }, { sessionWorkdir: workDir }),
+        await scaffoldGhostDir(
+          {
+            dir: path.join(workDir, 'out', 'plugin'),
+            template: 'plain',
+            id: 'escape',
+            name: 'Escape',
+          },
+          { sessionWorkdir: workDir },
+        ),
       ).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
       await expect(fs.promises.stat(path.join(outside, 'plugin'))).rejects.toMatchObject({
         code: 'ENOENT',
@@ -758,9 +778,7 @@ describe('FORGE_GUIDE', () => {
     }
     sections.set(current, size);
     for (const [header, bytes] of sections) {
-      expect(bytes, `${header} 超出分章安全体量,请拆小节`).toBeLessThanOrEqual(
-        CHAPTER_BYTE_LIMIT,
-      );
+      expect(bytes, `${header} 超出分章安全体量,请拆小节`).toBeLessThanOrEqual(CHAPTER_BYTE_LIMIT);
     }
   });
 
@@ -799,7 +817,7 @@ describe('FORGE_GUIDE', () => {
       // 2026-08-04 文本转向量(cindy.embed.text):作者最容易踩的是"换模型 =
       // 换向量空间",手册必须讲到 model + dim 要跟向量一起存。
       'embed_text',
-      "\"embed\": [\"text\"]",
+      '"embed": ["text"]',
       'inputType',
       'dimensions',
       // 上下文化(voyage-context-*):二维 documents 与三层 documentEmbeddings 是
@@ -920,8 +938,8 @@ describe('FORGE_GUIDE', () => {
       'minimize',
       '最小化为浮动气泡',
       // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
-      // 卡槽总数标记随 workspace 槽合入更新为十五个。
-      '十五个卡槽',
+      // 卡槽总数标记随 ios-simulator 槽合入更新为十八个。
+      '十八个卡槽',
       '捆绑 Agent Skills(skill 槽)',
       'skill.items',
       'SKILL.md',
@@ -933,6 +951,12 @@ describe('FORGE_GUIDE', () => {
       '创建工作区会话(workspace 槽)',
       'cindy.workspace',
       "kind: 'ensure-session'",
+      // 2026-08-06 iOS Simulator 插件能力:只读脱敏状态与 Host 面板入口。
+      '内置 iOS 模拟器(ios-simulator 槽)',
+      'cindy.iosSimulator.request',
+      'caps.capabilities.pluginVideo === false',
+      'caps.capabilities.pluginInput === false',
+      '声明 `ios-simulator` 时必须同时声明 `minCindyVersion`',
       // 2026-07-28 图标与官方仓门禁(#809):§1/§2 的 icon 字段说明、
       // §8.1 官方插件仓的四语言 locale 与 assets/icon.png 惯例。
       '"icon": "assets/icon.png"',

@@ -33,6 +33,47 @@ describe('maker Orca role marking IPC boundary', () => {
     expectOrder(roleMarkingSource, 'markKnownOrcaWorkerSession(sessionId);', 'clearSuppressedOrcaWorkerAgentIslandSession(sessionId);');
   });
 
+  it('rejects Review sessions before either Orca entry point can mutate state', () => {
+    const roleMarkingSource = registerSource.slice(
+      registerSource.indexOf('async function markOrcaRoleIfNeeded'),
+      registerSource.indexOf('async function bootstrapSession'),
+    );
+    const collabGuardSource = registerSource.slice(
+      registerSource.indexOf('async function assertLeadCollabProjectEnabled'),
+      registerSource.indexOf('async function sendUserMessageWithAwaitedGitBaseline'),
+    );
+
+    expectOrder(
+      roleMarkingSource,
+      'await assertReviewSettingsUnlocked(sessionId);',
+      'await setSessionOrcaRole(sessionId, orcaRole);',
+    );
+    expectOrder(
+      collabGuardSource,
+      'await assertReviewSettingsUnlocked(leadSessionId);',
+      'const lead = maker.getSession(leadSessionId);',
+    );
+  });
+
+  it('routes IPC and MCP team/worker creation through the shared Review guard', () => {
+    const workerIpcSource = registerSource.slice(
+      registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.WORKER_CREATE'),
+      registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.WORKER_LIST'),
+    );
+    const collabHolderSource = registerSource.slice(
+      registerSource.indexOf('orcaCollabServiceHolder = {'),
+      registerSource.indexOf('// ─── Agent Team heartbeat watcher'),
+    );
+
+    expect(workerIpcSource).toContain('await assertLeadCollabProjectEnabled(b.leadSessionId);');
+    expect(collabHolderSource).toContain('startTeam: async');
+    expect(collabHolderSource).toContain('createWorker: async');
+    expect(collabHolderSource).toContain('createWorkerFromTask: async');
+    expect(
+      collabHolderSource.match(/await assertLeadCollabProjectEnabled\(/g)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(3);
+  });
+
   it('registers rehydrated worker sessions as known before Maker publishes them', () => {
     const successHookSource = makerHostSource.slice(
       makerHostSource.indexOf('onStartSucceeded:'),

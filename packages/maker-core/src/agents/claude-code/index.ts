@@ -155,6 +155,16 @@ import type {
 } from '../../types/memory.js';
 import type { McpProviderContext } from '../../interfaces/mcp-provider.js';
 import { scanClaudeCustomizations } from './customization-scanner.js';
+import {
+  REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS,
+  isReviewSensitiveCredentialSelector,
+} from '../shared/sensitive-credential-paths.js';
+import {
+  assertReviewMessageContentPaths,
+  buildReviewReadGrants,
+  resolveReviewReadPath,
+  type ReviewReadGrant,
+} from '../shared/review-read-scope.js';
 
 type ClaudeSdkEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -269,6 +279,63 @@ const READ_ONLY_CLAUDE_TOOLS: ReadonlySet<string> = new Set([
 /** canUseTool fail-closed 分支用: 判断工具是否属于已知只读工具(见上方白名单注释)。 */
 function isReadOnlyClaudeTool(toolName: string): boolean {
   return READ_ONLY_CLAUDE_TOOLS.has(toolName);
+}
+
+function reviewGlobPatternEscapesScope(pattern: string): boolean {
+  const value = pattern.trim();
+  if (!value) return false;
+  if (path.isAbsolute(value) || path.win32.isAbsolute(value)) return true;
+  // Backslash escapes and character classes can spell a parent segment without
+  // a literal "..". Reject those ambiguous forms, then inspect brace/extglob
+  // branches for rooted paths while keeping common {ts,tsx} patterns usable.
+  if (/[\\[\]]/.test(value) || value.includes('..')) return true;
+  return /(^|[{(,|])(?:\/|[a-zA-Z]:\/)/.test(value);
+}
+
+function reviewFileSelectorIsAllowed(selector: unknown): selector is string {
+  return (
+    typeof selector === 'string' &&
+    !reviewGlobPatternEscapesScope(selector) &&
+    !isReviewSensitiveCredentialSelector(selector)
+  );
+}
+
+async function resolveReviewReadToolInput(params: {
+  toolName: string;
+  toolInput: Record<string, unknown> | undefined;
+  workingDir: string;
+  grants: readonly ReviewReadGrant[];
+}): Promise<Record<string, unknown> | null> {
+  if (params.toolName === 'Glob') {
+    if (!reviewFileSelectorIsAllowed(params.toolInput?.pattern)) return null;
+  }
+  if (
+    params.toolName === 'Grep' &&
+    params.toolInput?.glob !== undefined &&
+    !reviewFileSelectorIsAllowed(params.toolInput.glob)
+  ) {
+    return null;
+  }
+  const keyByTool: Partial<Record<string, string>> = {
+    Read: 'file_path',
+    Glob: 'path',
+    Grep: 'path',
+    LS: 'path',
+    NotebookRead: 'notebook_path',
+  };
+  const key = keyByTool[params.toolName];
+  if (!key) return null;
+  const raw = params.toolInput?.[key];
+  const candidate =
+    typeof raw === 'string' && raw.trim()
+      ? path.resolve(params.workingDir, raw)
+      : params.workingDir;
+  const resolved = await resolveReviewReadPath(candidate, params.workingDir, params.grants);
+  if (!resolved) return null;
+  // The permission decision and the SDK tool execution must address the same
+  // filesystem object. In particular, never hand a validated symlink back to
+  // Read/Glob/Grep: it could be retargeted after this hook returns.
+  return { ...(params.toolInput ?? {}), [key]: resolved };
 }
 
 /**
@@ -830,6 +897,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
+    const reviewMode = opts.reviewMode === true;
+    if (reviewMode && opts.remoteHostId) {
+      throw new Error('Cindy Review currently supports local Claude Code sessions only');
+    }
+    const reviewReadGrants = reviewMode
+      ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? [])
+      : [];
     // 开 debug 时让每个 session 的 cc 子进程写到各自 session 目录的 raw 文件 (host 注入
     // resolveCcDebugFile 拼路径 + mkdir); 没注入则回退全局 XDT_CC_DEBUG_FILE。
     const ccDebugFile = process.env.XDT_CC_DEBUG_NET === '1'
@@ -1003,7 +1077,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
     }
     const hostSystemPrompt = this.deps.runtimeConfig.systemPrompt;
-    const ghostRosterPrompt = opts.remoteHostId
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode
       ? ''
       : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
 
@@ -1052,8 +1126,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。
-    const makerMemoryFlag =
-      opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
+    const makerMemoryFlag = reviewMode
+      ? false
+      : opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
     // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
@@ -1081,12 +1156,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
     }
 
-    const mcpProviders = this.deps.mcpProviders ?? [];
+    const mcpProviders = reviewMode ? [] : this.deps.mcpProviders ?? [];
     // host-owned 只读白名单在 session 启动时快照; 与 hooks / MCP 注册同样保持整条
     // 会话稳定, 避免中途改数组导致 CLI 权限规则与 prompt cache 前缀漂移。
-    const claudeAllowedTools = this.deps.claudeAllowedTools?.length
-      ? [...this.deps.claudeAllowedTools]
-      : undefined;
+    const claudeAllowedTools = reviewMode
+      ? [...READ_ONLY_CLAUDE_TOOLS]
+      : this.deps.claudeAllowedTools?.length
+        ? [...this.deps.claudeAllowedTools]
+        : undefined;
     /**
      * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
      * canUseTool 用它把 `mcp__<server>__<tool>` 归属到唯一 server; 空集合时
@@ -1289,30 +1366,64 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       return { continue: true };
     };
-    const localClaudeHooks = mergeClaudeHookSets(
-      buildClaudeLocalToolGuardHooks(
-        this.deps.capabilityRouting,
-        () => activeCapabilitySelectionText,
-        (toolName, route) => {
-          log.warn('downstream MCP source denied by host PreToolUse route', {
-            toolName,
-            capabilityId: route.capabilityId,
-            replacement: route.replacement?.id,
-          });
+    const reviewReadOnlyHook: HookCallback = async (input) => {
+      if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+      const pre = input as PreToolUseHookInput;
+      const toolName = pre.tool_name;
+      const updatedInput = isReadOnlyClaudeTool(toolName)
+        ? await resolveReviewReadToolInput({
+          toolName,
+          toolInput: pre.tool_input as Record<string, unknown> | undefined,
+          workingDir: opts.workingDir,
+          grants: reviewReadGrants,
+        })
+        : null;
+      if (updatedInput) {
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            updatedInput,
+          },
+        };
+      }
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            'Cindy Review only permits read-only access to this task and its explicit artifacts.',
         },
-        () => nonHarnessMcpServerNames,
-      ),
-      {
-        PreToolUse: [{ hooks: [turnChangeCaptureHook] }],
-        PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
-        PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
-      },
-      // Keep the existing local routing/capture hooks first: callers and tests
-      // rely on their observable order. The exact-match Orca provenance guard
-      // still runs for send_to_lead after those hooks and denies descendants.
-      buildClaudeOrcaCallerProvenanceHooks(),
-      this.deps.claudeHooks,
-    );
+      };
+    };
+    const localClaudeHooks = reviewMode
+      ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
+      : mergeClaudeHookSets(
+          buildClaudeLocalToolGuardHooks(
+            this.deps.capabilityRouting,
+            () => activeCapabilitySelectionText,
+            (toolName, route) => {
+              log.warn('downstream MCP source denied by host PreToolUse route', {
+                toolName,
+                capabilityId: route.capabilityId,
+                replacement: route.replacement?.id,
+              });
+            },
+            () => nonHarnessMcpServerNames,
+          ),
+          {
+            PreToolUse: [{ hooks: [turnChangeCaptureHook] }],
+            PostToolUse: [{ hooks: [turnChangeCaptureHook] }],
+            PostToolUseFailure: [{ hooks: [turnChangeCaptureHook] }],
+          },
+          // Keep the existing local routing/capture hooks first: callers and tests
+          // rely on their observable order. The exact-match Orca provenance guard
+          // still runs for send_to_lead after those hooks and denies descendants.
+          buildClaudeOrcaCallerProvenanceHooks(),
+          this.deps.claudeHooks,
+        );
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
         this.deps.capabilityRouting,
@@ -1509,6 +1620,29 @@ export class ClaudeCodeAgent extends BaseAgent {
       return 'prompt-each-time';
     };
 
+    const mcpApprovalPresentation = (
+      toolName: string,
+      input: unknown,
+    ) => {
+      const presenter = this.deps.getMcpToolApprovalPresentation;
+      if (!presenter) return undefined;
+      const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      if (!target) return undefined;
+      try {
+        return presenter({
+          serverName: target.serverName,
+          toolName: target.toolName,
+          toolParams: input,
+        });
+      } catch (error) {
+        log.error('MCP approval presentation threw -> vendor copy', {
+          serverName: target.serverName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      }
+    };
+
     // canUseTool dispatcher —— 三路分支(参考 agentManager.ts:1054-1162):
     //  1. AskUserQuestion: 模型问问题, 转 ask_user_question kind, decision.answers 拼回 updatedInput
     //  2. ExitPlanMode:   plan 模式提交计划, 转 plan_review kind, decision.editedPlan 覆盖 plan
@@ -1657,6 +1791,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
       const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
+      const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = turnPolicyForcePrompt;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
@@ -1704,9 +1839,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         requestId: options.toolUseID,
         toolName,
         input: input as Record<string, unknown>,
-        title: options.title,
+        title: hostApprovalPresentation?.title ?? options.title,
         displayName: options.displayName,
-        description: options.description,
+        description: hostApprovalPresentation?.description ?? options.description,
         // prompt-each-time 的语义是"每次都要人过目", 因此不把会话级 suggestion 交给
         // UI —— 否则用户点一次"总是允许"就把逐次确认的高风险 action 永久放行了。
         suggestions: forcePrompt
@@ -1764,8 +1899,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
     // mutableFastMode 读最新值 (setMemory / setFastMode 运行时改) 而不是 buildQuery
     // 时快照。装配逻辑(含 apiKeyHelper 恒置空的鉴权防线)在 flag-settings.ts。
-    const buildSettings = (): Settings =>
-      buildClaudeFlagSettings({
+    const buildSettings = (): Settings => {
+      const settings = buildClaudeFlagSettings({
         showThinkingSummaries,
         // availableModels is the SDK's highest-priority allowlist. Convert the
         // whole current catalog and the selected model through the one
@@ -1783,13 +1918,28 @@ export class ClaudeCodeAgent extends BaseAgent {
         // configuration. Maker Memory on remote sessions is injected via the
         // host bridge (prompt + http MCP), which coexists with — but does not
         // rewrite — the remote machine's native memory settings.
-        memoryOverride: opts.remoteHostId ? undefined : this.memoryOverride,
+        memoryOverride: reviewMode ? false : opts.remoteHostId ? undefined : this.memoryOverride,
         // Fast 模式:进 flag settings 层(= --settings),解锁 cc 二进制在 Agent SDK 通道下的
         // fast(否则二进制按 "Agent SDK 不可用" 拒绝)。是否 Opus/官方/firstParty 由二进制把关,
         // agent 层不重复硬判(规则 9:确定性逻辑就近,但 fast 的最终门槛是二进制 + 配置门控)。
         fastMode: mutableFastMode,
-        capabilityRouting: this.deps.capabilityRouting,
+        capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
       });
+      if (!reviewMode) return settings;
+      return {
+        ...settings,
+        permissions: {
+          ...(settings.permissions ?? {}),
+          // Claude's built-in Grep/Glob implementation translates Read deny
+          // rules into trailing negative rg globs. Keep this execution-layer
+          // filter in addition to the PreToolUse path/scope gate: a granted
+          // directory with no explicit glob must not expose credential files.
+          deny: REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.map(
+            (pattern) => `Read(${pattern})`,
+          ),
+        },
+      };
+    };
 
     // file checkpointing 与 capability 强绑定 —— 声明 rewind 能力时必须开此开关,
     // 否则 SDK rewindFiles() 报 "no checkpoint"。
@@ -1868,12 +2018,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       ? new ToolLoopGuard()
       : null;
     let mutableEffort: Effort = opts.effort ?? 'high';
-    let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'default';
+    let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'default';
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮 plan turn 由 planTurnActive 承载(SDK 保持 plan 档): ExitPlanMode 批准
     // 提前切回底层档, 否则(取消 / 模型没提交计划)在 turn 结束时收尾。
-    let mutablePlanMode = opts.planMode === true;
+    let mutablePlanMode = !reviewMode && opts.planMode === true;
     let planTurnActive = false;
     // SDK 当前是否处于 plan 档(跟踪我们最后一次 push / buildQuery 的档位)。
     // setPlanMode 在 turn 流式中递延 push(避免改写 in-flight turn 的工具权限),
@@ -2476,7 +2626,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               ghostRosterPrompt,
               hostSystemPrompt,
               makerMemoryIndex,
-              opts.userPrompt,
+              reviewMode ? undefined : opts.userPrompt,
             ]
               .filter((s): s is string => !!s && s.trim().length > 0)
               .join('\n\n');
@@ -2513,7 +2663,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 上的 ~/.claude / 项目 .claude / cwd-local 三层 settings 文件 (slash
             // commands / output styles / hooks / per-project model 等)。不透传
             // SDK 默认不读, 远端会丢用户配置, 跟本地行为分歧。
-            settingSources: ['user', 'project', 'local'],
+            settingSources: reviewMode ? [] : ['user', 'project', 'local'],
           },
         };
 
@@ -2676,6 +2826,10 @@ export class ClaudeCodeAgent extends BaseAgent {
               params.input ?? {},
             );
             const remoteMcpPolicy = classifyMcpApprovalPolicy(remoteToolName, params.input ?? {});
+            const remoteHostApprovalPresentation = mcpApprovalPresentation(
+              remoteToolName,
+              params.input ?? {},
+            );
             let remoteForcePrompt = remoteTurnPolicyForcePrompt;
             if (
               mutablePermissionMode === 'auto'
@@ -2713,9 +2867,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               requestId: params.requestId,
               toolName: params.toolName ?? 'unknown',
               input: params.input ?? {},
-              title: params.title,
+              title: remoteHostApprovalPresentation?.title ?? params.title,
               displayName: params.displayName,
-              description: params.description,
+              description: remoteHostApprovalPresentation?.description ?? params.description,
               suggestions: remoteForcePrompt
                 ? undefined
                 : this.normalizeSessionPermissionSuggestions(params.suggestions),
@@ -2920,7 +3074,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               ghostRosterPrompt,
               hostSystemPrompt,
               makerMemoryIndex,
-              opts.userPrompt,
+              reviewMode ? undefined : opts.userPrompt,
             ]
               .filter((s): s is string => !!s && s.trim().length > 0)
               .join('\n\n');
@@ -2973,14 +3127,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           // permissionMode=auto 时再调用远程安全分类器。动态聚合入口不在列表中。
           ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
           canUseTool,
-          settingSources: ['user', 'project', 'local'],
+          settingSources: reviewMode ? [] : ['user', 'project', 'local'],
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
           //    BaseAgent.setMemory 控制; this.memoryOverride === undefined 时不传, 让 SDK 走默认)
           // **同一对象远端分支也透传 (extraOptions.settings)**, 别在两边漂移。
           settings: buildSettings(),
-          allowDangerouslySkipPermissions: true,
+          allowDangerouslySkipPermissions: !reviewMode,
           stderr: vo.onStderrLine as ((line: string) => void) | undefined,
           // SDK debug 等同 --debug CLI flag, 让 cc 子进程吐 verbose 日志。
           // - debug: true 触发 verbose 模式
@@ -4890,6 +5044,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         let userInputAccepted = false;
         try {
+          if (reviewMode) {
+            await assertReviewMessageContentPaths(
+              message.content,
+              opts.workingDir,
+              reviewReadGrants,
+            );
+          }
           const content = await toClaudeSdkContent(message.content);
           if (sendOpts?.signal?.aborted) {
             throw new Error('Claude send cancelled before acceptance');
@@ -4980,6 +5141,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           logTitle: lastSendTitle,
         });
 
+        if (reviewMode) {
+          await assertReviewMessageContentPaths(
+            message.content,
+            opts.workingDir,
+            reviewReadGrants,
+          );
+        }
         const content = await toClaudeSdkContent(message.content);
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude steer cancelled before acceptance');
@@ -5396,6 +5564,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // effectiveSdkPermissionMode() 的最新值, 新设置会自然带上。
 
       async setModel(newModel: string, setModelOpts?: { providerId?: string | null }) {
+        if (reviewMode) return;
         const targetProviderId = setModelOpts?.providerId !== undefined
           ? setModelOpts.providerId
           : mutableProviderId;
@@ -5547,6 +5716,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setEffort(newEffort: Effort) {
+        if (reviewMode) return;
         // maker 的 minimal / ultra 先归一成 Claude 的 low / max；2.1.219 起
         // applyFlagSettings 可原样接收 max，不能再静默降成 xhigh。
         const sdkEffort = getSdkEffortForModel(mutableModel, newEffort);
@@ -5574,6 +5744,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setFastMode(enabled: boolean) {
+        if (reviewMode) return;
         // 与 setEffort 同款:走 SDK applyFlagSettings 改 flag settings 层 `fastMode`。
         // cc 二进制的 sticky-on latch 负责缓存安全(header 一旦发出整 session 保持,中途 toggle
         // 不破 server 端 cache key)—— 所以这里直接切、不做缓存兜底。是否 Opus/官方/firstParty
@@ -5591,6 +5762,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setPermissionMode(newMode) {
+        if (reviewMode) {
+          log.debug('setPermissionMode ignored for hard read-only Review session', {
+            requested: newMode,
+          });
+          return;
+        }
         // 用户自己动过权限档之后,「自动审核不可用」这条一次性提示重新武装:再回到 Auto
         // 又不可用时,他有权再看到一次(否则一个会话里只提示一次会显得像偶发)。
         // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
@@ -5646,6 +5823,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setPlanMode(enabled: boolean) {
+        if (reviewMode) return;
         if (mutablePlanMode === enabled) return;
         mutablePlanMode = enabled;
         // turn 流式中(含 plan turn 本身)只记账武装态、递延 SDK 切档:立即 push 会
@@ -5676,6 +5854,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setExtraDirs(newDirs: string[]) {
+        if (reviewMode) return;
         // 只覆盖 closure。SDK 没有运行时 setAdditionalDirectories 入口, 但 buildQuery
         // 是 turn-by-turn 装配的 (rewind 重启 / fork 都走 buildQuery), 改完下一 turn
         // 自动用新值。当前 in-flight turn 不会变 (允许的 — 用户在 turn 中加目录

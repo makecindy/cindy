@@ -124,6 +124,14 @@ export interface RuntimeState {
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
   subagentParentToolUseIdByTaskId: Map<string, string>;
   /**
+   * 已被 SDK 明确标记为 local_agent / remote_agent 的 task_id。
+   * Claude 后续进度与终态帧可能省略 task_type / tool_use_id；一旦确认，
+   * 该身份在本 RuntimeState 生命周期内保持单向锁存，避免持久记录停在 running。
+   */
+  confirmedSubagentTaskIds: Set<string>;
+  /** 明确属于 local_bash / local_workflow 的 task_id；稀疏后续帧继续排除。 */
+  excludedSubagentTaskIds: Set<string>;
+  /**
    * 上一次 SDK assistant 消息提取出来的 agentMeta (uuid / sdkSessionId / model / ...).
    * 主 agent 的 stream_event 累积时用它补齐 transcript 锚点；subagent stream
    * 则必须按 parent_tool_use_id 隔离，不能共享这份会话级状态。
@@ -144,6 +152,8 @@ export function newRuntimeState(): RuntimeState {
     streamModelByParentToolUseId: new Map(),
     resolvedSubagentModelByParentToolUseId: new Map(),
     subagentParentToolUseIdByTaskId: new Map(),
+    confirmedSubagentTaskIds: new Set(),
+    excludedSubagentTaskIds: new Set(),
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
   };
@@ -551,25 +561,30 @@ export function translateSdkMessage(
       if (subagentLaunch) {
         const { taskId, parentToolUseId, model, prompt } = subagentLaunch;
         ctx.rt.subagentParentToolUseIdByTaskId.set(taskId, parentToolUseId);
+        ctx.rt.confirmedSubagentTaskIds.add(taskId);
+        ctx.rt.excludedSubagentTaskIds.delete(taskId);
         if (model) {
           ctx.rt.resolvedSubagentModelByParentToolUseId.set(parentToolUseId, model);
         }
         if (prompt) {
           ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model });
         }
-        if (model) {
-          queue.push({
-            type: 'agent_task_update',
-            data: {
-              provider: 'claude-code',
-              taskId,
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            provider: 'claude-code',
+            taskId,
+            parentToolUseId,
+            status: 'running',
+            subagentObservation: {
+              kind: 'spawn',
+              logicalSubagentId: taskId,
               parentToolUseId,
-              status: 'running',
-              model,
             },
-            source: 'claude-code',
-          });
-        }
+            ...(model ? { model } : {}),
+          },
+          source: 'claude-code',
+        });
       }
       // 单独遍历: 不能复用 extractToolResultFullText, 见 onToolResultDone JSDoc。
       const completedToolUseIds = new Set(fullPairs.map((pair) => pair.toolUseId));
@@ -854,7 +869,7 @@ function handleSystem(
   // 与上面三个事件共用 agent_task_update 通道 —— 下游 makerChatStore 按 taskId 做
   // 字段级 merge,故这里只需带上补丁里变化的字段。
   if (msg.subtype === 'task_updated') {
-    const update = toClaudeTaskUpdatedPatch(msg);
+    const update = toClaudeTaskUpdatedPatch(msg, ctx.rt);
     if (update) {
       queue.push({
         type: 'agent_task_update',
@@ -917,6 +932,33 @@ function toClaudeTaskUpdate(msg: {
     : undefined;
   // CLI 对纯心跳帧节流省略该字段;收窄失败/缺失都不下发(undefined = 下游沿用上一帧)。
   const workflowProgress = normalizeWorkflowProgressEntries(msg.workflow_progress);
+  const taskType = msg.task_type;
+  const explicitlySubagent = taskType === 'local_agent' || taskType === 'remote_agent';
+  const explicitlyExcluded = taskType === 'local_bash' || taskType === 'local_workflow';
+  if (explicitlySubagent) {
+    rt.confirmedSubagentTaskIds.add(msg.task_id);
+    rt.excludedSubagentTaskIds.delete(msg.task_id);
+  } else if (explicitlyExcluded && !rt.confirmedSubagentTaskIds.has(msg.task_id)) {
+    rt.excludedSubagentTaskIds.add(msg.task_id);
+  }
+  const isExcludedTask =
+    !rt.confirmedSubagentTaskIds.has(msg.task_id) &&
+    (explicitlyExcluded || rt.excludedSubagentTaskIds.has(msg.task_id));
+  const isKnownSubagent =
+    !isExcludedTask &&
+    (Boolean(parentToolUseId) || explicitlySubagent || rt.confirmedSubagentTaskIds.has(msg.task_id));
+  const subagentObservation = !isExcludedTask && isKnownSubagent
+    ? {
+        kind:
+          msg.subtype === 'task_started'
+            ? 'spawn' as const
+            : msg.subtype === 'task_notification'
+              ? 'terminal' as const
+              : 'progress' as const,
+        logicalSubagentId: msg.task_id,
+        ...(parentToolUseId ? { parentToolUseId } : {}),
+      }
+    : undefined;
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
@@ -932,6 +974,7 @@ function toClaudeTaskUpdate(msg: {
     ...(usage ? { usage } : {}),
     ...(model ? { model } : {}),
     ...(workflowProgress ? { workflowProgress } : {}),
+    ...(subagentObservation ? { subagentObservation } : {}),
   };
 }
 
@@ -949,16 +992,34 @@ function toClaudeTaskUpdate(msg: {
 function toClaudeTaskUpdatedPatch(msg: {
   task_id?: string;
   patch?: { status?: string; description?: string; error?: string };
-}): AgentTaskUpdateEventData | null {
+}, rt: RuntimeState): AgentTaskUpdateEventData | null {
   if (!msg.task_id || !msg.patch) return null;
   const { status: rawStatus, description, error } = msg.patch;
   const hasStatus = typeof rawStatus === 'string' && rawStatus.length > 0;
   const hasError = typeof error === 'string' && error.length > 0;
   if (!hasStatus && !hasError) return null;
+  const status = mapTaskUpdatedStatus(rawStatus, hasError);
+  const parentToolUseId = rt.subagentParentToolUseIdByTaskId.get(msg.task_id);
+  const isExcludedTask =
+    !rt.confirmedSubagentTaskIds.has(msg.task_id) &&
+    rt.excludedSubagentTaskIds.has(msg.task_id);
+  const isKnownSubagent =
+    !isExcludedTask &&
+    (Boolean(parentToolUseId) || rt.confirmedSubagentTaskIds.has(msg.task_id));
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
-    status: mapTaskUpdatedStatus(rawStatus, hasError),
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+    status,
+    ...(isKnownSubagent
+      ? {
+          subagentObservation: {
+            kind: status === 'running' ? 'progress' : 'terminal',
+            logicalSubagentId: msg.task_id,
+            ...(parentToolUseId ? { parentToolUseId } : {}),
+          },
+        }
+      : {}),
     ...(description ? { title: description } : {}),
     ...(hasError ? { summary: error } : {}),
   };

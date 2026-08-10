@@ -80,7 +80,10 @@ import {
 } from '../utils/readBoundedFile.js';
 import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
 import { GhostPackagePermissionReviewRequiredError } from '../cindy-brain/packagePermissionReview.js';
-import { installedGhostContentDigest } from '../cindy-brain/ghostPackageContentDigest.js';
+import {
+  installedGhostContentDigest,
+  packableGhostSourceContentDigest,
+} from '../cindy-brain/ghostPackageContentDigest.js';
 import { PluginMarketApi } from './api.js';
 import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
@@ -2236,7 +2239,7 @@ export class PluginMarketService {
         ) {
           return 'mismatch';
         }
-        const sourceDigest = await installedGhostContentDigest(matches[0]!.dir);
+        const sourceDigest = await packableGhostSourceContentDigest(matches[0]!.dir);
         requireSameMarketOwner(owner);
         if (sourceDigest === null) return 'deferred';
         return sourceDigest === installedDigest ? 'match' : 'mismatch';

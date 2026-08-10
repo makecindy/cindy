@@ -44,6 +44,7 @@
     "locateMessageNotFound": "未找到要定位的訊息。",
     "shareNoLocalImage": "無法獲取本地圖片檔案",
     "shareFailedTitle": "分享失敗",
+    "shareImageFailed": "無法生成或開啟分享圖片，請重試。",
     "shareUnsupported": "當前客戶端暫不支援分享，更新到最新版本後重試。",
     "downloadFailed": "下載失敗",
     "voiceNoRemoteDevice": "缺少遠端裝置，不能開始語音輸入。",
@@ -105,6 +106,17 @@
     "forkConfirmDescription": "系統會根據這裡的對話上下文建立一個獨立的新任務。原任務不會改變，之後兩邊的訊息互不影響。",
     "forkConfirm": "開啟新任務",
     "forkCancel": "取消"
+  },
+  "shareImage": {
+    "title": "分享對話",
+    "selectedCount": "已選擇 {{count}} 條訊息",
+    "selectAll": "全選",
+    "clearAll": "取消全選",
+    "cancel": "取消分享",
+    "share": "分享圖片",
+    "generating": "正在準備…",
+    "checkboxLabel": "選擇要分享的訊息",
+    "shareMessage": "分享這條訊息"
   },
   "new": {
     "selectDevice": "選擇裝置",

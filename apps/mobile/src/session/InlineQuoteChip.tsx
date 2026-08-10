@@ -2,11 +2,8 @@ import { Alert } from 'react-native';
 import { MessageSquareQuote } from 'lucide-react-native';
 import { quoteSourceDisplayLabel, type ChatQuote } from '@cindy/maker-shared/chat-quotes';
 import { InlineReferenceChip } from '@/session/InlineReferenceChip';
+import { compactQuoteLabel } from '@/session/quotePresentation';
 import { iconSize, iconStroke, useTheme } from '@/theme';
-
-export function compactQuoteLabel(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
 
 /** One quote per chip, shared geometry with message-anchor references. */
 export function InlineQuoteChip({
