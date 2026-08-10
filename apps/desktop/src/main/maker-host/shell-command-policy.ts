@@ -1103,10 +1103,15 @@ interface HeredocRegion {
  * control operator; `$'...'` is treated as a plain single-quoted region.
  * Substitutions (`$(...)`, `<(...)`, `>(...)`, backticks) are re-scanned
  * recursively by the caller, so masking their markers here is safe.
+ * Shell quotes may span lines, so `initialQuote` carries the quote state
+ * from the previous line and the end state is returned for the next one.
  */
-function maskQuotedAndCommentRegions(line: string): string {
+function maskQuotedAndCommentRegions(
+  line: string,
+  initialQuote: "'" | '"' | '`' | null,
+): { masked: string; endQuote: "'" | '"' | '`' | null } {
   const masked = line.split('');
-  let quote: "'" | '"' | '`' | null = null;
+  let quote = initialQuote;
   let escaped = false;
   let comment = false;
   let parenDepth = 0;
@@ -1164,7 +1169,7 @@ function maskQuotedAndCommentRegions(line: string): string {
       continue;
     }
   }
-  return masked.join('');
+  return { masked: masked.join(''), endQuote: quote };
 }
 
 /**
@@ -1180,10 +1185,14 @@ function parseHeredocRegions(command: string): HeredocRegion[] {
   const regions: HeredocRegion[] = [];
   const pending: Array<Pick<HeredocRegion, 'lineIndex' | 'markerIndex' | 'delimiter' | 'tabStripped'>> =
     [];
+  // Quote state spans lines; body lines are data and do not affect it.
+  let quote: "'" | '"' | '`' | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? '';
     if (pending.length === 0) {
-      for (const match of maskQuotedAndCommentRegions(line).matchAll(HEREDOC_MARKER)) {
+      const { masked, endQuote } = maskQuotedAndCommentRegions(line, quote);
+      quote = endQuote;
+      for (const match of masked.matchAll(HEREDOC_MARKER)) {
         pending.push({
           lineIndex: index,
           markerIndex: match.index ?? 0,
@@ -1265,8 +1274,45 @@ function stringLiteralPieces(value: string): string[] {
   let index = 0;
   while (index < value.length) {
     const quote = value[index];
-    if (quote !== '"' && quote !== "'") {
+    if (quote !== '"' && quote !== "'" && quote !== '`') {
       index += 1;
+      continue;
+    }
+    if (quote === '`') {
+      // Template literal: static text is a piece, `${...}` expressions
+      // contribute the string literals they contain.
+      let cursor = index + 1;
+      let piece = '';
+      let closed = false;
+      while (cursor < value.length) {
+        const char = value[cursor]!;
+        if (char === '\\') {
+          piece += '\\' + (value[cursor + 1] ?? '');
+          cursor += 2;
+          continue;
+        }
+        if (char === '$' && value[cursor + 1] === '{') {
+          let depth = 1;
+          let end = cursor + 2;
+          while (end < value.length && depth > 0) {
+            if (value[end] === '{') depth += 1;
+            else if (value[end] === '}') depth -= 1;
+            end += 1;
+          }
+          pieces.push(...stringLiteralPieces(value.slice(cursor + 2, end - 1)));
+          cursor = end;
+          continue;
+        }
+        if (char === '`') {
+          closed = true;
+          break;
+        }
+        piece += char;
+        cursor += 1;
+      }
+      if (piece) pieces.push(piece);
+      if (!closed) break;
+      index = cursor + 1;
       continue;
     }
     let cursor = index + 1;
@@ -1368,6 +1414,29 @@ function decodedCharCodePieces(value: string): string[] {
   for (const match of value.matchAll(/(?<!\\)\\u([0-9a-fA-F]{4})/g)) {
     const code = parseInt(match[1] ?? '', 16);
     if (code > 0) pieces.push(String.fromCharCode(code));
+  }
+  // Base64/hex payloads decoded and executed at runtime: base64.b64decode,
+  // b64decode, atob, Buffer.from(..., base64|hex), bytes.fromhex.
+  const pushDecoded = (decoded: string): void => {
+    for (const char of decoded) {
+      if (char.charCodeAt(0) > 0) pieces.push(char);
+    }
+  };
+  for (const match of value.matchAll(
+    /(?:base64\.)?b64decode\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)/g,
+  )) {
+    pushDecoded(Buffer.from(match[1] ?? '', 'base64').toString('utf8'));
+  }
+  for (const match of value.matchAll(/\batob\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)/g)) {
+    pushDecoded(Buffer.from(match[1] ?? '', 'base64').toString('utf8'));
+  }
+  for (const match of value.matchAll(
+    /Buffer\.from\(\s*["']([A-Za-z0-9+/=]+)["']\s*,\s*["'](base64|hex)["']\s*\)/g,
+  )) {
+    pushDecoded(Buffer.from(match[1] ?? '', match[2] === 'hex' ? 'hex' : 'base64').toString('utf8'));
+  }
+  for (const match of value.matchAll(/bytes\.fromhex\(\s*["']([0-9a-fA-F]+)["']\s*\)/g)) {
+    pushDecoded(Buffer.from(match[1] ?? '', 'hex').toString('utf8'));
   }
   return pieces;
 }
