@@ -75,10 +75,16 @@ export function createDesktopMakerMemoryManager(): MakerMemoryManager {
     return path.join(app.getPath('userData'), 'owners', dataOwnerStorageKey(ownerId));
   };
   // 脱敏作用域键: owner id 经 sha256 前 20 hex 隐藏, 日志可直接记录。
+  // 追加 boundary 位 (review #2388 第二轮 P1): beginAppSessionBoundary() 后、
+  // commitActiveAppSession() 前 getActiveAppSession() 仍返回旧 owner —— 若 key
+  // 不含 boundary 状态, 已捕获 scopeAtEntry 的在途异步操作跨 await 复核会放行,
+  // 把旧 owner store 缓存入池。追加 ':boundary' 后 boundary 开始即 key 变化,
+  // 所有在途操作复核必失败, fail-closed 到新 commit。
   const ownerScopeKey = (): string => {
     const session = getActiveAppSession();
     const ownerSegment = session.dataOwnerId ? dataOwnerStorageKey(session.dataOwnerId) : 'none';
-    return `${session.mode}:${ownerSegment}:${session.generation}`;
+    const boundary = isAppSessionBoundaryPending() ? ':boundary' : '';
+    return `${session.mode}:${ownerSegment}:${session.generation}${boundary}`;
   };
   // 构造时快照仅用于 initialEnabled 读取与日志; 运行期以 resolveBasePath 为准。
   const basePath = resolveBasePath();
