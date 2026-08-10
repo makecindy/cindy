@@ -6,6 +6,7 @@ import {
   isWorkLouderCodexHostMessage,
   isWorkLouderCodexLightingFrameOff,
   parseWorkLouderCodexAgentKeyPress,
+  projectWorkLouderCodexSlotActivity,
   WorkLouderLightingEffect,
 } from '../protocol.js';
 
@@ -62,6 +63,16 @@ describe('createWorkLouderCodexLightingFrame', () => {
 
     expect(frame.threads.map((thread) => thread.id)).toEqual([0, 1, 2, 3, 4, 5]);
     expect(frame.threads.every((thread) => thread.brightness > 0)).toBe(true);
+  });
+
+  it('keeps an activity LED on the same slot as its task key assignment', () => {
+    const running = activity('running-task', 'running');
+    const projected = projectWorkLouderCodexSlotActivity([running], ['idle-task', 'running-task']);
+    const frame = createWorkLouderCodexLightingFrame([running], ['idle-task', 'running-task']);
+
+    expect(projected).toEqual([undefined, running, undefined, undefined, undefined, undefined]);
+    expect(frame.threads[0].brightness).toBe(0);
+    expect(frame.threads[1].brightness).toBeGreaterThan(0);
   });
 });
 

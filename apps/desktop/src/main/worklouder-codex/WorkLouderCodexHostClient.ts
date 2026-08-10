@@ -189,6 +189,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       return;
     }
     if (message.kind === 'agent-key') {
+      this.deps.log.debug('Codex Micro Agent key pressed', { slot: message.slot });
       this.agentKeyPressHandler?.(message.slot);
       return;
     }

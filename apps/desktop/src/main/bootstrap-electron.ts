@@ -1300,6 +1300,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   resetSchedulerReady();
   const agentIslandService = getAgentIslandService();
   agentIslandService?.resetRuntimeState();
+  workLouderCodexLightingController.suspendTaskSlots();
   // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
   // closeLocalDb 之前先 stop;否则下一秒 tick 会撞 'localDb not ready'。
   // resetScheduler 把 scheduler-host 的 _scheduler 单例置 null,下一次
@@ -6969,6 +6970,13 @@ app.on('ready', async () => {
         void ensureCurrentAccountProviderReadiness();
         return;
       }
+      try {
+        await workLouderCodexLightingController.resumeTaskSlots();
+      } catch (error) {
+        dbClientLog.warn('Work Louder task slot refresh failed (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
@@ -7304,7 +7312,15 @@ app.on('ready', async () => {
   registerGitReviewDeviceOp();
   registerModelVisibilityOwnerClaimIpc();
   registerModelVisibilitySyncIpc();
-  registerSidebarSettingsIpc();
+  registerSidebarSettingsIpc({
+    onPinnedOrderChanged: () => {
+      void workLouderCodexLightingController.refreshTaskSlots().catch((error) => {
+        dbClientLog.warn('Work Louder task slot refresh failed after pinned-order change', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+  });
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
   // + listAvailableShells / get|setDefaultShellPref)。owner WebContents destroyed 时:

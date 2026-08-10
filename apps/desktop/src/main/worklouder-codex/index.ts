@@ -10,6 +10,7 @@ import {
   type WorkLouderSdkLocation,
 } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
+import { listWorkLouderCodexTaskSlots } from './taskSlots.js';
 
 const log = createLogger('worklouder-codex');
 const requireFromMain = createRequire(__filename);
@@ -61,4 +62,5 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
     focusMainWindow();
     openMainWindowSession(sessionId);
   },
+  listWorkLouderCodexTaskSlots,
 );

@@ -76,21 +76,21 @@ const PHASE_PRIORITY: Readonly<Record<AgentIslandSessionActivity['phase'], numbe
  */
 export function createWorkLouderCodexLightingFrame(
   activity: readonly AgentIslandSessionActivity[],
+  slotSessionIds?: readonly string[],
 ): WorkLouderCodexLightingFrame {
-  const visible = selectWorkLouderCodexSlotActivity(activity);
-  const aggregate = visible.reduce<AgentIslandSessionActivity['phase'] | null>(
-    (current, item) =>
-      current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
-        ? item.phase
-        : current,
-    null,
-  );
+  const slots = projectWorkLouderCodexSlotActivity(activity, slotSessionIds);
+  const aggregate = slots.reduce<AgentIslandSessionActivity['phase'] | null>((current, item) => {
+    if (!item) return current;
+    return current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
+      ? item.phase
+      : current;
+  }, null);
 
   return {
     ambient: aggregate ? ambientForPhase(aggregate) : { ...OFF_SIDE },
     keys: aggregate ? keysForPhase(aggregate) : { ...OFF_SIDE },
     threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) =>
-      threadForActivity(id, visible[id]),
+      threadForActivity(id, slots[id]),
     ),
   };
 }
@@ -100,6 +100,21 @@ export function selectWorkLouderCodexSlotActivity(
   activity: readonly AgentIslandSessionActivity[],
 ): AgentIslandSessionActivity[] {
   return activity.filter(isLightingVisibleActivity).slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+}
+
+/** Aligns activity LEDs with an explicit six-task key assignment when one is available. */
+export function projectWorkLouderCodexSlotActivity(
+  activity: readonly AgentIslandSessionActivity[],
+  slotSessionIds?: readonly string[],
+): Array<AgentIslandSessionActivity | undefined> {
+  if (slotSessionIds === undefined) return selectWorkLouderCodexSlotActivity(activity);
+  const visibleBySessionId = new Map(
+    activity.filter(isLightingVisibleActivity).map((item) => [item.sessionId, item] as const),
+  );
+  return Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, slot) => {
+    const sessionId = slotSessionIds[slot];
+    return sessionId ? visibleBySessionId.get(sessionId) : undefined;
+  });
 }
 
 /** Accept only press events for the six official Agent keys (AG00 through AG05). */

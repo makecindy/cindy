@@ -487,6 +487,17 @@ describe('sidebarSettingsStore', () => {
     expect(harness.destroyedSend).not.toHaveBeenCalled();
   });
 
+  it('notifies main-process consumers after a durable pinned-order write', async () => {
+    const onPinnedOrderChanged = vi.fn();
+    const { registerSidebarSettingsIpc } = await import('../sidebarSettingsStore');
+    registerSidebarSettingsIpc({ onPinnedOrderChanged });
+    const order = ['session-a', 'session-b'];
+
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order } }));
+
+    expect(onPinnedOrderChanged).toHaveBeenCalledWith(order);
+  });
+
   it('releases settled per-owner write chains after success and failure', async () => {
     expect(sidebarTesting.pendingWriteChainCount()).toBe(0);
     await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } }));

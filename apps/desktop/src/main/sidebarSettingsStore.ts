@@ -374,7 +374,10 @@ function broadcastHiddenProjectKeysChanged(
   }
 }
 
-async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
+async function savePinnedOrder(
+  rawRequest: unknown,
+  onPinnedOrderChanged?: (order: readonly string[]) => void,
+): Promise<string[]> {
   const request = requireWriteRequest(rawRequest);
   const mutation = requirePinnedMutation(request.mutation);
   assertRequestedOwner(request);
@@ -411,6 +414,7 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
   }
   if (changed) {
     broadcastPinnedOrderChanged(nextSettings.pinnedOrder, ownerStamp);
+    onPinnedOrderChanged?.(nextSettings.pinnedOrder);
   }
   return Array.from(nextSettings.pinnedOrder);
 }
@@ -741,7 +745,11 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   return initializeScopedSidebarSettings(scopedPath, ownerKey, legacyPath);
 }
 
-export function registerSidebarSettingsIpc(): void {
+export interface SidebarSettingsIpcOptions {
+  onPinnedOrderChanged?: (order: readonly string[]) => void;
+}
+
+export function registerSidebarSettingsIpc(options: SidebarSettingsIpcOptions = {}): void {
   ipcMain.on('sidebar-settings:claim-renderer-legacy-owner-sync', (event) => {
     assertTrustedAppRendererEvent(event);
     event.returnValue = claimLegacyRendererSidebarOwner();
@@ -752,7 +760,10 @@ export function registerSidebarSettingsIpc(): void {
   });
   ipcMain.handle('sidebar-settings:save-pinned-order', (event, request) => {
     assertTrustedAppRendererEvent(event);
-    return savePinnedOrder(request as SidebarPinnedOrderWriteRequest);
+    return savePinnedOrder(
+      request as SidebarPinnedOrderWriteRequest,
+      options.onPinnedOrderChanged,
+    );
   });
   ipcMain.handle('sidebar-settings:set-project-hidden', (event, request) => {
     assertTrustedAppRendererEvent(event);
