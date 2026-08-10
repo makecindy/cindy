@@ -1256,7 +1256,12 @@ describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () =
     // Defer the upsert pump so the queued write is still pending when the
     // conversion runs — then release it; the delete must wait for it.
     let resolveUpsert!: () => void;
-    ipc.upsert.mockImplementationOnce(() => new Promise((r) => (resolveUpsert = r)));
+    ipc.upsert.mockImplementationOnce(
+      async () =>
+        new Promise<{ ok: true }>((r) => {
+          resolveUpsert = () => r({ ok: true });
+        }),
+    );
     const pendingPatch = store.patchTabState('s1', other.id, (s) => ({ ...(s as object), title: 'queued' }));
     await new Promise((r) => setTimeout(r, 0)); // let the write enqueue
     ipc.upsert.mockImplementation(async () => ({ ok: true }));

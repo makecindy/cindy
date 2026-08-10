@@ -215,17 +215,16 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
   });
   // did-start-navigation fires for EVERY navigation — including renderer
   // / webContents.loadURL, which does NOT emit will-navigate (round 10).
-  wc.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
+  wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
     if (!isMainFrame) return;
-    // A REAL (cross-document) navigation that commits away from a preview
-    // URL clears the preview identity — the page is no longer a preview.
-    // In-page navigations (history.pushState/replaceState) do NOT clear it:
-    // they keep the same document, so the guard must keep blocking escapes
-    // (codex-connector P1, round 27i).
-    if (!isInPlace && !isPreviewUrl(url)) {
-      previewActiveContents.delete(wc);
-      return;
-    }
+    // NOTE: the preview identity is NOT cleared here. did-start-navigation
+    // fires at navigation START; a loadURL that later fails/times out/stops
+    // leaves the OLD preview document alive, so deleting the identity here
+    // would disarm the guard while the preview page still lives (Greptile
+    // P1 XzI5E / codex-connector P1 XzOZH, round 27l). Identity is cleared
+    // only on did-navigate (committed), below. In-page navigations
+    // (history.pushState/replaceState) never fire did-navigate and keep the
+    // same document — identity stays, and will-navigate keeps blocking.
     if (!isPreviewUrl(url)) return;
     // Fail-closed on stale preview URLs (restart / port reuse): never
     // stop-and-replay a URL the current server does not authorize — the port
@@ -265,5 +264,16 @@ export function guardPreviewPageNavigation(wc: WebContents): void {
         previewGuardReplaying.delete(wc);
       }
     })();
+  });
+  // did-navigate fires when a MAIN-FRAME navigation COMMITS. This is the
+  // correct moment to drop the preview identity: the old preview document has
+  // been replaced, so the guard no longer needs to block its escapes. Cleared
+  // ONLY on commit — a loadURL that fails/times out/stops never commits, the
+  // old preview document survives, and the identity stays armed (Greptile
+  // P1 XzI5E / codex-connector P1 XzOZH, round 27l).
+  wc.on('did-navigate', (_event, url) => {
+    if (!isPreviewUrl(url)) {
+      previewActiveContents.delete(wc);
+    }
   });
 }

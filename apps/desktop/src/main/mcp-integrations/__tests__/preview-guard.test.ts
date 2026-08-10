@@ -42,9 +42,14 @@ function fakeWcForGuard(initialUrl: string) {
       return ev;
     },
     emitDidStart: (u: string, isInPlace = false) => {
-      // A committed navigation updates the URL (matches real WebContents).
-      currentUrl = u;
+      // A navigation STARTS (does not yet update the URL for the purpose of
+      // identity — identity clearing now happens on did-navigate).
       ee.emit('did-start-navigation', {}, u, isInPlace, true);
+    },
+    emitDidNavigate: (u: string) => {
+      // A main-frame navigation COMMITS (matches real WebContents).
+      currentUrl = u;
+      ee.emit('did-navigate', {}, u);
     },
     stopped,
     loaded,
@@ -58,6 +63,7 @@ function fakeWcForGuard(initialUrl: string) {
     loadURL(u: string): Promise<void>;
     emitWillNavigate(u: string): { preventDefault: ReturnType<typeof vi.fn> };
     emitDidStart(u: string, isInPlace?: boolean): void;
+    emitDidNavigate(u: string): void;
     stopped: unknown[];
     loaded: unknown[];
   };
@@ -176,16 +182,30 @@ describe('guardPreviewPageNavigation (preview identity)', () => {
     expect(ev.preventDefault).toHaveBeenCalled();
   });
 
-  it('clears identity on a REAL (cross-document) navigation away from preview (round 27i)', async () => {
+  it('clears identity on a REAL (cross-document) navigation away from preview (round 27i, committed via did-navigate round 27l)', async () => {
     setLivePreviewOrigin('http://127.0.0.1:49152');
     const wc = fakeWcForGuard(PREVIEW_URL);
     guardPreviewPageNavigation(wc as never);
     wc.emitDidStart(PREVIEW_URL); // enter identity
-    // A real navigation (isInPlace=false) commits away from the preview URL
-    // → identity cleared, guard no longer blocks escapes.
-    wc.emitDidStart('https://example.com/');
+    // A real navigation COMMITS away from the preview URL (did-navigate) →
+    // identity cleared, guard no longer blocks escapes.
+    wc.emitDidNavigate('https://example.com/');
     const ev = wc.emitWillNavigate('https://other.example/x');
     expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('keeps the preview identity when a navigation STARTS but never commits (Greptile P1 XzI5E / codex-connector P1 XzOZH)', async () => {
+    setLivePreviewOrigin('http://127.0.0.1:49152');
+    const wc = fakeWcForGuard(PREVIEW_URL);
+    guardPreviewPageNavigation(wc as never);
+    wc.emitDidStart(PREVIEW_URL); // enter identity
+    // A loadURL away from the preview starts (did-start-navigation) but then
+    // fails / times out / stops — it never commits (no did-navigate). The OLD
+    // preview document survives; the identity must STAY armed so a later
+    // page-initiated escape is still blocked.
+    wc.emitDidStart('https://evil.example/');
+    const ev = wc.emitWillNavigate('https://evil.example/exfil');
+    expect(ev.preventDefault).toHaveBeenCalled();
   });
 
   it('blocks a same-origin non-preview navigation (cannot probe loopback via the preview origin)', async () => {
