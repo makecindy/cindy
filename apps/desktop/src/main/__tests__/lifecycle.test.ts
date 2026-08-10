@@ -137,6 +137,67 @@ describe('runQuitDisposers', () => {
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
   });
 
+  it('stops async producers before draining DbClient and closing the local database', async () => {
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    const log: string[] = [];
+    let settleUsageWrite!: () => void;
+    const usageWrite = new Promise<void>((resolve) => {
+      settleUsageWrite = resolve;
+    });
+
+    onQuit(
+      'shutdown-maker',
+      async () => {
+        log.push('producer-started');
+        await Promise.resolve();
+        log.push('producer-stopped');
+        settleUsageWrite();
+      },
+      'async',
+    );
+    onQuit(
+      'db-client',
+      async () => {
+        log.push('drain-started');
+        await usageWrite;
+        log.push('usage-settled');
+        log.push('client-disposed');
+      },
+      'post-async',
+    );
+    onQuit(
+      'local-db-close',
+      () => {
+        log.push('local-db-closed');
+      },
+      'post-async',
+    );
+
+    await runQuitDisposers(1000);
+
+    expect(log).toEqual([
+      'producer-started',
+      'producer-stopped',
+      'drain-started',
+      'usage-settled',
+      'client-disposed',
+      'local-db-closed',
+    ]);
+  });
+
+  it('wires DbClient disposal into post-async before local DB close', () => {
+    const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+    const dbClient = source.indexOf(
+      "onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');",
+    );
+    const localDb = source.indexOf(
+      "onQuit('local-db-close', () => localDbCloseDb(), 'post-async');",
+    );
+
+    expect(dbClient).toBeGreaterThan(-1);
+    expect(localDb).toBeGreaterThan(dbClient);
+  });
+
   it('sync disposer that throws does not block subsequent disposers', async () => {
     const { onQuit, runQuitDisposers } = await freshLifecycle();
     const log: string[] = [];
