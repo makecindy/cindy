@@ -17,6 +17,8 @@ export interface RuntimeFillDraft {
   models: ProviderRuntimeModelConfig[];
   headers: RuntimeFillHeaderRow[];
   modelsUrl: string;
+  /** Non-secret metadata for headers held in main-only storage. */
+  headersConfigured?: boolean;
 }
 export type RuntimeFillField =
   'baseUrl' | 'requestPath' | 'wireProtocol' | 'apiKey' | 'models' | 'headers' | 'modelsUrl';
@@ -210,6 +212,16 @@ function sourceFieldHasValue(
   return Array.isArray(value) ? value.length > 0 : value !== '';
 }
 
+function targetFieldHasValue(
+  field: RuntimeFillField,
+  draft: RuntimeFillDraft,
+  agent: RuntimeFillAgent,
+) {
+  return field === 'headers'
+    ? sourceFieldHasValue(field, draft, agent) || draft.headersConfigured === true
+    : sourceFieldHasValue(field, draft, agent);
+}
+
 export function runtimeFillFieldHasValue(
   field: RuntimeFillField,
   draft: RuntimeFillDraft,
@@ -299,7 +311,7 @@ export function buildRuntimeFillDiffs(
       field,
       targetState: same
         ? 'same'
-        : sourceFieldHasValue(field, target, options.targetAgent)
+        : targetFieldHasValue(field, target, options.targetAgent)
           ? 'conflict'
           : 'empty',
     };
@@ -399,6 +411,10 @@ export function applyRuntimeFillFields(
   const models = selected.has('models')
     ? modelsForTarget(source.models, target.models, options.sourceAgent, options.targetAgent)
     : target.models;
+  const copyHeaders =
+    selected.has('headers') &&
+    fieldSupported(options.sourceAgent, 'headers', sourceWire) &&
+    fieldSupported(options.targetAgent, 'headers', sourceWire);
 
   return {
     baseUrl: copyBaseUrl ? source.baseUrl : target.baseUrl,
@@ -411,12 +427,8 @@ export function applyRuntimeFillFields(
     apiKey: selected.has('apiKey') ? source.apiKey : target.apiKey,
     wireProtocol: copyWireProtocol ? source.wireProtocol : target.wireProtocol,
     models,
-    headers:
-      selected.has('headers') &&
-      fieldSupported(options.sourceAgent, 'headers', sourceWire) &&
-      fieldSupported(options.targetAgent, 'headers', sourceWire)
-        ? canonicalHeaders(source.headers)
-        : target.headers,
+    headers: copyHeaders ? canonicalHeaders(source.headers) : target.headers,
+    headersConfigured: copyHeaders ? false : target.headersConfigured,
     modelsUrl:
       selected.has('modelsUrl') &&
       fieldSupported(options.sourceAgent, 'modelsUrl', sourceWire) &&

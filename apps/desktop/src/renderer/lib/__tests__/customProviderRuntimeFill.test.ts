@@ -233,6 +233,33 @@ describe('custom provider runtime fill', () => {
     });
   });
 
+  it('treats hidden stored target headers as a conflict without exposing their values', () => {
+    const source = draft({
+      baseUrl: 'https://source.example/v1',
+      headers: [{ name: 'X-Tenant', value: 'source-tenant' }],
+    });
+    const target = draft({
+      baseUrl: 'https://target.example/v1',
+      headersConfigured: true,
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'codex',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'headers')?.targetState).toBe('conflict');
+    expect(
+      applyRuntimeFillFields(target, source, ['headers'], {
+        sourceAgent: 'codex',
+        targetAgent: 'codex',
+      }),
+    ).toMatchObject({
+      headers: source.headers,
+      headersConfigured: false,
+    });
+  });
+
   it('clears a legacy target request path when filling from a path-free Pi source', () => {
     const source = draft({
       baseUrl: 'https://pi.example/v1',

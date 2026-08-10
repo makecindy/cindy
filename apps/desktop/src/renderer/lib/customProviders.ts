@@ -149,6 +149,9 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
       ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
         ? { headers: { ...routing.headerOverride } }
         : {}),
+      ...(routing?.headerOverridePresent === true
+        ? { headersConfigured: true }
+        : {}),
       ...(routing?.modelsUrl ? { modelsUrl: routing.modelsUrl } : {}),
     };
   }

@@ -215,6 +215,7 @@ describe('provider:list IPC handler', () => {
           upstream: 'https://custom.example/v1',
           authStrategy: 'api-key-header',
           headerOverride: { Authorization: 'Bearer secret' },
+          headerOverridePresent: true,
         },
       },
     } as unknown as ProviderView;
@@ -227,6 +228,7 @@ describe('provider:list IPC handler', () => {
       providers: ProviderView[];
     };
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
+    expect(result.providers[0].routing.pi?.headerOverridePresent).toBe(true);
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
   });
 
@@ -241,6 +243,7 @@ describe('provider:list IPC handler', () => {
           upstream: 'https://custom.example/v1',
           authStrategy: 'api-key-header',
           headerOverride: { Authorization: 'Bearer secret' },
+          headerOverridePresent: true,
         },
       },
     } as unknown as ProviderView;
@@ -253,6 +256,7 @@ describe('provider:list IPC handler', () => {
       providers: ProviderView[];
     };
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
+    expect(result.providers[0].routing.pi?.headerOverridePresent).toBe(true);
     // 非密字段仍完整回传,编辑表单据此渲染 endpoint/鉴权策略。
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
   });

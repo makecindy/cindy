@@ -258,6 +258,37 @@ describe('providerViewToCustomProviderConfig', () => {
       },
     ]);
   });
+
+  it('preserves non-secret presence metadata for main-only runtime headers', () => {
+    const provider = {
+      id: 'headered-provider',
+      name: 'Headered provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          upstream: 'https://api.example/v1',
+          authStrategy: 'api-key-header',
+          headerOverridePresent: true,
+        },
+      },
+      models: {
+        codex: [{
+          id: 'model',
+          name: 'Model',
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).runtimes.codex).toMatchObject({
+      headersConfigured: true,
+    });
+  });
 });
 
 describe('appendDiscoveredCustomProviderModels', () => {

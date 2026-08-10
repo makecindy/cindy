@@ -214,6 +214,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
             : [{ name: '', value: '' }],
         modelsUrl: rc.modelsUrl ?? '',
+        headersConfigured: rc.headersConfigured === true,
       };
     }
   }

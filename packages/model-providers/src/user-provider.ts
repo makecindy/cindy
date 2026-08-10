@@ -112,7 +112,10 @@ function toRouting(
     ...(requestPath ? { requestPath } : {}),
     ...(wireProtocol && wireProtocol !== defaultWireProtocol(agent) ? { wireProtocol } : {}),
   };
-  if (headers && Object.keys(headers).length > 0) r.headerOverride = { ...headers };
+  if (headers && Object.keys(headers).length > 0) {
+    r.headerOverride = { ...headers };
+    r.headerOverridePresent = true;
+  }
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
   return r;
