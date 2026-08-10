@@ -4824,7 +4824,8 @@
         "in-progress": "git 작업 진행 중",
         "agent-running": "에이전트 실행 중",
         "disabled": "리뷰를 사용할 수 없음",
-        "remote-device": "원격 기기 세션은 보기 전용입니다"
+        "remote-device": "원격 기기 세션은 보기 전용입니다",
+        "remote-ssh": "SSH 워크스페이스 검토는 보기 전용입니다"
       },
       "remote": {
         "deviceTooOldTitle": "상대 기기 버전이 너무 오래되었습니다",

@@ -4824,7 +4824,8 @@
         "in-progress": "git 操作が進行中です",
         "agent-running": "エージェントが実行中です",
         "disabled": "レビューを利用できません",
-        "remote-device": "リモートデバイスのセッションは閲覧のみです"
+        "remote-device": "リモートデバイスのセッションは閲覧のみです",
+        "remote-ssh": "SSH ワークスペースのレビューは表示専用です"
       },
       "remote": {
         "deviceTooOldTitle": "相手デバイスのバージョンが古すぎます",

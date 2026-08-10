@@ -4823,7 +4823,8 @@
         "in-progress": "git 操作進行中",
         "agent-running": "Agent 正在執行",
         "disabled": "審查不可用",
-        "remote-device": "遠端設備任務僅支援檢視"
+        "remote-device": "遠端設備任務僅支援檢視",
+        "remote-ssh": "SSH 工作區審查僅支援檢視"
       },
       "remote": {
         "deviceTooOldTitle": "對方設備版本過舊",
