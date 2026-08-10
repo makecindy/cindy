@@ -20,6 +20,12 @@ type Fetcher = <T>(
   options: Omit<ApiFetchOptions, 'baseUrl'>,
 ) => Promise<T>;
 
+export interface PluginInstallReceiptResponse {
+  accepted: true;
+  duplicate: boolean;
+  eventId: string;
+}
+
 const defaultFetcher: Fetcher = (apiPath, options) =>
   serverApiFetch(apiPath, {
     ...options,
@@ -110,5 +116,33 @@ export class PluginMarketApi {
         this.requestOptions(),
       ),
     );
+  }
+
+  async recordInstallReceipt(
+    pluginId: string,
+    releaseId: string,
+    eventId: string,
+  ): Promise<PluginInstallReceiptResponse> {
+    const response = await this.fetcher<unknown>(
+      `/api/plugins/${encodeURIComponent(pluginId)}/install-events`,
+      {
+        ...this.requestOptions(),
+        method: 'POST',
+        body: { eventId, releaseId },
+        // 回执必须是后台尽力而为；服务端悬挂不能拖住本地安装。
+        timeoutMs: 5_000,
+      },
+    );
+    if (
+      !response ||
+      typeof response !== 'object' ||
+      Array.isArray(response) ||
+      (response as { accepted?: unknown }).accepted !== true ||
+      typeof (response as { duplicate?: unknown }).duplicate !== 'boolean' ||
+      (response as { eventId?: unknown }).eventId !== eventId
+    ) {
+      throw new Error('Plugin install receipt response is invalid');
+    }
+    return response as PluginInstallReceiptResponse;
   }
 }
