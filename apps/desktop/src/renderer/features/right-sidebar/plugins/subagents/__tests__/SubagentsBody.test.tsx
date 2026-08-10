@@ -41,6 +41,7 @@ function detail(summary: string): SubagentRunDetail {
       viewActivity: false,
       viewReturnedResult: false,
       viewFullTranscript: false,
+      viewCost: false,
       resume: false,
       steer: false,
       stop: false,

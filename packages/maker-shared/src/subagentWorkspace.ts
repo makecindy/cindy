@@ -43,6 +43,7 @@ export interface SubagentCapabilities {
   viewActivity: boolean;
   viewReturnedResult: boolean;
   viewFullTranscript: boolean;
+  viewCost: boolean;
   resume: boolean;
   steer: boolean;
   stop: boolean;
@@ -53,6 +54,36 @@ export interface SubagentRunUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+}
+
+export type SubagentCostQuality = 'actual' | 'estimated' | 'unavailable';
+
+export interface SubagentTokenBreakdown {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+}
+
+export interface SubagentCostMoney {
+  amount: number;
+  currency: 'CNY' | 'USD';
+  approximate: boolean;
+}
+
+export interface SubagentCostSnapshot {
+  quality: SubagentCostQuality;
+  totalTokens?: number;
+  breakdown?: SubagentTokenBreakdown;
+  cost?: SubagentCostMoney;
+  model?: string;
+  frozenAt: number;
+}
+
+export interface SubagentRunIdentity {
+  displayName?: string;
+  role?: string;
+  nativeName?: string;
 }
 
 export interface SubagentRun {
@@ -75,6 +106,8 @@ export interface SubagentRun {
   model?: string;
   reasoningEffort?: string;
   usage?: SubagentRunUsage;
+  identity?: SubagentRunIdentity;
+  costSnapshot?: SubagentCostSnapshot;
   capabilities: SubagentCapabilities;
   startedAt: number;
   updatedAt: number;
@@ -163,6 +196,19 @@ export const SUBAGENT_PR1_CAPABILITIES: Readonly<SubagentCapabilities> =
     viewActivity: true,
     viewReturnedResult: true,
     viewFullTranscript: false,
+    viewCost: false,
+    resume: false,
+    steer: false,
+    stop: false,
+    parentContext: 'unknown',
+  });
+
+export const SUBAGENT_PR2_CAPABILITIES: Readonly<SubagentCapabilities> =
+  Object.freeze({
+    viewActivity: true,
+    viewReturnedResult: true,
+    viewFullTranscript: true,
+    viewCost: true,
     resume: false,
     steer: false,
     stop: false,

@@ -5097,6 +5097,18 @@
         "tool": "ツール",
         "system": "システム"
       },
+      "cost": "コスト",
+      "costActual": "実際",
+      "costEstimated": "推定",
+      "costUnavailable": "コスト不明",
+      "tokenBreakdown": "トークン内訳",
+      "inputTokens": "入力",
+      "outputTokens": "出力",
+      "cacheReadTokens": "キャッシュ読取",
+      "cacheCreateTokens": "キャッシュ書込",
+      "transcriptLoading": "読み込み中…",
+      "transcriptLoadMore": "さらに読み込む",
+      "transcriptEmpty": "内容なし",
       "lastTool": "最後のツール：{{tool}}",
       "tokens": "{{value}} tokens",
       "activityKinds": {

@@ -109,8 +109,20 @@ describe('ClaudeSubagentUsageBridge', () => {
     observe(bridge, 2, 'codex/gpt-5.6-terra', 'Solve calculator problem B', sse(200, 30));
     observe(bridge, 3, 'codex/gpt-5.6-terra', 'Solve calculator problem A', sse(150, 5, 20));
 
-    expect(bridge.getTaskUsage('agent-a')).toEqual({ totalTokens: 185 });
-    expect(bridge.getTaskUsage('agent-b')).toEqual({ totalTokens: 230 });
+    expect(bridge.getTaskUsage('agent-a')).toEqual({
+      totalTokens: 185,
+      inputTokens: 170,
+      outputTokens: 15,
+      cacheReadTokens: 20,
+      cacheCreateTokens: 0,
+    });
+    expect(bridge.getTaskUsage('agent-b')).toEqual({
+      totalTokens: 230,
+      inputTokens: 200,
+      outputTokens: 30,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
   });
 
   it('does not observe unrelated parent-agent requests', () => {
@@ -172,7 +184,13 @@ describe('ClaudeSubagentUsageBridge', () => {
     sink?.onData?.(sse(100, 10));
     sink?.onEnd?.();
 
-    expect(bridge.getTaskUsage('agent-a')).toEqual({ totalTokens: 110 });
+    expect(bridge.getTaskUsage('agent-a')).toEqual({
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
   });
 
   it('does not evict a task reserved by an in-flight response at the tracking limit', () => {
@@ -202,7 +220,13 @@ describe('ClaudeSubagentUsageBridge', () => {
 
     sink?.onData?.(sse(100, 10));
     sink?.onEnd?.();
-    expect(bridge.getTaskUsage('agent-inflight')).toEqual({ totalTokens: 110 });
+    expect(bridge.getTaskUsage('agent-inflight')).toEqual({
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
   });
 
   it('rejects reservation overflow without dropping protection for older in-flight responses', () => {
@@ -241,7 +265,13 @@ describe('ClaudeSubagentUsageBridge', () => {
     oldest?.onData?.(sse(100, 10));
     oldest?.onEnd?.();
 
-    expect(bridge.getTaskUsage('agent-inflight')).toEqual({ totalTokens: 110 });
+    expect(bridge.getTaskUsage('agent-inflight')).toEqual({
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
     expect(bridge.reserveRequest(1_001, payload)).toBe('agent-inflight');
   });
 
@@ -282,7 +312,13 @@ describe('ClaudeSubagentUsageBridge', () => {
 
     sinks[0]?.onData?.(sse(100, 10));
     sinks[0]?.onEnd?.();
-    expect(bridge.getTaskUsage('agent-streaming')).toEqual({ totalTokens: 110 });
+    expect(bridge.getTaskUsage('agent-streaming')).toEqual({
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
   });
 
   it('prefers the longest matching prompt when prompts overlap', () => {
@@ -337,7 +373,19 @@ describe('ClaudeSubagentUsageBridge', () => {
     first?.onData?.(sse(100, 10));
     first?.onEnd?.();
 
-    expect(bridge.getTaskUsage('agent-a')).toEqual({ totalTokens: 110 });
-    expect(bridge.getTaskUsage('agent-b')).toEqual({ totalTokens: 220 });
+    expect(bridge.getTaskUsage('agent-a')).toEqual({
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
+    expect(bridge.getTaskUsage('agent-b')).toEqual({
+      totalTokens: 220,
+      inputTokens: 200,
+      outputTokens: 20,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
   });
 });

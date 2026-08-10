@@ -975,6 +975,7 @@ function toClaudeTaskUpdate(msg: {
     ...(model ? { model } : {}),
     ...(workflowProgress ? { workflowProgress } : {}),
     ...(subagentObservation ? { subagentObservation } : {}),
+    ...(isKnownSubagent ? { role: 'developer' } : {}),
   };
 }
 

@@ -29,11 +29,17 @@ export interface ClaudeSubagentTaskRegistration {
 
 export interface ClaudeSubagentTaskUsage {
   totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
 }
 
 interface TrackedTask extends ClaudeSubagentTaskRegistration {
   normalizedPrompt: string;
   latestInputTokens: number;
+  latestCacheReadTokens: number;
+  latestCacheCreateTokens: number;
   cumulativeOutputTokens: number;
   matchedRequests: number;
   registrationOrder: number;
@@ -110,6 +116,8 @@ export class ClaudeSubagentUsageBridge {
       ...task,
       normalizedPrompt,
       latestInputTokens: 0,
+      latestCacheReadTokens: 0,
+      latestCacheCreateTokens: 0,
       cumulativeOutputTokens: 0,
       matchedRequests: 0,
       registrationOrder: this.nextRegistrationOrder++,
@@ -184,10 +192,15 @@ export class ClaudeSubagentUsageBridge {
   recordResponseUsage(taskId: string, usage: Record<string, unknown>): void {
     const task = this.tasks.get(taskId);
     if (!task) return;
-    const inputTokens = numberField(usage, 'input_tokens')
-      + numberField(usage, 'cache_read_input_tokens')
-      + numberField(usage, 'cache_creation_input_tokens');
-    if (inputTokens > 0) task.latestInputTokens = inputTokens;
+    const rawInput = numberField(usage, 'input_tokens');
+    const cacheRead = numberField(usage, 'cache_read_input_tokens');
+    const cacheCreate = numberField(usage, 'cache_creation_input_tokens');
+    const inputTokens = rawInput + cacheRead + cacheCreate;
+    if (inputTokens > 0) {
+      task.latestInputTokens = inputTokens;
+      task.latestCacheReadTokens = cacheRead;
+      task.latestCacheCreateTokens = cacheCreate;
+    }
     task.cumulativeOutputTokens += numberField(usage, 'output_tokens');
   }
 
@@ -195,7 +208,14 @@ export class ClaudeSubagentUsageBridge {
     const task = this.tasks.get(taskId);
     if (!task) return undefined;
     const totalTokens = task.latestInputTokens + task.cumulativeOutputTokens;
-    return totalTokens > 0 ? { totalTokens } : undefined;
+    if (totalTokens <= 0) return undefined;
+    return {
+      totalTokens,
+      inputTokens: task.latestInputTokens,
+      outputTokens: task.cumulativeOutputTokens,
+      cacheReadTokens: task.latestCacheReadTokens,
+      cacheCreateTokens: task.latestCacheCreateTokens,
+    };
   }
 
   clear(): void {

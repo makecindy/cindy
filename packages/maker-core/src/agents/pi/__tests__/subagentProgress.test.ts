@@ -32,6 +32,8 @@ describe('parsePiSubagentProgress', () => {
           parentToolUseId: 'sa-1',
         },
         title: 'scout',
+        role: 'scout',
+        nativeName: 'scout',
         description: 'survey the auth flow',
         model: 'claude-haiku-4-5',
         usage: { totalTokens: 12_345, toolUses: 7, durationMs: 4_200 },

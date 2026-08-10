@@ -5,10 +5,13 @@ import {
   SUBAGENT_PR1_CAPABILITIES,
   type SubagentActivityEntry,
   type SubagentCapabilities,
+  type SubagentCostSnapshot,
   type SubagentProvider,
   type SubagentRun,
   type SubagentRunDetail,
+  type SubagentRunIdentity,
   type SubagentRunStatus,
+  type SubagentTokenBreakdown,
 } from '@cindy/maker-shared/subagent-workspace';
 import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import {
@@ -134,6 +137,7 @@ function parseCapabilities(raw: string): SubagentCapabilities {
     viewActivity: value.viewActivity === true,
     viewReturnedResult: value.viewReturnedResult === true,
     viewFullTranscript: value.viewFullTranscript === true,
+    viewCost: value.viewCost === true,
     resume: value.resume === true,
     steer: value.steer === true,
     stop: value.stop === true,
@@ -217,12 +221,50 @@ function appendActivity(
   return [...current, next].slice(-MAX_ACTIVITY_ENTRIES);
 }
 
+function rowToIdentity(row: SubagentRunRow): SubagentRunIdentity | undefined {
+  if (!row.displayName && !row.role && !row.nativeName) return undefined;
+  return {
+    ...(row.displayName ? { displayName: row.displayName } : {}),
+    ...(row.role ? { role: row.role } : {}),
+    ...(row.nativeName ? { nativeName: row.nativeName } : {}),
+  };
+}
+
+function rowToCostSnapshot(row: SubagentRunRow): SubagentCostSnapshot | undefined {
+  if (!row.costQuality) return undefined;
+  const breakdown: SubagentTokenBreakdown = {};
+  if (row.costInputTokens !== null) breakdown.inputTokens = row.costInputTokens;
+  if (row.costOutputTokens !== null) breakdown.outputTokens = row.costOutputTokens;
+  if (row.costCacheReadTokens !== null) breakdown.cacheReadTokens = row.costCacheReadTokens;
+  if (row.costCacheCreateTokens !== null) breakdown.cacheCreateTokens = row.costCacheCreateTokens;
+  const hasCost =
+    row.costAmount !== null && row.costCurrency !== null;
+  return {
+    quality: row.costQuality,
+    ...(row.costTotalTokens !== null ? { totalTokens: row.costTotalTokens } : {}),
+    ...(Object.keys(breakdown).length > 0 ? { breakdown } : {}),
+    ...(hasCost
+      ? {
+          cost: {
+            amount: row.costAmount!,
+            currency: row.costCurrency! as 'CNY' | 'USD',
+            approximate: row.costApproximate === true,
+          },
+        }
+      : {}),
+    ...(row.model ? { model: row.model } : {}),
+    frozenAt: row.costFrozenAt ?? row.updatedAt,
+  };
+}
+
 function rowToRun(row: SubagentRunRow): SubagentRun {
   const usage = {
     ...(row.totalTokens !== null ? { totalTokens: row.totalTokens } : {}),
     ...(row.toolUses !== null ? { toolUses: row.toolUses } : {}),
     ...(row.durationMs !== null ? { durationMs: row.durationMs } : {}),
   };
+  const identity = rowToIdentity(row);
+  const costSnapshot = rowToCostSnapshot(row);
   return {
     id: row.id,
     parentSessionId: row.sessionId,
@@ -238,6 +280,8 @@ function rowToRun(row: SubagentRunRow): SubagentRun {
     ...(row.model ? { model: row.model } : {}),
     ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
     ...(Object.keys(usage).length > 0 ? { usage } : {}),
+    ...(identity ? { identity } : {}),
+    ...(costSnapshot ? { costSnapshot } : {}),
     capabilities: parseCapabilities(row.capabilities),
     startedAt: row.startedAt,
     updatedAt: row.updatedAt,
@@ -456,6 +500,9 @@ export async function persistSubagentTaskUpdate(
     totalTokens: boundedNumber(update.usage?.totalTokens) ?? existing?.totalTokens ?? null,
     toolUses: boundedNumber(update.usage?.toolUses) ?? existing?.toolUses ?? null,
     durationMs: boundedNumber(update.usage?.durationMs) ?? existing?.durationMs ?? null,
+    displayName: boundedText(update.displayName, TEXT_LIMITS.title) ?? existing?.displayName ?? null,
+    role: boundedText(update.role, TEXT_LIMITS.reasoningEffort) ?? existing?.role ?? null,
+    nativeName: boundedText(update.nativeName, TEXT_LIMITS.title) ?? existing?.nativeName ?? null,
     capabilities: existing?.capabilities ?? JSON.stringify(SUBAGENT_PR1_CAPABILITIES),
     activity: JSON.stringify(activity),
     startedAt,

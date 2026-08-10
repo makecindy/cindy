@@ -7,6 +7,7 @@ import {
   type SubagentRunDetailResponse,
   type SubagentRunsChangedPayload,
   type SubagentRunsListResponse,
+  type SubagentTranscriptPageResponse,
 } from '@cindy/maker-shared/subagent-workspace';
 
 import { getActiveDataOwnerPushStamp } from '../../appSessionState.js';
@@ -25,6 +26,7 @@ import {
   requireString,
 } from '../../utils/ipcValidate.js';
 import { getSubagentRunDetail, listSubagentRuns } from '../subagentRuns.js';
+import { resolveSubagentTranscript } from '../subagentTranscriptResolvers/index.js';
 
 const SUBAGENT_PROVIDERS = [
   'claude-code',
@@ -93,5 +95,17 @@ export function registerSubagentRunsIpc(): void {
       supported: run !== undefined,
       run: run ?? null,
     } satisfies SubagentRunDetailResponse;
+  });
+
+  ipcMain.handle('local-db:subagent-runs:transcript', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(input, 'subagent transcript input');
+    const sessionId = requireString(body.sessionId, 'sessionId');
+    const provider = requireEnum(body.provider, SUBAGENT_PROVIDERS, 'provider');
+    const runIdOrAlias = requireString(body.runIdOrAlias, 'runIdOrAlias');
+    const cursor = body.cursor === undefined ? undefined : requireString(body.cursor, 'cursor');
+    const limit = body.limit === undefined ? undefined : requireNonNegativeInt(body.limit, 'limit');
+    const page = await resolveSubagentTranscript(sessionId, provider, runIdOrAlias, { cursor, limit });
+    return page satisfies SubagentTranscriptPageResponse;
   });
 }

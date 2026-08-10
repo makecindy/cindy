@@ -5096,6 +5096,18 @@
         "tool": "工具",
         "system": "系統"
       },
+      "cost": "費用",
+      "costActual": "實際",
+      "costEstimated": "估算",
+      "costUnavailable": "費用不可用",
+      "tokenBreakdown": "Token 明細",
+      "inputTokens": "輸入",
+      "outputTokens": "輸出",
+      "cacheReadTokens": "快取讀取",
+      "cacheCreateTokens": "快取寫入",
+      "transcriptLoading": "載入中…",
+      "transcriptLoadMore": "載入更早的",
+      "transcriptEmpty": "未擷取內容",
       "lastTool": "最近工具：{{tool}}",
       "tokens": "{{value}} tokens",
       "activityKinds": {

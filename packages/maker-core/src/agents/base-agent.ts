@@ -314,6 +314,10 @@ export interface ClaudeSubagentTaskRegistration {
 
 export interface ClaudeSubagentTaskUsage {
   totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
 }
 
 /**

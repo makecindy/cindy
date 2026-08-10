@@ -5099,6 +5099,18 @@
         "tool": "Tool",
         "system": "System"
       },
+      "cost": "Cost",
+      "costActual": "Actual",
+      "costEstimated": "Estimated",
+      "costUnavailable": "Cost unavailable",
+      "tokenBreakdown": "Token breakdown",
+      "inputTokens": "Input",
+      "outputTokens": "Output",
+      "cacheReadTokens": "Cache read",
+      "cacheCreateTokens": "Cache write",
+      "transcriptLoading": "Loading transcript…",
+      "transcriptLoadMore": "Load earlier",
+      "transcriptEmpty": "No content captured",
       "lastTool": "Last tool: {{tool}}",
       "tokens": "{{value}} tokens",
       "activityKinds": {

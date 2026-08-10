@@ -19,6 +19,9 @@ import type {
   SubagentRunDetail,
 } from '@cindy/maker-shared/subagent-workspace';
 
+import { CostSection } from './CostSection';
+import { TranscriptSection } from './TranscriptSection';
+
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -56,8 +59,20 @@ function providerLabel(provider: SubagentProvider): string {
   return 'PI';
 }
 
-function runTitle(run: SubagentRun, fallback: string): string {
+function runPrimaryLabel(run: SubagentRun, fallback: string): string {
+  if (run.identity?.displayName?.trim()) return run.identity.displayName.trim();
+  if (run.identity?.role?.trim()) {
+    const role = run.identity.role.trim();
+    return role.charAt(0).toUpperCase() + role.slice(1);
+  }
   return run.title?.trim() || run.description?.trim() || fallback;
+}
+
+function runSecondaryLabel(run: SubagentRun): string | undefined {
+  if (run.identity?.displayName || run.identity?.role) {
+    return run.title?.trim() || undefined;
+  }
+  return undefined;
 }
 
 function metadata(run: SubagentRun, t: TFunction): string[] {
@@ -89,9 +104,18 @@ function StatusGlyph({ status, label }: { status: SubagentRun['status']; label: 
   );
 }
 
+function formatRunCostBadge(run: SubagentRun): string | undefined {
+  const cost = run.costSnapshot?.cost;
+  if (!cost || cost.amount <= 0) return undefined;
+  if (cost.amount < 0.01) return '<$0.01';
+  return `$${cost.amount.toFixed(2)}`;
+}
+
 function RunRow({ run, onOpen }: { run: SubagentRun; onOpen: (run: SubagentRun) => void }) {
   const { t } = useTranslation();
-  const title = runTitle(run, t('rightSidebar.subagents.untitled'));
+  const primary = runPrimaryLabel(run, t('rightSidebar.subagents.untitled'));
+  const secondary = runSecondaryLabel(run);
+  const costBadge = formatRunCostBadge(run);
   const statusLabel = t(`chat.agentTask.status.${run.status}`);
   return (
     <button
@@ -103,9 +127,21 @@ function RunRow({ run, onOpen }: { run: SubagentRun; onOpen: (run: SubagentRun) 
         <StatusGlyph status={run.status} label={statusLabel} />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
-          {title}
+        <span className="flex items-center gap-1.5">
+          <span className="block truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
+            {primary}
+          </span>
+          {costBadge ? (
+            <span className="shrink-0 rounded px-1 py-0.5 text-10 font-medium bg-[var(--surface-chip)] text-[var(--text-tertiary)]">
+              {costBadge}
+            </span>
+          ) : null}
         </span>
+        {secondary ? (
+          <span className="mt-0.5 block truncate text-12 leading-4 text-[var(--text-secondary)]">
+            {secondary}
+          </span>
+        ) : null}
         <span className="mt-0.5 block truncate text-11 leading-4 text-[var(--text-tertiary)]">
           {metadata(run, t).join(' · ')}
         </span>
@@ -176,7 +212,7 @@ function DetailView({
       </div>
     );
   }
-  const title = runTitle(detail, t('rightSidebar.subagents.untitled'));
+  const title = runPrimaryLabel(detail, t('rightSidebar.subagents.untitled'));
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <HeaderBack onBack={onBack} title={title} status={detail.status} />
@@ -249,11 +285,16 @@ function DetailView({
           </section>
         ) : null}
 
-        {!detail.capabilities.viewFullTranscript ? (
-          <p className="mt-5 rounded-lg bg-[var(--surface-subtle)] px-3 py-2 text-11 leading-4 text-[var(--text-tertiary)]">
-            {t('rightSidebar.subagents.transcriptUnavailable')}
-          </p>
+        {detail.capabilities.viewCost ? (
+          <CostSection costSnapshot={detail.costSnapshot} />
         ) : null}
+
+        <TranscriptSection
+          sessionId={detail.parentSessionId}
+          provider={detail.provider}
+          runId={detail.id}
+          supported={detail.capabilities.viewFullTranscript}
+        />
       </div>
     </div>
   );

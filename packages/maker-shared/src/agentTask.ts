@@ -144,6 +144,12 @@ export interface AgentTaskUpdate {
   /** `null` is an explicit live-update instruction to clear a stale model badge. */
   model?: string | null;
   reasoningEffort?: string;
+  /** Functional role label for the sidebar list view. */
+  role?: string;
+  /** User-specified name; takes display priority over role. */
+  displayName?: string;
+  /** Harness-native technical name (for routing/diagnostics). */
+  nativeName?: string;
   receiverThreadIds?: string[];
   /**
    * workflow 逐 agent 进度树(taskType=local_workflow 时由 task_progress 事件携带)。
@@ -244,6 +250,9 @@ export function normalizeAgentTaskUpdate(
         ? { model: raw.model }
         : {}),
     ...(typeof raw.reasoningEffort === 'string' && raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
+    ...(typeof raw.role === 'string' && raw.role ? { role: raw.role } : {}),
+    ...(typeof raw.displayName === 'string' && raw.displayName ? { displayName: raw.displayName } : {}),
+    ...(typeof raw.nativeName === 'string' && raw.nativeName ? { nativeName: raw.nativeName } : {}),
     ...(Array.isArray(raw.receiverThreadIds)
       ? { receiverThreadIds: raw.receiverThreadIds.filter((id): id is string => typeof id === 'string') }
       : {}),
@@ -269,6 +278,10 @@ export function mergeAgentTaskUpdate(prev: AgentTaskUpdate | undefined, next: Ag
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
     model: next.model === null ? null : next.model ?? prev.model,
+    reasoningEffort: next.reasoningEffort ?? prev.reasoningEffort,
+    role: next.role ?? prev.role,
+    displayName: next.displayName ?? prev.displayName,
+    nativeName: next.nativeName ?? prev.nativeName,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
 }

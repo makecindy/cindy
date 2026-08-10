@@ -758,3 +758,256 @@ export default async function cindySubagent(pi: any) {
  */
 export const CINDY_SUBAGENT_EXTENSION_SOURCE =
   CINDY_SUBAGENT_EXTENSION_BODY + CINDY_SUBAGENT_PARENT_WATCHDOG_SOURCE;
+
+// ---------------------------------------------------------------------------
+// PiTranscriptBuffer: host-side accumulator for PI subagent JSONL transcripts.
+// ---------------------------------------------------------------------------
+
+import type { SubagentTranscriptEntry, SubagentTranscriptRole } from '@cindy/maker-shared/subagent-workspace';
+
+/** Maximum entries retained per buffer instance. */
+const PI_TRANSCRIPT_MAX_ENTRIES = 500;
+/** Maximum characters for a single entry's content field (64 KB). */
+const PI_TRANSCRIPT_MAX_CONTENT = 64 * 1024;
+
+function piClampContent(content: string): string {
+  if (content.length <= PI_TRANSCRIPT_MAX_CONTENT) return content;
+  return content.slice(0, PI_TRANSCRIPT_MAX_CONTENT - 1) + '…';
+}
+
+/**
+ * Lightweight buffer that captures PI child process stdout JSONL lines and maps
+ * them to `SubagentTranscriptEntry` format.
+ *
+ * Usage:
+ *  - Call `note(line)` for each raw stdout line from the pi child process.
+ *  - After the child exits, call `getEntries()` to retrieve the transcript.
+ *  - The host layer passes entries to `onTranscriptReady` for file persistence.
+ *
+ * This class lives in maker-core (not desktop), so it cannot write files directly.
+ * The desktop host layer handles persistence via the callback pattern.
+ *
+ * Bounds: max 500 entries, max 64 KB per entry content.
+ */
+export class PiTranscriptBuffer {
+  private readonly entries: SubagentTranscriptEntry[] = [];
+  private nextSequence = 0;
+  private readonly now: () => number;
+
+  constructor(opts?: { now?: () => number }) {
+    this.now = opts?.now ?? (() => Date.now());
+  }
+
+  /** Called per stdout line from the PI child process. */
+  note(line: string): void {
+    if (!line || typeof line !== 'string') return;
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    let event: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      event = parsed as Record<string, unknown>;
+    } catch {
+      return;
+    }
+
+    const eventType = typeof event.type === 'string' ? event.type : '';
+
+    // message_end with role: "assistant" -> subagent transcript entry
+    if (eventType === 'message_end') {
+      this.handleMessageEnd(event);
+      return;
+    }
+
+    // message_start or message with role: "user" -> parent entry
+    if (eventType === 'message_start' || eventType === 'message') {
+      this.handleUserMessage(event);
+      return;
+    }
+
+    // tool_execution_start -> tool entry
+    if (eventType === 'tool_execution_start') {
+      this.handleToolStart(event);
+      return;
+    }
+
+    // tool_execution_end -> tool result entry
+    if (eventType === 'tool_execution_end') {
+      this.handleToolEnd(event);
+      return;
+    }
+  }
+
+  /** Get all accumulated transcript entries. */
+  getEntries(): SubagentTranscriptEntry[] {
+    return this.entries.slice();
+  }
+
+  /** Number of buffered entries (diagnostic). */
+  get size(): number {
+    return this.entries.length;
+  }
+
+  // -- Private handlers --
+
+  private handleMessageEnd(event: Record<string, unknown>): void {
+    const message = event.message as Record<string, unknown> | null | undefined;
+    if (!message || typeof message !== 'object') return;
+
+    const role = message.role;
+    if (role !== 'assistant') return;
+
+    const text = this.extractAssistantText(message);
+    if (!text) return;
+
+    this.pushEntry({
+      id: `pi-msg-${this.nextSequence}`,
+      role: 'subagent',
+      content: text,
+    });
+  }
+
+  private handleUserMessage(event: Record<string, unknown>): void {
+    const message = (event.message ?? event) as Record<string, unknown>;
+    if (!message || typeof message !== 'object') return;
+
+    const role = message.role;
+    if (role !== 'user') return;
+
+    const text = this.extractMessageText(message);
+    if (!text) return;
+
+    this.pushEntry({
+      id: `pi-user-${this.nextSequence}`,
+      role: 'parent',
+      content: text,
+    });
+  }
+
+  private handleToolStart(event: Record<string, unknown>): void {
+    const toolName = typeof event.tool_name === 'string'
+      ? event.tool_name
+      : typeof event.name === 'string'
+        ? event.name
+        : 'unknown_tool';
+
+    const input = event.tool_input ?? event.input;
+    const inputSummary = this.summarizeInput(input);
+    const content = inputSummary
+      ? `${toolName}: ${inputSummary}`
+      : toolName;
+
+    this.pushEntry({
+      id: `pi-tool-${this.nextSequence}`,
+      role: 'tool',
+      content,
+      toolName,
+    });
+  }
+
+  private handleToolEnd(event: Record<string, unknown>): void {
+    const toolName = typeof event.tool_name === 'string'
+      ? event.tool_name
+      : typeof event.name === 'string'
+        ? event.name
+        : 'unknown_tool';
+
+    const output = event.output ?? event.result;
+    const outputText = typeof output === 'string'
+      ? output
+      : output && typeof output === 'object'
+        ? this.safeStringify(output)
+        : '';
+
+    if (!outputText) return;
+
+    this.pushEntry({
+      id: `pi-tool-result-${this.nextSequence}`,
+      role: 'tool',
+      content: `${toolName} result: ${outputText}`,
+      toolName,
+    });
+  }
+
+  private pushEntry(opts: {
+    id: string;
+    role: SubagentTranscriptRole;
+    content: string;
+    toolName?: string;
+  }): void {
+    if (this.entries.length >= PI_TRANSCRIPT_MAX_ENTRIES) {
+      this.entries.shift();
+    }
+
+    const entry: SubagentTranscriptEntry = {
+      id: opts.id,
+      sequence: this.nextSequence++,
+      role: opts.role,
+      content: piClampContent(opts.content),
+      occurredAt: this.now(),
+      ...(opts.toolName ? { toolName: opts.toolName } : {}),
+    };
+    this.entries.push(entry);
+  }
+
+  private extractAssistantText(message: Record<string, unknown>): string {
+    const content = message.content;
+    if (typeof content === 'string') return content.trim();
+    if (!Array.isArray(content)) return '';
+
+    const parts: string[] = [];
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === 'object' &&
+        (block as Record<string, unknown>).type === 'text' &&
+        typeof (block as Record<string, unknown>).text === 'string'
+      ) {
+        parts.push((block as Record<string, unknown>).text as string);
+      }
+    }
+    return parts.join('').trim();
+  }
+
+  private extractMessageText(message: Record<string, unknown>): string {
+    const content = message.content;
+    if (typeof content === 'string') return content.trim();
+    if (!Array.isArray(content)) return '';
+
+    const parts: string[] = [];
+    for (const block of content) {
+      if (typeof block === 'string') {
+        parts.push(block);
+      } else if (
+        block &&
+        typeof block === 'object' &&
+        typeof (block as Record<string, unknown>).text === 'string'
+      ) {
+        parts.push((block as Record<string, unknown>).text as string);
+      }
+    }
+    return parts.join('').trim();
+  }
+
+  private summarizeInput(input: unknown): string {
+    if (input === null || input === undefined) return '';
+    if (typeof input === 'string') {
+      return input.length > 200 ? input.slice(0, 200) + '…' : input;
+    }
+    if (typeof input === 'object') {
+      return this.safeStringify(input);
+    }
+    return String(input);
+  }
+
+  private safeStringify(value: unknown): string {
+    try {
+      const json = JSON.stringify(value);
+      return json.length > 200 ? json.slice(0, 200) + '…' : json;
+    } catch {
+      return '';
+    }
+  }
+}

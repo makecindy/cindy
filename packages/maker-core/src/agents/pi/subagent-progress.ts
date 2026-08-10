@@ -140,7 +140,7 @@ export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgr
         logicalSubagentId: taskId,
         parentToolUseId: taskId,
       },
-      ...(title ? { title } : {}),
+      ...(title ? { title, role: title, nativeName: title } : {}),
       ...(description ? { description } : {}),
       ...(summary ? { summary } : {}),
       ...(model ? { model } : {}),
