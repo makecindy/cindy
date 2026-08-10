@@ -151,7 +151,6 @@ describe('GhostPluginCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'iOS Simulator' }));
     expect(onOpenDetail).toHaveBeenCalledTimes(1);
   });
-  });
 
   it('停用或未配置插件——停用时不显示右侧图标', () => {
     const { container } = render(
