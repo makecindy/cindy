@@ -575,6 +575,7 @@ type ManagedToolGrantCandidate = {
 async function prepareManagedToolGrantSources(params: {
   urls: string[];
   ghostId: string;
+  tool?: string;
   localResolved: Map<string, ResolvedGrantSource>;
   maxCount: number;
   sessionId: string | null;
@@ -692,6 +693,7 @@ async function prepareManagedToolGrantSources(params: {
 
   const confirm = await requestGrantConfirm({
     ghostId: params.ghostId,
+    tool: params.tool,
     sessionId: params.sessionId,
     sessionInstanceId: params.sessionInstanceId,
     lane: 'attachments',
@@ -745,6 +747,7 @@ async function grantAttachmentUrls(params: {
   const managedToolGrant = await prepareManagedToolGrantSources({
     urls: params.urls,
     ghostId,
+    tool: params.tool,
     localResolved: localGrant.resolved,
     maxCount: params.maxCount,
     sessionId: params.sessionId,
