@@ -212,6 +212,7 @@ function isInsideSessionWorkdir(targetAbs: string, workdirAbs: string | null): b
  */
 async function requestGrantConfirm(params: {
   ghostId: string;
+  tool?: string;
   sessionId: string | null;
   sessionInstanceId: string | null;
   lane: GhostGrantLane;
@@ -221,6 +222,16 @@ async function requestGrantConfirm(params: {
   | { ok: true; approvalSource: GhostGrantApprovalSource; allowDirs?: boolean }
   | { ok: false; message: string }
 > {
+  if (params.tool && resolveToolApprovalMode(params.ghostId, params.tool) === 'always-allow') {
+    log.info('ghost grant: tool always-allow policy auto-approved outside-workdir handoff', {
+      ghostId: params.ghostId,
+      tool: params.tool,
+      lane: params.lane,
+      count: params.items.length,
+      grantSource: 'always-allow',
+    });
+    return { ok: true, approvalSource: 'full-access' };
+  }
   if (params.sessionId && params.sessionInstanceId && params.getLiveSessionGrantState) {
     try {
       const live = params.getLiveSessionGrantState(params.sessionId, params.sessionInstanceId);
@@ -287,6 +298,7 @@ async function requestGrantConfirm(params: {
 async function prepareLocalPathAttachments(params: {
   urls: string[];
   ghostId: string;
+  tool?: string;
   workdirAbs: string | null;
   sessionId: string | null;
   sessionInstanceId: string | null;
@@ -415,6 +427,7 @@ async function prepareLocalPathAttachments(params: {
       });
       const confirm = await requestGrantConfirm({
         ghostId: params.ghostId,
+        tool: params.tool,
         sessionId: params.sessionId,
         sessionInstanceId: params.sessionInstanceId,
         lane: 'attachments',
@@ -467,6 +480,7 @@ async function prepareLocalPathAttachments(params: {
  */
 async function confirmDepositOutsideWorkdir(params: {
   ghostId: string;
+  tool?: string;
   sessionId: string | null;
   sessionInstanceId: string | null;
   lane: 'dir' | 'save_dir';
@@ -522,6 +536,7 @@ async function confirmDepositOutsideWorkdir(params: {
 
   const confirm = await requestGrantConfirm({
     ghostId: params.ghostId,
+    tool: params.tool,
     sessionId: params.sessionId,
     sessionInstanceId: params.sessionInstanceId,
     lane: params.lane,
@@ -707,6 +722,7 @@ async function prepareManagedToolGrantSources(params: {
  */
 async function grantAttachmentUrls(params: {
   ghostId: string;
+  tool?: string;
   urls: string[];
   workdirAbs: string | null;
   sessionId: string | null;
@@ -718,6 +734,7 @@ async function grantAttachmentUrls(params: {
   const localGrant = await prepareLocalPathAttachments({
     urls: params.urls,
     ghostId,
+    tool: params.tool,
     workdirAbs: params.workdirAbs,
     sessionId: params.sessionId,
     sessionInstanceId: params.sessionInstanceId,
@@ -1072,6 +1089,7 @@ export function getCindyGhostsMcpDeps(
         }
         const grant = await grantAttachmentUrls({
           ghostId,
+          ...(tool ? { tool } : {}),
           urls: attachments!,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
@@ -1124,6 +1142,7 @@ export function getCindyGhostsMcpDeps(
       if (attachments && attachments.length > 0) {
         const grant = await grantAttachmentUrls({
           ghostId,
+          tool,
           urls: attachments,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
@@ -1143,6 +1162,7 @@ export function getCindyGhostsMcpDeps(
       if (dir !== undefined) {
         const dirConfirm = await confirmDepositOutsideWorkdir({
           ghostId,
+          tool,
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           lane: 'dir',
@@ -1171,6 +1191,7 @@ export function getCindyGhostsMcpDeps(
       if (saveDir !== undefined) {
         const saveConfirm = await confirmDepositOutsideWorkdir({
           ghostId,
+          tool,
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           lane: 'save_dir',
