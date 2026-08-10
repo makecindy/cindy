@@ -66,8 +66,27 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(dispatchPresence).not.toContain('targetAvailableRef');
     expect(source).toContain('canStop: canUseRemoteSessionControls && canStopComposer,');
     expect(stop).toContain('if (remoteStopUnavailable) {');
-    expect(stop).toContain("'[DEVICE_OFFLINE] target device unavailable'");
-    expect(stop).toContain("'[NOT_CONNECTED] relay reconnecting'");
+    expect(stop).toContain("'[DEVICE_OFFLINE]'");
+    expect(stop).toContain("'[NOT_CONNECTED]'");
+    expect(stop).not.toContain('target device unavailable');
+    expect(stop).not.toContain('relay reconnecting');
+  });
+
+  it('publishes every transport-side presence availability transition to context consumers', () => {
+    const source = readSource('src/device-link/DeviceLinkContext.tsx');
+    const helperStart = source.indexOf('const publishPresenceAvailabilityMutation =');
+    const helperEnd = source.indexOf('\n\n  const sendOpenLinkOnce', helperStart);
+    const helper = source.slice(helperStart, helperEnd);
+
+    expect(helper).toContain('const before = availabilityByDevice.get(deviceId) ?? null;');
+    expect(helper).toContain('const after = availabilityByDevice.get(deviceId) ?? null;');
+    expect(helper).toContain('if (before !== after) setPresenceVersion((version) => version + 1);');
+    expect(source).not.toContain('presenceAvailableByDeviceRef.current.set');
+    expect((source.match(
+      /publishPresenceAvailabilityMutation\(deviceId, \(availabilityByDevice\) =>/g,
+    ) ?? [])).toHaveLength(5);
+    expect(source).toContain('setConnectionEpoch((n) => n + 1);');
+    expect(source).toContain('setPresenceVersion((n) => n + 1);\n      const presence = updatePresenceAvailability(');
   });
 
   it('blocks outbox dispatch until the session row can actually be sent with', () => {

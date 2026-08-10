@@ -1,5 +1,6 @@
 import {
   describeRemoteError as describeRemoteErrorShared,
+  formatRemoteError as formatRemoteErrorShared,
   humanizeRemoteError as humanizeRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
   isTransientRemoteError,
@@ -41,18 +42,26 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
   return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].hint);
 }
 
+/** 自动恢复类连接错误保留结构化 marker 做状态分类，展示文案则复用 Mobile i18n。 */
+function localizedConnectionRecoveryCopy(error: unknown): string | null {
+  const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
+  if (formatted.includes('DEVICE_OFFLINE')) return i18n.t('session.menu.aiRenameOffline');
+  if (formatted.includes('NOT_CONNECTED')) return i18n.t('session.screen.networkReconnecting');
+  return null;
+}
+
 /**
- * mobile 侧的 humanizeRemoteError / describeRemoteError:熔断快速失败
- * (DEVICE_UNRESPONSIVE)先走四语言 i18n(与 ConnectionBanner 同一组文案),
- * 其余委托 maker-shared 原实现。共享层的文案是中文硬编码(历史现状),直接
- * 透出会让 en/ja/ko 用户在 Alert / banner 里看到中文(review P1 两轮)——
- * 本 PR 新增的错误码不再走那条老路。mobile 代码一律从本文件 import,
- * 不要直接 import 共享层的这两个函数。
+ * mobile 侧的 humanizeRemoteError / describeRemoteError:熔断快速失败与 Stop
+ * 会主动产生的自动恢复错误先走 Mobile i18n,其余委托 maker-shared 原实现。
+ * 共享层的文案是中文硬编码(历史现状),新接入的错误出口不能直接透给其它语言
+ * 用户。mobile 代码一律从本文件 import,不要直接 import 共享层的这两个函数。
  */
 export function humanizeRemoteError(error: unknown): string {
   if (isDeviceUnresponsiveRemoteError(error)) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
+  const recoveryCopy = localizedConnectionRecoveryCopy(error);
+  if (recoveryCopy) return recoveryCopy;
   return humanizeRemoteErrorShared(error);
 }
 
@@ -76,6 +85,8 @@ export function describeRemoteError(error: string | null): string | null {
   if (error?.includes('DEVICE_UNRESPONSIVE')) {
     return i18n.t('deviceLink.deviceUnresponsiveHint');
   }
+  const recoveryCopy = localizedConnectionRecoveryCopy(error);
+  if (recoveryCopy) return recoveryCopy;
   return describeRemoteErrorShared(error);
 }
 

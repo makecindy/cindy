@@ -6644,8 +6644,8 @@ export default function SessionScreen() {
     if (queueBusy) return;
     if (remoteStopUnavailable) {
       setError(status === 'online'
-        ? '[DEVICE_OFFLINE] target device unavailable'
-        : '[NOT_CONNECTED] relay reconnecting');
+        ? '[DEVICE_OFFLINE]'
+        : '[NOT_CONNECTED]');
       return;
     }
     setStopPending(true);

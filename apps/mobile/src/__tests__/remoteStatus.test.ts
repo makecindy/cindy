@@ -6,6 +6,7 @@ import {
   describeRemoteComposerBlockingError,
   describeRemoteError,
   formatRemoteError,
+  humanizeRemoteError,
   isAutoRecoveringRemoteError,
   relayStatusHint,
   relayStatusLabel,
@@ -28,7 +29,7 @@ describe('remoteStatus', () => {
     expect(describeRemoteError('[REMOTE_DISABLED] disabled')).toContain('关闭允许远程控制');
     expect(describeRemoteError("[CHANNEL_NOT_ALLOWED] channel 'x'")).toContain('版本不支持');
     expect(describeRemoteError('[ACCESS_REVOKED] revoked')).toContain('撤销手机访问权限');
-    expect(describeRemoteError('[NOT_CONNECTED] offline')).toContain('稍后重新同步');
+    expect(describeRemoteError('[NOT_CONNECTED] offline')).toBe(i18n.t('session.screen.networkReconnecting'));
     expect(describeRemoteError('unknown failure')).toBe('unknown failure');
   });
 
@@ -46,6 +47,7 @@ describe('remoteStatus', () => {
   it('keeps the composer writable for automatic recovery, but blocks deterministic failures', () => {
     for (const error of [
       '[NOT_CONNECTED] offline',
+      '[DEVICE_OFFLINE] target unavailable',
       '[LINK_NOT_OPEN] reopening',
       '[INVOKE_TIMEOUT] timed out',
       '[DEVICE_UNRESPONSIVE] circuit open',
@@ -62,6 +64,25 @@ describe('remoteStatus', () => {
     expect(describeRemoteComposerBlockingError("[CHANNEL_NOT_ALLOWED] channel 'x'"))
       .toContain('版本不支持');
     expect(describeRemoteComposerBlockingError(null)).toBeNull();
+  });
+
+  it('localizes Stop connection recovery errors without dropping their structured classification', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      for (const locale of ['en', 'ja', 'ko', 'zh-TW'] as const) {
+        await i18n.changeLanguage(locale);
+        expect(describeRemoteError('[DEVICE_OFFLINE]')).toBe(i18n.t('session.menu.aiRenameOffline'));
+        expect(describeRemoteError('[NOT_CONNECTED]')).toBe(i18n.t('session.screen.networkReconnecting'));
+        expect(humanizeRemoteError(
+          Object.assign(new Error('target unavailable'), { code: 'DEVICE_OFFLINE' }),
+        )).toBe(i18n.t('session.menu.aiRenameOffline'));
+        expect(humanizeRemoteError(
+          Object.assign(new Error('relay reconnecting'), { code: 'NOT_CONNECTED' }),
+        )).toBe(i18n.t('session.screen.networkReconnecting'));
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
 
   it('localizes every connection issue kind', async () => {
