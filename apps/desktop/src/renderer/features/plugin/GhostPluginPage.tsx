@@ -21,6 +21,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowUp,
   ChevronDown,
+  AlertTriangle,
   Link,
   MessageCircle,
   Plus,
@@ -1954,11 +1955,13 @@ export function GhostPluginCard({
   const unreadSummary = useGhostUnreadSummary(item.id);
 
   // 右侧图标与动作:
+  // - 授权过期/失败显示 AlertTriangle(红色警告)→配置
   // - 未配置显示 Link→配置
   // - 可对话/可使用显示 MessageCircle→对话/使用
   // - 纯工具型插件不显示右侧图标(只能由 Agent 自动调用,不能对话)
   // - 停用不显示图标
   const needsAttention = item.hasSetupRequirements && !item.setupReady;
+  const setupFailed = item.setupState === 'failed';
   const isActionable = item.canUse || item.tabPanel || Boolean(item.hostCapability);
   const rightAction = needsAttention ? onConfigure : onChat;
   const showRightIcon = enabled && (needsAttention || isActionable);
@@ -2048,7 +2051,9 @@ return (
             onClick={rightAction}
             aria-label={
               needsAttention
-                ? t('settings.ghosts.page.manageAria', { name: item.name })
+                ? setupFailed
+                  ? t('settings.ghosts.page.reauthAria', { name: item.name })
+                  : t('settings.ghosts.page.manageAria', { name: item.name })
                 : t('settings.ghosts.page.chatAria', { name: item.name })
             }
             className={cn(
@@ -2058,7 +2063,11 @@ return (
             )}
           >
             {needsAttention ? (
-              <Link size={16} aria-hidden="true" />
+              setupFailed ? (
+                <AlertTriangle size={16} aria-hidden="true" className="text-[var(--text-warning)]" />
+              ) : (
+                <Link size={16} aria-hidden="true" />
+              )
             ) : (
               <MessageCircle size={16} aria-hidden="true" />
             )}

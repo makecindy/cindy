@@ -4991,8 +4991,19 @@ export function registerGhostIpc(): void {
   // 未知 id 静默跳过(不报错——列表渲染时的竞态窗口里可能已卸载)。
   ipcMain.handle('ghosts:setup-profiles', (event, ids: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (!Array.isArray(ids) || !ids.every((id): id is string => typeof id === 'string')) {
-      throwIpcError('INVALID_PARAMS', 'ids must be a string array');
+    if (!Array.isArray(ids)) {
+      throwIpcError('INVALID_PARAMS', 'ids must be an array');
+    }
+    // 防御纵深:拒绝超长数组,防止受控 renderer 在导航期间发送百万级条目让主进程无界遍历。
+    const MAX_SETUP_PROFILE_IDS = 200;
+    if (ids.length > MAX_SETUP_PROFILE_IDS) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `ids length ${ids.length} exceeds limit ${MAX_SETUP_PROFILE_IDS}`,
+      );
+    }
+    if (!ids.every((id): id is string => typeof id === 'string' && isValidGhostId(id))) {
+      throwIpcError('INVALID_PARAMS', 'ids must be a string array of valid ghost IDs');
     }
     const oauthManager = getGhostOauthAccountManager();
     const result: Record<string, GhostSetupProfile> = {};
