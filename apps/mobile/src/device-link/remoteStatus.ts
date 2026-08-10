@@ -77,8 +77,19 @@ export function isAutoRecoveringRemoteError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   return code === 'SESSION_REFERENCE_OFFLINE'
     || message.includes('SESSION_REFERENCE_OFFLINE')
+    // 桌面端 fail-closed：持久消息 / input coordinator 暂时无法完成 clientId
+    // 去重核验。原消息必须留在 outbox 等状态恢复，不能让用户换 id 重发。
+    || message.includes('REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE')
     || isTransientRemoteError(error)
     || isDeviceUnresponsiveRemoteError(error);
+}
+
+/**
+ * 权威同步的一轮内置瞬态重试耗尽后，页面继续自动恢复所用的外层退避。
+ * 900ms 尽快吃掉短抖动，随后指数放缓并封顶 30s，避免电脑长期离线时形成请求风暴。
+ */
+export function connectionRecoverySyncRetryDelayMs(attempt: number): number {
+  return Math.min(900 * 2 ** Math.max(0, Math.floor(attempt)), 30_000);
 }
 
 export function describeRemoteError(error: string | null): string | null {

@@ -122,12 +122,21 @@ describe('mobile optimistic composer while session is not ready', () => {
 
   it('defers disconnect races instead of turning them into failed or falsely delivered messages', () => {
     const source = readSource(SCREEN);
+    const recoveryHelperStart = source.indexOf('function shouldWaitForOutboxEnqueueRecovery');
+    const recoveryHelperEnd = source.indexOf('\n}', recoveryHelperStart);
+    const recoveryHelper = source.slice(recoveryHelperStart, recoveryHelperEnd);
 
     expect(source).toContain('const waitForConnection = (error: unknown) => {');
     expect(source).toContain('outboxItemWaitingForConnection(item)');
     expect(source).toContain("if (result === 'deferred' || result === 'stopped') return;");
     expect(source).toContain("return 'stopped' as const;");
     expect(source).toContain('isSafelyUnsentOutboxEnqueueError(err)');
+    expect(recoveryHelper).toContain('isSafelyUnsentOutboxEnqueueError(err)');
+    expect(recoveryHelper).toContain('isAutoRecoveringRemoteError(err)');
+    // direct 与 outbox-originated enqueue 都必须用同一判据，把回执不确定项保留在
+    // 原 clientId 上自动重试；不能一条自动等、另一条退回草稿生成新 id。
+    expect((source.match(/if \(shouldWaitForOutboxEnqueueRecovery\(err\)\)/g) ?? []))
+      .toHaveLength(2);
     expect((source.match(/按「无法证明已送达」处理。\n\s+return false;/g) ?? [])).toHaveLength(2);
     expect(source).not.toContain('const authorityAdvanced = remoteSessionStore.captureInputProjectionAuthorityEpoch(');
     expect(source).toContain('isAutoRecoveringSessionReferencePreparationError(err)');
@@ -140,6 +149,30 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect((source.match(/return fresh\.pendingQueue\.some/g) ?? [])).toHaveLength(2);
     expect(source).not.toContain('const current = accepted ? fresh : remoteSessionStore.getInputProjection');
     expect(source).not.toContain('const accepted = remoteSessionStore.setInputProjectionIfCurrent');
+  });
+
+  it('keeps retrying authoritative recovery syncs with bounded backoff', () => {
+    const source = readSource(SCREEN);
+    const retryStart = source.indexOf('const shouldAutoRetryConnectionSync =');
+    const retryEnd = source.indexOf('\n\n  // 监听 error-persisted', retryStart);
+    const retry = source.slice(retryStart, retryEnd);
+    const syncCatchStart = source.indexOf('    } catch (err) {', source.indexOf('const syncSession ='));
+    const syncCatchEnd = source.indexOf('    } finally {', syncCatchStart);
+    const syncCatch = source.slice(syncCatchStart, syncCatchEnd);
+
+    expect(source).toContain("useRef<{ identity: string; attempt: number } | null>(null)");
+    expect(retry).toContain('isAutoRecoveringRemoteError(connectionRecoveryError)');
+    expect(retry).toContain('const retryIdentity = `${deviceId}:${sessionId}:${connectionEpoch}`;');
+    expect(retry).not.toContain('${connectionRecoveryError}');
+    expect(retry).toContain('attempt: retryState.attempt + 1,');
+    expect(retry).toContain('connectionRecoverySyncRetryDelayMs(retryState.attempt)');
+    expect(retry).toContain('return () => clearTimeout(timer);');
+    expect(retry).toContain('targetAvailableForDispatch === false');
+    expect(retry).toContain('|| isDeviceUnresponsive');
+    expect(syncCatch).toContain('if (!isAutoRecoveringRemoteError(err)) {');
+    expect(syncCatch).toContain('return current?.deviceId === deviceId ? null : current;');
+    expect(syncCatch).toContain(': { deviceId, error: formatted };');
+    expect(source).toContain('error={connectionRecoveryError}');
   });
 
   it('fences every pre-outbox await against an in-place session switch', () => {

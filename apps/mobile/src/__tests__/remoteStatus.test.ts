@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 import {
+  connectionRecoverySyncRetryDelayMs,
   connectionIssueHint,
   connectionIssueTitle,
   describeRemoteComposerBlockingError,
@@ -14,6 +15,12 @@ import {
 import { i18n } from '@/i18n';
 
 describe('remoteStatus', () => {
+  it('backs repeated connection recovery syncs off and caps the delay', () => {
+    expect([0, 1, 2, 3, 4, 5, 6].map(connectionRecoverySyncRetryDelayMs))
+      .toEqual([900, 1_800, 3_600, 7_200, 14_400, 28_800, 30_000]);
+    expect(connectionRecoverySyncRetryDelayMs(20)).toBe(30_000);
+  });
+
   it('labels relay status', () => {
     expect(relayStatusLabel('online')).toBe('Relay 已连接');
     expect(relayStatusLabel('connecting')).toBe('正在连接 Relay');
@@ -52,10 +59,15 @@ describe('remoteStatus', () => {
       '[INVOKE_TIMEOUT] timed out',
       '[DEVICE_UNRESPONSIVE] circuit open',
       '[SESSION_REFERENCE_OFFLINE] target unavailable',
+      '[REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE] dedupe state unavailable',
     ]) {
       expect(isAutoRecoveringRemoteError(error), error).toBe(true);
       expect(describeRemoteComposerBlockingError(error), error).toBeNull();
     }
+
+    const deliveryUnknown = new DeviceLinkError('NOT_CONNECTED', 'ack may be lost');
+    deliveryUnknown.inFlight = true;
+    expect(isAutoRecoveringRemoteError(deliveryUnknown)).toBe(true);
 
     expect(describeRemoteComposerBlockingError('[ACCESS_REVOKED] revoked'))
       .toContain('撤销手机访问权限');

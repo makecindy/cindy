@@ -79,6 +79,7 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import {
+  connectionRecoverySyncRetryDelayMs,
   connectionIssueHint,
   describeRemoteComposerBlockingError,
   describeRemoteError,
@@ -702,6 +703,14 @@ function isRetryableEnqueueTransportError(err: unknown): boolean {
 function isAutoRecoveringSessionReferencePreparationError(err: unknown): boolean {
   return isAutoRecoveringRemoteError(err)
     || (err instanceof MobileSessionReferenceError && err.code === 'SESSION_REFERENCE_OFFLINE');
+}
+
+/**
+ * 明确未发出的连接失败和「请求可能已到桌面、只丢了回执」都留在 outbox。
+ * 后一类必须复用原 clientId 重试，由桌面 enqueue 幂等去重，不能恢复草稿后生成新 id。
+ */
+function shouldWaitForOutboxEnqueueRecovery(err: unknown): boolean {
+  return isSafelyUnsentOutboxEnqueueError(err) || isAutoRecoveringRemoteError(err);
 }
 
 /** enqueue 对可安全重发的瞬时传输错误做有界退避。 */
@@ -1743,7 +1752,7 @@ export default function SessionScreen() {
   // 点选的 skill 不被白名单拦截误分流到 learn:start。
   const pendingSkillSelectionRef = useRef<{ name: string; sid: string } | null>(null);
   const extraDirBrowseSeqRef = useRef(0);
-  const autoRetrySyncKeyRef = useRef<string | null>(null);
+  const autoRetrySyncStateRef = useRef<{ identity: string; attempt: number } | null>(null);
   const loadedRouteFocusKeyRef = useRef<string | null>(null);
   const appliedRouteFocusKeyRef = useRef<string | null>(null);
   const appliedRouteComposerFocusKeyRef = useRef<string | null>(null);
@@ -3670,7 +3679,20 @@ export default function SessionScreen() {
         setReadAckSyncedKey(`${sessionId}:${readAckEpochAtStart}`);
       }
     } catch (err) {
-      if (!syncRun.isStale()) setError(formatRemoteError(err));
+      if (!syncRun.isStale()) {
+        const formatted = formatRemoteError(err);
+        setError(formatted);
+        // transient 失败刷新 hold，保证共享 UI error 被其它操作清理时 outbox 仍不
+        // 提前派发；确定性失败则清旧 hold，交给普通错误与手动重试入口处理。
+        setOutboxTransportHold((current) => {
+          if (!isAutoRecoveringRemoteError(err)) {
+            return current?.deviceId === deviceId ? null : current;
+          }
+          return current?.deviceId === deviceId && current.error === formatted
+            ? current
+            : { deviceId, error: formatted };
+        });
+      }
     } finally {
       if (!syncRun.isStale()) setLoading(false);
     }
@@ -4049,38 +4071,55 @@ export default function SessionScreen() {
     void load();
   }, [deviceId, isDeviceUnresponsive, load, sessionId, status]);
 
+  const shouldAutoRetryConnectionSync = connectionRecoveryError !== null
+    && isAutoRecoveringRemoteError(connectionRecoveryError);
   useEffect(() => {
-    if (!connectionRecoveryError) {
-      if (!loading) autoRetrySyncKeyRef.current = null;
+    if (!shouldAutoRetryConnectionSync) {
+      autoRetrySyncStateRef.current = null;
       return;
     }
     if (
       isDeviceAccessRevoked
-      || !currentSession
+      || !hasCurrentSession
       || !deviceId
       || !sessionId
       || loading
       || status !== 'online'
+      || targetAvailableForDispatch === false
+      || isDeviceUnresponsive
     ) {
       return;
     }
-    const retryKey = `${deviceId}:${sessionId}:${connectionEpoch}:${connectionRecoveryError}`;
-    if (autoRetrySyncKeyRef.current === retryKey) return;
+    // 错误全文不属于 identity：同一次故障可能在 NOT_CONNECTED / INVOKE_TIMEOUT
+    // 之间切换，不能因此把退避不断重置回 900ms。
+    const retryIdentity = `${deviceId}:${sessionId}:${connectionEpoch}`;
+    const current = autoRetrySyncStateRef.current;
+    const retryState = current?.identity === retryIdentity
+      ? current
+      : { identity: retryIdentity, attempt: 0 };
+    autoRetrySyncStateRef.current = retryState;
     const timer = setTimeout(() => {
-      autoRetrySyncKeyRef.current = retryKey;
+      const latest = autoRetrySyncStateRef.current;
+      if (latest?.identity !== retryIdentity || latest.attempt !== retryState.attempt) return;
+      autoRetrySyncStateRef.current = {
+        identity: retryIdentity,
+        attempt: retryState.attempt + 1,
+      };
       void load();
-    }, 900);
+    }, connectionRecoverySyncRetryDelayMs(retryState.attempt));
     return () => clearTimeout(timer);
   }, [
-    connectionRecoveryError,
-    currentSession,
+    shouldAutoRetryConnectionSync,
+    hasCurrentSession,
     deviceId,
     isDeviceAccessRevoked,
+    isDeviceUnresponsive,
     load,
     loading,
     connectionEpoch,
     sessionId,
     status,
+    targetAvailableForDispatch,
   ]);
 
   // 监听 error-persisted 脏信号:被控端落库完成后通知控制端,保留了缓存消息但失效了 sync marker。
@@ -5526,7 +5565,7 @@ export default function SessionScreen() {
           ...current,
           pendingQueue: current.pendingQueue.filter((entry) => entry.clientId !== queued.clientId),
         });
-        if (isSafelyUnsentOutboxEnqueueError(err)) {
+        if (shouldWaitForOutboxEnqueueRecovery(err)) {
           waitForConnection(err);
           return 'deferred' as const;
         }
@@ -6504,9 +6543,10 @@ export default function SessionScreen() {
             salvageOutboxItem(recoverableItem);
             return;
           }
-          if (isSafelyUnsentOutboxEnqueueError(err)) {
-            // 点击时链路尚健康、真正派发前才撞上断线：把同一 clientId/内容接回
-            // 本地 outbox，保持乐观气泡与 FIFO，恢复后自动 pump；不把草稿塞回输入框。
+          if (shouldWaitForOutboxEnqueueRecovery(err)) {
+            // 明确未发出或 enqueue 已到桌面但回执不确定：都把同一 clientId/内容
+            // 接回 outbox。恢复后同 id 重试由桌面幂等去重，不能恢复草稿让用户用
+            // 新 id 重发，否则第一次其实已执行时会产生重复任务。
             updateOutbox((items) => (
               items.some((item) => item.clientId === recoverableItem.clientId)
                 ? replaceOutboxItem(items, recoverableItem)
@@ -8555,7 +8595,7 @@ export default function SessionScreen() {
               <ConnectionBanner
                 density="compact"
                 deviceUnresponsive={isDeviceUnresponsive}
-                error={connectionError}
+                error={connectionRecoveryError}
                 issue={connectionIssue}
                 lastSyncedAt={lastSyncedAt}
                 loading={loading}
