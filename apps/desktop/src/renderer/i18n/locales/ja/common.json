@@ -3251,6 +3251,7 @@
         "chatAria": "{{name}} と会話",
         "manageAction": "管理",
         "manageAria": "{{name}} を管理",
+        "reauthAria": "{{name}} を再認証",
         "agentInvoked": "Agent が自動で呼び出し",
         "upToDate": "最新です",
         "installAria": "{{name}} をインストール"

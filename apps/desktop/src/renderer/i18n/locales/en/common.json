@@ -3252,6 +3252,7 @@
         "chatAria": "Chat with {{name}}",
         "manageAction": "Manage",
         "manageAria": "Manage {{name}}",
+        "reauthAria": "Re-authenticate {{name}}",
         "agentInvoked": "Invoked by Agent",
         "upToDate": "Up to date",
         "installAria": "Install {{name}}"

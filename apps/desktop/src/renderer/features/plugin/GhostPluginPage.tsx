@@ -2064,7 +2064,7 @@ return (
           >
             {needsAttention ? (
               setupFailed ? (
-                <AlertTriangle size={16} aria-hidden="true" className="text-[var(--text-warning)]" />
+                <AlertTriangle size={16} aria-hidden="true" className="text-[var(--error-fg)]" />
               ) : (
                 <Link size={16} aria-hidden="true" />
               )

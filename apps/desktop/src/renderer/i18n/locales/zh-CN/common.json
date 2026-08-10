@@ -3251,6 +3251,7 @@
         "chatAria": "与 {{name}} 对话",
         "manageAction": "管理",
         "manageAria": "管理 {{name}}",
+        "reauthAria": "重新授权 {{name}}",
         "agentInvoked": "Agent 自动调用",
         "upToDate": "已是最新",
         "installAria": "安装 {{name}}"

@@ -3251,6 +3251,7 @@
         "chatAria": "{{name}}과(와) 대화",
         "manageAction": "관리",
         "manageAria": "{{name}} 관리",
+        "reauthAria": "{{name}} 재인증",
         "agentInvoked": "Agent가 자동 호출",
         "upToDate": "최신 상태",
         "installAria": "{{name}} 설치"
