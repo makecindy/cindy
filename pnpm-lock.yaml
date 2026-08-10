@@ -79,6 +79,9 @@ importers:
       '@cindy/im':
         specifier: workspace:*
         version: link:../../packages/lizi-im
+      '@cindy/ios-simulator-runtime':
+        specifier: workspace:*
+        version: link:../../packages/ios-simulator-runtime
       '@cindy/maker-cc-manager':
         specifier: workspace:*
         version: link:../../packages/maker-cc-manager
@@ -984,6 +987,21 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/ios-simulator-runtime:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.9.5
+      tsx:
+        specifier: ^4.20.6
+        version: 4.23.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   packages/lizi-im:
     dependencies:
       '@larksuiteoapi/node-sdk':
@@ -1029,6 +1047,9 @@ importers:
       '@cindy/gitlab-client':
         specifier: workspace:*
         version: link:../gitlab-client
+      '@cindy/ios-simulator-runtime':
+        specifier: workspace:*
+        version: link:../ios-simulator-runtime
       '@cindy/maker-core':
         specifier: workspace:*
         version: link:../maker-core

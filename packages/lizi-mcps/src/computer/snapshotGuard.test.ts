@@ -23,7 +23,14 @@ function makeLogger(): LiziMcpLogger & { warn: ReturnType<typeof vi.fn> } {
 }
 
 async function makeHarness(deps: ComputerMcpDeps, options?: Parameters<typeof createComputerMcpServer>[1]) {
-  const server = createComputerMcpServer(deps, options);
+  const server = createComputerMcpServer(
+    {
+      ...deps,
+      resolveProcessIdentity:
+        deps.resolveProcessIdentity ?? (async (pid) => ({ pid, name: 'Code' })),
+    },
+    options,
+  );
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'snapshot-test-client', version: '0.0.0' });
   await Promise.all([server.connect(serverTx), client.connect(clientTx)]);

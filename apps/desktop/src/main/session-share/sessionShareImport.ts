@@ -23,7 +23,8 @@ import JSZip from 'jszip';
 import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
 import { app } from 'electron';
 
-import { getDbClient } from '../localDb/client/current.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
+import { isDbTransportOutcomeUnknown } from '../localDb/client/DbTransport.js';
 import type {
   SessionImportShareMessageRow,
   SessionImportShareSessionRow,
@@ -49,9 +50,19 @@ import {
 } from '../imageCacheStore.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
 import { resolveSafe as resolveModelUrl } from '../modelCacheStore.js';
-import { parseBlobUrl, mimeForExt, resolveHashRef as resolveBlobHashRef } from '../cindy-media/blobStore.js';
+import {
+  parseBlobUrl,
+  mimeForExt,
+  resolveHashRef as resolveBlobHashRef,
+} from '../cindy-media/blobStore.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
-import { removeSessionRefs as removeSessionMediaRefs } from '../cindy-media/ledger.js';
+import type { MediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
+import {
+  removeSessionRefs as removeSessionMediaRefs,
+  removeSessionRefsIfDeleted,
+  type LedgerDb,
+} from '../cindy-media/ledger.js';
+import { withSessionRouteLocks } from '../localDb/sessionRouteLock.js';
 
 import { openPayload } from './xdtshareCrypto.js';
 import {
@@ -126,7 +137,9 @@ function toPreview(manifest: XdtshareManifest): SharePreview {
   };
 }
 
-async function loadZipAndManifest(zipBytes: Buffer): Promise<{ zip: JSZip; manifest: XdtshareManifest }> {
+async function loadZipAndManifest(
+  zipBytes: Buffer,
+): Promise<{ zip: JSZip; manifest: XdtshareManifest }> {
   const zip = await JSZip.loadAsync(zipBytes).catch(() => {
     throw new XdtshareError('SHARE_FILE_INVALID', 'payload is not a readable zip');
   });
@@ -243,6 +256,13 @@ export interface CommitShareImportOptions {
   overwrite?: boolean;
 }
 
+/** Stable owner-bound resources captured synchronously by the production IPC entry. */
+export interface CommitShareImportRuntimeScope {
+  dbClient: DbClient;
+  assertStillValid(): void;
+  refCompensationScope: MediaRefCompensationScope;
+}
+
 export interface CommitShareImportResult {
   sessionId: string;
   fidelity: XdtshareFidelity;
@@ -292,10 +312,11 @@ interface WorkerImportPlan {
  */
 export async function cleanupReplacedSessionMediaRefs(
   sessions: ReadonlyArray<{ id: string }>,
+  db: LedgerDb,
 ): Promise<void> {
   for (const session of sessions) {
     try {
-      const removed = await removeSessionMediaRefs(session.id);
+      const removed = await removeSessionRefsIfDeleted(session.id, db);
       if (removed > 0) {
         log.info('replaced session media refs removed', {
           sessionId: session.id,
@@ -314,7 +335,18 @@ export async function cleanupReplacedSessionMediaRefs(
 /** 第三段:落三层数据。前置校验全过才写;文件步登记 journal,失败逆序回滚。 */
 export async function commitShareImport(
   opts: CommitShareImportOptions,
+  runtimeScope: CommitShareImportRuntimeScope,
 ): Promise<CommitShareImportInternalResult> {
+  const dbClient = runtimeScope.dbClient;
+  const mediaDb = dbClient.drizzle;
+  const assertStillValid = runtimeScope.assertStillValid;
+  const guarded = async <T>(task: () => Promise<T>): Promise<T> => {
+    assertStillValid();
+    const result = await task();
+    assertStillValid();
+    return result;
+  };
+  assertStillValid();
   sweepExpiredDrafts();
   const draft = drafts.get(opts.draftId);
   if (!draft) throw codedError('NOT_FOUND', 'draft expired or not found');
@@ -324,10 +356,10 @@ export async function commitShareImport(
   const { zip, manifest } = draft;
 
   // ── 解析包内数据(仍属只读阶段) ──
-  const sessionSnapshot = await readJsonEntry(zip, 'session.json');
-  const messages = await readMessagesJsonl(zip, 'messages.jsonl');
+  const sessionSnapshot = await guarded(() => readJsonEntry(zip, 'session.json'));
+  const messages = await guarded(() => readMessagesJsonl(zip, 'messages.jsonl'));
   if (messages.length === 0) throw codedError('SHARE_FILE_INVALID', 'bundle has no messages');
-  const mediaMap = await readMediaMap(zip);
+  const mediaMap = await guarded(() => readMediaMap(zip));
 
   // 协同包:逐个读 Worker 的包内数据(Worker 允许 0 条消息——刚创建未派活)。
   const workerPlans: WorkerImportPlan[] = [];
@@ -338,8 +370,8 @@ export async function commitShareImport(
         manifest: workerManifest,
         prefix,
         newId: randomUUID(),
-        snapshot: await readJsonEntry(zip, `${prefix}session.json`),
-        messages: await readMessagesJsonl(zip, `${prefix}messages.jsonl`),
+        snapshot: await guarded(() => readJsonEntry(zip, `${prefix}session.json`)),
+        messages: await guarded(() => readMessagesJsonl(zip, `${prefix}messages.jsonl`)),
         activeSdkSessionId: null,
       });
     }
@@ -352,13 +384,15 @@ export async function commitShareImport(
   if (manifest.workspaceKind === 'project') {
     const dir = typeof opts.workingDir === 'string' ? opts.workingDir.trim() : '';
     if (!dir) throw codedError('INVALID_PARAMS', 'workingDir is required for project sessions');
-    const stat = await fsp.stat(dir).catch(() => null);
+    const stat = await guarded(() => fsp.stat(dir).catch(() => null));
     if (!stat?.isDirectory()) {
       throw codedError('PRECONDITION_FAILED', 'workingDir does not exist or is not a directory');
     }
     workingDir = dir;
   } else {
+    assertStillValid();
     workingDir = ensureDialogueWorkspaceDir(newId, now);
+    assertStillValid();
   }
 
   // activeSdkSessionId 同样是不可信输入,且会流入落盘路径:codex 侧
@@ -367,7 +401,10 @@ export async function commitShareImport(
   // 协同包的每个 Worker 与 lead 同口径校验。
   const portableActiveSdkSessionId = manifest.activeSdkSessionId;
   if (portableActiveSdkSessionId && !isSafePathSegment(portableActiveSdkSessionId)) {
-    throw new XdtshareError('SHARE_FILE_INVALID', `unsafe activeSdkSessionId: ${portableActiveSdkSessionId}`);
+    throw new XdtshareError(
+      'SHARE_FILE_INVALID',
+      `unsafe activeSdkSessionId: ${portableActiveSdkSessionId}`,
+    );
   }
   // .xdtshare 是他人给的不可信输入:sdkSessionId 会拼进落盘路径(`<id>.jsonl`),
   // 恶意包塞 `../../evil` 可逃出转码目录写任意文件(review bot P1)。写盘/预检前
@@ -376,9 +413,7 @@ export async function commitShareImport(
     transcripts: XdtshareManifest['transcripts'],
     label: string,
   ): BundledTranscript[] => {
-    const bundled = transcripts.filter(
-      (t): t is BundledTranscript => t.path !== null,
-    );
+    const bundled = transcripts.filter((t): t is BundledTranscript => t.path !== null);
     for (const t of bundled) {
       if (!isSafePathSegment(t.sdkSessionId)) {
         throw new XdtshareError(
@@ -391,10 +426,7 @@ export async function commitShareImport(
   };
   const bundledTranscripts = filterBundled(manifest.transcripts, 'transcripts');
   for (const plan of workerPlans) {
-    if (
-      plan.manifest.activeSdkSessionId &&
-      !isSafePathSegment(plan.manifest.activeSdkSessionId)
-    ) {
+    if (plan.manifest.activeSdkSessionId && !isSafePathSegment(plan.manifest.activeSdkSessionId)) {
       throw new XdtshareError(
         'SHARE_FILE_INVALID',
         `unsafe worker activeSdkSessionId: ${plan.manifest.activeSdkSessionId}`,
@@ -432,7 +464,9 @@ export async function commitShareImport(
     portableId: string | null,
   ): string | null =>
     agentKind === 'pi'
-      ? (portableId ? (piTranscriptTargets.get(portableId) ?? null) : null)
+      ? portableId
+        ? (piTranscriptTargets.get(portableId) ?? null)
+        : null
       : portableId;
   const activeSdkSessionId = resolveActiveSdkSessionId(
     manifest.agentKind,
@@ -462,17 +496,22 @@ export async function commitShareImport(
     ),
   ];
   for (const probe of conflictProbes) {
-    const existing = await getDbClient().queryOne<{
-      id: string;
-      status: 'active' | 'archived';
-    }>(
-      `SELECT id, status FROM sessions
-       WHERE agent_kind = ? AND sdk_session_id = ? AND status != 'deleted' LIMIT 1`,
-      [probe.agentKind, probe.resumeId],
+    const existing = await guarded(() =>
+      dbClient.queryOne<{
+        id: string;
+        status: 'active' | 'archived';
+      }>(
+        `SELECT id, status FROM sessions
+         WHERE agent_kind = ? AND sdk_session_id = ? AND status != 'deleted' LIMIT 1`,
+        [probe.agentKind, probe.resumeId],
+      ),
     );
     if (existing) {
       if (!opts.overwrite) {
-        throw codedError('SHARE_CONFLICT', `session with same resume id already imported: ${existing.id}`);
+        throw codedError(
+          'SHARE_CONFLICT',
+          `session with same resume id already imported: ${existing.id}`,
+        );
       }
       if (!conflictExisting.some((c) => c.id === existing.id)) conflictExisting.push(existing);
     }
@@ -483,11 +522,12 @@ export async function commitShareImport(
   // 命中其历次 team，从 Worker 反查所属 team，再把对应 lead 与全部 Worker
   // session 纳入同一事务，防止旧隐藏 Worker/关系残留成孤儿或与新图并存。
   for (const existing of [...conflictExisting]) {
-    const graphRows = await getDbClient().query<{
-      id: string;
-      status: 'active' | 'archived';
-    }>(
-      `WITH related_leads AS (
+    const graphRows = await guarded(() =>
+      dbClient.query<{
+        id: string;
+        status: 'active' | 'archived';
+      }>(
+        `WITH related_leads AS (
          SELECT lead_session_id AS id FROM orca_teams WHERE lead_session_id = ?
          UNION
          SELECT t.lead_session_id AS id
@@ -505,8 +545,9 @@ export async function commitShareImport(
        SELECT s.id, s.status
        FROM related_sessions r
        JOIN sessions s ON s.id = r.id
-       WHERE s.status != 'deleted'`,
-      [existing.id, existing.id],
+         WHERE s.status != 'deleted'`,
+        [existing.id, existing.id],
+      ),
     );
     for (const row of graphRows) {
       if (!conflictExisting.some((candidate) => candidate.id === row.id)) {
@@ -534,6 +575,11 @@ export async function commitShareImport(
       });
     }
   };
+  // Keep this in a mutable cell: the assignments happen inside the route-lock
+  // callback, which TypeScript does not include in outer control-flow narrowing.
+  const finalTxState: {
+    outcome: 'not-started' | 'in-flight' | 'committed';
+  } = { outcome: 'not-started' };
 
   try {
     // 0. 覆盖导入命中的旧 session 不在编排层提前软删。patchSessionMetaInDb
@@ -547,7 +593,7 @@ export async function commitShareImport(
     //     草稿开 worktree 创建同语义。失败即中止导入;成功登记 journal,后续
     //     任一步失败逆序回滚时移除 worktree,不留孤儿。
     if (opts.useWorktree && manifest.workspaceKind === 'project') {
-      const detect = await detectCwd(workingDir).catch(() => null);
+      const detect = await guarded(() => detectCwd(workingDir).catch(() => null));
       if (!detect?.isGitRepo || !detect.repoRoot) {
         throw codedError(
           'SHARE_WORKTREE_NOT_GIT',
@@ -555,8 +601,9 @@ export async function commitShareImport(
         );
       }
       const baseRepo = detect.repoRoot;
-      let wtName = (await suggestWorktreeName(baseRepo).catch(() => '')).trim();
+      let wtName = (await guarded(() => suggestWorktreeName(baseRepo).catch(() => ''))).trim();
       if (!wtName) wtName = `auto-${Date.now().toString(36).slice(-6)}`;
+      assertStillValid();
       const resp = await createWorktree({
         sessionId: newId,
         baseRepo,
@@ -571,6 +618,7 @@ export async function commitShareImport(
       journal.push(async () => {
         await removeWorktreeForSession(newId);
       });
+      assertStillValid();
       log.info('share import created worktree', { newId, baseRepo, worktreePath });
     }
 
@@ -608,14 +656,18 @@ export async function commitShareImport(
       if (!entry.zipPath) continue;
       const file = zip.file(entry.zipPath);
       if (!file) continue;
-      const buffer = Buffer.from(await file.async('nodebuffer'));
+      const buffer = Buffer.from(await guarded(() => file.async('nodebuffer')));
       const restored = await restoreMediaEntry({
         entry,
         buffer,
         newSessionId: newId,
         sharedMediaRoot,
         journal,
+        db: mediaDb,
+        assertStillValid,
+        refCompensationScope: runtimeScope.refCompensationScope,
       });
+      assertStillValid();
       if (!restored) continue;
       if (restored.kind === 'session-image') {
         // 入仓形态只挂引用行(回滚走 removeSessionMediaRefs);老目录回落形态
@@ -639,7 +691,7 @@ export async function commitShareImport(
       // 回滚只删引用行(账本);字节本身内容寻址无害,留给对账/回收器,
       // 与 ingest 的"先字节后记账"崩溃语义一致。
       journal.push(async () => {
-        await removeSessionMediaRefs(newId).catch(() => undefined);
+        await removeSessionMediaRefs(newId, mediaDb).catch(() => undefined);
       });
     }
 
@@ -673,7 +725,7 @@ export async function commitShareImport(
     //     保真度不降档)。
     let transcriptsWritten = 0;
     if (claudeTargetDir && transcriptsPlaceable) {
-      await fsp.mkdir(claudeTargetDir, { recursive: true });
+      await guarded(() => fsp.mkdir(claudeTargetDir, { recursive: true }).then(() => undefined));
       for (const restore of restorePlans) {
         if (restore.agentKind !== 'cc') continue;
         for (const t of restore.bundled) {
@@ -681,13 +733,17 @@ export async function commitShareImport(
           if (!file) continue;
           const target = path.join(claudeTargetDir, `${t.sdkSessionId}.jsonl`);
           try {
-            await fsp.writeFile(target, Buffer.from(await file.async('nodebuffer')), { flag: 'wx' });
+            const transcriptBytes = Buffer.from(await guarded(() => file.async('nodebuffer')));
+            assertStillValid();
+            await fsp.writeFile(target, transcriptBytes, { flag: 'wx' });
             journal.push(async () => {
               await fsp.rm(target, { force: true });
             });
+            assertStillValid();
           } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
             log.info('transcript already on disk, reusing', { sdkSessionId: t.sdkSessionId });
+            assertStillValid();
           }
           transcriptsWritten += 1;
         }
@@ -705,7 +761,12 @@ export async function commitShareImport(
         const file = zip.file(transcript.path);
         if (!target || !file || piTargetsWritten.has(target)) continue;
         piTargetsWritten.add(target);
-        await writeIfMissing(target, Buffer.from(await file.async('nodebuffer')), journal);
+        await writeIfMissing(
+          target,
+          Buffer.from(await guarded(() => file.async('nodebuffer'))),
+          journal,
+          assertStillValid,
+        );
         transcriptsWritten += 1;
       }
     }
@@ -716,7 +777,7 @@ export async function commitShareImport(
       const threadId = restore.activeSdkSessionId;
       const stateEntry = zip.file(`${restore.prefix}codex-state/thread.json`);
       const stateRows = stateEntry
-        ? ((JSON.parse(await stateEntry.async('string'))) as {
+        ? (JSON.parse(await guarded(() => stateEntry.async('string'))) as {
             threads: Array<Record<string, unknown>>;
             threadDynamicTools: Array<Record<string, unknown>>;
             threadSpawnEdges: Array<Record<string, unknown>>;
@@ -724,10 +785,14 @@ export async function commitShareImport(
         : { threads: [], threadDynamicTools: [], threadSpawnEdges: [] };
       const rolloutRef = restore.bundled[0] ?? null;
       const rolloutFile = rolloutRef ? zip.file(rolloutRef.path) : null;
+      const rolloutBuffer = rolloutFile
+        ? Buffer.from(await guarded(() => rolloutFile.async('nodebuffer')))
+        : null;
+      assertStillValid();
       const written = await importSharedCodexThread({
         threadId,
         stateRows,
-        rolloutBuffer: rolloutFile ? Buffer.from(await rolloutFile.async('nodebuffer')) : null,
+        rolloutBuffer,
         rolloutFilename: rolloutRef ? path.posix.basename(rolloutRef.path) : null,
         newCwd: workingDir,
         title: restore.title,
@@ -736,10 +801,15 @@ export async function commitShareImport(
       journal.push(async () => {
         await removeSharedCodexThread(threadId, written);
       });
+      assertStillValid();
       if (written.rolloutPath) transcriptsWritten += 1;
       // 降档提示看 statePresent(state 行最终在不在),不能看 stateWritten——
       // 删除后重导时行已存在、本次零插入,state 依然完好,不该提示。
-      if (!written.statePresent && stateRows.threads.length > 0 && !notes.includes('codexStateSkipped')) {
+      if (
+        !written.statePresent &&
+        stateRows.threads.length > 0 &&
+        !notes.includes('codexStateSkipped')
+      ) {
         notes.push('codexStateSkipped');
       }
     }
@@ -823,27 +893,38 @@ export async function commitShareImport(
           }),
         }
       : undefined;
-    await getDbClient().tx('session.importShare', {
-      session: buildSessionRow({
-        newId,
-        agentKind: manifest.agentKind,
-        title: manifest.title || 'Shared session',
-        workspaceKind: manifest.workspaceKind,
-        orcaRole: manifest.orca ? ('lead' as const) : null,
-        snapshot: sessionSnapshot,
-        draftPrefs,
-        applyDraftPrefs: true,
-        workingDir,
-        worktreePath,
-        activeSdkSessionId,
-        now,
-      }),
-      messages: dbMessages,
-      ...(conflictExisting.length > 0
-        ? { replaceSessions: conflictExisting }
-        : {}),
-      ...(orcaTxArgs ? { orca: orcaTxArgs } : {}),
-    });
+    await withSessionRouteLocks(
+      conflictExisting.map((session) => session.id),
+      async () => {
+        assertStillValid();
+        finalTxState.outcome = 'in-flight';
+        await dbClient.tx('session.importShare', {
+          session: buildSessionRow({
+            newId,
+            agentKind: manifest.agentKind,
+            title: manifest.title || 'Shared session',
+            workspaceKind: manifest.workspaceKind,
+            orcaRole: manifest.orca ? ('lead' as const) : null,
+            snapshot: sessionSnapshot,
+            draftPrefs,
+            applyDraftPrefs: true,
+            workingDir,
+            worktreePath,
+            activeSdkSessionId,
+            now,
+          }),
+          messages: dbMessages,
+          ...(conflictExisting.length > 0 ? { replaceSessions: conflictExisting } : {}),
+          ...(orcaTxArgs ? { orca: orcaTxArgs } : {}),
+        });
+        finalTxState.outcome = 'committed';
+        // The transaction is now durable. Consume the in-memory draft before
+        // revalidating the owner so a stale completion cannot be retried into
+        // another profile and duplicate the already committed import.
+        drafts.delete(opts.draftId);
+        assertStillValid();
+      },
+    );
 
     // ── 最终保真度(lead + 全部 Worker 聚合) ──
     const bundledKeys = new Set(
@@ -866,7 +947,6 @@ export async function commitShareImport(
       transcriptsWritten,
       notes,
     });
-    drafts.delete(opts.draftId);
     // 回传被原子替换的旧图，IPC 层在 commit 成功后执行可逆性不再需要的
     // 运行时/UI 收尾（closeSession + patched 广播）。资源字节不立即删除，避免
     // 与同 resume id 的新任务复用转录/媒体发生竞态，交既有对账/回收路径处理。
@@ -878,13 +958,25 @@ export async function commitShareImport(
       replacedSessions: conflictExisting,
     };
   } catch (err) {
-    await rollback();
+    // A resolved final transaction is the import commit point. A dispatched
+    // worker RPC can also commit and then lose its ACK during an owner switch,
+    // timeout, or worker termination. In that explicitly classified ambiguous
+    // state, preserve staged files/refs: an orphan leak is recoverable, while
+    // deleting bytes that committed messages reference is permanent corruption.
+    // Deterministic worker/business failures still roll back normally.
+    const preserveStagedArtifacts =
+      finalTxState.outcome === 'in-flight' && isDbTransportOutcomeUnknown(err);
+    if (preserveStagedArtifacts) {
+      log.warn('share import final transaction outcome is unknown; preserving staged artifacts', {
+        sessionId: newId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } else if (finalTxState.outcome !== 'committed') {
+      await rollback();
+    }
     const code = (err as { code?: unknown }).code;
     if (typeof code === 'string' && code !== 'ALREADY_EXISTS') throw err;
-    throw codedError(
-      'SHARE_IMPORT_FAILED',
-      err instanceof Error ? err.message : String(err),
-    );
+    throw codedError('SHARE_IMPORT_FAILED', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -897,7 +989,8 @@ async function readJsonEntry(zip: JSZip, entryPath: string): Promise<Record<stri
   if (!file) throw codedError('SHARE_FILE_INVALID', `${entryPath} missing`);
   try {
     const parsed = JSON.parse(await file.async('string')) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not object');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new Error('not object');
     return parsed as Record<string, unknown>;
   } catch {
     throw codedError('SHARE_FILE_INVALID', `${entryPath} is not valid JSON`);
@@ -1014,23 +1107,34 @@ async function restoreMediaEntry(params: {
   newSessionId: string;
   sharedMediaRoot: string;
   journal: Array<() => Promise<void>>;
+  db: LedgerDb;
+  assertStillValid: () => void;
+  refCompensationScope: MediaRefCompensationScope;
 }): Promise<RestoredMedia | null> {
   const { entry, buffer, newSessionId, sharedMediaRoot, journal } = params;
   // 老包媒体入总仓的统一小工具:字节 → blob + import 引用,mime 按已验证来源
   // 的扩展名反查;白名单外/账本不可用返回 null 由调用方走各自回落路径。
   // 白名单即 blobStore 全集(含 .glb 模型)——比"图/音/视频"口径略宽是有意的:
   // xdt-file 直读协议本就放行 .glb,入仓只是换了字节的住处。
-  const ingestLegacyMedia = async (ext: string): Promise<{ url: string; absPath: string } | null> => {
+  const ingestLegacyMedia = async (
+    ext: string,
+  ): Promise<{ url: string; absPath: string } | null> => {
     const mimeType = mimeForExt(ext.toLowerCase());
     if (!mimeType) return null;
     try {
-      const written = await ingestMedia({
-        buffer,
-        mimeType,
-        refs: [{ refKind: 'import', refId: newSessionId, originKind: 'user' }],
-      });
+      const written = await ingestMedia(
+        {
+          buffer,
+          mimeType,
+          refs: [{ refKind: 'import', refId: newSessionId, originKind: 'user' }],
+          assertStillValid: params.assertStillValid,
+          refCompensationScope: params.refCompensationScope,
+        },
+        params.db,
+      );
       return { url: written.url, absPath: resolveBlobHashRef(written.hash, written.ext).absPath };
     } catch (err) {
+      params.assertStillValid();
       log.warn('import media ingest failed, falling back to legacy dir', {
         url: entry.url,
         error: err instanceof Error ? err.message : String(err),
@@ -1056,18 +1160,18 @@ async function restoreMediaEntry(params: {
         const targetDir = getSessionDir(newSessionId);
         await fsp.mkdir(targetDir, { recursive: true });
         const target = path.join(targetDir, parsed.filename);
-        await writeIfMissing(target, buffer, journal);
+        await writeIfMissing(target, buffer, journal, params.assertStillValid);
         return {
           kind: 'session-image',
           newUrl: `xdt-image://${newSessionId}/${encodeURIComponent(parsed.filename)}`,
         };
       }
-      await writeIfMissing(absPath, buffer, journal);
+      await writeIfMissing(absPath, buffer, journal, params.assertStillValid);
       return { kind: 'reserved' };
     }
     if (entry.kind === 'video') {
       const { absPath } = resolveVideoUrl(entry.url);
-      await writeIfMissing(absPath, buffer, journal);
+      await writeIfMissing(absPath, buffer, journal, params.assertStillValid);
       return { kind: 'reserved' };
     }
     if (entry.kind === 'blob') {
@@ -1088,16 +1192,21 @@ async function restoreMediaEntry(params: {
         return null;
       }
       // 挂 import 引用(归属导入会话,删会话时随 removeSessionRefs 走)。
-      await ingestMedia({
-        buffer,
-        mimeType,
-        refs: [{ refKind: 'import', refId: params.newSessionId, originKind: 'user' }],
-      });
+      await ingestMedia(
+        {
+          buffer,
+          mimeType,
+          refs: [{ refKind: 'import', refId: params.newSessionId, originKind: 'user' }],
+          assertStillValid: params.assertStillValid,
+          refCompensationScope: params.refCompensationScope,
+        },
+        params.db,
+      );
       return { kind: 'blob' };
     }
     if (entry.kind === 'model') {
       const { absPath } = resolveModelUrl(entry.url);
-      await writeIfMissing(absPath, buffer, journal);
+      await writeIfMissing(absPath, buffer, journal, params.assertStillValid);
       return { kind: 'reserved' };
     }
     // loose:按 zipPath 里带序号的文件名落盘(天然去重),二次单段校验防穿越
@@ -1113,9 +1222,10 @@ async function restoreMediaEntry(params: {
     const targetDir = path.join(sharedMediaRoot, newSessionId);
     await fsp.mkdir(targetDir, { recursive: true });
     const target = path.join(targetDir, filename);
-    await writeIfMissing(target, buffer, journal);
+    await writeIfMissing(target, buffer, journal, params.assertStillValid);
     return { kind: 'loose', newUrl: buildLooseUrl(scheme, target) };
   } catch (err) {
+    params.assertStillValid();
     log.warn('restore media entry failed', {
       url: entry.url,
       error: err instanceof Error ? err.message : String(err),
@@ -1129,20 +1239,32 @@ async function writeIfMissing(
   target: string,
   buffer: Buffer,
   journal: Array<() => Promise<void>>,
+  assertStillValid: () => void,
 ): Promise<void> {
+  assertStillValid();
   await fsp.mkdir(path.dirname(target), { recursive: true });
+  assertStillValid();
   try {
     await fsp.writeFile(target, buffer, { flag: 'wx' });
     journal.push(async () => {
       await fsp.rm(target, { force: true });
     });
+    assertStillValid();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    assertStillValid();
   }
 }
 
 const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
-const PERMISSION_MODES = new Set(['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+const PERMISSION_MODES = new Set([
+  'ask',
+  'default',
+  'acceptEdits',
+  'plan',
+  'auto',
+  'bypassPermissions',
+]);
 
 /** draftPrefs 缺省(旧调用方 / 测试)时按 agentKind 兜底的模型。 */
 const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
@@ -1192,8 +1314,7 @@ function buildSessionRow(params: {
     now,
   } = params;
   const draftPrefs = params.applyDraftPrefs ? params.draftPrefs : null;
-  const str = (v: unknown, fallback: string): string =>
-    typeof v === 'string' && v ? v : fallback;
+  const str = (v: unknown, fallback: string): string => (typeof v === 'string' && v ? v : fallback);
   const num = (v: unknown, fallback: number): number =>
     typeof v === 'number' && Number.isFinite(v) ? v : fallback;
   const effort = str(draftPrefs?.effort, 'high');

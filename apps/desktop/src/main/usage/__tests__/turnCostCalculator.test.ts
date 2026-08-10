@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import {
+  LEDGER_CURRENCY_FALLBACK,
   __resetActiveLedgerCurrencyForTesting,
   setActiveLedgerCurrency,
 } from '../ledgerCurrency';
@@ -317,6 +318,7 @@ describe('resolveTurnCost', () => {
       context: XD_GATEWAY,
     });
     expect(result.source).toBe('sdk-fallback');
+    expect(LEDGER_CURRENCY_FALLBACK).toBe('USD');
     expect(result.money).toEqual({
       amount: 1.23,
       currency: 'USD',

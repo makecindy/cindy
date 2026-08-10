@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
 
 import { createOwnerEnsureCoordinator } from '../ownerEnsureCoordinator.js';
 
@@ -18,7 +19,7 @@ describe('createOwnerEnsureCoordinator', () => {
     const discard = vi.fn();
     const run = createOwnerEnsureCoordinator({
       isOwnerCurrent: (ownerId) => ownerId === activeOwner,
-      beforeEnsureReady: (ownerId) => ownerId === 'cloud-a' ? preflightA.promise : undefined,
+      beforeEnsureReady: (ownerId) => (ownerId === 'cloud-a' ? preflightA.promise : undefined),
       ensureReady: ensure,
       discardReadyOwner: discard,
     });
@@ -58,11 +59,7 @@ describe('createOwnerEnsureCoordinator', () => {
 
     await expect(stale).resolves.toMatchObject({ ready: false });
     await expect(local).resolves.toEqual({ ready: true });
-    expect(events).toEqual([
-      'ensure:cloud-a',
-      'discard:cloud-a',
-      'ensure:local-v1',
-    ]);
+    expect(events).toEqual(['ensure:cloud-a', 'discard:cloud-a', 'ensure:local-v1']);
   });
 
   it('discards an owner superseded while its ready callback is pending', async () => {
@@ -115,5 +112,26 @@ describe('createOwnerEnsureCoordinator', () => {
     expect(onReadyError).toHaveBeenCalledWith('local-v1', readyError);
     expect(discard).toHaveBeenCalledOnce();
     expect(discard).toHaveBeenCalledWith('local-v1');
+  });
+});
+
+describe('registerLocalDbIpc ready-hook composition', () => {
+  it('installs DbClient before runtime recovery and deleted-media reconcile', () => {
+    const source = fs.readFileSync(new URL('../registerAll.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('onReady: async (userId) => {');
+    const end = source.indexOf('onReadyError:', start);
+    const hook = source.slice(start, end);
+
+    expect(hook.indexOf('await opts.onReady?.(userId)')).toBeLessThan(
+      hook.indexOf('tryGetDbClient()'),
+    );
+    expect(hook).toContain('await opts.reconcilePersistedSessionRuntimes?.()');
+    expect(hook.indexOf('await opts.reconcilePersistedSessionRuntimes?.()')).toBeLessThan(
+      hook.indexOf('reconcileSessionMediaRefsForDeletedSessions({'),
+    );
+    expect(hook).toContain('if (');
+    expect(hook).toContain('!client');
+    expect(hook).toContain('!withSessionLock');
+    expect(hook).toContain('withSessionLock,');
   });
 });
