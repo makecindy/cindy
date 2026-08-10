@@ -60,12 +60,9 @@ vi.mock('undici', async (importOriginal) => {
   return { ...actual, fetch: vi.fn() };
 });
 
-// SUT 链(maker-host/runtime-configs → effectiveXdGatewayBaseUrl)运行期读
-// model-access 下发的 endpoint;mock 成 fixture 值。
-vi.mock('../../model-access/effectiveEndpoint.js', async () => {
-  const { TEST_XD_GATEWAY_BASE_URL } = await import('../../../test/vitest/clientEndpointsFixture');
-  return { effectiveXdGatewayBaseUrl: () => TEST_XD_GATEWAY_BASE_URL };
-});
+vi.mock('../../model-access/effectiveEndpoint.js', () => ({
+  effectiveXdGatewayBaseUrl: vi.fn(),
+}));
 
 import type { Maker } from '@cindy/maker-core';
 import { fetch as undiciFetch } from 'undici';
@@ -78,7 +75,9 @@ import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oaut
 import { getActiveCatalog } from '../../maker-host/active-catalog.js';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
+import { effectiveXdGatewayBaseUrl } from '../../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
+import { TEST_XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
 import {
   getUtilityTextCandidates,
@@ -96,6 +95,7 @@ const fetchMock = vi.mocked(undiciFetch);
 const activeCatalog = vi.mocked(getActiveCatalog);
 const readDisableOverrides = vi.mocked(readModelDisableOverrides);
 const providerRouteMutationInProgress = vi.mocked(isProviderRouteMutationInProgress);
+const readEffectiveXdGatewayBaseUrl = vi.mocked(effectiveXdGatewayBaseUrl);
 const readCustomKey = vi.mocked(readCustomProviderKey);
 
 function makerMock(authenticated: boolean): Maker {
@@ -115,6 +115,7 @@ describe('utility one-shot candidates', () => {
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     readGenericOAuthToken.mockReturnValue(null);
     providerRouteMutationInProgress.mockReturnValue(false);
+    readEffectiveXdGatewayBaseUrl.mockReturnValue(TEST_XD_GATEWAY_BASE_URL);
     readCustomKey.mockReturnValue(null);
     readDisableOverrides.mockReturnValue({ disabledModels: {}, disabledProviders: {} });
     activeCatalog.mockReturnValue({ providers: [] } as never);
@@ -1241,6 +1242,35 @@ describe('utility one-shot candidates', () => {
       upstream: 'https://custom.example/v1',
     });
     expect(reordered?.routeRevision).toBe(initial?.routeRevision);
+  });
+
+  it('changes the approval route revision when the effective XD gateway changes', () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'api-key' },
+        routing: {
+          codex: { upstream: 'https://catalog.example/v1', authStrategy: 'api-key-header' },
+        },
+        models: { codex: [{ id: 'gpt-5.5', name: 'GPT 5.5', contextWindow: 100_000 }] },
+      }],
+    } as never);
+
+    const resolve = () => resolveUtilityTextRouteIdentity({
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+    });
+    const initial = resolve();
+
+    readEffectiveXdGatewayBaseUrl.mockReturnValue('https://next-gateway.test.invalid');
+    expect(resolve()?.routeRevision).not.toBe(initial?.routeRevision);
+
+    readEffectiveXdGatewayBaseUrl.mockReturnValue(`  ${TEST_XD_GATEWAY_BASE_URL}  `);
+    expect(resolve()?.routeRevision).toBe(initial?.routeRevision);
   });
 
   it('does not produce a memory route when an omitted provider is ambiguous', () => {

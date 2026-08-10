@@ -304,9 +304,99 @@ function sqliteMayLoadMutableFileState(args: readonly string[]): boolean {
   return false;
 }
 
-const PSQL_MUTABLE_FILE_META_COMMAND_PATTERN =
-  /(?:^|[\r\n])\s*\\+(?:include_relative|include|ir|i)(?=\s|$)/;
-const PSQL_COPY_META_COMMAND_PATTERN = /(?:^|[\r\n])\s*\\+copy\b/gi;
+type PsqlMetaCommand = { name: string; argumentsStart: number };
+
+/**
+ * 找出不在 SQL quote/comment 内的 psql 元命令。
+ *
+ * psql 元命令由未被引用的反斜杠开始；SQL 字符串、标识符、dollar quote 与注释中的
+ * `\\!` / `\\i` 只是数据，不能误判。连续反斜杠兼容 shell 转义后仍保留的等价形态。
+ */
+function psqlMetaCommands(command: string): PsqlMetaCommand[] {
+  const matches: PsqlMetaCommand[] = [];
+  let quote: "'" | '"' | null = null;
+  let dollarQuote: string | null = null;
+  let lineComment = false;
+  let blockCommentDepth = 0;
+
+  for (let index = 0; index < command.length; index++) {
+    const char = command[index]!;
+    const next = command[index + 1];
+
+    if (lineComment) {
+      if (char === '\n' || char === '\r') {
+        lineComment = false;
+      }
+      continue;
+    }
+    if (blockCommentDepth > 0) {
+      if (char === '/' && next === '*') {
+        blockCommentDepth += 1;
+        index += 1;
+      } else if (char === '*' && next === '/') {
+        blockCommentDepth -= 1;
+        index += 1;
+      }
+      continue;
+    }
+    if (dollarQuote) {
+      if (command.startsWith(dollarQuote, index)) {
+        index += dollarQuote.length - 1;
+        dollarQuote = null;
+      }
+      continue;
+    }
+    if (quote) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === quote) {
+        if (next === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+
+    if (char === '-' && next === '-') {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockCommentDepth = 1;
+      index += 1;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === '$') {
+      const dollarStart = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(command.slice(index));
+      if (dollarStart) {
+        dollarQuote = dollarStart[0];
+        index += dollarQuote.length - 1;
+        continue;
+      }
+    }
+    if (char === '\\') {
+      let cursor = index;
+      while (command[cursor] === '\\') cursor += 1;
+      if (command[cursor] === '!') {
+        matches.push({ name: '!', argumentsStart: cursor + 1 });
+        index = cursor;
+      } else {
+        const name = /^[A-Za-z_]+/.exec(command.slice(cursor))?.[0];
+        if (name) {
+          matches.push({ name: name.toLowerCase(), argumentsStart: cursor + name.length });
+          index = cursor + name.length - 1;
+        }
+      }
+    }
+  }
+  return matches;
+}
 
 /** 找出 `\copy` 在最外层 query/quote 之外的 from/to 方向。 */
 function psqlCopyDirection(command: string, start: number): 'from' | 'to' | null {
@@ -368,9 +458,9 @@ function psqlCopyDirection(command: string, start: number): 'from' | 'to' | null
 }
 
 function psqlCopyMayLoadMutableFile(command: string): boolean {
-  for (const match of command.matchAll(PSQL_COPY_META_COMMAND_PATTERN)) {
-    const start = (match.index ?? 0) + match[0].length;
-    if (psqlCopyDirection(command, start) === 'from') return true;
+  for (const metaCommand of psqlMetaCommands(command)) {
+    if (metaCommand.name === 'copy'
+      && psqlCopyDirection(command, metaCommand.argumentsStart) === 'from') return true;
   }
   return false;
 }
@@ -381,7 +471,13 @@ function psqlArgumentMayLoadMutableFile(arg: string): boolean {
   else if (arg.startsWith('-c') && arg.length > 2) command = arg.slice(2);
   // tokenize 会为 ANSI-C quote 保留 `$'` 标记；去掉标记后仍按同一元命令入口判定。
   if (command.startsWith("$'")) command = command.slice(2);
-  return PSQL_MUTABLE_FILE_META_COMMAND_PATTERN.test(command)
+  const metaCommands = psqlMetaCommands(command);
+  return metaCommands.some(({ name }) =>
+    name === 'i'
+    || name === 'ir'
+    || name === 'include'
+    || name === 'include_relative'
+    || name === '!')
     || psqlCopyMayLoadMutableFile(command);
 }
 
@@ -898,6 +994,25 @@ const FILE_TRANSFORM_EXECUTABLES: ReadonlySet<string> = new Set([
   'brotli',
 ]);
 
+/**
+ * OpenSSL 子命令普遍通过 `-in FILE` 读取输入、通过 `-out FILE` 写出结果。只要输入来自
+ * 文件，同一 argv 就能因文件替换产生不同输出；固定字面量 stdin + `-out` 仍可精确复用。
+ */
+function opensslMayLoadMutableFileState(args: readonly string[]): boolean {
+  return args.some((arg) => {
+    if (arg === '-in' || arg.startsWith('-in=')) return true;
+    // OpenSSL 的单横线长选项中，-inform/-inkey/-indent 不是 -in 的紧凑值。
+    return /^-in.+/i.test(arg) && !/^-(?:inform|inkey|indent|inhibit_any)(?:=|$)/i.test(arg);
+  });
+}
+
+function opensslWritesFile(args: readonly string[]): boolean {
+  return args.some((arg) =>
+    arg === '-out'
+    || arg.startsWith('-out=')
+    || (/^-out.+/i.test(arg) && !/^-outform(?:=|$)/i.test(arg)));
+}
+
 const PIPELINE_FILE_SINK_NAMES: ReadonlySet<string> = new Set(['tee', 'sponge']);
 
 /**
@@ -999,6 +1114,7 @@ function pipelineHasMutableFileSideEffect(command: string): boolean {
     const hasSideEffectSink = pipeline.some(({ name, args, text }) =>
       hasOutputFileRedirection(text)
       || (PIPELINE_FILE_SINK_NAMES.has(name) && hasFileOperand(args))
+      || (name === 'openssl' && opensslWritesFile(args))
       || PIPELINE_NETWORK_SINK_NAMES.has(name));
     if (!hasSideEffectSink) continue;
     if (pipeline.some(({ name, args }) =>
@@ -1066,6 +1182,8 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
         && mysqlMayLoadMutableScript(args))))) return true;
   if (invocations.some(({ name, args }) =>
     FILE_TRANSFORM_EXECUTABLES.has(name) && hasFileOperand(args))) return true;
+  if (invocations.some(({ name, args }) =>
+    name === 'openssl' && opensslMayLoadMutableFileState(args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。

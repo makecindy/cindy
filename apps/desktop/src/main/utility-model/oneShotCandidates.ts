@@ -325,6 +325,9 @@ function utilityRouteRevision(
     agentKind,
     auth: provider.auth,
     routing: provider.routing[agentKind],
+    // XD 的实际请求地址来自 model-access 运行时下发，而不是 catalog routing。
+    // 只把它放进摘要输入，不把 endpoint 明文写入批准记录。
+    effectiveEndpoint: provider.id === 'xd' ? effectiveXdGatewayBaseUrl().trim() : undefined,
   }));
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
 }

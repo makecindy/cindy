@@ -567,6 +567,41 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(0);
   });
 
+  it('OpenSSL 文件输入变换不可记忆，固定字面量 stdin 不误报', () => {
+    for (const command of [
+      'openssl base64 -d -in payload.b64 -out dist/config',
+      'openssl base64 -d -in=payload.b64 -out=dist/config',
+      'openssl base64 -d -inpayload.b64 -outdist/config',
+      'env openssl.exe base64 -d -in .\\payload.b64 -out .\\dist\\config',
+      'true && openssl enc -d -aes-256-cbc -in payload.enc -out payload.txt',
+      'openssl version && openssl dgst -sha256 -in payload.bin',
+      'cat payload.b64 | openssl base64 -d -out dist/config',
+      'head -n 1 payload.b64 | env openssl.exe base64 -d -out=.\\dist\\config',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'openssl version',
+      'openssl x509 -inform PEM -noout -text',
+      'printf payload | openssl base64 -d -out dist/config',
+      'echo payload | openssl dgst -sha256',
+      'cat payload.b64 | openssl base64 -d -outform PEM',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    const action = exec('openssl base64 -d -in payload.b64 -out dist/config');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
+  });
+
   it('输入重定向的紧贴、fd 前缀与 shell 分隔符形式均不可记忆', () => {
     for (const command of [
       'psql < input.sql',
@@ -634,6 +669,15 @@ describe('approvalSignature — 可记忆判据', () => {
       "psql -X prod -c $'\\\\copy jobs from ./payload.csv'",
       "psql -X prod -c '\\copy jobs to ./audit.csv'"
         + " && psql -X prod -c '\\copy jobs from ./payload.csv'",
+      "psql -X prod -c '\\! sh deploy.sh'",
+      "psql --no-psqlrc prod --command '\\!sh deploy.sh'",
+      "psql -X prod --command='\\! sh deploy.sh'",
+      "psql -X prod -c'\\! sh deploy.sh'",
+      "psql -X prod -c 'select 1; \\! sh deploy.sh'",
+      "psql.exe -X prod '\\! sh deploy.sh'",
+      "env psql -X prod '\\! sh deploy.sh'",
+      "psql -X prod -c $'\\\\! sh deploy.sh'",
+      "psql -X prod -c 'select 1' && psql -X prod -c '\\! sh deploy.sh'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
       expect(signature(exec(command)), command).toBeNull();
@@ -658,6 +702,9 @@ describe('approvalSignature — 可记忆判据', () => {
       "psql -X prod -c \"\\copy (select 'from file' from jobs) to './audit.csv'\"",
       "psql -X prod -c \"select '\\\\copy jobs from ./payload.csv'\"",
       "psql -X prod -c \"select 'copy jobs from ./payload.csv'\"",
+      "psql -X prod -c \"select '\\\\! sh deploy.sh'\"",
+      "psql -X prod -c '-- \\! sh deploy.sh\nselect 1'",
+      "psql -X prod -c '/* \\! sh deploy.sh */ select 1'",
       "echo psql -X prod -c '\\i deploy.sql'",
     ]) {
       expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
@@ -673,6 +720,7 @@ describe('approvalSignature — 可记忆判据', () => {
       exec('cat deploy.sql | psql -X prod'),
       exec("psql -X prod -c '\\i deploy.sql'"),
       exec("psql -X prod -c \"\\\\copy jobs from './payload.csv'\""),
+      exec("psql -X prod -c '\\! sh deploy.sh'"),
     ]) {
       memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
       // psqlrc、deploy.sql、元命令文件或管道输入被替换时，各入口都不写入摘要。
