@@ -35,7 +35,6 @@ import {
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
-  hasLegacyOwnerNamespaceClaim,
   hasExclusiveSharedLegacyUserDataAccess,
   isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
@@ -727,14 +726,14 @@ function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
   const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
 
   if (isLegacyOwnerNamespaceClaimedByOtherOwner(session.dataOwnerId)) return 'ready';
-  const legacyPathState = sidebarPathState(legacyPath);
-
-  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
-    return isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) && legacyPathState === 'missing'
-      ? initializeScopedSidebarSettings(scopedPath, ownerKey)
-      : 'blocked';
+  if (
+    !isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) ||
+    !hasExclusiveSharedLegacyUserDataAccess()
+  ) {
+    return 'blocked';
   }
 
+  const legacyPathState = sidebarPathState(legacyPath);
   if (legacyPathState === 'missing') {
     return initializeScopedSidebarSettings(scopedPath, ownerKey);
   }
