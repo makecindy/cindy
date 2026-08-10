@@ -33,6 +33,7 @@ beforeEach(() => {
     value: {
       maker: {
         listProviderPresets: vi.fn(async () => ({ presets: [] })),
+        testProviderConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
       },
     },
   });
@@ -145,6 +146,52 @@ describe('CustomProviderDialog accessibility', () => {
 
     await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
     expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[1]).toEqual({});
+  });
+
+  it('does not send a hydrated key to a changed endpoint during an ad-hoc test', async () => {
+    const testProviderConnection = vi
+      .fn<(request: unknown) => Promise<{ ok: true; latencyMs: number }>>()
+      .mockResolvedValue({ ok: true, latencyMs: 1 });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        maker: {
+          listProviderPresets: vi.fn(async () => ({ presets: [] })),
+          testProviderConnection,
+        },
+      },
+    });
+    const initial: CustomProviderConfig = {
+      id: 'existing-provider',
+      name: 'Existing provider',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://old.example.test/v1',
+          models: [{ id: 'test-model', name: 'Test Model' }],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('old-secret');
+
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+    const baseUrl = screen.getByPlaceholderText(
+      'settings.providers.custom.fields.baseUrlPlaceholder',
+    );
+    await user.clear(baseUrl);
+    await user.type(baseUrl, 'https://new.example.test/v1');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+
+    await waitFor(() => expect(testProviderConnection).toHaveBeenCalledOnce());
+    expect(testProviderConnection.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'adhoc',
+      spec: expect.objectContaining({
+        baseUrl: 'https://new.example.test/v1',
+        apiKey: null,
+      }),
+    });
   });
 
   it('hides and strips a legacy request path from a Pi runtime', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   areProviderRequestUrlsAllowed,
+  canSendHydratedApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
@@ -166,6 +167,50 @@ describe('modelFetchCanReuseSavedCredentials', () => {
         'apiKey',
       ),
     ).toBe(false);
+  });
+});
+
+describe('canSendHydratedApiKey', () => {
+  const apiKeyBaseline: SavedProviderProbeBaseline = {
+    ...headerAuthBaseline,
+    authMode: 'apiKey',
+    apiKey: 'saved-key',
+  };
+  const requestTarget = {
+    baseUrl: apiKeyBaseline.baseUrl,
+    requestPath: apiKeyBaseline.requestPath,
+    modelsUrl: apiKeyBaseline.modelsUrl,
+  };
+
+  it('keeps an untouched hydrated key on the saved request target only', () => {
+    expect(canSendHydratedApiKey(requestTarget, apiKeyBaseline, 'apiKey', 0)).toBe(true);
+    expect(
+      canSendHydratedApiKey(
+        { ...requestTarget, baseUrl: 'https://new.example/v1' },
+        apiKeyBaseline,
+        'apiKey',
+        0,
+      ),
+    ).toBe(false);
+    expect(
+      canSendHydratedApiKey(
+        { ...requestTarget, modelsUrl: 'https://new.example/models' },
+        apiKeyBaseline,
+        'apiKey',
+        0,
+      ),
+    ).toBe(false);
+  });
+
+  it('allows a key after the user explicitly edits it', () => {
+    expect(
+      canSendHydratedApiKey(
+        { ...requestTarget, baseUrl: 'https://new.example/v1' },
+        apiKeyBaseline,
+        'apiKey',
+        1,
+      ),
+    ).toBe(true);
   });
 });
 

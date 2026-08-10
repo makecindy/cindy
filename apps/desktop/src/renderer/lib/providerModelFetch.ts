@@ -121,6 +121,26 @@ export function modelFetchCanReuseSavedCredentials(
 }
 
 /**
+ * Decide whether a hydrated API key may be sent with an ad-hoc request.
+ * A key that the user has not explicitly edited must stay bound to the saved
+ * request target; otherwise changing an endpoint could send it to a new host.
+ */
+export function canSendHydratedApiKey(
+  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'requestPath' | 'modelsUrl'>,
+  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'requestPath' | 'modelsUrl' | 'authMode'>,
+  authMode: CustomProviderAuthMode,
+  keyEditRevision: number,
+): boolean {
+  if (keyEditRevision > 0) return true;
+  return (
+    authMode === baseline.authMode &&
+    form.baseUrl.trim() === baseline.baseUrl.trim() &&
+    form.requestPath.trim() === baseline.requestPath.trim() &&
+    form.modelsUrl.trim() === baseline.modelsUrl.trim()
+  );
+}
+
+/**
  * 测试连接是否走「已存供应商」受控探测(kind:'saved')。saved 探测整体按已存 spec 发起,
  * 能带上不回读进表单的 main-only 密文头;但它用的是已存端点/模型/凭证,所以只有当编辑态
  * 表单里端点、协议、鉴权模式与凭证材料相对已存配置**都未改动**时才可用——否则用 adhoc

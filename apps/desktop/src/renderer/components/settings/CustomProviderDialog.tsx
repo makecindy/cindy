@@ -51,6 +51,7 @@ import {
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   areProviderRequestUrlsAllowed,
+  canSendHydratedApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
@@ -878,6 +879,15 @@ export function CustomProviderDialog({
     // 它整体按已存 spec 发起,能带上不回读进表单的 main-only 密文鉴权头(否则纯密文头
     // 供应商会因缺头而失败)。任一改动则回落 adhoc,测用户新填的值。
     const savedBaseline = savedBaselineFor(agent);
+    const canSendApiKey =
+      authMode !== 'apiKey' ||
+      !savedBaseline ||
+      canSendHydratedApiKey(
+        probeFields,
+        savedBaseline,
+        authMode,
+        keyEditRevisionRef.current[agent],
+      );
     const useSaved = Boolean(
       initial?.id &&
         savedBaseline &&
@@ -899,7 +909,8 @@ export function CustomProviderDialog({
                 ...(agent !== 'pi' && rf.requestPath.trim()
                   ? { requestPath: rf.requestPath.trim() }
                   : {}),
-                apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
+                apiKey:
+                  authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
                 ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
               },
             },
@@ -975,6 +986,15 @@ export function CustomProviderDialog({
     // savedProviderId,让 main 侧并入不回读进 renderer 的 main-only 密文鉴权头(表单显式
     // 填的头/key 仍由 main 以 renderer 值优先);端点一改就不带,避免把已存凭证外泄给新主机。
     const savedBaseline = savedBaselineFor(agent);
+    const canSendApiKey =
+      authMode !== 'apiKey' ||
+      !savedBaseline ||
+      canSendHydratedApiKey(
+        rf,
+        savedBaseline,
+        authMode,
+        keyEditRevisionRef.current[agent],
+      );
     const reuseSaved = Boolean(
       initial?.id && savedBaseline && modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
     );
@@ -987,7 +1007,7 @@ export function CustomProviderDialog({
         authMethod: authMode,
         ...(rf.wireProtocol ? { wireProtocol: rf.wireProtocol } : {}),
         modelsUrl: rf.modelsUrl.trim() || null,
-        apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
+        apiKey: authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
         ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
         ...(reuseSaved ? { savedProviderId: initial!.id } : {}),
       });
