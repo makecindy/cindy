@@ -6527,9 +6527,10 @@
       "lastTool": "最近工具：{{tool}}",
       "outputFile": "輸出：{{path}}"
     },
-    "planPill": {
-      "step": "第 {{current}} / {{total}} 步"
-    },
+      "planPill": {
+        "step": "第 {{current}} / {{total}} 步",
+        "dismiss": "關閉計劃"
+      },
     "forkOrigin": {
       "label": "基於原任務建立"
     },
