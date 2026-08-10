@@ -1484,6 +1484,7 @@
           "overwriteCurrent": "取代目前值",
           "fillEmpty": "填入目前空白欄位",
           "incompatibleProtocol": "未複製：{{target}} 不支援此 API 協議",
+          "incompatibleHeaders": "未複製：{{target}} 需要無法在此安全複製的請求標頭",
           "incompatibleEndpoint": "未複製：{{target}} 無法使用此端點設定",
           "noSelectableFields": "此 Runtime 沒有可相容填入的欄位。",
           "endpointBundleNote": "填入 {{target}} 時，基礎 URL、請求路徑和 API 協議會成組複製，避免端點組合不符。",

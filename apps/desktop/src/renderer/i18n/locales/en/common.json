@@ -1512,6 +1512,7 @@
           "overwriteCurrent": "Replaces the current value",
           "fillEmpty": "Fills the currently empty field",
           "incompatibleProtocol": "Not copied: {{target}} does not support this API protocol",
+          "incompatibleHeaders": "Not copied: {{target}} needs headers that cannot be copied here",
           "incompatibleEndpoint": "Not copied: {{target}} cannot use this endpoint configuration",
           "noSelectableFields": "No compatible fields are available for this runtime.",
           "endpointBundleNote": "For {{target}}, the Base URL, request path, and API protocol are copied together so they cannot become mismatched.",

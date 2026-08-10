@@ -1508,6 +1508,7 @@
           "overwriteCurrent": "替换当前值",
           "fillEmpty": "填充当前空字段",
           "incompatibleProtocol": "未复制：{{target}} 不支持此 API 协议",
+          "incompatibleHeaders": "未复制：{{target}} 需要无法在此安全复制的请求头",
           "incompatibleEndpoint": "未复制：{{target}} 无法使用此端点配置",
           "noSelectableFields": "此 runtime 没有可兼容填充的字段。",
           "endpointBundleNote": "向 {{target}} 填充时，基础 URL、请求路径和 API 协议会成组复制，避免端点组合不匹配。",

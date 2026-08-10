@@ -23,11 +23,13 @@ export interface RuntimeFillDraft {
 export type RuntimeFillField =
   'baseUrl' | 'requestPath' | 'wireProtocol' | 'apiKey' | 'models' | 'headers' | 'modelsUrl';
 export type RuntimeFillTargetState = 'empty' | 'same' | 'conflict' | 'incompatible';
-export type RuntimeFillIncompatibilityReason = 'protocol' | 'endpoint';
+export type RuntimeFillIncompatibilityReason = 'protocol' | 'endpoint' | 'headers';
 export interface RuntimeFillFieldDiff {
   field: RuntimeFillField;
   targetState: RuntimeFillTargetState;
   incompatibilityReason?: RuntimeFillIncompatibilityReason;
+  /** The main process will clear target headers when this endpoint URL changes. */
+  implicitClear?: boolean;
 }
 
 export const RUNTIME_FILL_ENDPOINT_FIELDS = [
@@ -45,6 +47,12 @@ export const RUNTIME_FILL_FIELD_ORDER: readonly RuntimeFillField[] = [
 ];
 
 const PROTOCOL_BOUND_FIELDS = new Set<RuntimeFillField>([
+  ...RUNTIME_FILL_ENDPOINT_FIELDS,
+  'headers',
+  'modelsUrl',
+]);
+
+const HEADER_DEPENDENT_FIELDS = new Set<RuntimeFillField>([
   ...RUNTIME_FILL_ENDPOINT_FIELDS,
   'headers',
   'modelsUrl',
@@ -222,6 +230,15 @@ function targetFieldHasValue(
     : sourceFieldHasValue(field, draft, agent);
 }
 
+function endpointUrlChanged(source: RuntimeFillDraft, target: RuntimeFillDraft): boolean {
+  const sourceBaseUrl = source.baseUrl.trim();
+  const sourceModelsUrl = source.modelsUrl.trim();
+  return (
+    (sourceBaseUrl.length > 0 && sourceBaseUrl !== target.baseUrl.trim()) ||
+    (sourceModelsUrl.length > 0 && sourceModelsUrl !== target.modelsUrl.trim())
+  );
+}
+
 export function runtimeFillFieldHasValue(
   field: RuntimeFillField,
   draft: RuntimeFillDraft,
@@ -275,11 +292,28 @@ export function buildRuntimeFillDiffs(
     options.sourceAgent,
     options.targetAgent,
   );
+  const sourceHasHiddenHeaders =
+    source.headersConfigured === true && !sourceFieldHasValue('headers', source, options.sourceAgent);
+  const targetHasHeaders = targetFieldHasValue('headers', target, options.targetAgent);
+  const endpointChangesUrl = endpointUrlChanged(source, target);
+  const implicitHeaderClear = endpointChangesUrl && targetHasHeaders;
 
   return RUNTIME_FILL_FIELD_ORDER.filter((field) => {
     if (!options.includeApiKey && field === 'apiKey') return false;
+    if (field === 'headers') {
+      return sourceFieldHasValue(field, source, options.sourceAgent) ||
+        sourceHasHiddenHeaders ||
+        implicitHeaderClear;
+    }
     return sourceFieldHasValue(field, source, options.sourceAgent);
   }).map((field) => {
+    if (sourceHasHiddenHeaders && HEADER_DEPENDENT_FIELDS.has(field)) {
+      return {
+        field,
+        targetState: 'incompatible',
+        incompatibilityReason: 'headers',
+      };
+    }
     if (
       (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(field) &&
       !endpointSupported
@@ -307,13 +341,19 @@ export function buildRuntimeFillDiffs(
         ? modelsForTarget(target.models, target.models, options.targetAgent, options.targetAgent)
         : comparableValue(field, target, options.targetAgent);
     const same = JSON.stringify(sourceValue) === JSON.stringify(targetValue);
+    const hiddenTargetHeadersOnly =
+      field === 'headers' &&
+      target.headersConfigured === true &&
+      !sourceFieldHasValue('headers', source, options.sourceAgent);
+    const shouldConfirmHeaderClear = field === 'headers' && implicitHeaderClear;
     return {
       field,
-      targetState: same
+      targetState: same && !hiddenTargetHeadersOnly
         ? 'same'
         : targetFieldHasValue(field, target, options.targetAgent)
           ? 'conflict'
           : 'empty',
+      ...(shouldConfirmHeaderClear ? { implicitClear: true } : {}),
     };
   });
 }
@@ -322,16 +362,27 @@ export function runtimeFillFieldsForToggle(
   field: RuntimeFillField,
   diffs: readonly RuntimeFillFieldDiff[],
 ): RuntimeFillField[] {
+  const implicitHeaderDiff = diffs.find(
+    (diff) => diff.field === 'headers' && diff.implicitClear,
+  );
   if (!(RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(field)) {
-    return [field];
+    return implicitHeaderDiff && field === 'headers'
+      ? [
+          ...RUNTIME_FILL_ENDPOINT_FIELDS.filter((endpointField) =>
+            diffs.some((diff) => diff.field === endpointField && diff.targetState !== 'incompatible'),
+          ),
+          'headers',
+        ]
+      : [field];
   }
-  return diffs
+  const endpointFields = diffs
     .filter(
       (diff) =>
         (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(diff.field) &&
         diff.targetState !== 'incompatible',
     )
     .map((diff) => diff.field);
+  return implicitHeaderDiff ? [...endpointFields, 'headers'] : endpointFields;
 }
 
 export function normalizeRuntimeFillSelection(
@@ -388,9 +439,12 @@ export function applyRuntimeFillFields(
     (field) => selected.has(field),
   );
   const sourceWire = effectiveWire(options.sourceAgent, source.wireProtocol);
+  const sourceHasHiddenHeaders =
+    source.headersConfigured === true && !sourceFieldHasValue('headers', source, options.sourceAgent);
   const endpointCompatible =
     protocolSupported(options.targetAgent, sourceWire) &&
-    endpointBundleSupported(source, options.sourceAgent, options.targetAgent);
+    endpointBundleSupported(source, options.sourceAgent, options.targetAgent) &&
+    !sourceHasHiddenHeaders;
   const copyableEndpointFields = RUNTIME_FILL_ENDPOINT_FIELDS.filter(
     (field) =>
       transferFieldSupported(
@@ -413,6 +467,7 @@ export function applyRuntimeFillFields(
     : target.models;
   const copyHeaders =
     selected.has('headers') &&
+    !sourceHasHiddenHeaders &&
     fieldSupported(options.sourceAgent, 'headers', sourceWire) &&
     fieldSupported(options.targetAgent, 'headers', sourceWire);
 
@@ -420,7 +475,9 @@ export function applyRuntimeFillFields(
     baseUrl: copyBaseUrl ? source.baseUrl : target.baseUrl,
     requestPath:
       options.targetAgent === 'pi'
-        ? ''
+        ? sourceHasHiddenHeaders
+          ? target.requestPath
+          : ''
         : copyRequestPath
           ? source.requestPath
           : target.requestPath,
@@ -431,6 +488,7 @@ export function applyRuntimeFillFields(
     headersConfigured: copyHeaders ? false : target.headersConfigured,
     modelsUrl:
       selected.has('modelsUrl') &&
+      !sourceHasHiddenHeaders &&
       fieldSupported(options.sourceAgent, 'modelsUrl', sourceWire) &&
       fieldSupported(options.targetAgent, 'modelsUrl', sourceWire)
         ? source.modelsUrl

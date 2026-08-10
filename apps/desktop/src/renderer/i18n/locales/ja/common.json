@@ -1512,6 +1512,7 @@
           "overwriteCurrent": "現在値を置換",
           "fillEmpty": "空の項目を入力",
           "incompatibleProtocol": "コピーされません：{{target}} はこの API プロトコルをサポートしていません",
+          "incompatibleHeaders": "コピーされません：{{target}} にはここで安全にコピーできないヘッダーが必要です",
           "incompatibleEndpoint": "コピーされません：{{target}} ではこのエンドポイント設定を使用できません",
           "noSelectableFields": "この runtime に入力できる互換項目はありません。",
           "endpointBundleNote": "{{target}} には、ベース URL、リクエストパス、API プロトコルを一括コピーし、不整合を防ぎます。",

@@ -160,6 +160,49 @@ describe('CustomProviderRuntimeFillOverlay', () => {
     ).toBeNull();
   });
 
+  it('shows hidden target headers as configured without exposing values', () => {
+    renderOverlay(
+      state({
+        targets: [
+          {
+            agent: 'pi',
+            draft: draft({ headersConfigured: true }),
+            diffs: [{ field: 'headers', targetState: 'conflict', implicitClear: true }],
+          },
+        ],
+        selected: { pi: ['headers'] },
+      }),
+    );
+
+    expect(screen.getByText('settings.providers.custom.runtimeFill.values.secretSet')).not.toBeNull();
+  });
+
+  it('explains that main-only source headers cannot be copied', () => {
+    renderOverlay(
+      state({
+        sourceDraft: draft({ headersConfigured: true }),
+        targets: [
+          {
+            agent: 'pi',
+            draft: draft(),
+            diffs: [
+              {
+                field: 'headers',
+                targetState: 'incompatible',
+                incompatibilityReason: 'headers',
+              },
+            ],
+          },
+        ],
+        selected: {},
+      }),
+    );
+
+    expect(
+      screen.getByText('settings.providers.custom.runtimeFill.incompatibleHeaders'),
+    ).not.toBeNull();
+  });
+
   it('focuses the primary action, traps keyboard focus, closes on Escape, and restores focus', async () => {
     const onClose = vi.fn();
 

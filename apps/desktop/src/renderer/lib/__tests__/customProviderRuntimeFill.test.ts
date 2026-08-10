@@ -260,6 +260,77 @@ describe('custom provider runtime fill', () => {
     });
   });
 
+  it('requires endpoint confirmation before clearing hidden target headers', () => {
+    const source = draft({ baseUrl: 'https://source.example/v1' });
+    const target = draft({
+      baseUrl: 'https://target.example/v1',
+      headersConfigured: true,
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'codex',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'headers')).toEqual({
+      field: 'headers',
+      targetState: 'conflict',
+      implicitClear: true,
+    });
+    expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([
+      'baseUrl',
+      'requestPath',
+      'wireProtocol',
+      'headers',
+    ]);
+    expect(runtimeFillFieldsForToggle('headers', diffs)).toEqual([
+      'baseUrl',
+      'requestPath',
+      'wireProtocol',
+      'headers',
+    ]);
+    expect(
+      applyRuntimeFillFields(target, source, ['baseUrl', 'requestPath', 'wireProtocol', 'headers'], {
+        sourceAgent: 'codex',
+        targetAgent: 'codex',
+      }),
+    ).toMatchObject({
+      baseUrl: source.baseUrl,
+      headers: [],
+      headersConfigured: false,
+    });
+  });
+
+  it('blocks endpoint transfer when source headers exist only in main storage', () => {
+    const source = draft({
+      baseUrl: 'https://source.example/v1',
+      modelsUrl: 'https://source.example/v1/models',
+      headersConfigured: true,
+    });
+    const target = draft({ baseUrl: 'https://target.example/v1' });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'pi',
+    });
+
+    expect(
+      diffs
+        .filter((diff) => ['baseUrl', 'requestPath', 'wireProtocol', 'headers', 'modelsUrl'].includes(diff.field))
+        .every(
+          (diff) =>
+            diff.targetState === 'incompatible' && diff.incompatibilityReason === 'headers',
+        ),
+    ).toBe(true);
+    expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([]);
+    expect(
+      applyRuntimeFillFields(target, source, ['baseUrl', 'wireProtocol', 'headers', 'modelsUrl'], {
+        sourceAgent: 'codex',
+        targetAgent: 'pi',
+      }),
+    ).toMatchObject(target);
+  });
+
   it('clears a legacy target request path when filling from a path-free Pi source', () => {
     const source = draft({
       baseUrl: 'https://pi.example/v1',

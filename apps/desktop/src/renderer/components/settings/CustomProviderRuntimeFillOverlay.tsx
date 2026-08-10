@@ -164,6 +164,8 @@ export function CustomProviderRuntimeFillOverlay({
         const count = runtimeFillHeaderCount(draft);
         return count > 0
           ? t('settings.providers.custom.runtimeFill.values.headers', { count })
+          : draft.headersConfigured === true
+            ? t('settings.providers.custom.runtimeFill.values.secretSet')
           : t('settings.providers.custom.runtimeFill.values.empty');
       }
     }
@@ -179,7 +181,9 @@ export function CustomProviderRuntimeFillOverlay({
     t(
       diff.incompatibilityReason === 'protocol'
         ? 'settings.providers.custom.runtimeFill.incompatibleProtocol'
-        : 'settings.providers.custom.runtimeFill.incompatibleEndpoint',
+        : diff.incompatibilityReason === 'headers'
+          ? 'settings.providers.custom.runtimeFill.incompatibleHeaders'
+          : 'settings.providers.custom.runtimeFill.incompatibleEndpoint',
       { target: targetName },
     );
 
