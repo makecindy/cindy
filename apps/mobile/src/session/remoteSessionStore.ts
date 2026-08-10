@@ -1,5 +1,10 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
+import {
+  MAKER_EVENT_BATCH_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL,
+  expandMakerEventBatchPayload,
+  type SessionActivityPayload,
+} from '@cindy/device-link';
 import {
   applyAgentTaskUpdateEvent,
   isSameAgentTaskAlias,
@@ -7,7 +12,7 @@ import {
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
-import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import { applyCodexPlanSnapshotOnDone, markCodexPlanTurnFailed } from '@cindy/maker-shared/message-render';
 import type { RemoteSessionLiveActivity } from '@cindy/maker-shared/session-list';
 import { buildDeviceIdentity, resolveCanonicalDeviceId } from '@cindy/maker-shared/mobile-home';
 import {
@@ -255,6 +260,12 @@ function interactionsByRequestId(list: readonly PendingInteraction[]): Map<strin
   return byId;
 }
 const inputProjections = new Map<string, InputProjection>();
+// Projection queries can resolve after a newer push or terminal boundary. Keep
+// a monotonic per-session authority epoch so late snapshots cannot overwrite
+// current queue / continuation state (mirrors Desktop makerChatStore).
+const inputProjectionAuthorityEpochs = new Map<string, number>();
+let nextInputProjectionAuthorityEpoch = 0;
+let inputProjectionAuthorityEpochFloor = 0;
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
 const sessionRunning = new Map<string, boolean>();
 const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
@@ -512,6 +523,19 @@ function emit(): void {
   for (const sub of subs) sub();
 }
 
+function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
+  const epoch = ++nextInputProjectionAuthorityEpoch;
+  inputProjectionAuthorityEpochs.set(sessionId, epoch);
+  return epoch;
+}
+
+function commitInputProjection(sessionId: string, next: InputProjection): boolean {
+  if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) return false;
+  inputProjections.set(sessionId, next);
+  emit();
+  return true;
+}
+
 function recomputeSessions(): void {
   sessionDeviceIndex.clear();
   // 跨 shard 去重 + 设备身份归一化。re-link 后同一 session.id 可能同时存在于 stale / current 两个 shard;
@@ -639,6 +663,7 @@ function completeLivePlanSnapshotOnDone(
   snapshot: unknown,
   turnId: string | null,
   terminalStatus: string | null,
+  cancelled: boolean,
 ): boolean {
   if (!turnId) return false;
   const toolUseId = `plan:${turnId}`;
@@ -650,6 +675,8 @@ function completeLivePlanSnapshotOnDone(
     snapshot,
     turnId,
     terminalStatus,
+    undefined,
+    cancelled,
   );
   const content = completed.messages[0]?.content;
   if (!completed.changed || !isRecord(content)) return false;
@@ -1836,9 +1863,31 @@ export const remoteSessionStore = {
 
   setInputProjection(sessionId: string, projection: unknown): void {
     const next = normalizeInputProjection(projection, sessionId);
-    if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) return;
-    inputProjections.set(sessionId, next);
-    emit();
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    commitInputProjection(sessionId, next);
+  },
+
+  captureInputProjectionAuthorityEpoch(sessionId: string): number {
+    return inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
+  },
+
+  setInputProjectionIfCurrent(
+    sessionId: string,
+    projection: unknown,
+    expectedEpoch: number,
+  ): boolean {
+    const currentEpoch = inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
+    if (currentEpoch !== expectedEpoch) {
+      return false;
+    }
+    const next = normalizeInputProjection(projection, sessionId);
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    commitInputProjection(sessionId, next);
+    return true;
+  },
+
+  invalidateInputProjectionAuthority(sessionId: string): void {
+    bumpInputProjectionAuthorityEpoch(sessionId);
   },
 
   setSessionRunning(
@@ -1847,6 +1896,24 @@ export const remoteSessionStore = {
     boundaryAgentMeta?: Record<string, unknown> | null,
   ): void {
     if (!sessionId) return;
+    // A maker turn boundary supersedes any projection query that started
+    // before it. This is the terminal fence for late owner snapshots.
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    // The terminal event is also authoritative for the continuation owner. A
+    // paired projection clear push may be lost during a disconnect, so clear a
+    // known owner here instead of leaving the mobile row live until rehydrate.
+    let continuationOwnerCleared = false;
+    if (!running) {
+      const currentProjection = inputProjections.get(sessionId);
+      if (currentProjection?.continuationTurnClientId) {
+        const nextProjection: InputProjection = {
+          ...currentProjection,
+          continuationTurnClientId: null,
+        };
+        continuationOwnerCleared = !deepValueEqual(currentProjection, nextProjection);
+        if (continuationOwnerCleared) inputProjections.set(sessionId, nextProjection);
+      }
+    }
     // 本方法只被 maker 权威信号调用(done / terminal error / status-changed closed),
     // 与 maker turn 边界同步;activity / 快照流走 writeSessionRunStatus,不经过这里。
     // 边界变化必须独立参与 emit 判定:activity 流可能已把宽 run status 置 false,此时
@@ -1863,7 +1930,10 @@ export const remoteSessionStore = {
       sideTaskRunning: running ? current.sideTaskRunning : false,
       startedAt: running ? (current.startedAt ?? Date.now()) : null,
     };
-    if (writeSessionRunStatus(sessionId, next) || turnBoundaryChanged || streamingChanged) emit();
+    if (writeSessionRunStatus(sessionId, next)
+      || turnBoundaryChanged
+      || streamingChanged
+      || continuationOwnerCleared) emit();
   },
 
   captureActiveSessionSnapshotEpoch(): number {
@@ -2005,6 +2075,17 @@ export const remoteSessionStore = {
     emit();
   },
 
+  /**
+   * 单条 maker:event push payload 的消费(逐帧与微批拆包**共用**唯一实现——
+   * 两条路径若各自解析,批的语义就会随逐帧演进而漂移)。
+   */
+  applyMakerEventPush(payload: Record<string, unknown>): void {
+    const sessionId = readString(payload, 'sessionId');
+    const event = isRecord(payload.event) ? payload.event : null;
+    const persistId = readString(payload, 'persistId') ?? undefined;
+    if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId);
+  },
+
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       this.applySessionActivity(deviceId, payload);
@@ -2102,10 +2183,20 @@ export const remoteSessionStore = {
       return;
     }
     if (channel === 'maker:event' && isRecord(payload)) {
-      const sessionId = readString(payload, 'sessionId');
-      const event = isRecord(payload.event) ? payload.event : null;
-      const persistId = readString(payload, 'persistId') ?? undefined;
-      if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId);
+      this.applyMakerEventPush(payload);
+      return;
+    }
+    // 微批帧:被控端把同一会话的连续 maker:event 合并成一帧(能力协商见
+    // CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)。逐条按原顺序走与逐帧**完全
+    // 相同**的处理路径——批只是传输层的聚合,不引入新的应用语义;单条形状不符
+    // 时跳过该条而不丢整批。
+    if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+      // 拆包与 fail-closed 的 topic 隔离判据在共享包里(desktop 作为控制端时也用
+      // 同一份,见 expandMakerEventBatchPayload 注释)。
+      for (const event of expandMakerEventBatchPayload(payload)) {
+        if (!isRecord(event)) continue;
+        this.applyMakerEventPush(event);
+      }
       return;
     }
     if (channel === 'maker:status-changed' && isRecord(payload)) {
@@ -2339,18 +2430,22 @@ export const remoteSessionStore = {
         const rawTurn = isRecord(data?.raw) ? data.raw : null;
         const turnId = readString(rawTurn, 'id');
         const turnStatus = readString(rawTurn, 'status');
+        const turnCancelled = data?.cancelled === true;
         const currentMessages = messages.get(sessionId) ?? [];
         const completed = applyCodexPlanSnapshotOnDone(
           currentMessages,
           data?.plan,
           turnId,
           turnStatus,
+          undefined,
+          turnCancelled,
         );
         completeLivePlanSnapshotOnDone(
           sessionId,
           data?.plan,
           turnId,
           turnStatus,
+          turnCancelled,
         );
         terminalPlanChanged = completed.changed;
         if (completed.changed) {
@@ -2365,6 +2460,27 @@ export const remoteSessionStore = {
               completed.toolUseId,
               completedMessage.content,
             );
+          }
+        }
+      } else if (readString(event, 'source') === 'codex') {
+        // 没有 done 的 codex 终态 error:这一轮的计划行等不到章,也等不到
+        // persistCodexPlanOnDone 的 turnCompleted:false。与 desktop renderer 的
+        // markCodexPlanTurnFailed 同款补印记,否则全勾完的失败计划会按旧数据
+        // 兜底退场——任务还活着,用户正要接着指挥。
+        const currentMessages = messages.get(sessionId) ?? [];
+        const failed = markCodexPlanTurnFailed(currentMessages);
+        terminalPlanChanged = failed.changed;
+        if (failed.changed) {
+          messages.set(sessionId, [...failed.messages]);
+          const failedMessage = failed.messages.find((message) => {
+            if (message.toolUseId === failed.toolUseId) return true;
+            return readString(message.content, 'toolUseId') === failed.toolUseId;
+          });
+          // 印记也要进 live-plan 缓存:overlayLivePlanSnapshot 用缓存内容整体
+          // 替换 content,缓存不补就会把 main 随后广播的落库 turnCompleted:false
+          // 盖回去,本连接周期内再也纠不回来。
+          if (failed.toolUseId && isRecord(failedMessage?.content)) {
+            rememberLivePlanContent(sessionId, failed.toolUseId, failedMessage.content);
           }
         }
       }
@@ -2548,6 +2664,7 @@ export const remoteSessionStore = {
       // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
       changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
       changed = inputProjections.delete(sessionId) || changed;
+      bumpInputProjectionAuthorityEpoch(sessionId);
       changed = sessionLiveActivity.delete(sessionId) || changed;
       changed = sessionGoalStatus.delete(sessionId) || changed;
       changed = sessionTaskUpdates.delete(sessionId) || changed;
@@ -2577,6 +2694,7 @@ export const remoteSessionStore = {
         pendingInteractions.delete(sessionId);
         pendingInteractionsAuthoritative.delete(sessionId);
         inputProjections.delete(sessionId);
+        bumpInputProjectionAuthorityEpoch(sessionId);
         sessionLiveActivity.delete(sessionId);
         sessionRunning.delete(sessionId);
         sessionRunStatus.delete(sessionId);
@@ -2625,6 +2743,10 @@ export const remoteSessionStore = {
     confirmedInteractionDismissals.clear();
     interactionRevisionFloors.clear();
     inputProjections.clear();
+    inputProjectionAuthorityEpochFloor = ++nextInputProjectionAuthorityEpoch;
+    inputProjectionAuthorityEpochs.clear();
+    // Keep authority tombstones monotonic across a global store reset so an
+    // old in-flight query cannot be accepted after the session is recreated.
     sessionLiveActivity.clear();
     sessionRunning.clear();
     sessionRunStatus.clear();

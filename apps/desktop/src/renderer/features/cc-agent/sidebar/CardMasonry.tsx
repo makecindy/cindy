@@ -43,6 +43,8 @@ export interface CardMasonryProps<T> {
   reducedMotion: boolean;
   /** SortableJS 跨列拖拽的 group 名;默认 'pinned-cards'。 */
   groupId?: string;
+  /** 与 SortableList 同口径；置顶卡片用原生 DnD 兼容分屏 drop。 */
+  forceFallback?: boolean;
 }
 
 export function CardMasonry<T>({
@@ -52,6 +54,7 @@ export function CardMasonry<T>({
   onReorder,
   reducedMotion,
   groupId,
+  forceFallback = true,
 }: CardMasonryProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(1);
@@ -81,6 +84,7 @@ export function CardMasonry<T>({
             getId={getId}
             onReorder={onReorder}
             reducedMotion={reducedMotion}
+            forceFallback={forceFallback}
             className="flex flex-col gap-[7px]"
             renderItem={renderItem}
           />
@@ -93,6 +97,7 @@ export function CardMasonry<T>({
             onReorder={onReorder}
             reducedMotion={reducedMotion}
             groupId={groupId}
+            forceFallback={forceFallback}
           />
         )}
       </div>

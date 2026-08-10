@@ -135,6 +135,11 @@ export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgr
       taskId,
       parentToolUseId: taskId,
       status,
+      subagentObservation: {
+        kind: status === 'running' ? 'progress' : 'terminal',
+        logicalSubagentId: taskId,
+        parentToolUseId: taskId,
+      },
       ...(title ? { title } : {}),
       ...(description ? { description } : {}),
       ...(summary ? { summary } : {}),

@@ -122,8 +122,14 @@ describe('MarkdownRenderer — math 接线 source contract', () => {
   });
 
   it('normalizeMathDelimiters 在渲染前调用且 emitSourceLines 走保行数模式', () => {
+    // 输入是流式修复层的输出(repairStreamingMarkdown,跟随 streamFade 总开关:
+    // 关闭动效 / reduced-motion / 非流式时 repairedContent === throttledContent
+    // 原引用,与动效引入前的渲染路径逐位一致)。
     expect(source).toContain(
-      'normalizeMathDelimiters(throttledContent, { preserveLineCount: emitSourceLines })',
+      'normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines })',
+    );
+    expect(source).toContain(
+      'streamFade ? repairStreamingMarkdown(throttledContent) : throttledContent',
     );
   });
 

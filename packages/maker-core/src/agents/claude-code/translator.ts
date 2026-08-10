@@ -93,8 +93,8 @@ export interface TurnState {
   /** interrupt 置位时的 generation 快照(见 generation 注释)。 */
   interruptGeneration: number;
   /**
-   * 最近一条 assistant API 消息是否带「实质内容」(非空 text 块或 tool_use 块;
-   * 只有 thinking——包括空 thinking——不算)。逐条 assistant 消息覆盖写,turn end
+   * 最近一条 assistant API 消息是否带「实质内容」(非空 text 或任何非 thinking 块;
+   * thinking / redacted_thinking 不算)。逐条 assistant 消息覆盖写,turn end
    * 时留下的即"最后一条 assistant 消息"的判定,是 silent-stop 观测的核心依据:
    * 上游偶发用一条空内容消息收尾整个 turn(空 thinking + end_turn,或 SSE 流被
    * 静默中断后 stop_reason 缺失;社区同型报告 anthropics/claude-code#50597 /
@@ -102,6 +102,12 @@ export interface TurnState {
    * 见过 assistant 消息时不参与判定)。
    */
   lastAssistantMsgHadSubstance: boolean;
+  /**
+   * 本 turn 最近一条 assistant API message id。Vertex 路由用 `msg_vrtx_`
+   * 前缀作为输出 token 延迟结算的确定性证据；result 本身不携带该 id，
+   * 因此必须在 assistant 消息到达时按 turn 暂存，再随 done 交给 host。
+   */
+  lastAssistantRequestId?: string;
 }
 
 export interface RuntimeState {
@@ -117,6 +123,14 @@ export interface RuntimeState {
   resolvedSubagentModelByParentToolUseId: Map<string, string>;
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
   subagentParentToolUseIdByTaskId: Map<string, string>;
+  /**
+   * 已被 SDK 明确标记为 local_agent / remote_agent 的 task_id。
+   * Claude 后续进度与终态帧可能省略 task_type / tool_use_id；一旦确认，
+   * 该身份在本 RuntimeState 生命周期内保持单向锁存，避免持久记录停在 running。
+   */
+  confirmedSubagentTaskIds: Set<string>;
+  /** 明确属于 local_bash / local_workflow 的 task_id；稀疏后续帧继续排除。 */
+  excludedSubagentTaskIds: Set<string>;
   /**
    * 上一次 SDK assistant 消息提取出来的 agentMeta (uuid / sdkSessionId / model / ...).
    * 主 agent 的 stream_event 累积时用它补齐 transcript 锚点；subagent stream
@@ -138,6 +152,8 @@ export function newRuntimeState(): RuntimeState {
     streamModelByParentToolUseId: new Map(),
     resolvedSubagentModelByParentToolUseId: new Map(),
     subagentParentToolUseIdByTaskId: new Map(),
+    confirmedSubagentTaskIds: new Set(),
+    excludedSubagentTaskIds: new Set(),
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
   };
@@ -157,6 +173,7 @@ function resetTurnState(turn: TurnState): void {
   turn.pendingApiError = null;
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
+  turn.lastAssistantRequestId = undefined;
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
 
@@ -544,25 +561,30 @@ export function translateSdkMessage(
       if (subagentLaunch) {
         const { taskId, parentToolUseId, model, prompt } = subagentLaunch;
         ctx.rt.subagentParentToolUseIdByTaskId.set(taskId, parentToolUseId);
+        ctx.rt.confirmedSubagentTaskIds.add(taskId);
+        ctx.rt.excludedSubagentTaskIds.delete(taskId);
         if (model) {
           ctx.rt.resolvedSubagentModelByParentToolUseId.set(parentToolUseId, model);
         }
         if (prompt) {
           ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model });
         }
-        if (model) {
-          queue.push({
-            type: 'agent_task_update',
-            data: {
-              provider: 'claude-code',
-              taskId,
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            provider: 'claude-code',
+            taskId,
+            parentToolUseId,
+            status: 'running',
+            subagentObservation: {
+              kind: 'spawn',
+              logicalSubagentId: taskId,
               parentToolUseId,
-              status: 'running',
-              model,
             },
-            source: 'claude-code',
-          });
-        }
+            ...(model ? { model } : {}),
+          },
+          source: 'claude-code',
+        });
       }
       // 单独遍历: 不能复用 extractToolResultFullText, 见 onToolResultDone JSDoc。
       const completedToolUseIds = new Set(fullPairs.map((pair) => pair.toolUseId));
@@ -847,7 +869,7 @@ function handleSystem(
   // 与上面三个事件共用 agent_task_update 通道 —— 下游 makerChatStore 按 taskId 做
   // 字段级 merge,故这里只需带上补丁里变化的字段。
   if (msg.subtype === 'task_updated') {
-    const update = toClaudeTaskUpdatedPatch(msg);
+    const update = toClaudeTaskUpdatedPatch(msg, ctx.rt);
     if (update) {
       queue.push({
         type: 'agent_task_update',
@@ -910,6 +932,33 @@ function toClaudeTaskUpdate(msg: {
     : undefined;
   // CLI 对纯心跳帧节流省略该字段;收窄失败/缺失都不下发(undefined = 下游沿用上一帧)。
   const workflowProgress = normalizeWorkflowProgressEntries(msg.workflow_progress);
+  const taskType = msg.task_type;
+  const explicitlySubagent = taskType === 'local_agent' || taskType === 'remote_agent';
+  const explicitlyExcluded = taskType === 'local_bash' || taskType === 'local_workflow';
+  if (explicitlySubagent) {
+    rt.confirmedSubagentTaskIds.add(msg.task_id);
+    rt.excludedSubagentTaskIds.delete(msg.task_id);
+  } else if (explicitlyExcluded && !rt.confirmedSubagentTaskIds.has(msg.task_id)) {
+    rt.excludedSubagentTaskIds.add(msg.task_id);
+  }
+  const isExcludedTask =
+    !rt.confirmedSubagentTaskIds.has(msg.task_id) &&
+    (explicitlyExcluded || rt.excludedSubagentTaskIds.has(msg.task_id));
+  const isKnownSubagent =
+    !isExcludedTask &&
+    (Boolean(parentToolUseId) || explicitlySubagent || rt.confirmedSubagentTaskIds.has(msg.task_id));
+  const subagentObservation = !isExcludedTask && isKnownSubagent
+    ? {
+        kind:
+          msg.subtype === 'task_started'
+            ? 'spawn' as const
+            : msg.subtype === 'task_notification'
+              ? 'terminal' as const
+              : 'progress' as const,
+        logicalSubagentId: msg.task_id,
+        ...(parentToolUseId ? { parentToolUseId } : {}),
+      }
+    : undefined;
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
@@ -925,6 +974,7 @@ function toClaudeTaskUpdate(msg: {
     ...(usage ? { usage } : {}),
     ...(model ? { model } : {}),
     ...(workflowProgress ? { workflowProgress } : {}),
+    ...(subagentObservation ? { subagentObservation } : {}),
   };
 }
 
@@ -942,16 +992,34 @@ function toClaudeTaskUpdate(msg: {
 function toClaudeTaskUpdatedPatch(msg: {
   task_id?: string;
   patch?: { status?: string; description?: string; error?: string };
-}): AgentTaskUpdateEventData | null {
+}, rt: RuntimeState): AgentTaskUpdateEventData | null {
   if (!msg.task_id || !msg.patch) return null;
   const { status: rawStatus, description, error } = msg.patch;
   const hasStatus = typeof rawStatus === 'string' && rawStatus.length > 0;
   const hasError = typeof error === 'string' && error.length > 0;
   if (!hasStatus && !hasError) return null;
+  const status = mapTaskUpdatedStatus(rawStatus, hasError);
+  const parentToolUseId = rt.subagentParentToolUseIdByTaskId.get(msg.task_id);
+  const isExcludedTask =
+    !rt.confirmedSubagentTaskIds.has(msg.task_id) &&
+    rt.excludedSubagentTaskIds.has(msg.task_id);
+  const isKnownSubagent =
+    !isExcludedTask &&
+    (Boolean(parentToolUseId) || rt.confirmedSubagentTaskIds.has(msg.task_id));
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
-    status: mapTaskUpdatedStatus(rawStatus, hasError),
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+    status,
+    ...(isKnownSubagent
+      ? {
+          subagentObservation: {
+            kind: status === 'running' ? 'progress' : 'terminal',
+            logicalSubagentId: msg.task_id,
+            ...(parentToolUseId ? { parentToolUseId } : {}),
+          },
+        }
+      : {}),
     ...(description ? { title: description } : {}),
     ...(hasError ? { summary: error } : {}),
   };
@@ -979,6 +1047,20 @@ function mapTaskUpdatedStatus(status: string | undefined, hasError: boolean): Ag
 
 // ── assistant 子分支 ─────────────────────────────────────────────────────────
 
+/**
+ * 只有不可见的 thinking 块不算 assistant 的实质产出。未知/新增块按有实质内容
+ * 保守处理，避免 SDK 增加 server tool / control block 后被误判成 silent stop。
+ */
+function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
+  if (block.type === 'text') {
+    return typeof block.text === 'string' && block.text.length > 0;
+  }
+  if (block.type === 'thinking' || block.type === 'redacted_thinking') {
+    return false;
+  }
+  return true;
+}
+
 function handleAssistant(
   msg: { message?: { content?: Array<Record<string, unknown>> }; error?: string },
   queue: EventQueue,
@@ -989,6 +1071,12 @@ function handleAssistant(
   // (mid-turn text_delta / message_delta 没有自己的 uuid, 落库时取最近一条 assistant
   // 的 meta 作为 fallback, 让 messages.agent_meta 行能被 fork/rewind 反查到)。
   const assistantMeta = extractAssistantMeta(msg);
+  if (
+    typeof assistantMeta.requestId === 'string' &&
+    assistantMeta.requestId.startsWith('msg_vrtx_')
+  ) {
+    ctx.turn.lastAssistantRequestId = assistantMeta.requestId;
+  }
 
   // SDK API-error envelope: msg.error 是 SDKAssistantMessageError tag
   // (invalid_request / authentication_failed / rate_limit / server_error /
@@ -1035,15 +1123,10 @@ function handleAssistant(
   ctx.rt.lastAssistantMeta = assistantMeta;
 
   const content = msg.message?.content ?? [];
-  // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / tool_use;thinking 不算)。
+  // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
+  // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
   // 逐条覆盖写, turn end 时留下的就是最后一条 assistant 消息的判定(见 TurnState 字段注释)。
-  ctx.turn.lastAssistantMsgHadSubstance = content.some((blockRaw) => {
-    const block = blockRaw as { type?: string; text?: string };
-    return (
-      (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) ||
-      block.type === 'tool_use'
-    );
-  });
+  ctx.turn.lastAssistantMsgHadSubstance = content.some(assistantBlockHasSubstance);
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
@@ -1610,17 +1693,21 @@ function handleResult(
   if (fallbackTail.length > 0) {
     queue.push({
       type: 'text',
-      data: { text: fallbackTail, isFinal: true },
+      // fallbackTail 是「UI 尚未收到的追加段」，不是整条 assistant 全文。
+      // 按 delta 发出才能在已有气泡中正确追加，随后的 done 负责收口。
+      data: { text: fallbackTail, isFinal: false },
       source: 'claude-code',
     });
   }
-  // silent-stop 判定: turn 内干过活(有 tool 调用), 但最后一条 assistant 消息没有任何
-  // 实质内容(典型: 只有一个空 thinking 块), result 也没兜出可补的文本 —— 上游把"任务
-  // 进行到一半"的 turn 静默收了尾, 用户侧表现为"干着干着停了、看起来像正常结束"。已知
+  // silent-stop 判定: turn 内干过活(有 tool 调用),或整轮没有任何用户可见正文,且最后
+  // 一条 assistant 消息没有实质内容(典型: 只有 thinking 块),result 也没兜出可补的
+  // 文本 —— 上游把 turn 静默收了尾,用户侧表现为"干着干着停了、看起来像正常结束"。已知
   // 上游形态: 模型偶发 thinking-only 空响应(anthropics/claude-code#50597,
   // stop_reason=end_turn)与 SSE 流被静默中断后 SDK 按正常结束处理(#38905, 此形态
   // stop_reason 常缺失)。与 isEmptyResponseTurn(整轮 0 产出 + usage 全 0)互斥:
-  // 这里要求 toolUses > 0。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
+  // 零 tool 但零可见正文也必须命中:第一次自动补发「继续」后,上游可能再次只返回
+  // thinking；旧的 toolUses > 0 守卫会把第二次当正常完成。已有可见正文的零 tool turn
+  // 则不扩张判定。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
   // interruptRequested(用户停止/watchdog)、sawCompactBoundary(compact 轮合法空)。
   // 命中后事件流仍走正常 Done/done 收尾(记账/收口零变更), 只在 done.data 附加
   // silentStop 标记交给 host 的自动续跑守卫决策; WARN 日志保留作 dev 排查。
@@ -1629,7 +1716,7 @@ function handleResult(
     !ctx.turn.interruptRequested &&
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
-    ctx.turn.toolUses > 0 &&
+    (ctx.turn.toolUses > 0 || ctx.turn.uiEmittedText.length === 0) &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
@@ -1752,18 +1839,19 @@ function handleResult(
   // silentStop 标记随 done 透传给 host: main 的自动续跑守卫据此决策(补发「继续」或
   // surface 耗尽提示)。data 为 unknown 形状、既有消费方(记账 / IM / orca)均按需
   // typeof 读字段, 加字段零影响; 不命中时 done 与现状逐字节一致。
+  const safeResult =
+    msg.is_error && typeof msg.result === 'string'
+      ? { ...msg, result: redactSensitiveText(msg.result) }
+      : msg;
+  const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
+    ? { ...safeResult, assistant_message_id: ctx.turn.lastAssistantRequestId }
+    : safeResult;
   queue.push({
     type: 'done',
     data:
-      msg.is_error && typeof msg.result === 'string'
-        ? {
-            ...msg,
-            result: redactSensitiveText(msg.result),
-            ...(isSilentStopTurn ? { silentStop: true } : {}),
-          }
-        : isSilentStopTurn
-          ? { ...msg, silentStop: true }
-          : msg,
+      isSilentStopTurn
+        ? { ...resultWithAssistantMessageId, silentStop: true }
+        : resultWithAssistantMessageId,
     source: 'claude-code',
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)

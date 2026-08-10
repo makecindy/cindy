@@ -371,7 +371,7 @@ export function RailNav({
             </span>
             <span
               className={cn(
-                'max-w-[56px] truncate text-[10px] font-medium leading-[1.2]',
+                'max-w-[56px] truncate text-10 font-medium leading-[1.2]',
                 // 标签在 rail 底色上(胶囊之外),active 用正文色加粗,
                 // 不用 active-foreground(那是胶囊底上的前景,底色外会失配)。
                 isActive

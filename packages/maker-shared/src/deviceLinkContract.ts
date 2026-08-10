@@ -345,6 +345,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:input:get-projection',
   'maker:input:enqueue',
   'maker:input:compact',
+  // 手动压缩(pi 原生 compact,capability-aware):移动端控制远程 pi 会话同样隧道到
+  // 被控端执行;长 LLM 摘要请求的超时覆盖见 INVOKE_TIMEOUT_OVERRIDES_MS。
+  'maker:compact-session',
   'maker:input:steer',
   'maker:input:stop',
   'maker:input:resume',

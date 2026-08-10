@@ -171,12 +171,12 @@ export function SessionBranchTreeDialog({
             {switchingId === node.id ? <Spinner size={12} /> : roleIcon(node)}
           </span>
           <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-1 text-[11px] text-[var(--text-tertiary)]">
+            <span className="flex items-center gap-1 text-11 text-[var(--text-tertiary)]">
               {node.label || t(`ccAgent.sidebar.sessionBranches.role.${node.role ?? 'system'}`)}
               {branching && <GitBranch size={11} />}
               {leaf && <span>{t('ccAgent.sidebar.sessionBranches.current')}</span>}
             </span>
-            <span className="line-clamp-2 text-[12px] leading-4 text-[var(--text-primary)]">
+            <span className="line-clamp-2 text-12 leading-4 text-[var(--text-primary)]">
               {node.preview || t('ccAgent.sidebar.sessionBranches.emptyEntry')}
             </span>
           </span>
@@ -200,10 +200,10 @@ export function SessionBranchTreeDialog({
           style={{ paddingLeft: `${10 + depth * 18}px` }}
         >
           {item.agentKind === 'pi' ? <Pi size={15} /> : <GitBranch size={15} />}
-          <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--text-primary)]">
+          <span className="min-w-0 flex-1 truncate text-13 text-[var(--text-primary)]">
             {item.title?.trim() || t('ccAgent.sessionHeader.untitled')}
           </span>
-          {current && <span className="text-[11px] text-[var(--text-tertiary)]">{t('ccAgent.sidebar.sessionBranches.current')}</span>}
+          {current && <span className="text-11 text-[var(--text-tertiary)]">{t('ccAgent.sidebar.sessionBranches.current')}</span>}
           {!current && <ChevronRight size={13} className="text-[var(--text-tertiary)]" />}
         </button>
         {current && session.agentKind === 'pi' && (
@@ -213,7 +213,7 @@ export function SessionBranchTreeDialog({
             ) : tree && tree.roots.length > 0 ? (
               tree.roots.map((root) => renderPiNode(root, depth + 1))
             ) : (
-              <div className="px-3 py-3 text-[12px] text-[var(--text-tertiary)]">
+              <div className="px-3 py-3 text-12 text-[var(--text-tertiary)]">
                 {t('ccAgent.sidebar.sessionBranches.empty')}
               </div>
             )}
@@ -234,10 +234,10 @@ export function SessionBranchTreeDialog({
         >
           <div className="flex items-start gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-default)' }}>
             <div className="min-w-0 flex-1">
-              <Dialog.Title className="text-[15px] font-medium text-[var(--text-primary)]">
+              <Dialog.Title className="text-15 font-medium text-[var(--text-primary)]">
                 {t('ccAgent.sidebar.sessionBranches.title')}
               </Dialog.Title>
-              <Dialog.Description className="mt-1 text-[12px] leading-5 text-[var(--text-tertiary)]">
+              <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-tertiary)]">
                 {t('ccAgent.sidebar.sessionBranches.description')}
               </Dialog.Description>
             </div>
@@ -254,7 +254,7 @@ export function SessionBranchTreeDialog({
 
           {session.agentKind === 'pi' && (
             <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-subtle)' }}>
-              <label className="flex items-center gap-2 text-[12px] text-[var(--text-primary)]">
+              <label className="flex items-center gap-2 text-12 text-[var(--text-primary)]">
                 <input
                   type="checkbox"
                   checked={summarize}
@@ -269,11 +269,11 @@ export function SessionBranchTreeDialog({
                   value={summaryFocus}
                   onChange={(event) => setSummaryFocus(event.target.value.slice(0, 4000))}
                   placeholder={t('ccAgent.sidebar.sessionBranches.summaryFocus')}
-                  className="mt-2 h-8 w-full rounded-lg border bg-[var(--settings-input-bg)] px-2 text-[12px] text-[var(--settings-input-text)] outline-none"
+                  className="mt-2 h-8 w-full rounded-lg border bg-[var(--settings-input-bg)] px-2 text-12 text-[var(--settings-input-text)] outline-none"
                   style={{ borderColor: 'var(--settings-input-border)' }}
                 />
               )}
-              <p className="mt-2 text-[11px] leading-4 text-[var(--text-tertiary)]">
+              <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
                 {running
                   ? t('ccAgent.sidebar.sessionBranches.runningBlocked')
                   : writeBlocked

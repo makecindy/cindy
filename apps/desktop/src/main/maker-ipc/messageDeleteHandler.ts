@@ -11,6 +11,10 @@
 import { buildHandoffText, type HandoffSourceMessage } from './agentHandoff.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
+import type {
+  MessageDeletionTarget,
+  SubagentTurnDeletionWindow,
+} from '../localDb/ipc/messages.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 interface ContextSourceMessage extends HandoffSourceMessage {
@@ -30,6 +34,7 @@ interface MessageDeleteSessionRow {
 interface MessageDeleteCommittedPayload {
   sessionId: string;
   deletedClientIds: string[];
+  subagentRunIds: string[];
   updatedAt: number;
   preview: string | null;
 }
@@ -39,19 +44,18 @@ export interface MessageDeleteHandlerDeps {
   getMessage(
     sessionId: string,
     clientId: string,
-  ): Promise<{
-    id: string;
-    role: 'user' | 'assistant';
-    deletedClientIds: string[];
-  } | null>;
+  ): Promise<MessageDeletionTarget | null>;
   listMessagesForContext(sessionId: string): Promise<ContextSourceMessage[]>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   hasBackgroundActivity(sessionId: string): boolean;
   closeSession(sessionId: string): Promise<void>;
+  /** Wait for chat/Subagent observations queued before the deletion barrier. */
+  drainPersistQueue(): Promise<void>;
   commitDeletion(
     sessionId: string,
     clientIds: string[],
     handoff: string,
+    subagentTurnWindow?: SubagentTurnDeletionWindow,
   ): Promise<MessageDeleteCommittedPayload>;
   /** 见 sessionAgentSwitchHandler 同名字段:带代次写,防 /clear 竞态。 */
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
@@ -83,14 +87,14 @@ export async function performMessageDeletion(
     throwIpcError('INVALID_PARAMS', 'clientId required');
   }
 
-  const [sessionRow, target] = await Promise.all([
+  const [sessionRow, initialTarget] = await Promise.all([
     deps.getSessionRow(sessionId),
     deps.getMessage(sessionId, clientId),
   ]);
   if (!sessionRow || sessionRow.status === 'deleted') {
     throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
   }
-  if (!target) {
+  if (!initialTarget) {
     throwIpcError('NOT_FOUND', 'Message 不存在或不可删除');
   }
 
@@ -101,20 +105,6 @@ export async function performMessageDeletion(
   if (deps.hasBackgroundActivity(sessionId)) {
     throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
   }
-
-  // 代次在读历史之前取:下面到 setPendingHandoff 之间有异步活,期间 /clear 过的话
-  // 这份按删除前历史算出的交接必须作废(见 registry.set 的 expectedGeneration)。
-  const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
-  const source = await deps.listMessagesForContext(sessionId);
-  const deletedClientIds = new Set(target.deletedClientIds);
-  const remaining = source.filter((message) => !deletedClientIds.has(message.clientId));
-  const label = engineLabel(sessionRow.agentKind);
-  const handoff = buildHandoffText(remaining, {
-    fromLabel: label,
-    toLabel: label,
-    sessionId,
-    reason: 'message-deletion',
-  });
 
   return deps.withCloseSuppressed(sessionId, async () => {
     // 上面的读取和真正 close 之间仍可能有 dispatch 抢先；提交前再查一次，
@@ -127,11 +117,34 @@ export async function performMessageDeletion(
       throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
     }
     if (currentLive) await deps.closeSession(sessionId);
+    await deps.drainPersistQueue();
+
+    // durable FIFO 里可能仍有在删除请求前产生、但尚未落库的 tool_result / Subagent
+    // 观察。屏障后必须重读目标与历史，确保它们进入同一轮的删除范围且不会混入 handoff。
+    // 代次也在这份最终历史之前读取；期间若发生 /clear，registry 会拒绝旧代 handoff。
+    const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+    const [target, source] = await Promise.all([
+      deps.getMessage(sessionId, clientId),
+      deps.listMessagesForContext(sessionId),
+    ]);
+    if (!target) {
+      throwIpcError('NOT_FOUND', 'Message 不存在或不可删除');
+    }
+    const deletedClientIds = new Set(target.deletedClientIds);
+    const remaining = source.filter((message) => !deletedClientIds.has(message.clientId));
+    const label = engineLabel(sessionRow.agentKind);
+    const handoff = buildHandoffText(remaining, {
+      fromLabel: label,
+      toLabel: label,
+      sessionId,
+      reason: 'message-deletion',
+    });
 
     const committed = await deps.commitDeletion(
       sessionId,
       target.deletedClientIds,
       handoff,
+      target.subagentTurnWindow,
     );
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     await deps.onCommitted(committed, clientId);

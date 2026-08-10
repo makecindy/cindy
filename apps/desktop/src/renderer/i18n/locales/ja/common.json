@@ -131,6 +131,7 @@
       "terminalShell": "デフォルトターミナルシェル",
       "composer": "メッセージ入力",
       "linkOpen": "リンクの開き方",
+      "streamFade": "ストリーミング表示エフェクト",
       "compatMode": "ヒント",
       "voiceInput": "音声入力",
       "import": "セッションインポート",
@@ -464,6 +465,15 @@
         "label": "サイドバーカードモード",
         "hint": "ピン留めセッションをタスク状況の要約付きカードで表示します。カードの高さは要約の長さで変わり、サイドバーを広げると 2〜3 列に自動配置されます。",
         "aria": "サイドバーカードモードを切り替える"
+      },
+      "layout": {
+        "label": "パネルレイアウト",
+        "hint": "パネルの位置と幅は次回起動時も保持されます。使いにくい配置になった場合は、初期レイアウトに戻せます。",
+        "reset": "初期レイアウトに戻す",
+        "resetSuccess": "パネルレイアウトを初期状態に戻しました",
+        "resetFailed": "パネルレイアウトを初期状態に戻せませんでした",
+        "saved": "パネル位置を保存しました。設定 → 外観から初期レイアウトに戻せます。",
+        "saveFailed": "パネル位置を保存できませんでした"
       }
     },
     "notifications": {
@@ -475,6 +485,15 @@
       "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
       "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
       "feishuAria": "セッション完了時の Feishu 通知を切り替え",
+      "sessionEvent": {
+        "untitled": "無題のセッション",
+        "done": "完了しました ✓",
+        "error": "実行に失敗しました",
+        "needsReply": "返信が必要です",
+        "externalDone": "Cindy · セッション「{{title}}」が完了しました ✓",
+        "externalError": "Cindy · セッション「{{title}}」の実行に失敗しました",
+        "externalNeedsReply": "Cindy · セッション「{{title}}」への返信が必要です"
+      },
       "wecomGroupLabel": "WeCom グループ通知",
       "wecomGroupHint": "自動操作の完了通知に使用します。WeCom グループボットの Webhook URL を貼り付けると、このデバイスに暗号化保存されます。",
       "wecomGroupConfiguredHint": "設定済み（キー {{maskedKey}}）。全体スイッチをオンにした後、自動操作ごとに必要に応じて送信できます。",
@@ -613,6 +632,7 @@
       "options": {
         "system": "自動 (システムに従う)",
         "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -924,6 +944,7 @@
         "optionDescriptions": {
           "auto": "認識サービスが自動判定",
           "zh-CN": "簡体字中国語（中国本土）",
+          "zh-TW": "繁体字中国語（台湾）",
           "en": "英語",
           "ja": "日本語",
           "ko": "韓国語"
@@ -1728,6 +1749,12 @@
         "cellLabel": "メッセージ通知",
         "hint": "接続・切断時に Bot へ通知メッセージを送信"
       },
+      "sessionNotification": {
+        "label": "セッション完了通知",
+        "cellLabel": "セッション完了または応答が必要なときに Feishu / Lark メッセージを送信",
+        "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
+        "disabledHint": "先に Bot を設定し、バインドを完了するために DM を送信してください。"
+      },
       "bind": "連携"
     },
     "wechatBot": {
@@ -2040,6 +2067,7 @@
         "project": "プロジェクトワークスペースを切り替え",
         "model": "モデルを表示・切り替え",
         "permission": "権限モードを表示・切り替え",
+        "settings": "プロジェクトと Agent 設定を表示",
         "ctr": "デスクトップセッションをリモート操作",
         "exctr": "リモート操作を終了"
       },
@@ -2320,6 +2348,12 @@
         "sidebar": "サイドバーブラウザ",
         "external": "システムブラウザ"
       }
+    },
+    "streamFade": {
+      "title": "ストリーミング表示エフェクト",
+      "label": "出力テキストのフェードイン",
+      "hint": "返信のストリーミング中、新しいテキストが語単位で順にフェードインします。オンにするとエフェクトが有効になり、オフでは即時表示されます。システムの「視差効果を減らす」が有効な場合、このエフェクトは常にオフです。",
+      "toggleAria": "ストリーミングのフェードインを切り替え"
     },
     "chatEmbedding": {
       "cell": {
@@ -3289,6 +3323,9 @@
           "empty": "このマーケットにはプラグイン項目がありません",
           "skippedEntries": "無効なプラグイン項目 {{count}} 件をスキップしました",
           "unreadableEntries": "プラグイン項目 {{count}} 件を一時的に読み込めません。更新して再試行してください",
+          "addedReceipt": "「{{name}}」を追加し、プラグイン {{count}} 件を検出しました",
+          "refreshedReceipt": "「{{name}}」を更新し、プラグイン {{count}} 件を検出しました",
+          "emptyWithSkippedEntries": "利用可能なプラグインが見つかりませんでした。マニフェストの項目はすべてスキップされました。ソースの種類、プラグインのディレクトリ、マニフェストを確認してください。",
           "localBadge": "ローカル",
           "defaultRef": "デフォルトブランチ",
           "neverSynced": "未同期",
@@ -4260,6 +4297,8 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
     "cacheLabel": "キャッシュ",
+    "timeLabel": "時間",
+    "timeAndRateValue": "{{duration}} 速度:{{rate}} トークン/秒",
     "modelLabel": "モデル",
     "staleData": "データは {{minutes}} 分前に更新されました",
     "paceTrendFast": "現在の平均使用ペースは速めです（おおよその傾向）",
@@ -4268,6 +4307,11 @@
     "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}秒",
+    "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "performanceLine": "速度 {{rate}} トークン/秒 · 時間 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} トークン/秒",
+    "timeLine": "時間 {{duration}}",
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
     "tokenLine": "Token: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
@@ -4391,6 +4435,7 @@
         "browser": "ブラウザ",
         "terminal": "ターミナル",
         "review": "レビュー",
+        "subagents": "サブエージェント",
         "backgroundTasks": "バックグラウンドタスク",
         "resourceUsage": "リソース使用量",
         "collaboration": "コラボ",
@@ -4416,6 +4461,8 @@
         "fileSub": "Files",
         "openReview": "レビューを開く",
         "reviewSub": "Review",
+        "openSubagents": "サブエージェントを開く",
+        "subagentsSub": "後から確認できる子タスク",
         "openBackgroundTasks": "バックグラウンドタスクを開く",
         "backgroundTasksSub": "Background tasks",
         "openResourceUsage": "リソース使用量を開く",
@@ -4784,6 +4831,58 @@
       "touchCountAria_other": "{{count}} 回編集",
       "expandAllAria": "すべてのファイルを展開",
       "collapseAllAria": "すべてのファイルを折りたたむ"
+    },
+    "subagents": {
+      "running": "実行中",
+      "finished": "終了",
+      "empty": "このタスクにはまだサブエージェントがありません",
+      "emptyDetail": "このタスクで作成されたサブエージェントは、ここに保持されます。",
+      "loading": "サブエージェントを読み込み中…",
+      "unavailable": "サブエージェント履歴を利用できません",
+      "unavailableDetail": "このリモートデバイスまたは旧バージョンは、永続的なサブエージェント記録にまだ対応していません。",
+      "loadFailed": "サブエージェントを読み込めませんでした",
+      "retry": "再試行",
+      "loadEarlier": "以前のサブエージェントを読み込む",
+      "untitled": "サブエージェント",
+      "notFound": "サブエージェントが見つかりません",
+      "back": "戻る",
+      "harness": "Harness",
+      "model": "モデル",
+      "context": "親タスクのコンテキスト",
+      "contextValues": {
+        "unknown": "Harness から報告されていません",
+        "snapshot": "親タスクのスナップショット",
+        "live": "親タスクをリアルタイム参照"
+      },
+      "assignment": "担当内容",
+      "returnedResult": "返された結果",
+      "resultTruncated": "返された結果は表示用に省略されています。",
+      "latestUpdate": "最新の更新",
+      "activity": "アクティビティ",
+      "noActivity": "アクティビティの詳細は報告されていません。",
+      "transcript": "記録",
+      "noTranscript": "記録は報告されていません。",
+      "transcriptUnavailable": "この Harness は完全な子タスク記録をまだ Cindy に提供していません。返された結果とライフサイクルは保持されます。",
+      "transcriptRoles": {
+        "parent": "親タスク",
+        "subagent": "サブエージェント",
+        "tool": "ツール",
+        "system": "システム"
+      },
+      "lastTool": "最後のツール：{{tool}}",
+      "tokens": "{{value}} tokens",
+      "activityKinds": {
+        "started": "開始",
+        "progress": "進行",
+        "message": "メッセージ",
+        "question": "質問",
+        "decision": "決定",
+        "resumed": "再開",
+        "steered": "方向調整",
+        "completed": "完了",
+        "failed": "失敗",
+        "stopped": "停止"
+      }
     },
     "backgroundTasks": {
       "running": "実行中",
@@ -5626,7 +5725,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT のログインが無効になりました",
-    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。ChatGPT App を開いて再度ログインしてから、再試行してください。",
+    "systemSharedInvalidated": "Cindy は現在、このコンピューターの ChatGPT ログインを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "instanceIsolatedInvalidated": "Cindy は現在、個別にログインした ChatGPT アカウントを使用しています。このログインは無効になりました。Cindy で再度ログインしてから、再試行してください。",
     "unknownInvalidated": "Cindy の現在の ChatGPT ログインは無効になりました。再度ログインしてから、再試行してください。",
     "recovered": "ChatGPT ログインが復旧しました。再試行してください。",
@@ -6136,6 +6235,24 @@
         "handoffTitle": "引き継ぎ内容——切り替え時に新しいエンジンへ送信されたコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
         "handoffTitleEnglishSource": "引き継ぎ内容——切り替え時に新しいエンジンへ送信されたコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)",
         "resumedBadge": "セッション再開"
+      },
+      "review": {
+        "running": "現在の成果をレビュー中",
+        "completed": "レビュー完了",
+        "failed": "レビューを完了できませんでした",
+        "openTask": "レビュータスクを開く",
+        "readOnlyHint": "独立タスク・開発メモリなし・読み取り専用",
+        "noResult": "レビュー結果が返されませんでした",
+        "failure": {
+          "reviewerClosed": "レビュータスクは完了前に閉じられました",
+          "cancelledBeforeStart": "レビューは開始前にキャンセルされました",
+          "interrupted": "Cindy の終了時にレビューが中断されました。/review をもう一度実行してください。",
+          "sourceWorkspaceChanged": "元のタスクのワークスペースが変更されました。現在のワークスペースで /review をもう一度実行してください。",
+          "sourceConversationChanged": "元のタスクが変更されました。現在のタスクに対して /review をもう一度実行してください。",
+          "sourceFilesChanged": "元のタスクのファイルが変更されました。現在の成果に対して /review をもう一度実行してください。",
+          "artifactChanged": "レビュー対象の成果が変更されました。現在の成果に対して /review をもう一度実行してください。",
+          "providerFailed": "レビュータスクの実行に失敗しました"
+        }
       }
     },
     "markdownRenderer": {
@@ -7826,7 +7943,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "{{appName}} にフィードバックを送りたいです。質の高い GitHub issue にまとめるのを手伝ってください:まずフィードバックの種類(バグか機能要望か)を確認し、必要な詳細(現象、再現手順または利用シーン、期待する動作)を質問してください。情報が揃ったら cindy_helper の call_tool で submit_github_issue ツールを呼び出して提出してください(category=feedback。先に list_tools でパラメータを確認できます。提出前に確認カードが表示されます)。提出に失敗した場合は、理由をそのまま教えてください。{{details}}",
+      "instruction": "{{appName}} にフィードバックを送りたいです。情報が揃った明確な GitHub issue にまとめるのを手伝ってください:バグか機能要望かを確認し、不足または曖昧な点だけを質問してください。バグでは現象、再現手順、期待する動作と実際の動作、再現頻度、試した対処をできるだけ確認し、ユーザーの同意がある場合だけ個人情報を除いた診断の要約を含めてください。パスワード、トークン、メールアドレス、個人パス、無関係なファイル内容は含めないでください。機能要望では利用シーン、現在の困りごと、期待する結果を確認してください。情報が揃ったら cindy_helper の call_tool で submit_github_issue ツールを呼び出して提出してください(category=feedback。先に list_tools でパラメータを確認できます。提出前に確認カードが表示されます)。GitHub プラグインやアカウントの設定は不要です。既定では Cindy 公式 Bot が送信し、利用可能な GitHub アカウントがある場合のみ確認カードに追加の送信元として表示されます。作成後は issue 番号とリンクを伝え、Cindy がオープンソースであること、ソースから再現・修正・テスト・機能開発を一緒に進められることを案内してください。提出に失敗した場合は、理由をそのまま教えてください。{{details}}",
       "detailsPrefix": "\n最初の説明:{{details}}"
     },
     "confirm": {
@@ -7835,11 +7952,12 @@
       "typeFeature": "機能要望",
       "titleLabel": "タイトル",
       "bodyLabel": "本文(Markdown)",
-      "submissionMethodLabel": "公開方法",
-      "identityGithubUser": "GitHub アカウント @{{login}} から直接公開",
+      "privacyHint": "検出された一般的な秘密情報、個人パス、メールアドレスはできるだけ自動で隠します。送信前に公開内容を確認してください。",
+      "submissionMethodLabel": "送信元",
+      "identityGithubUser": "自分の GitHub アカウント @{{login}}",
       "identityGithubUserHint": "GitHub 上の Issue 作成者となり、自分で編集またはクローズできます",
-      "identityPlatform": "Cindy が代理で公開(GitHub App {{login}})",
-      "identityPlatformHint": "GitHub 上の Issue 作成者にはならず、自分で編集またはクローズできません",
+      "identityPlatform": "Cindy 公式 Bot @{{login}}（既定）",
+      "identityPlatformHint": "GitHub アカウントの設定は不要です。Issue は公式 Bot が作成し、本文に公開署名を付けられます",
       "publicNameLabel": "公開署名",
       "publicNameHint": "この署名は Issue 本文に公開表示されます",
       "anonymous": "匿名",
@@ -7886,6 +8004,9 @@
       "deny": "拒否"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "このプロジェクトを信頼すると使用できます"
+  },
   "skillhub": {
     "home": {
       "title": "スキル",
@@ -7913,7 +8034,12 @@
     },
     "common": {
       "openFolderFailed": "フォルダを開けませんでした",
-      "close": "閉じる"
+      "close": "閉じる",
+      "statusDiscovered": "検出済み",
+      "statusApproved": "承認済み",
+      "statusLoaded": "読み込み済み",
+      "statusFailed": "読み込み失敗",
+      "statusUnknown": "不明"
     },
     "welcome": {
       "scanning": "ローカルの skill をスキャン中…",
@@ -8729,6 +8855,21 @@
       "failed": "目標の設定に失敗しました",
       "set": "目標を設定しました。自動で進めます",
       "cleared": "目標をクリアしました"
+    }
+  },
+  "review": {
+    "sessionTitle": "レビュー · {{title}}",
+    "toast": {
+      "failed": "レビューを開始できませんでした",
+      "remoteUnsupported": "このバージョンではローカルタスクのみレビューできます"
+    },
+    "externalArtifactConfirm": {
+      "title": "ワークスペース外の成果物をレビューしますか？",
+      "message": "このレビューでは、ワークスペース外またはメモリ内の {{count}} 件を設定済みモデルへ送信します。",
+      "detail": "今回許可されるのは以下の項目だけです。続行前に確認してください。",
+      "inline": "メモリ内の添付ファイル",
+      "allow": "今回のみ許可",
+      "cancel": "キャンセル"
     }
   },
   "learn": {

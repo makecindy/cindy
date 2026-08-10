@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const locales = ['zh-CN', 'en', 'ja', 'ko'] as const;
+const locales = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
 
 function readLocale(locale: (typeof locales)[number]) {
   return JSON.parse(

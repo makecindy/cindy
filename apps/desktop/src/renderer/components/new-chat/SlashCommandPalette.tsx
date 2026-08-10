@@ -14,10 +14,12 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import {
   filterSlashCommands,
+  isSlashCommandUnavailable,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 
@@ -67,6 +69,7 @@ export function SlashCommandPalette({
   onTooltipHoverChange,
   maxHeight = 400,
 }: SlashCommandPaletteProps) {
+  const { t } = useTranslation();
   const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -218,7 +221,7 @@ export function SlashCommandPalette({
           <div
             className={cn(
               'flex items-center justify-center',
-              'h-[40px] text-[13px]',
+              'h-[40px] text-13',
               'text-[var(--cmd-palette-empty)]',
             )}
           >
@@ -227,30 +230,36 @@ export function SlashCommandPalette({
         ) : (
           filtered.map((cmd, idx) => {
             const focused = idx === focusedIndex;
+            const unavailable = isSlashCommandUnavailable(cmd);
             return (
               <button
                 key={cmd.name}
                 ref={focused ? focusedRef : undefined}
                 type="button"
+                aria-disabled={unavailable}
+                aria-label={unavailable ? `${cmd.name}: ${t('commandPalette.projectTrustRequired')}` : cmd.name}
+                title={unavailable ? t('commandPalette.projectTrustRequired') : undefined}
                 // `onMouseDown` instead of `onClick` so the textarea
                 // keeps focus — click would fire after blur.
                 onMouseDown={(e) => {
                   e.preventDefault();
+                  if (unavailable) return;
                   onSelect(cmd);
                 }}
                 onMouseEnter={() => onFocusedIndexChange(idx)}
                 className={cn(
                   'flex w-full items-center justify-between',
                   'h-[36px] px-[10px] rounded-[6px]',
-                  'text-left text-[14px] font-medium',
+                  'text-left text-14 font-medium',
                   'text-[var(--cmd-palette-item-text)]',
                   'outline-none transition-colors',
                   focused && 'bg-[var(--cmd-palette-item-hover)]',
+                  unavailable && 'cursor-not-allowed opacity-50',
                 )}
               >
                 <span className="truncate">{cmd.name}</span>
                 {metaLabel(cmd) && (
-                  <span className="shrink-0 text-[12px] font-normal text-[var(--cmd-palette-item-meta)]">
+                  <span className="shrink-0 text-12 font-normal text-[var(--cmd-palette-item-meta)]">
                     {metaLabel(cmd)}
                   </span>
                 )}
@@ -281,11 +290,13 @@ export function SlashCommandPalette({
             maxHeight: tooltipPos.maxHeight,
           }}
         >
-          <div className="text-[14px] font-medium text-[var(--cmd-palette-item-text)]">
+          <div className="text-14 font-medium text-[var(--cmd-palette-item-text)]">
             {focusedCmd.name}
           </div>
-          <div className="mt-[8px] text-[13px] leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
-            {focusedCmd.description}
+          <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
+            {isSlashCommandUnavailable(focusedCmd)
+              ? t('commandPalette.projectTrustRequired')
+              : focusedCmd.description}
           </div>
         </div>,
         document.body,

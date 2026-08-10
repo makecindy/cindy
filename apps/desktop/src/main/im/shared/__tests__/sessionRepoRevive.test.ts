@@ -28,9 +28,17 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-// 用轻量 eq 替身让断言能直接核对 WHERE 的列与值(真 eq 返回不可比对的 SQL 对象)
+// 用轻量 eq 让断言能直接核对 WHERE 的列与值(真 eq 返回不可比对的 SQL 对象)。
+// `sql` 同理拼成可读字符串: 生产代码用 `sql\`case when ...\`` 组装 workspaceKind
+// 的 SET, 这里只看判据的形状 —— 它在真 SQLite 下的语义由
+// sessionRepoWorkspaceKind.test.ts 覆盖。
 vi.mock('drizzle-orm', () => ({
   eq: (col: unknown, val: unknown) => ({ col, val }),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+    sqlText: strings.raw
+      .map((part, i) => part + (i < values.length ? String(values[i]) : ''))
+      .join(''),
+  }),
 }));
 vi.mock('electron', () => ({
   BrowserWindow: {
@@ -58,7 +66,13 @@ vi.mock('../../../localDb/client/current', () => ({
     },
   }),
 }));
-vi.mock('../../../localDb/schema', () => ({ sessions: { id: 'sessions.id' } }));
+vi.mock('../../../localDb/schema', () => ({
+  sessions: {
+    id: 'sessions.id',
+    workingDir: 'sessions.working_dir',
+    workspaceKind: 'sessions.workspace_kind',
+  },
+}));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   setSessionProvider: vi.fn(),
 }));
@@ -233,7 +247,17 @@ describe('sessionRepo.createSession upsert 兜竞态(#748)', () => {
 describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
   const dialogueNs = { ...ns, workspaceKind: 'dialogue' } as unknown as ImSessionNamespace;
 
+  /** 开着 `/project` 的渠道(个人 Telegram): 归属可以按路径推断。 */
   function makeDialogueRepo() {
+    return createImSessionRepo(
+      { agentKind: 'claude-code' } as ImOrchestratorConfig,
+      dialogueNs,
+      { projectSwitching: true },
+    );
+  }
+
+  /** 没有 `/project` 的渠道(微信这类): 只有托管目录, 且它用户可改。 */
+  function makePlainDialogueRepo() {
     return createImSessionRepo(
       { agentKind: 'claude-code' } as ImOrchestratorConfig,
       dialogueNs,
@@ -248,23 +272,50 @@ describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
     mocks.selectLimit.mockResolvedValue([]);
   });
 
-  it('INSERT values 与冲突 set 都落 workspaceKind=dialogue(老行随下一条消息校正)', async () => {
+  it('新行直接落 workspaceKind=dialogue, 冲突分支改成带判据的 CASE', async () => {
     await makeDialogueRepo().createSession('bot', 'user', undefined, preparedDefaults);
 
+    // 新行没有历史可保护, 渠道归属就是它的归属。
     const values = mocks.insertValues.mock.calls[0][0] as Record<string, unknown>;
     expect(values.workspaceKind).toBe('dialogue');
+
+    // 冲突撞的是残留行 —— 无条件写 'dialogue' 会把用户 `/project` 选的项目归属
+    // 刷掉。判据必须落在 SET 表达式里(不是先读再改写: 并发下旧值会盖新值)。
+    const conflictArg = mocks.insertConflict.mock.calls[0][0] as {
+      set: Record<string, { sqlText: string }>;
+    };
+    const setSql = conflictArg.set.workspaceKind.sqlText;
+    expect(setSql).toContain('case when');
+    expect(setSql).toContain('sessions.working_dir');
+    expect(setSql).toContain('/tmp/im-working-dir/bot');
+    expect(setSql).toContain('dialogue');
+    // else 分支写死 'project': 老版本刷坏的存量行(dialogue + 项目目录)靠"保留现值"
+    // 永远修不好。语义与判据见 sessionRepoWorkspaceKind.test.ts。
+    expect(setSql).toContain("else 'project'");
+  });
+
+  it('没有 /project 的渠道照旧直写渠道归属, 不按路径判', async () => {
+    // 这些渠道的托管目录用户可以在设置页改, 而已有会话保留旧目录 —— 按路径判会把
+    // 一条合法的对话会话判成项目, 还会写进库里。
+    await makePlainDialogueRepo().createSession('bot', 'user', undefined, preparedDefaults);
+
     const conflictArg = mocks.insertConflict.mock.calls[0][0] as {
       set: Record<string, unknown>;
     };
     expect(conflictArg.set.workspaceKind).toBe('dialogue');
   });
 
-  it('软删行复活时一并校正 workspaceKind', async () => {
+  it('软删行复活时按同一判据校正 workspaceKind', async () => {
     mocks.selectLimit.mockResolvedValue([dbRow('archived')]);
     await makeDialogueRepo().findActiveSession('bot', 'user');
 
     expect(mocks.updateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'active', workspaceKind: 'dialogue' }),
+      expect.objectContaining({
+        status: 'active',
+        workspaceKind: expect.objectContaining({
+          sqlText: expect.stringContaining('case when'),
+        }),
+      }),
     );
   });
 

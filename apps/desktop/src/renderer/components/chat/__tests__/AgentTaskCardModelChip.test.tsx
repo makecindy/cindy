@@ -21,6 +21,10 @@ vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
   openBackgroundTasksTab: vi.fn(),
 }));
 
+vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
+  openSubagentsTab: vi.fn(),
+}));
+
 vi.mock('@/features/right-sidebar/plugins/background-tasks/listSessionTasks', () => ({
   extractWorkflowTaskId: () => undefined,
 }));

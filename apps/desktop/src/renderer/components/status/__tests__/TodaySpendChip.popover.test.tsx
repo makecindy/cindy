@@ -45,6 +45,8 @@ vi.mock('react-i18next', () => ({
         'quotaCard.tokenLabel': 'Token',
         'quotaCard.tokenBreakdown': '（输入 {{input}} · 输出 {{output}}）',
         'quotaCard.cacheLabel': '缓存',
+        'quotaCard.timeLabel': '耗时',
+        'quotaCard.timeAndRateValue': '{{duration}} 速度：{{rate}} token/秒',
         'quotaCard.modelLabel': '模型',
         'quotaCard.waiting': '等待额度数据',
         'quotaCard.latestMessageTitle': '最近一轮用户请求累计',
@@ -53,6 +55,8 @@ vi.mock('react-i18next', () => ({
         'quotaCard.valueLine': '本轮 token 价值：{{cost}}',
         'quotaCard.noBilledCost': '本轮费用暂不可用，仅显示用量',
         'usageDetails.costBreakdownHeader': '按模型拆分：',
+        'usageDetails.durationSeconds': '{{value}}秒',
+        'usageDetails.durationMinutesSeconds': '{{minutes}}分 {{seconds}}秒',
         'usageDetails.modelCostLine': '· {{model}} {{cost}}',
         'usageDetails.cacheLine': '缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}',
         'usageDetails.cacheLineNoRate': '缓存拆分：读取 {{read}} · 写入 {{create}}',
@@ -119,6 +123,8 @@ const TURN_USAGE_DETAILS = {
   cacheCreateTokens: 74_000,
   totalTokens: 74_018,
   cacheHitRate: 0,
+  durationMs: 400,
+  turnDurationMs: 12_345,
   model: 'claude-opus-5[1m]',
 };
 
@@ -206,6 +212,9 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText(/^74\.0k/)).toBeTruthy();
     expect(screen.getByText('（输入 2 · 输出 16）')).toBeTruthy();
     expect(screen.getByText('读 0 · 写 74.0k · 命中 0%')).toBeTruthy();
+    const performance = screen.getByTestId('quota-performance');
+    expect(within(performance).getByText('耗时')).toBeTruthy();
+    expect(within(performance).getByText('12.3秒 速度：40 token/秒')).toBeTruthy();
     expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
     expect(screen.getByText('缓存命中率偏低，本轮较多上下文重新计费')).toBeTruthy();
     expect(document.activeElement).toBe(document.body);
@@ -227,6 +236,31 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText(/^74\.0k/)).toBeTruthy();
     expect(screen.getByText('（输入 74.0k · 输出 16）')).toBeTruthy();
     expect(screen.queryByText('（输入 74000 · 输出 16）')).toBeNull();
+  });
+
+  it('没有可靠耗时时不显示 TPS，现有用量明细保持不变', () => {
+    setLatestUsageMessage({
+      turnUsageDetails: {
+        ...TURN_USAGE_DETAILS,
+        durationMs: undefined,
+        turnDurationMs: undefined,
+      },
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+    expect(screen.queryByText('速度')).toBeNull();
+    expect(screen.getByText('（输入 2 · 输出 16）')).toBeTruthy();
+  });
+
+  it('只有整轮耗时时直接显示耗时，不显示缺失速度占位', () => {
+    setLatestUsageMessage({
+      turnUsageDetails: { ...TURN_USAGE_DETAILS, durationMs: undefined },
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+    const performance = screen.getByTestId('quota-performance');
+    expect(within(performance).getByText('耗时')).toBeTruthy();
+    expect(within(performance).getByText('12.3秒')).toBeTruthy();
   });
 
   it('键盘聚焦打开时把焦点移入卡片，关闭后归还 trigger', () => {

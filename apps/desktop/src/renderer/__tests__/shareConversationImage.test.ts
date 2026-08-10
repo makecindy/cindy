@@ -23,7 +23,6 @@ const {
   redactTextNodes,
   stripCloneAnchors,
   stripInteractiveElements,
-  websiteHost,
 } = await import('@/lib/shareConversationImage');
 
 beforeEach(() => {
@@ -268,55 +267,35 @@ describe('queryShareableMessageIds', () => {
   });
 });
 
-describe('websiteHost', () => {
-  it('取 host,去掉协议与路径', () => {
-    expect(websiteHost('https://cindy.app')).toBe('cindy.app');
-    expect(websiteHost('https://cindy.com.cn/download')).toBe('cindy.com.cn');
-  });
-
-  it('解析不了就原样返回,空值返回空串', () => {
-    expect(websiteHost('not a url')).toBe('not a url');
-    expect(websiteHost(undefined)).toBe('');
-  });
-});
-
 describe('buildShareImageFooter', () => {
-  it('形象与 logo 横向锁定,网址在下一行', () => {
+  it('形象与 logo 横向锁定,不附加网址', () => {
     const footer = buildShareImageFooter({
       logoSrc: 'logo.png',
       characterSrc: 'character.jpg',
-      siteHost: 'cindy.app',
     });
     const imgs = Array.from(footer.querySelectorAll('img'));
     expect(imgs.map((el) => el.getAttribute('src'))).toEqual(['character.jpg', 'logo.png']);
     expect(imgs[0].parentElement).toBe(imgs[1].parentElement);
-    expect(footer.textContent).toBe('cindy.app');
+    expect(footer.textContent).toBe('');
   });
 
-  it('角色图标小尺寸、圆角并弱化色彩', () => {
+  it('角色图标保持小尺寸、圆角与源素材颜色', () => {
     const footer = buildShareImageFooter({
       logoSrc: 'logo.png',
       characterSrc: 'character.jpg',
-      siteHost: 'cindy.app',
     });
     const character = footer.querySelector('img');
     expect(character?.style.width).toBe('40px');
     expect(character?.style.height).toBe('40px');
     expect(character?.style.borderRadius).toBe('8px');
     expect(character?.style.objectFit).toBe('cover');
-    expect(character?.style.filter).toBe('saturate(0.72) contrast(0.94)');
-    expect(character?.style.opacity).toBe('0.9');
+    expect(character?.style.filter).toBe('');
+    expect(character?.style.opacity).toBe('');
   });
 
   it('没有形象时只放 logo', () => {
-    const footer = buildShareImageFooter({ logoSrc: 'logo.png', siteHost: 'cindy.app' });
+    const footer = buildShareImageFooter({ logoSrc: 'logo.png' });
     const imgs = Array.from(footer.querySelectorAll('img'));
     expect(imgs.map((el) => el.getAttribute('src'))).toEqual(['logo.png']);
-  });
-
-  it('没有 host 时不渲染网址行', () => {
-    const footer = buildShareImageFooter({ logoSrc: 'logo.png', siteHost: '' });
-    expect(footer.querySelector('img')).not.toBeNull();
-    expect(footer.textContent).toBe('');
   });
 });

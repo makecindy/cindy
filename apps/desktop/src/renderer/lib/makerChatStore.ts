@@ -40,6 +40,7 @@ import {
   applyCodexPlanSnapshotOnDone,
   getLatestMessageTodoState,
   isAgentPlanToolName,
+  markCodexPlanTurnFailed,
 } from '@cindy/maker-shared/message-render';
 import {
   normalizeWorkflowProgressEntries,
@@ -61,6 +62,7 @@ import type {
 } from '../../shared/agentInputQueue';
 import { normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue';
 import { hasUserVisibleText } from '../../shared/visibleText';
+import { readReviewRunMeta } from '../../shared/reviewRun';
 import {
   deriveAutoTitleSeed,
   reconcileSessionRefsForText,
@@ -127,6 +129,7 @@ import {
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
   parseIssueEnvRegion,
+  parseOptionalGithubUserIdentity,
   parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
   type IssueSubmissionIdentity,
@@ -371,6 +374,8 @@ export interface ChatMessage {
   planUpdatedAtMs?: number;
   /** Main stamped this persisted Codex plan at the successful done boundary. */
   terminalPlanSnapshot?: boolean;
+  /** Host time when the successful Codex plan seal was applied. */
+  terminalPlanAtMs?: number;
   /**
    * 产生这条消息的模型 raw id(读自 agentMeta.model)。对 subagent 子消息而言
    * 即子代理实际跑的模型(如 'claude-haiku-4-5-20251001')。仅 SDK 带 model 的
@@ -454,6 +459,7 @@ export interface ChatMessage {
     | 'goal-complete'
     | 'goal-resumed'
     | 'learn'
+    | 'review'
     | 'auto-resume'
     /**
      * 中断自愈**进行中**(退避窗口内,由 projection.autoResumePending 驱动的 ephemeral
@@ -745,8 +751,13 @@ export interface PendingIssueConfirm {
     osVersion: string;
     region?: CindyRegion;
   };
-  /** main 已经选定、确认后不会自动切换的实际 GitHub 作者身份。 */
+  /**
+   * Main 提供的默认身份。新版 Main 始终传平台 Bot；旧版 Main 可能已经固定为
+   * GitHub 用户，Renderer 必须保留该形状，不能让升级中的确认卡静默消失。
+   */
   submissionIdentity: IssueSubmissionIdentity;
+  /** 当前验证可用时才提供的 GitHub 用户本人身份。 */
+  githubUserIdentity?: Extract<IssueSubmissionIdentity, { kind: 'github-user' }>;
   /** 平台代发的建议公开署名；缺失时卡片使用本地化“匿名”。 */
   suggestedPublicName?: string;
 }
@@ -4405,7 +4416,11 @@ export function handleStreamEvent(
   };
   switch (event.type) {
     case 'text': {
-      const { text, isFinal } = event.data as { text: string; isFinal: boolean };
+      const { text, isFinal, isFullText } = event.data as {
+        text: string;
+        isFinal: boolean;
+        isFullText?: boolean;
+      };
 
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
@@ -4438,7 +4453,8 @@ export function handleStreamEvent(
             ],
           };
         }
-        // 流式中的 isFinal 不重复落库，但仍要刷新 lastAgentMeta（done 时抢救用）。
+        // 流式中的 isFinal 不重复落库。只有显式 isFullText 是 SDK 权威全文，
+        // 可校准在途气泡；Claude Code 的局部 text block / 截断尾段不能覆盖整条消息。
         // subagent-model-chip: 流式起点的 delta 事件不带 agentMeta(见 CCAgentStreamEvent
         // 注释:delta 类无此字段),只有这条来自 SDK assistant message 的 isFinal 带 ——
         // 把 model/parentToolUseId 补写到在途流式 assistant 消息上,否则纯文本(零工具)
@@ -4447,16 +4463,24 @@ export function handleStreamEvent(
           assistantMetaFields.model !== undefined ||
           assistantMetaFields.parentToolUseId !== undefined ||
           assistantMetaFields.turnCompleted === true;
-        if (!incomingMeta && !hasAssistantFields) return state;
+        const shouldCalibrateText = Boolean(
+          isFullText === true && text && state.streamingClientId && text !== state.streamingText,
+        );
+        if (!incomingMeta && !hasAssistantFields && !shouldCalibrateText) return state;
         return {
           ...state,
+          ...(shouldCalibrateText ? { streamingText: text } : {}),
           ...(incomingMeta ? { lastAgentMeta: incomingMeta } : {}),
-          ...(hasAssistantFields && state.streamingClientId
+          ...((hasAssistantFields || shouldCalibrateText) && state.streamingClientId
             ? {
                 messages: replaceMessage(
                   state.messages,
                   (m) => m.clientId === state.streamingClientId,
-                  (m) => ({ ...m, ...assistantMetaFields }),
+                  (m) => ({
+                    ...m,
+                    ...(shouldCalibrateText ? { content: text } : {}),
+                    ...assistantMetaFields,
+                  }),
                 ),
               }
             : {}),
@@ -4836,7 +4860,9 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        { plan?: unknown; raw?: { id?: unknown; status?: unknown } } | null | undefined;
+        { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        | null
+        | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
@@ -4848,6 +4874,7 @@ export function handleStreamEvent(
               terminalTurnId,
               terminalTurnStatus,
               Date.now(),
+              terminalData?.cancelled === true,
             ).messages
           : cleanedMessages;
 
@@ -5005,11 +5032,19 @@ export function handleStreamEvent(
       // failure. Daemon dying outside upgrade still surfaces a normal banner.
       const isPlannedUpgradeClose =
         reason === 'remote_daemon_closed' && isSessionUpgrading(event.sessionId);
+      // 没有 done 的 codex 终态 error:该 turn 的计划行等不到章,也等不到
+      // persistCodexPlanOnDone 的 turnCompleted:false。立即在内存里补失败印记
+      // (main 的 persistCodexPlanOnTerminalError 落库版本随行广播稍后到达),
+      // 否则钉住面板会把全勾完的失败计划当旧数据兜底退场。
+      const terminalErrorMessages =
+        event.source === 'codex'
+          ? markCodexPlanTurnFailed(finalized.messages).messages
+          : finalized.messages;
       return {
         ...finalized,
         messages: suppressAutoResumeBroadcastError
-          ? finalized.messages
-          : finalized.messages.filter(
+          ? [...terminalErrorMessages]
+          : terminalErrorMessages.filter(
               (message) => message.clientId !== AUTO_RESUME_PENDING_CLIENT_ID,
             ),
         // coordinator 已经先发 autoResumePending projection 时，终态 maker:event
@@ -6550,6 +6585,12 @@ function initGlobalListeners(): void {
         (Omit<PendingIssueConfirm['env'], 'region'> & { region?: unknown }) | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
       if (!draft || !rawEnv || !submissionIdentity) return;
+      // 新版 Main:平台默认 + 可选 GitHub 身份。旧版 Main:只传已经固定的单一
+      // 身份；若它固定为 GitHub，不能凭新版字段再虚构平台切换入口。
+      const githubUserIdentity =
+        submissionIdentity.kind === 'platform'
+          ? parseOptionalGithubUserIdentity(request.githubUserIdentity)
+          : undefined;
       const suggestedPublicName =
         submissionIdentity.kind === 'platform'
           ? parseIssueSuggestedPublicName(request.suggestedPublicName)
@@ -6563,6 +6604,7 @@ function initGlobalListeners(): void {
           draft,
           env,
           submissionIdentity,
+          githubUserIdentity,
           suggestedPublicName,
         },
       }));
@@ -10759,7 +10801,7 @@ function extractSessionRefs(
   return reconcileSessionRefsForText(text, previous, getStickySessionDeviceId);
 }
 
-function buildCreateOptsForCurrentSession(
+export function buildCreateOptsForCurrentSession(
   sessionId: string,
   model: string,
   effort: string,
@@ -12696,7 +12738,7 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
 /**
  * issue_confirm: 把确认卡片结果回给 main(IssueConfirmBridge)并清 pendingIssueConfirm。
  * confirmed=true 时携带卡片当前的 title/body/type(用户编辑版,main 以此为准)、
- * 平台代发公开署名(publicName)和 renderer 界面语言(uiLanguage)。
+ * 用户选择的提交身份、平台代发公开署名(publicName)和 renderer 界面语言(uiLanguage)。
  */
 function respondToIssueConfirm(
   sessionId: string,
@@ -12706,6 +12748,7 @@ function respondToIssueConfirm(
         title: string;
         body: string;
         type: 'bug' | 'feature';
+        submissionIdentity: IssueSubmissionIdentity;
         publicName?: string;
         uiLanguage: string;
       }
@@ -14321,7 +14364,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolName,
         toolInput,
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
-          ? { terminalPlanSnapshot: true }
+          ? {
+              terminalPlanSnapshot: true,
+              ...(typeof c.terminalPlanAtMs === 'number'
+                ? { terminalPlanAtMs: c.terminalPlanAtMs }
+                : {}),
+            }
           : {}),
         ...(toolName === 'update_plan' && c.turnCompleted === false
           ? { turnCompleted: false }
@@ -14611,6 +14659,20 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         systemCardType: 'goal-resumed' as const,
         systemCardData: { kind: m.agentMeta.goalNotice },
+      };
+    }
+    const reviewRun = m.role === 'assistant' ? readReviewRunMeta(m.agentMeta?.reviewRun) : null;
+    if (reviewRun) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'review' as const,
+        systemCardData: {
+          ...reviewRun,
+          result: typeof m.content === 'string' ? m.content : '',
+        },
       };
     }
     const agentMeta = m.agentMeta;

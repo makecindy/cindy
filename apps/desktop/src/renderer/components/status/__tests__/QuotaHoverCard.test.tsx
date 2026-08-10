@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
@@ -23,6 +23,8 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.tokenBreakdown') {
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
+      if (key === 'quotaCard.timeLabel') return '耗时';
+      if (key === 'quotaCard.timeAndRateValue') return `${options.duration} 速度：${options.rate} token/秒`;
       if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
       if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
       if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
@@ -351,6 +353,54 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('本任务 $0.75')).toBeTruthy();
     expect(screen.getByText('本任务已用 $0.25')).toBeTruthy();
     expect(screen.getByText('本任务价值 $0.50')).toBeTruthy();
+  });
+
+  it('订阅卡用固定耗时标题和右对齐组合值，缺速度时结构保持不变', () => {
+    const { rerender } = render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot()}
+        nowMs={NOW_MS}
+        turnUsage={{ outputRateText: '40', turnDurationText: '12.3s' }}
+      />,
+    );
+
+    const performance = screen.getByTestId('quota-performance');
+    expect(within(performance).getByText('耗时')).toBeTruthy();
+    const combinedValue = within(performance).getByTestId('quota-performance-value');
+    expect(combinedValue.textContent).toBe('12.3s 速度：40 token/秒');
+    expect(combinedValue.classList.contains('ml-auto')).toBe(true);
+    expect(combinedValue.classList.contains('text-right')).toBe(true);
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot()}
+        nowMs={NOW_MS}
+        turnUsage={{ outputRateText: null, turnDurationText: '12.3s' }}
+      />,
+    );
+    const timeOnlyPerformance = screen.getByTestId('quota-performance');
+    expect(within(timeOnlyPerformance).getByText('耗时')).toBeTruthy();
+    const timeOnlyValue = within(timeOnlyPerformance).getByTestId('quota-performance-value');
+    expect(timeOnlyValue.textContent).toBe('12.3s');
+    expect(timeOnlyValue.classList.contains('ml-auto')).toBe(true);
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot()}
+        nowMs={NOW_MS}
+        turnUsage={{ outputRateText: '40', turnDurationText: null }}
+      />,
+    );
+    expect(screen.queryByTestId('quota-performance')).toBeNull();
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot()}
+        nowMs={NOW_MS}
+        turnUsage={{ outputRateText: null, turnDurationText: null }}
+      />,
+    );
+    expect(screen.queryByTestId('quota-performance')).toBeNull();
   });
 
   it('marks estimated value and labels user-turn totals without exposing SDK segments', () => {

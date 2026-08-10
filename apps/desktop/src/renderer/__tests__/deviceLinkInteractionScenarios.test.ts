@@ -679,6 +679,38 @@ describe('device-link 交互快照重建 — 窗口在交互挂起之后才打�
     makerChatStore.purgeSession(s);
   });
 
+  it('兼容旧 Main 已固定的 GitHub 身份，不静默丢弃确认卡', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValue([
+      {
+        request: {
+          kind: 'issue_confirm',
+          requestId: 'issue-legacy-github',
+          draft: { title: '旧版标题', body: '旧版正文', type: 'bug' },
+          env: {
+            appVersion: '0.1.33',
+            platform: 'win32',
+            arch: 'x64',
+            osVersion: '10.0',
+          },
+          submissionIdentity: { kind: 'github-user', login: 'legacy-user' },
+        },
+      },
+    ]);
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toMatchObject({
+      requestId: 'issue-legacy-github',
+      submissionIdentity: { kind: 'github-user', login: 'legacy-user' },
+    });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.githubUserIdentity).toBeUndefined();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.suggestedPublicName).toBeUndefined();
+    makerChatStore.purgeSession(s);
+  });
+
   it('permission:被控端已挂起 + 不发 push → ensureInitialMessages 后重建 pendingPermission', async () => {
     const s = openRemoteSession();
     host.seedPending(s, {
@@ -1227,6 +1259,8 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain('let linkOnline = false');
     expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
     expect(src).toContain('linkStatusPushSeen = true');
+    // debounce 排队后 relay 可能已进入 connecting；执行时必须重查实时状态，不能离线重试。
+    expect(src).toContain('if (!disposed && linkOnline && eligible.has(deviceId))');
   });
 
   it('F4: extraDirs 远程跳过 sessionService.update(getSessionDeviceId 守卫,避免阻断 setExtraDirs)', () => {

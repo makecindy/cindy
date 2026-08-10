@@ -354,7 +354,7 @@ function StackBubble({
       {/* 数量角标:语义 token 灰阶,不引新强调色(与图钉同纪律)。 */}
       <span
         aria-hidden
-        className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-[var(--text-tertiary)] bg-[var(--surface-chip)] px-1 text-[10px] font-medium leading-none text-[var(--text-secondary)]"
+        className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-[var(--text-tertiary)] bg-[var(--surface-chip)] px-1 text-10 font-medium leading-none text-[var(--text-secondary)]"
       >
         {count}
       </span>

@@ -319,6 +319,7 @@
       "id": "zhipu-glm-cn",
       "name": "智谱 GLM（中国大陆）",
       "nameEn": "Zhipu GLM (China)",
+      "nameZhTW": "智譜 GLM（中國大陸）",
       "docsUrl": "https://docs.bigmodel.cn/cn/guide/develop/claude",
       "regionHint": "cn",
       "runtimes": {
@@ -390,6 +391,7 @@
       "id": "moonshot-kimi-cn",
       "name": "Kimi (Moonshot 中国大陆)",
       "nameEn": "Kimi (Moonshot China)",
+      "nameZhTW": "Kimi (Moonshot 中國大陸)",
       "docsUrl": "https://platform.moonshot.cn/docs/guide/agent-support",
       "regionHint": "cn",
       "runtimes": {
@@ -487,6 +489,7 @@
       "id": "moonshot-kimi-code",
       "name": "Kimi Code（编程计划包月）",
       "nameEn": "Kimi Code (coding plan)",
+      "nameZhTW": "Kimi Code（程式設計計劃包月）",
       "docsUrl": "https://www.kimi.com/zh-cn/help/kimi-code/third-party-agents",
       "runtimes": {
         "claude-code": {
@@ -536,6 +539,7 @@
       "id": "minimax-cn",
       "name": "MiniMax（中国大陆）",
       "nameEn": "MiniMax (China)",
+      "nameZhTW": "MiniMax（中國大陸）",
       "docsUrl": "https://platform.minimaxi.com/docs/api-reference/responses-create",
       "regionHint": "cn",
       "runtimes": {
@@ -609,6 +613,7 @@
       "id": "aliyun-bailian-coding",
       "name": "阿里云百炼 Coding Plan（包月）",
       "nameEn": "Alibaba Cloud Bailian Coding Plan",
+      "nameZhTW": "阿里雲百鍊 Coding Plan（包月）",
       "docsUrl": "https://help.aliyun.com/zh/model-studio/coding-plan",
       "regionHint": "cn",
       "runtimes": {
@@ -654,6 +659,7 @@
       "id": "aliyun-bailian-token-plan-cn",
       "name": "阿里云百炼 Token Plan（个人版）",
       "nameEn": "Alibaba Cloud Bailian Token Plan (Personal)",
+      "nameZhTW": "阿里雲百鍊 Token Plan（個人版）",
       "docsUrl": "https://help.aliyun.com/zh/model-studio/token-plan-personal-overview",
       "regionHint": "cn",
       "runtimes": {
@@ -736,6 +742,7 @@
       "id": "aliyun-bailian-token-plan-team-cn",
       "name": "阿里云百炼 Token Plan（团队版）",
       "nameEn": "Alibaba Cloud Bailian Token Plan (Team)",
+      "nameZhTW": "阿里雲百鍊 Token Plan（團隊版）",
       "docsUrl": "https://help.aliyun.com/zh/model-studio/token-plan-team-overview",
       "regionHint": "cn",
       "runtimes": {
@@ -980,6 +987,7 @@
       "id": "zhipu-coding-plan-cn",
       "name": "智谱 GLM Coding Plan（中国大陆）",
       "nameEn": "Zhipu GLM Coding Plan (China)",
+      "nameZhTW": "智譜 GLM Coding Plan（中國大陸）",
       "docsUrl": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "regionHint": "cn",
       "runtimes": {
@@ -1197,6 +1205,7 @@
       "id": "tencentcloud-coding-plan",
       "name": "腾讯云 Coding Plan",
       "nameEn": "Tencent Cloud Coding Plan",
+      "nameZhTW": "騰訊雲 Coding Plan",
       "docsUrl": "https://cloud.tencent.com/document/product/1823/130092",
       "regionHint": "cn",
       "runtimes": {

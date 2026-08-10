@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  Bot,
   FolderTree,
   Globe,
   Terminal,
@@ -122,6 +123,7 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   terminal: Terminal,
   review: GitPullRequestArrow,
   'orca-workers': UsersRound,
+  subagents: Bot,
   'background-tasks': ListTodo,
   'resource-usage': Activity,
 };
@@ -132,6 +134,7 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   terminal: 'rightSidebar.tabs.kinds.terminal',
   review: 'rightSidebar.tabs.kinds.review',
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
+  subagents: 'rightSidebar.tabs.kinds.subagents',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
 };
@@ -477,7 +480,7 @@ export function TabStrip({
                   closeContextMenu();
                   onClose(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.close')}
               </DropdownMenuItem>
@@ -489,7 +492,7 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseOthers?.(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50"
+                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50"
               >
                 {t('rightSidebar.tabs.contextMenu.closeOthers')}
               </DropdownMenuItem>
@@ -498,7 +501,7 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseAll?.();
                 }}
-                className="h-7 px-2.5 rounded-md text-[13px] leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.closeAll')}
               </DropdownMenuItem>
@@ -570,7 +573,7 @@ function TabPill({
         if (e.button === 1) e.preventDefault();
       }}
       className={cn(
-        'group flex h-[30px] shrink-0 items-center gap-1.5 px-2.5 text-[12px] transition-colors',
+        'group flex h-[30px] shrink-0 items-center gap-1.5 px-2.5 text-12 transition-colors',
         pillVariant === 'chip' ? 'rounded-lg' : 'rounded-t-lg',
         active
           ? cn(

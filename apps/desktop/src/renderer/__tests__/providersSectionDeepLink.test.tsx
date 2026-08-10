@@ -178,7 +178,7 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
-  it('ChatGPT 系统共享登录失效时显示来源说明并打开 ChatGPT App', async () => {
+  it('ChatGPT 系统共享登录失效时显示来源说明并在 Cindy 中重新登录', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
       reason: 'token_revoked',
@@ -201,13 +201,13 @@ describe('ProvidersSection — 深链定位', () => {
       'var(--remote-status-failed)',
     );
     expect(await screen.findByText('chatgptAuthRecovery.systemSharedInvalidated')).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
 
-    await waitFor(() => expect(window.electronAPI.openChatGPTApp).toHaveBeenCalledOnce());
-    expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
+    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledOnce());
+    expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
   });
 
-  it('ChatGPT App 打开失败时保留恢复入口并提示用户', async () => {
+  it('ChatGPT 系统共享重新登录被取消时保留恢复入口', async () => {
     codexAuthState.state = {
       kind: 'reconnect-required',
       reason: 'token_revoked',
@@ -222,18 +222,15 @@ describe('ProvidersSection — 深链定位', () => {
         models: { codex: [], 'claude-code': [] },
       }),
     ];
-    vi.mocked(window.electronAPI.openChatGPTApp).mockRejectedValueOnce(
-      new Error('bridge unavailable'),
-    );
+    codexAuthActions.triggerLogin.mockResolvedValueOnce('cancelled');
     renderAt('?tab=providers&connect=openai');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.relogin' }));
 
-    await waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith('chatgptAuthRecovery.openAppFailed'),
-    );
-    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' })).not.toBeNull();
-    expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
+    await waitFor(() => expect(codexAuthActions.triggerLogin).toHaveBeenCalledOnce());
+    expect(toastError).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.relogin' })).not.toBeNull();
+    expect(window.electronAPI.openChatGPTApp).not.toHaveBeenCalled();
   });
 
   it('connect=anthropic(未占行内置渠道)→ 向导 builtin 直达;参数消费后清除', async () => {

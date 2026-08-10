@@ -16,6 +16,8 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
@@ -146,6 +148,51 @@ function capabilitiesForSession(
       reason: 'platform-limited',
       message: '远端 Codex 会话暂不支持对话 rewind',
     },
+  };
+}
+
+function canonicalPiRuntimePath(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function mergePiRuntimeSkillStatuses(
+  result: ListAgentSkillsResult,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): ListAgentSkillsResult {
+  if (manifest?.status !== 'loaded') return result;
+  const loadedProjectSkills = new Map(
+    manifest.commands.flatMap((command) => {
+      const baseDir = command.sourceInfo.baseDir;
+      if (
+        command.source !== 'skill'
+        || command.sourceInfo.scope !== 'project'
+        || typeof baseDir !== 'string'
+        || !command.name.startsWith('skill:')
+      ) return [];
+      return [[[
+        command.name.slice('skill:'.length),
+        canonicalPiRuntimePath(baseDir),
+      ].join('\0'), command.name] as const];
+    }),
+  );
+  if (loadedProjectSkills.size === 0) return result;
+  return {
+    ...result,
+    skills: result.skills.map((skill) => {
+      const runtimeCommandName = skill.scope === 'repo' && skill.path
+        ? loadedProjectSkills.get([
+          skill.name,
+          canonicalPiRuntimePath(path.dirname(path.dirname(skill.path))),
+        ].join('\0'))
+        : undefined;
+      return runtimeCommandName
+        ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
+        : skill;
+    }),
   };
 }
 
@@ -460,6 +507,7 @@ export class Maker {
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
+          reviewMode: opts.reviewMode,
           parentSessionId: opts.parentSessionId,
           // remoteHostId: 远端 session 把目标机器持久化, 之后 resume / list 都能识别。
           // 本地 session 留 undefined (sqlite 落空), 跟历史行为兼容。
@@ -794,9 +842,20 @@ export class Maker {
    */
   async listAgentSkills(
     agentKind: AgentKind,
-    opts: ListAgentSkillsOptions,
+    opts: ListAgentSkillsOptions & { sessionId?: string },
   ): Promise<ListAgentSkillsResult> {
-    return this.requireAgent(agentKind).listAgentSkills(opts);
+    const { sessionId, ...agentOpts } = opts;
+    const result = await this.requireAgent(agentKind).listAgentSkills(agentOpts);
+    if (agentKind !== 'pi' || !sessionId) return result;
+    const session = this.getSession(sessionId);
+    if (
+      session?.agentKind !== 'pi'
+      || !opts.workingDir
+      || canonicalPiRuntimePath(opts.workingDir) !== canonicalPiRuntimePath(session.workDir)
+    ) {
+      return result;
+    }
+    return mergePiRuntimeSkillStatuses(result, session.getRuntimeCapabilities());
   }
 
   /** ChatInput `@` palette entries, routed by agent kind. */

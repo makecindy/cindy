@@ -24,12 +24,12 @@ export function QuoteChip({
 
   const tooltip = (
     <span className="flex flex-col gap-1">
-      <span className="whitespace-pre-wrap text-[12px] leading-[1.5] [overflow-wrap:anywhere]">
+      <span className="whitespace-pre-wrap text-12 leading-[1.5] [overflow-wrap:anywhere]">
         “{quote.text}”
       </span>
       {sourceLabel ? (
         <span
-          className="inline-flex min-w-0 items-center gap-1 text-[11px]"
+          className="inline-flex min-w-0 items-center gap-1 text-11"
           style={{ color: 'var(--text-tertiary)' }}
         >
           <FileText className="h-3 w-3 shrink-0" aria-hidden />

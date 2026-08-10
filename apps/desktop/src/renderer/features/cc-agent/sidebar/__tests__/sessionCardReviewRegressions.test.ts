@@ -257,14 +257,34 @@ describe('SessionCard review regressions', () => {
   });
 
   it('aligns the session row cursor with the actual split drag source state', () => {
+    expect(sessionItemSource).toContain("!isEditing && 'cursor-pointer'");
     expect(sessionItemSource).toContain(
-      "!isEditing && 'cursor-pointer'",
+      'draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}',
     );
-    expect(sessionItemSource).toContain('draggable={splitDragEnabled}');
     expect(sessionItemSource).toContain('inSortableContainer: true');
+    expect(sessionItemSource).toContain('nativeSortable: false');
     expect(sessionItemSource).toContain(
       "sortableDragBlocked: Boolean(row?.closest('[data-no-drag]'))",
     );
+    expect(sessionItemSource).toContain(
+      "nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]'))",
+    );
+    expect(sessionItemSource).toContain('data-split-group-drag-handle');
+    expect(sessionItemSource).toContain('data-no-drag={splitDragHandleActive');
+  });
+
+  it('wires pinned card and list titles into split drag without disabling item sorting', () => {
+    expect(sessionCardSource).toContain('data-split-group-drag-source');
+    expect(sessionCardSource).toContain(
+      'draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}',
+    );
+    expect(sessionCardSource).toContain('nativeSortable: false');
+    expect(sessionCardSource).toContain(
+      "nativeSortable: Boolean(card?.closest('[data-sortable-native-dnd]'))",
+    );
+    expect(sessionCardSource).toContain('data-split-group-drag-handle');
+    expect(sessionCardSource).toContain('data-no-drag={splitDragHandleActive');
+    expect(sessionCardSource).toContain('writeSplitGroupSessionDragData');
   });
 
   it('wires split creation into both sidebar rendering modes', () => {

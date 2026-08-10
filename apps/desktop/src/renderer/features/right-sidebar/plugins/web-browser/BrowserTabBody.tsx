@@ -520,7 +520,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             className={cn(
               'absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-2',
               'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-              'py-1 pl-3 pr-1 text-[11px] text-[var(--text-secondary)] shadow-sm',
+              'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-sm',
             )}
           >
             <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
@@ -531,7 +531,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
                 browser.dismissResourceAlert();
                 void forceKillBrowserTab(tabId);
               }}
-              className="rounded-full px-2 py-0.5 text-[11px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
+              className="rounded-full px-2 py-0.5 text-11 font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
             >
               {t('rightSidebar.browser.resourceAlert.terminate')}
             </button>
@@ -551,7 +551,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             className={cn(
               'pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2',
               'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-              'px-3 py-1 text-[11px] text-[var(--text-secondary)]',
+              'px-3 py-1 text-11 text-[var(--text-secondary)]',
             )}
           >
             {t('rightSidebar.browser.commentModeHint')}
@@ -623,13 +623,13 @@ function BrowserCrashBanner({
     <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-modal)] backdrop-blur-sm">
       <div className="flex max-w-xs flex-col items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-5 text-center">
         <AlertTriangle size={28} strokeWidth={1.5} className="text-[var(--error-fg)]" />
-        <div className="text-[13px] font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
-        <div className="text-[12px] text-[var(--text-secondary)]">{t(descKey)}</div>
+        <div className="text-13 font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
+        <div className="text-12 text-[var(--text-secondary)]">{t(descKey)}</div>
         <div className="mt-1 flex items-center gap-2">
           <button
             type="button"
             onClick={onRecover}
-            className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-[12px] font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
+            className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-12 font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
           >
             <RotateCw size={12} strokeWidth={2.5} />
             {t('rightSidebar.browser.crash.reload')}
@@ -638,7 +638,7 @@ function BrowserCrashBanner({
             <button
               type="button"
               onClick={onForceKill}
-              className="flex h-7 items-center rounded-md border border-[var(--border-default)] px-3 text-[12px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
+              className="flex h-7 items-center rounded-md border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
             >
               {t('rightSidebar.browser.crash.forceKill')}
             </button>

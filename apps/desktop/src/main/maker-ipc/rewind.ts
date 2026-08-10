@@ -12,7 +12,20 @@ import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage } from '../maker-orchestration/rewind.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { getGoalController } from '../goal-host/index.js';
+import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
+import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
+import {
+  listVisibleSubagentObservationIdentities,
+  type VisibleSubagentObservationIdentity,
+} from '../localDb/subagentRuns.js';
+import {
+  beginSubagentRewindFence,
+  finishSubagentRewindFence,
+  primeSubagentRewindFence,
+  type SubagentRewindFence,
+} from '../subagentObservationRewindFence.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
@@ -32,7 +45,7 @@ async function commitAfterStopping(
   const deadline = Date.now() + STOPPED_REWIND_TIMEOUT_MS;
   while (true) {
     try {
-      return await commitRewindAtMessage(sessionId, clientId, opts);
+      return await commitAfterPersistBarrier(sessionId, clientId, opts);
     } catch (err) {
       if (!isIpcError(err) || err.code !== 'SESSION_RUNNING' || Date.now() >= deadline) {
         throw err;
@@ -40,6 +53,20 @@ async function commitAfterStopping(
       await new Promise<void>((resolve) => setTimeout(resolve, STOPPED_REWIND_RETRY_MS));
     }
   }
+}
+
+async function commitAfterPersistBarrier(
+  sessionId: string,
+  clientId: string,
+  opts: { requireLatestUser: boolean },
+) {
+  // Rewind must see every chat/Subagent observation that was already queued
+  // before its transaction chooses the visible tail. Otherwise a delayed
+  // spawn can be inserted after the transaction with rewind_at=NULL and make
+  // withdrawn work visible again. Drain first, then let commitRewindAtMessage
+  // reload its target and transaction boundary from the durable store.
+  await drainPersistQueue();
+  return commitRewindAtMessage(sessionId, clientId, opts);
 }
 
 function wrapErr(err: unknown): never {
@@ -77,6 +104,7 @@ export function registerMakerRewindIpc(): void {
     ) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      const ownerScope = captureDataOwnerBroadcastScope();
       // edit-last-message 专用可选项:要求 target 必须是会话最新 user 消息,
       // 在 main 侧权威校验(renderer 的切片判定有 TOCTOU 窗口)。普通 Rewind
       // 不传 → 保持"可回到任意历史消息"的既有语义。
@@ -86,13 +114,30 @@ export function registerMakerRewindIpc(): void {
       const stopIfRunning =
         !!opts && typeof opts === 'object' &&
         (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
+      let subagentFence: SubagentRewindFence | null = null;
+      // This flag controls observation-generation advancement, not whether
+      // the underlying message transaction has already committed.
+      let fenceCommitted = false;
+      let visibleSubagentIdentitiesAfterCommit: VisibleSubagentObservationIdentity[] = [];
       try {
+        subagentFence = beginSubagentRewindFence(sid);
+        primeSubagentRewindFence(
+          subagentFence,
+          await listVisibleSubagentObservationIdentities(sid),
+        );
         // Normal Rewind owns stop -> authoritative idle -> commit as one main
         // transaction. Edit-last-message keeps its existing direct orchestration.
         const result = stopIfRunning
           ? await withSessionInputStoppedForRewind(sid, () =>
               commitAfterStopping(sid, cid, { requireLatestUser }))
-          : await commitRewindAtMessage(sid, cid, { requireLatestUser });
+          : await commitAfterPersistBarrier(sid, cid, { requireLatestUser });
+        visibleSubagentIdentitiesAfterCommit =
+          await listVisibleSubagentObservationIdentities(sid);
+        // The fence may advance generations only after the post-commit
+        // identity refresh succeeds. A failed refresh must take the same
+        // rollback path as any other rewind failure so buffered observations
+        // are not discarded behind an empty survivor set.
+        fenceCommitted = true;
         // 回滚后缓存的待注入交接 / fork 来源标记都是按截断前的历史算出来的,丢弃它,
         // 让下次 send 按回滚后的现状重新判定——被回滚掉的正是当初携带来源标记的那一轮时,
         // DB 侧判定会自动重新 arm(它按 rewind_at 过滤)。
@@ -100,10 +145,19 @@ export function registerMakerRewindIpc(): void {
         // 回滚后会话历史被截断,active 目标若继续就会对着变化后的上下文跑 —— 暂停它
         // (保留计数,用户 review 后可 resume)。fire-and-forget,失败不阻塞 rewind。
         void getGoalController()?.pauseGoal(sid, 'paused: conversation rewound').catch(() => {});
+        broadcastSubagentRunsInvalidated(sid, ownerScope);
         return result;
       } catch (err) {
         log.warn('rewind:commit failed', { sid, cid, error: String(err) });
         wrapErr(err);
+      } finally {
+        if (subagentFence) {
+          finishSubagentRewindFence(
+            subagentFence,
+            fenceCommitted,
+            visibleSubagentIdentitiesAfterCommit,
+          );
+        }
       }
     },
   );

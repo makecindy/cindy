@@ -337,7 +337,7 @@ export function ProviderMark({
       className={cn(
         withMargin && 'mr-1.5',
         'flex shrink-0 items-center justify-center rounded-[4px] border border-current font-semibold leading-none',
-        dense ? 'h-[14.2px] w-[14.2px] text-[8.4px]' : 'h-[15px] w-[15px] text-[9px]',
+        dense ? 'h-[14.2px] w-[14.2px] text-10' : 'h-[15px] w-[15px] text-10',
         colorClass,
       )}
       aria-hidden
@@ -1723,7 +1723,7 @@ function ModelSelectorContentView({
               >
                 <span
                   className={cn(
-                    'truncate text-[13.5px] text-[var(--model-item-text)]',
+                    'truncate text-14 text-[var(--model-item-text)]',
                     selected ? 'font-medium' : 'font-normal',
                   )}
                 >
@@ -2001,7 +2001,7 @@ function ModelSelectorContentView({
                       </span>
                     )}
                     {showSubscriptionTag && (
-                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]">
                         {t('settings.providers.models.subscription')}
                       </span>
                     )}
@@ -2637,7 +2637,7 @@ export function ModelSelector({
         <span
           className={cn(
             'shrink-0 font-normal text-[var(--model-trigger-meta)]',
-            isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+            isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
           )}
         >
           {agentIdentityLabel}
@@ -2645,7 +2645,7 @@ export function ModelSelector({
         <span
           className={cn(
             'shrink-0 font-normal text-[var(--model-trigger-meta)]',
-            isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+            isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
           )}
           aria-hidden="true"
         >
@@ -2725,7 +2725,7 @@ export function ModelSelector({
                   : isCreateAgentVariant
                     ? 'truncate'
                     : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
-              isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+              isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
             {t('newChat.modelSelector.source.connect')}
@@ -2757,7 +2757,7 @@ export function ModelSelector({
                     : isFieldTrigger
                       ? 'max-w-[260px] truncate'
                       : 'truncate',
-              isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+              isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
             {/* 断开来源可能是该模型的唯一提供方 → visibleModels 查不到,回落显示原始 id,
@@ -2773,7 +2773,7 @@ export function ModelSelector({
             <span
               className={cn(
                 'shrink-0 font-medium text-[var(--error-fg)]',
-                dense ? 'text-[11.5px]' : 'text-[12px]',
+                dense ? 'text-11' : 'text-12',
               )}
             >
               {t('newChat.modelSelector.source.disconnected')}
@@ -2821,7 +2821,7 @@ export function ModelSelector({
                 (isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-text)]'
                   : 'text-[var(--text-primary)]'),
-              isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+              isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
             style={budgetGradientStyle}
           >
@@ -2836,10 +2836,10 @@ export function ModelSelector({
                     ? 'text-[var(--create-agent-control-text)]'
                     : 'text-[var(--model-trigger-meta)]',
                   isCreateAgentVariant
-                    ? 'shrink-0 text-[12px]'
+                    ? 'shrink-0 text-12'
                     : dense
-                      ? 'shrink-0 text-[12.5px]'
-                      : 'shrink-0 text-[13px]',
+                      ? 'shrink-0 text-12'
+                      : 'shrink-0 text-13',
                 )}
                 aria-hidden="true"
               >
@@ -2856,7 +2856,7 @@ export function ModelSelector({
                     : isFieldTrigger
                       ? 'max-w-[120px] truncate'
                       : 'shrink-0 whitespace-nowrap',
-                  isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+                  isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
                 )}
               >
                 {effortLabel}

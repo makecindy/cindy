@@ -40,6 +40,7 @@ import { mergeSessionSources } from './lib/mergeSessionSources';
 import {
   SPLIT_GROUP_SESSION_MIME,
   hasSplitGroupSessionType,
+  isSplitGroupComposerDropTarget,
   resolveSplitDropSide,
 } from './splitGroupDnd';
 import {
@@ -962,6 +963,10 @@ function SplitDropTarget({
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+    if (isSplitGroupComposerDropTarget(event.target)) {
+      setDropSide(null);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = 'move';
@@ -981,6 +986,10 @@ function SplitDropTarget({
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
       if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+      if (isSplitGroupComposerDropTarget(event.target)) {
+        setDropSide(null);
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       const sessionId = event.dataTransfer.getData(SPLIT_GROUP_SESSION_MIME).trim();

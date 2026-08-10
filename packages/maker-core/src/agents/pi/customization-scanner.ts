@@ -1,59 +1,136 @@
 /**
- * pi 文件系统 customization scanner。
+ * Pi filesystem customization scanner.
  *
- * 扫描路径:
- *   ~/.agents/skills/{name}/SKILL.md        → kind=skill, scope=user (跨引擎共享;
- *                                              与 cc/codex 同一个根,pi 因此看到与它们
- *                                              一致的技能包,无需 fan)
- *   ~/.pi/agent/skills/{name}/SKILL.md       → kind=skill, scope=user (pi 原生)
- *   {workingDir}/.agents/skills/{name}/...   → kind=skill, scope=repo
- *   {workingDir}/.pi/agent/skills/{name}/... → kind=skill, scope=repo (pi 原生)
- *
- * 纯文件系统发现,不 spawn pi —— ChatInput `/` palette 的 agent-skill 类目与
- * SkillHub 管理页共用。只暴露技能"存在"(name/description frontmatter),技能正文
- * 仅在 `/skill:name` 被调用时才进上下文,故此发现层零基线上下文增长。
+ * Pi reads user skills from ~/.agents/skills in Cindy sessions. Project skills
+ * live in {cwd}/.pi/skills and in every .agents/skills directory from cwd up to
+ * the nearest Git repository root. Project discovery is only a preview until
+ * Pi's runtime catalog confirms a skill was loaded.
  */
 
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import type {
+  AgentCustomization,
   ListCustomizationsOptions,
   ListCustomizationsResult,
 } from '../../types/customizations.js';
 import { scanCustomizationSources, type SourceDef } from '../shared/customization-scanner.js';
 
-function buildPiSources(workingDirs: string[]): SourceDef[] {
-  const home = os.homedir();
+function canonicalDirectory(dir: string): string {
+  const resolved = path.resolve(dir);
+  if (!fs.existsSync(resolved)) return resolved;
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function isExistingDirectory(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function hasGitMarker(dir: string): boolean {
+  try {
+    const marker = fs.statSync(path.join(dir, '.git'));
+    return marker.isDirectory() || marker.isFile();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
+}
+
+function findNearestGitRoot(workingDir: string): string | null {
+  let current = canonicalDirectory(workingDir);
+  while (true) {
+    if (hasGitMarker(current)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function agentSkillAncestors(workingDir: string): string[] {
+  const start = canonicalDirectory(workingDir);
+  const repoRoot = findNearestGitRoot(start);
+  const result: string[] = [];
+  let current = start;
+
+  while (true) {
+    result.push(current);
+    if (!repoRoot || current === repoRoot) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return result;
+}
+
+export function buildPiSources(workingDirs: string[]): SourceDef[] {
   const sources: SourceDef[] = [
-    { engine: 'pi', kind: 'skill', scope: 'user', dir: path.join(home, '.agents', 'skills') },
-    { engine: 'pi', kind: 'skill', scope: 'user', dir: path.join(home, '.pi', 'agent', 'skills') },
+    { engine: 'pi', kind: 'skill', scope: 'user', dir: path.join(os.homedir(), '.agents', 'skills') },
   ];
-  for (const wd of workingDirs) {
-    if (!wd || !path.isAbsolute(wd)) continue;
-    sources.push(
-      { engine: 'pi', kind: 'skill', scope: 'repo', dir: path.join(wd, '.agents', 'skills'), workingDir: wd },
-      { engine: 'pi', kind: 'skill', scope: 'repo', dir: path.join(wd, '.pi', 'agent', 'skills'), workingDir: wd },
-    );
+  const seen = new Set<string>();
+
+  for (const input of workingDirs) {
+    if (!input || !path.isAbsolute(input) || !isExistingDirectory(input)) continue;
+    // Scan through the physical directory so Git-boundary discovery is stable,
+    // but preserve the caller's lexical root for project ownership. Two project
+    // entries may intentionally refer to the same checkout through different
+    // symlink paths and must remain distinguishable to SkillHub.
+    const workingDir = path.resolve(input);
+    const scanRoot = canonicalDirectory(input);
+    const projectBoundary = findNearestGitRoot(scanRoot) ?? scanRoot;
+    const addProjectSource = (dir: string): void => {
+      const key = `${workingDir}\0${canonicalDirectory(dir)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      sources.push({
+        engine: 'pi',
+        kind: 'skill',
+        scope: 'repo',
+        dir,
+        workingDir,
+        runtimeStatus: 'discovered',
+        skillContainWithin: projectBoundary,
+      });
+    };
+
+    addProjectSource(path.join(scanRoot, '.pi', 'skills'));
+    for (const ancestor of agentSkillAncestors(scanRoot)) {
+      addProjectSource(path.join(ancestor, '.agents', 'skills'));
+    }
   }
   return sources;
 }
 
-export async function scanPiCustomizations(
-  opts: ListCustomizationsOptions,
-): Promise<ListCustomizationsResult> {
+function dedupePiItems(items: AgentCustomization[]): AgentCustomization[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = [item.scope, item.workingDir ?? '', canonicalDirectory(item.absolutePath)].join('\0');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export async function scanPiCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
   if (opts.kinds && opts.kinds.length > 0 && !opts.kinds.includes('skill')) {
     return { items: [], errors: [] };
   }
 
-  const workingDirs = opts.workingDirs ?? [];
-  const sources = buildPiSources(workingDirs);
-  const result = scanCustomizationSources(sources, null);
-
+  const result = scanCustomizationSources(buildPiSources(opts.workingDirs ?? []), null);
+  result.items = dedupePiItems(result.items);
   result.items.sort((a, b) => {
     if (a.scope !== b.scope) return a.scope.localeCompare(b.scope);
-    return a.name.localeCompare(b.name);
+    if (a.name !== b.name) return a.name.localeCompare(b.name);
+    return a.absolutePath.localeCompare(b.absolutePath);
   });
-
   return result;
 }

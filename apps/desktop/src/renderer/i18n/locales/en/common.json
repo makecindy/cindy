@@ -131,6 +131,7 @@
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
       "linkOpen": "Link open behavior",
+      "streamFade": "Streaming motion",
       "compatMode": "Tips",
       "voiceInput": "Voice input",
       "import": "Session Import",
@@ -464,6 +465,15 @@
         "label": "Sidebar card mode",
         "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
         "aria": "Toggle sidebar card mode"
+      },
+      "layout": {
+        "label": "Panel layout",
+        "hint": "Panel positions and widths persist across restarts. Restore the default arrangement if the layout becomes difficult to use.",
+        "reset": "Restore default layout",
+        "resetSuccess": "Default panel layout restored",
+        "resetFailed": "Could not restore the default panel layout",
+        "saved": "Panel position saved. Restore the default layout in Settings → Appearance.",
+        "saveFailed": "Could not save the panel position"
       }
     },
     "notifications": {
@@ -475,6 +485,15 @@
       "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
       "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
       "feishuAria": "Toggle session-done FeiShu notifications",
+      "sessionEvent": {
+        "untitled": "Untitled session",
+        "done": "Completed ✓",
+        "error": "Failed",
+        "needsReply": "Reply needed",
+        "externalDone": "Cindy · Session “{{title}}” completed ✓",
+        "externalError": "Cindy · Session “{{title}}” failed",
+        "externalNeedsReply": "Cindy · Session “{{title}}” needs your reply"
+      },
       "wecomGroupLabel": "WeCom group notifications",
       "wecomGroupHint": "Used for automation completion notifications. Paste a WeCom group bot Webhook URL; it is encrypted on this device.",
       "wecomGroupConfiguredHint": "Configured (key {{maskedKey}}). Turn on the master switch, then enable it for each automation as needed.",
@@ -613,6 +632,7 @@
       "options": {
         "system": "Auto (follow system)",
         "zh-CN": "简体中文",
+        "zh-TW": "Traditional Chinese",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -924,6 +944,7 @@
         "optionDescriptions": {
           "auto": "Let the recognition service detect it",
           "zh-CN": "Simplified Chinese (Mainland China)",
+          "zh-TW": "Traditional Chinese (Taiwan)",
           "en": "English",
           "ja": "Japanese",
           "ko": "Korean"
@@ -1729,6 +1750,12 @@
         "cellLabel": "Message notification",
         "hint": "Send a notification message to the Bot on connect/disconnect"
       },
+      "sessionNotification": {
+        "label": "Session notifications",
+        "cellLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
+        "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
+        "disabledHint": "First set up the bot and DM it once to complete binding."
+      },
       "bind": "Bind"
     },
     "wechatBot": {
@@ -2041,6 +2068,7 @@
         "project": "Switch project workspace",
         "model": "Show or switch the model",
         "permission": "Show or switch the permission mode",
+        "settings": "Show project and agent settings",
         "ctr": "Remotely control a desktop session",
         "exctr": "Exit remote control"
       },
@@ -2321,6 +2349,12 @@
         "sidebar": "Sidebar browser",
         "external": "System browser"
       }
+    },
+    "streamFade": {
+      "title": "Streaming motion",
+      "label": "Fade in streamed text",
+      "hint": "While a reply streams, new words fade in one after another. Turn on to enable the effect; content shows instantly when off. Always off when the system reduce-motion setting is on.",
+      "toggleAria": "Toggle streaming fade-in motion"
     },
     "chatEmbedding": {
       "cell": {
@@ -3290,6 +3324,9 @@
           "empty": "No plugin entries in this marketplace",
           "skippedEntries": "Skipped {{count}} invalid plugin entries",
           "unreadableEntries": "{{count}} plugin entries are temporarily unreadable; refresh to retry",
+          "addedReceipt": "Added \"{{name}}\" with {{count}} plugins discovered",
+          "refreshedReceipt": "Refreshed \"{{name}}\" with {{count}} plugins discovered",
+          "emptyWithSkippedEntries": "No usable plugins were discovered because all listed entries were skipped. Check the source types, plugin directories, and manifest entries.",
           "localBadge": "Local",
           "defaultRef": "Default branch",
           "neverSynced": "Never synced",
@@ -4262,6 +4299,8 @@
     "tokenLabel": "Tokens",
     "tokenBreakdown": "(input {{input}} · output {{output}})",
     "cacheLabel": "Cache",
+    "timeLabel": "Time",
+    "timeAndRateValue": "{{duration}} TPS:{{rate}}",
     "modelLabel": "Model",
     "staleData": "Data updated {{minutes}} minutes ago",
     "paceTrendFast": "Trending fast at the current average pace (rough estimate)",
@@ -4270,6 +4309,11 @@
     "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}s",
+    "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
+    "performanceLine": "TPS {{rate}} · Time {{duration}}",
+    "performanceRateLine": "TPS {{rate}}",
+    "timeLine": "Time {{duration}}",
     "costLine": "Cost this turn: {{cost}}",
     "valueLine": "Token value this turn: {{cost}}",
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",
@@ -4393,6 +4437,7 @@
         "browser": "Browser",
         "terminal": "Terminal",
         "review": "Review",
+        "subagents": "Subagent",
         "backgroundTasks": "Background tasks",
         "resourceUsage": "Resource Usage",
         "collaboration": "Team",
@@ -4418,6 +4463,8 @@
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
+        "openSubagents": "Open Subagent",
+        "subagentsSub": "Durable child work",
         "openBackgroundTasks": "Open background tasks",
         "backgroundTasksSub": "Background tasks",
         "openResourceUsage": "Open Resource Usage",
@@ -4786,6 +4833,58 @@
       "touchCountAria_other": "Edited {{count}} times",
       "expandAllAria": "Expand all files",
       "collapseAllAria": "Collapse all files"
+    },
+    "subagents": {
+      "running": "Running",
+      "finished": "Finished",
+      "empty": "No Subagent in this task yet",
+      "emptyDetail": "Subagents created while this task runs will remain available here.",
+      "loading": "Loading Subagents…",
+      "unavailable": "Subagent history is unavailable",
+      "unavailableDetail": "This remote device or older app version does not expose durable Subagent records yet.",
+      "loadFailed": "Could not load Subagents",
+      "retry": "Retry",
+      "loadEarlier": "Load earlier Subagents",
+      "untitled": "Subagent",
+      "notFound": "Subagent not found",
+      "back": "Back",
+      "harness": "Harness",
+      "model": "Model",
+      "context": "Parent context",
+      "contextValues": {
+        "unknown": "Not reported by the Harness",
+        "snapshot": "Parent task snapshot",
+        "live": "Live parent task"
+      },
+      "assignment": "Assignment",
+      "returnedResult": "Returned result",
+      "resultTruncated": "The returned result was truncated for display.",
+      "latestUpdate": "Latest update",
+      "activity": "Activity",
+      "noActivity": "No activity details were reported.",
+      "transcript": "Transcript",
+      "noTranscript": "No transcript entries were reported.",
+      "transcriptUnavailable": "This Harness has not exposed a full child transcript to Cindy yet. Returned results and lifecycle activity remain available.",
+      "transcriptRoles": {
+        "parent": "Parent",
+        "subagent": "Subagent",
+        "tool": "Tool",
+        "system": "System"
+      },
+      "lastTool": "Last tool: {{tool}}",
+      "tokens": "{{value}} tokens",
+      "activityKinds": {
+        "started": "Started",
+        "progress": "Progress",
+        "message": "Message",
+        "question": "Question",
+        "decision": "Decision",
+        "resumed": "Resumed",
+        "steered": "Steered",
+        "completed": "Completed",
+        "failed": "Failed",
+        "stopped": "Stopped"
+      }
     },
     "backgroundTasks": {
       "running": "Running",
@@ -5628,7 +5727,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT Sign-In Is No Longer Valid",
-    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Open the ChatGPT App, sign in again, then retry.",
+    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
     "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
     "recovered": "ChatGPT sign-in has been restored. Please retry.",
@@ -6139,6 +6238,24 @@
         "handoffTitle": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "resumedBadge": "session resumed"
+      },
+      "review": {
+        "running": "Reviewing current work",
+        "completed": "Review complete",
+        "failed": "Review did not complete",
+        "openTask": "Open review task",
+        "readOnlyHint": "Independent task · no development memory · read-only",
+        "noResult": "The reviewer returned no visible conclusion",
+        "failure": {
+          "reviewerClosed": "The review task closed before it finished",
+          "cancelledBeforeStart": "The review was cancelled before it started",
+          "interrupted": "The review was interrupted when Cindy closed. Run /review again.",
+          "sourceWorkspaceChanged": "The source task workspace changed. Run /review again in the current workspace.",
+          "sourceConversationChanged": "The source task changed. Run /review again for the current task.",
+          "sourceFilesChanged": "The source task files changed. Run /review again for the current result.",
+          "artifactChanged": "A review artifact changed. Run /review again for the current result.",
+          "providerFailed": "The review task failed"
+        }
       }
     },
     "markdownRenderer": {
@@ -7839,7 +7956,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "I'd like to file feedback for {{appName}}. Please help me turn it into a high-quality GitHub issue: first confirm the feedback type (bug or feature request) and ask follow-up questions for the necessary details (symptoms, reproduction steps or use case, expected behavior). Once there is enough information, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). If the submission fails, tell me the reason honestly.{{details}}",
+      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
       "detailsPrefix": "\nMy initial description: {{details}}"
     },
     "confirm": {
@@ -7848,11 +7965,12 @@
       "typeFeature": "Feature",
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
-      "submissionMethodLabel": "Publishing Method",
-      "identityGithubUser": "Publish directly through GitHub account @{{login}}",
+      "privacyHint": "Common secrets, personal paths, and email addresses are redacted when detected. Review the public content before submitting.",
+      "submissionMethodLabel": "Submission Identity",
+      "identityGithubUser": "My GitHub account @{{login}}",
       "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",
-      "identityPlatform": "Publish through Cindy (GitHub App {{login}})",
-      "identityPlatformHint": "You will not be the GitHub author and cannot edit or close this Issue yourself",
+      "identityPlatform": "Cindy official bot @{{login}} (default)",
+      "identityPlatformHint": "No GitHub account setup is required. The official bot creates the Issue, and you can add a public attribution in the body",
       "publicNameLabel": "Public Attribution",
       "publicNameHint": "This attribution will appear publicly in the Issue body",
       "anonymous": "Anonymous",
@@ -7899,6 +8017,9 @@
       "deny": "Deny"
     }
   },
+  "commandPalette": {
+    "projectTrustRequired": "Available after you trust this project"
+  },
   "skillhub": {
     "home": {
       "title": "Skills",
@@ -7926,7 +8047,12 @@
     },
     "common": {
       "openFolderFailed": "Failed to open folder",
-      "close": "Close"
+      "close": "Close",
+      "statusDiscovered": "Discovered",
+      "statusApproved": "Approved",
+      "statusLoaded": "Loaded",
+      "statusFailed": "Load failed",
+      "statusUnknown": "Unknown"
     },
     "welcome": {
       "scanning": "Scanning local skills…",
@@ -8743,6 +8869,21 @@
       "failed": "Failed to set goal",
       "set": "Goal set — working toward it",
       "cleared": "Goal cleared"
+    }
+  },
+  "review": {
+    "sessionTitle": "Review · {{title}}",
+    "toast": {
+      "failed": "Couldn't start review",
+      "remoteUnsupported": "This version can only review local tasks"
+    },
+    "externalArtifactConfirm": {
+      "title": "Allow review of external files?",
+      "message": "Review will send {{count}} external or in-memory item(s) to your configured model.",
+      "detail": "Only the items listed below are allowed for this review. Check them before continuing.",
+      "inline": "in-memory attachment",
+      "allow": "Allow once",
+      "cancel": "Cancel"
     }
   },
   "learn": {

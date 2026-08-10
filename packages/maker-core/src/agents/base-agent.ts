@@ -83,6 +83,9 @@ export interface AgentCapabilityAdditions {
 export interface CodexMcpThreadContextArgs {
   threadId: string;
   sessionId: string;
+  /** Host-owned app-server thread lineage. */
+  mcpCallerKind: 'root' | 'descendant' | 'unknown';
+  mcpCallerAttested: boolean;
   /** 当前 Maker Session 实例代号；同 business session 重建后必须变化。 */
   sessionInstanceId?: string;
   workingDir: string;
@@ -209,6 +212,8 @@ export interface PiExtraSpawnConfigContext {
   sessionInstanceId?: string;
   workingDir: string;
   vendorOptions?: Record<string, unknown>;
+  mcpCallerKind?: 'root' | 'descendant' | 'unknown';
+  mcpCallerAttested?: boolean;
 }
 
 export interface CodexExtraSpawnConfig {
@@ -490,7 +495,7 @@ export interface AgentDeps {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
       /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
-      hostPurpose?: 'control-plane';
+      hostPurpose?: 'control-plane' | 'review';
     },
   ) => Promise<CodexExtraSpawnConfig>;
 
@@ -983,6 +988,20 @@ export interface StartSessionOptions {
    * 共享 manager 的 enablement 由 host setting 控制，不由 session flag 改写。
    */
   makerMemoryEnabled?: boolean;
+  /**
+   * Host-owned Cindy Review policy. This is not a user permission preset:
+   * adapters must keep the session local, fresh, memory-free and hard
+   * read-only even if a later control request tries to widen permissions.
+   */
+  reviewMode?: true;
+  /**
+   * Exact local files or directories that a host-owned Review may inspect in
+   * addition to workingDir. Adapters must treat files as exact grants and
+   * directories as subtree grants; this is narrower than extraDirs, whose
+   * parent-directory transport semantics are only used to make attachments
+   * visible to the underlying harness.
+   */
+  reviewReadPaths?: string[];
   permissionMode?: PermissionMode;
   /**
    * 计划模式开关（与 permissionMode 正交，见 Capabilities.planMode）。

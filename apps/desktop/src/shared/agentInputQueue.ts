@@ -157,6 +157,33 @@ export interface AutoResumeInfo {
   sessionTotal: number;
 }
 
+/**
+ * Durable recovery context for a retry/continue action.
+ *
+ * This is deliberately a small, bounded handoff record rather than a copy of
+ * the transcript.  The transcript remains the source of truth; the checkpoint
+ * tells the next turn which interrupted input it belongs to, how many recovery
+ * attempts have already happened, and whether the previous durable progress
+ * was reconstructed under context pressure.
+ */
+export interface RecoveryCheckpoint {
+  version: 1;
+  source: 'manual' | 'automatic';
+  mode: 'fast' | 'checkpoint';
+  attempt: number;
+  failedUserClientId: string;
+  rootUserClientId: string;
+  contextTokens: number;
+  contextWindow: number;
+  contextRatio: number | null;
+  progressCount: number;
+  createdAt: string;
+  recentProgress: Array<{
+    role: 'assistant' | 'tool_use' | 'thinking' | 'ask_user' | 'plan_review';
+    summary: string;
+  }>;
+}
+
 export interface AgentInputQueuedMessage {
   clientId: string;
   text: string;
@@ -248,6 +275,8 @@ export interface AgentInputQueuedMessage {
    * 一起透传到落库 agentMeta，供「已重新连接」活动行的展开详情用。
    */
   autoResumeInfo?: AutoResumeInfo;
+  /** Bounded, durable handoff state shared by manual and automatic recovery. */
+  recoveryCheckpoint?: RecoveryCheckpoint;
   /**
    * 本条是零产出失败 turn 的克隆重发(错误横幅「重试」,见 performRetryLastError),
    * 值 = 被取代的那条已落库 user 行的 clientId。本条落库并派发成功后,host 据此把

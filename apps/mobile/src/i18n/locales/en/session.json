@@ -44,6 +44,7 @@
     "locateMessageNotFound": "Couldn't find the message to jump to.",
     "shareNoLocalImage": "Couldn't get the local image file",
     "shareFailedTitle": "Share Failed",
+    "shareImageFailed": "Couldn't create or open the share image. Please try again.",
     "shareUnsupported": "This app version doesn't support sharing yet; update to the latest version and try again.",
     "downloadFailed": "Download failed",
     "voiceNoRemoteDevice": "No remote device available; can't start voice input.",
@@ -105,6 +106,17 @@
     "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
     "forkConfirm": "Start new session",
     "forkCancel": "Cancel"
+  },
+  "shareImage": {
+    "title": "Share conversation",
+    "selectedCount": "{{count}} selected",
+    "selectAll": "Select All",
+    "clearAll": "Deselect All",
+    "cancel": "Cancel sharing",
+    "share": "Share image",
+    "generating": "Preparing…",
+    "checkboxLabel": "Select this message for sharing",
+    "shareMessage": "Share this message"
   },
   "new": {
     "selectDevice": "Select a device",

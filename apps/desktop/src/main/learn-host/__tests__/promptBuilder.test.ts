@@ -106,6 +106,9 @@ describe('buildLearnPrompt', () => {
     expect(p).toContain('Reply in Simplified Chinese (简体中文)');
     expect(p).toContain('Decisions and trade-offs');
     expect(p).toContain('What changed');
+    expect(buildLearnPrompt({ ...base, appLocale: 'zh-TW' })).toContain(
+      'Reply in Traditional Chinese (繁體中文)',
+    );
     // locale 未知/缺省 → 回退 English
     expect(buildLearnPrompt(base)).toContain('Reply in English');
   });
