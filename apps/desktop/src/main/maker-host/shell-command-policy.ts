@@ -1424,6 +1424,35 @@ function stringLiteralPieces(value: string): string[] {
   return pieces;
 }
 
+/** Split command-substitution words without splitting inside quotes. */
+function cmdsubTokens(text: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: "'" | '"' | null = null;
+  for (const char of text) {
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
 /**
  * Decode statically resolvable character-producing constructs: `chr(120)`,
  * `String.fromCharCode(120, 99, ...)`, integer arrays `[120, 99, ...]`, and
@@ -1478,11 +1507,39 @@ function decodedCharCodePieces(value: string): string[] {
   }
   // Command substitutions emitting a literal (`$(printf xcr)`, `$(echo un)`)
   // assemble an executor their output is invisible to; decode the literal.
-  for (const match of value.matchAll(/\$\(\s*(?:printf|echo)\s+([^)]+)\)/g)) {
+  for (const match of value.matchAll(/\$\(\s*echo\s+([^)]+)\)/g)) {
     const arg = (match[1] ?? '').trim();
-    if (/%[sdif]/.test(arg) || /[$`]/.test(arg)) continue; // format/expanding
+    if (/[$`]/.test(arg)) continue; // expanding
     const literal = arg.replace(/^['"]|['"]$/g, '').replace(/\s+/g, '');
     for (const char of literal) {
+      if (char.charCodeAt(0) > 0) pieces.push(char);
+    }
+  }
+  // `$(printf <fmt> <literal args...>)`: expand `%s` placeholders when every
+  // argument is a literal; other directives or runtime values stay skipped.
+  for (const match of value.matchAll(/\$\(\s*printf\s+([^)]+)\)/g)) {
+    const parts = cmdsubTokens(match[1] ?? '');
+    if (parts.length === 0) continue;
+    const fmt = parts[0]!.replace(/^['"]|['"]$/g, '');
+    if (fmt.replace(/%s/g, '').includes('%')) continue; // %% / %d / %f etc.
+    const args = parts.slice(1).map((arg) => {
+      if (/^["'][^"']*["']$/.test(arg)) return arg.slice(1, -1);
+      if (/^[A-Za-z0-9_.:+-]+$/.test(arg)) return arg;
+      return null; // runtime value — not statically decodable
+    });
+    if (args.some((arg) => arg === null)) continue;
+    let out = '';
+    let argIndex = 0;
+    for (const segment of fmt.split(/(%s)/)) {
+      if (segment === '%s') {
+        out += args[argIndex] ?? '';
+        argIndex += 1;
+      } else {
+        out += segment;
+      }
+    }
+    for (; argIndex < args.length; argIndex += 1) out += args[argIndex]!; // format reuse
+    for (const char of out.replace(/\s+/g, '')) {
       if (char.charCodeAt(0) > 0) pieces.push(char);
     }
   }

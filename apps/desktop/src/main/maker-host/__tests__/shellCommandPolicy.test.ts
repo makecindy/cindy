@@ -338,6 +338,15 @@ EOF`,
     `cat <<'EOF' | sh
 $(printf xcr) $(printf un) $(printf sim) $(printf ctl) shutdown DEVICE
 EOF`,
+    `cat <<'EOF' | sh
+$(printf '%s' xcr) $(printf '%s' un) $(printf '%s' sim) $(printf '%s' ctl) shutdown DEVICE
+EOF`,
+    `cat <<'EOF' | sh
+$(printf '%s %s' xcr un) $(printf '%s %s' sim ctl) shutdown DEVICE
+EOF`,
+    `cat <<'EOF' | sh
+$(printf 'xcr%s' un) $(printf ' sim%s' ctl) shutdown DEVICE
+EOF`,
     `cat <<'EOF' > /tmp/x.sh
 $(printf xcr) $(printf un) shutdown DEVICE
 EOF
@@ -531,6 +540,12 @@ EOF`,
     `echo 'echo hello' | sh`,
     `cat <<'EOF' | sh
 printf '%s' "$var"
+EOF`,
+    `cat <<'EOF' | sh
+$(printf '%s' hello)
+EOF`,
+    `cat <<'EOF' | sh
+$(printf '%d' 42)
 EOF`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',
