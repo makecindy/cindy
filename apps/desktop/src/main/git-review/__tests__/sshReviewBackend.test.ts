@@ -163,6 +163,44 @@ describe('SSH git-review backend', () => {
     });
   });
 
+  it('redacts an ancestor repo root when the remote workspace is a subdirectory', async () => {
+    const host: SshReviewHost = {
+      exec: vi.fn().mockResolvedValue(
+        execResult('', {
+          stderr: "fatal: unsafe repository at '/Users/david/project'; cwd '/Users/david/project/subdir'",
+          exitCode: 128,
+        }),
+      ),
+    };
+    const deps = remoteDeps(
+      host,
+      { request: vi.fn() },
+      {
+        getSessionRow: vi.fn().mockResolvedValue({
+          id: 's1',
+          workingDir: '/Users/david/project/subdir',
+          worktreePath: null,
+          remoteHostId: 'host-1',
+        }),
+      },
+    );
+
+    await expect(
+      withSessionReviewExecution(
+        's1',
+        () => runScopedGit(['rev-parse', '--show-toplevel'], {
+          cwd: '/Users/david/project/subdir',
+        }),
+        deps,
+      ),
+    ).rejects.toSatisfy((err: Error) => {
+      expect(err.message).toContain('<workspace>');
+      expect(err.message).not.toContain('/Users/david/project');
+      expect(err.message).not.toContain('/Users/david/project/subdir');
+      return true;
+    });
+  });
+
   it('keeps concurrent SSH review requests isolated by session', async () => {
     const makeDeps = (sessionId: string, hostId: string, output: string): SshReviewBackendDeps => {
       const host: SshReviewHost = {

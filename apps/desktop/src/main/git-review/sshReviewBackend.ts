@@ -205,8 +205,34 @@ function hardenedRemoteGitArgs(args: readonly string[]): readonly string[] {
   return args;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function remoteWorkspacePathPrefixes(cwd: string): string[] {
+  const normalized = path.posix.normalize(cwd);
+  const prefixes: string[] = [];
+  let candidate = normalized;
+  while (candidate !== '/') {
+    // Avoid redacting generic mount roots such as `/Users` or `/srv`, which
+    // could hide unrelated paths in an otherwise ordinary Git diagnostic.
+    if (candidate.split('/').filter(Boolean).length >= 2) prefixes.push(candidate);
+    const parent = path.posix.dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  return prefixes;
+}
+
 function sanitizeRemoteStderr(stderr: string, cwd: string): string {
-  const redacted = stderr.split(cwd).join('<workspace>');
+  const redacted = remoteWorkspacePathPrefixes(cwd).reduce(
+    (message, prefix) =>
+      message.replace(
+        new RegExp(`${escapeRegExp(prefix)}(?=$|[/\\s'\"\\)\\]\\},:;])`, 'g'),
+        '<workspace>',
+      ),
+    stderr,
+  );
   return redacted.length <= 4_096 ? redacted : `${redacted.slice(0, 4_096)}…`;
 }
 
