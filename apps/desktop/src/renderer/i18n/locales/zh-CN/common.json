@@ -1521,7 +1521,7 @@
           "nothingToFill": "请先填写当前 runtime 的可复用字段",
           "alreadySame": "其他 runtime 中的可填充字段已经一致",
           "loadingKeys": "请等待已保存的 API 密钥加载完成后再填充其他 runtime",
-          "keysUnavailable": "无法读取已保存的 API 密钥，本次只填充非密钥字段",
+          "keysUnavailable": "无法读取已保存的 API 密钥，暂时无法填充其他 runtime",
           "modelsBusy": "请先完成正在进行的模型列表获取或选择，再填充其他 runtime",
           "noCompatibleFields": "其他 runtime 不支持当前 runtime 中可复用的字段",
           "filledToast": "已填充 {{targets}}；各 runtime 仍独立"

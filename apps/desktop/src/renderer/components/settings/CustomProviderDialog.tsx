@@ -722,8 +722,9 @@ export function CustomProviderDialog({
     }
     if (usesApiKey && keyHydrationFailed) {
       toast.info(t('settings.providers.custom.runtimeFill.keysUnavailable'));
+      return;
     }
-    const includeApiKey = usesApiKey && !keyHydrationFailed;
+    const includeApiKey = usesApiKey;
 
     const oauthPiUnavailable = authModeRef.current === 'oauth' && source !== 'pi';
     const sourceDraft = cloneRuntimeFillDraft(rtRef.current[source]);

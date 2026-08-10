@@ -1525,7 +1525,7 @@
           "nothingToFill": "Fill in reusable fields for the current runtime first",
           "alreadySame": "The fillable fields already match in the other runtimes",
           "loadingKeys": "Wait for saved API keys to finish loading before filling other runtimes",
-          "keysUnavailable": "Saved API keys could not be loaded, so only non-secret fields will be filled",
+          "keysUnavailable": "Saved API keys could not be loaded, so filling other runtimes is unavailable",
           "modelsBusy": "Finish fetching or selecting models before filling other runtimes",
           "noCompatibleFields": "The other runtimes do not support the reusable fields in the current runtime",
           "filledToast": "Filled {{targets}}; each runtime remains independent"
