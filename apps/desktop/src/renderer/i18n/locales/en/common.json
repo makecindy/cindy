@@ -3273,10 +3273,11 @@
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
-        "conflict": "Unavailable",
-        "conflictAria": "{{name}} has a plugin ID conflict",
-        "conflictDescription": "This plugin ID is already in use, so this plugin can't be installed.",
+        "replace": "Replace",
+        "replaceAria": "Replace {{name}} with this marketplace version",
+        "replaceDescription": "A plugin with the same ID is already installed. Continuing will replace it with this marketplace version and keep its data.",
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
+        "customSourcesUnavailable": "These custom marketplaces are temporarily unavailable: {{names}}. Other marketplaces are unaffected.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
         "upgradeNotice": {
@@ -3698,15 +3699,8 @@
       },
       "updateAll": {
         "title": "Update all · {{count}} plugins",
-        "description": "Updates without permission changes finish automatically; permission expansions need your per-item approval.",
+        "description": "Regular updates finish automatically; verified packages that request new permissions need per-item approval.",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "Permissions changed",
-        "reviewOutdated": "Permission diff outdated",
-        "rereview": "Review again",
-        "reviewDiff": "Review & confirm",
-        "collapseDiff": "Collapse",
-        "approve": "Approve & update",
-        "skip": "Skip",
         "statusPending": "Queued",
         "statusInstalling": "Updating…",
         "statusDone": "Updated",
@@ -6421,6 +6415,7 @@
           "sourceConversationChanged": "The source task changed. Run /review again for the current task.",
           "sourceFilesChanged": "The source task files changed. Run /review again for the current result.",
           "artifactChanged": "A review artifact changed. Run /review again for the current result.",
+          "artifactUnavailable": "Cindy couldn't safely read the review artifacts. Check the workspace or attachments, then run /review again.",
           "providerFailed": "The review task failed"
         }
       }

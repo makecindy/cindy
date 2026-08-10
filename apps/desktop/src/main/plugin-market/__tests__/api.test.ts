@@ -88,6 +88,7 @@ describe('PluginMarketApi', () => {
     expect(fetcher.mock.calls[1]?.[0]).toContain(`cursor=${PLUGIN_A}`);
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
       headers: { 'x-cindy-version': '1.2.3' },
+      timeoutMs: 15_000,
     });
   });
 

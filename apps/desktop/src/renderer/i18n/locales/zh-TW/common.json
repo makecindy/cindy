@@ -2266,10 +2266,10 @@
         "nestedLabel": "允許 Subagent 再建立 Subagent",
         "nestedHint": "僅舊版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）會忽略此設定。",
         "nestedAria": "允許 Subagent 再建立 Subagent",
-        "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。",
-        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
-        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃和委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
-        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略"
+"cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
+        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃與委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
+        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略",
+        "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。"
       },
       "toast": {
         "saved": "Subagent 設定已儲存",
@@ -3275,10 +3275,11 @@
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
-        "conflict": "暫不可用",
-        "conflictAria": "{{name}} 存在插件標識衝突",
-        "conflictDescription": "插件標識已被佔用，當前無法安裝",
+        "replace": "替換",
+        "replaceAria": "使用此市場版本替換 {{name}}",
+        "replaceDescription": "已安裝相同標識的插件；繼續安裝會使用此市場版本替換，並保留插件資料。",
         "unavailable": "插件市場暫時不可用；已安裝插件仍可正常管理和使用。",
+        "customSourcesUnavailable": "以下自訂市場暫時不可用：{{names}}。其他市場不受影響。",
         "authenticationRequired": "登入 Cindy 後才能檢視插件市場。",
         "notConfigured": "當前環境未配置插件市場；已安裝插件仍可正常管理和使用。",
         "upgradeNotice": {
@@ -3702,13 +3703,6 @@
         "title": "全部更新 · {{count}} 個插件",
         "description": "權限無變化的更新會自動完成；涉及權限變更的需要你逐項確認。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "權限有變更",
-        "reviewOutdated": "權限差異已過期",
-        "rereview": "重新審閱",
-        "reviewDiff": "檢視並確認",
-        "collapseDiff": "收起",
-        "approve": "同意並更新",
-        "skip": "跳過此項",
         "statusPending": "排隊中",
         "statusInstalling": "更新中…",
         "statusDone": "已更新",
@@ -6421,6 +6415,7 @@
           "sourceConversationChanged": "來源任務已變更，請針對當前任務重新執行 /review。",
           "sourceFilesChanged": "來源任務的檔案已變更，請針對當前成果重新執行 /review。",
           "artifactChanged": "審查成果已變更，請針對當前成果重新執行 /review。",
+          "artifactUnavailable": "Cindy 無法安全讀取審查成果，請檢查工作區或附件後重新執行 /review。",
           "providerFailed": "審查任務執行失敗"
         }
       }

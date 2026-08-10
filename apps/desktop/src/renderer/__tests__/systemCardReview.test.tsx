@@ -81,9 +81,9 @@ describe('SystemCard Review', () => {
   it('localizes legacy built-in errors while preserving unknown provider detail', () => {
     const { rerender } = renderCard({
       status: 'failed',
-      error: 'Reviewer returned no visible conclusion',
+      error: 'Review refused a multiply linked file in its artifact workspace',
     });
-    expect(screen.getByText('chat.systemCard.review.noResult')).toBeTruthy();
+    expect(screen.getByText('chat.systemCard.review.failure.artifactUnavailable')).toBeTruthy();
 
     rerender(
       <MemoryRouter initialEntries={['/cc-agent/source-task']}>

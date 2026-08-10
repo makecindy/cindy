@@ -3272,10 +3272,11 @@
         "update": "从市场更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安装",
-        "conflict": "暂不可用",
-        "conflictAria": "{{name}} 存在插件标识冲突",
-        "conflictDescription": "插件标识已被占用，当前无法安装",
+        "replace": "替换",
+        "replaceAria": "使用此市场版本替换 {{name}}",
+        "replaceDescription": "已安装相同标识的插件；继续安装会用此市场版本替换，并保留插件数据。",
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
+        "customSourcesUnavailable": "以下自定义市场暂时不可用：{{names}}。其他市场不受影响。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
         "upgradeNotice": {
@@ -3697,15 +3698,8 @@
       },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
-        "description": "权限无变化的更新会自动完成；涉及权限变更的需要你逐项确认。",
+        "description": "普通更新会自动完成；真实包请求新增权限时需要逐项确认。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "权限有变更",
-        "reviewOutdated": "权限差异已过期",
-        "rereview": "重新审阅",
-        "reviewDiff": "查看并确认",
-        "collapseDiff": "收起",
-        "approve": "同意并更新",
-        "skip": "跳过此项",
         "statusPending": "排队中",
         "statusInstalling": "更新中…",
         "statusDone": "已更新",
@@ -6418,6 +6412,7 @@
           "sourceConversationChanged": "来源任务已变化，请针对当前任务重新运行 /review。",
           "sourceFilesChanged": "来源任务的文件已变化，请针对当前成果重新运行 /review。",
           "artifactChanged": "审查成果已变化，请针对当前成果重新运行 /review。",
+          "artifactUnavailable": "Cindy 无法安全读取审查成果，请检查工作区或附件后重新运行 /review。",
           "providerFailed": "审查任务执行失败"
         }
       }

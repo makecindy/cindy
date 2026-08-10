@@ -14,6 +14,7 @@ import { createLogger } from '../logger.js';
 import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
 
 const log = createLogger('plugin-market-api');
+const PLUGIN_MARKET_API_TIMEOUT_MS = 15_000;
 
 type Fetcher = <T>(
   apiPath: string,
@@ -42,6 +43,7 @@ export class PluginMarketApi {
     return {
       cache: 'no-store',
       headers: { [CINDY_CLIENT_VERSION_HEADER]: this.getClientVersion() },
+      timeoutMs: PLUGIN_MARKET_API_TIMEOUT_MS,
     };
   }
 

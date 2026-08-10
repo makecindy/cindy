@@ -3272,10 +3272,11 @@
         "update": "マーケットから更新",
         "updateTo": "v{{version}} に更新",
         "installed": "インストール済み",
-        "conflict": "利用不可",
-        "conflictAria": "{{name}} にプラグイン ID の競合があります",
-        "conflictDescription": "このプラグイン ID は使用中のため、インストールできません。",
+        "replace": "置き換え",
+        "replaceAria": "{{name}} をこのマーケット版で置き換える",
+        "replaceDescription": "同じ ID のプラグインがすでにインストールされています。続行するとこのマーケット版で置き換え、プラグインのデータは保持されます。",
         "unavailable": "プラグインマーケットを一時的に利用できません。インストール済みプラグインは引き続き利用できます。",
+        "customSourcesUnavailable": "次のカスタムマーケットは一時的に利用できません：{{names}}。他のマーケットには影響しません。",
         "authenticationRequired": "プラグインマーケットを表示するには Cindy にログインしてください。",
         "notConfigured": "この環境ではプラグインマーケットが設定されていません。インストール済みプラグインは引き続き利用できます。",
         "upgradeNotice": {
@@ -3697,15 +3698,8 @@
       },
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
-        "description": "権限に変更がない更新は自動で完了します。権限が拡張される更新は項目ごとに確認が必要です。",
+        "description": "通常の更新は自動で完了し、検証済みの実パッケージが新しい権限を要求する場合のみ個別に確認します。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "権限に変更あり",
-        "reviewOutdated": "権限の差分が古くなりました",
-        "rereview": "再確認",
-        "reviewDiff": "確認する",
-        "collapseDiff": "閉じる",
-        "approve": "同意して更新",
-        "skip": "スキップ",
         "statusPending": "待機中",
         "statusInstalling": "更新中…",
         "statusDone": "更新済み",
@@ -6418,6 +6412,7 @@
           "sourceConversationChanged": "元のタスクが変更されました。現在のタスクに対して /review をもう一度実行してください。",
           "sourceFilesChanged": "元のタスクのファイルが変更されました。現在の成果に対して /review をもう一度実行してください。",
           "artifactChanged": "レビュー対象の成果が変更されました。現在の成果に対して /review をもう一度実行してください。",
+          "artifactUnavailable": "Cindy はレビュー対象の成果を安全に読み取れませんでした。ワークスペースまたは添付ファイルを確認して、/review をもう一度実行してください。",
           "providerFailed": "レビュータスクの実行に失敗しました"
         }
       }

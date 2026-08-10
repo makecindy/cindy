@@ -42,10 +42,11 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const syncEnd = source.indexOf('function MessageHistoryToggle', syncStart);
     const syncSource = source.slice(syncStart, syncEnd);
 
-    // banner 渲染条件(useShowConnectionBanner):请求级 error / 可分类连接问题 /
+    // banner 渲染条件(useShowConnectionBanner):请求级 / transport hold error、可分类连接问题、
     // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
     expect(routeSource).toContain('{showConnectionBanner ? (');
-    expect(source).toContain('useShowConnectionBanner(status, connectionError, connectionIssue, isDeviceUnresponsive)');
+    expect(source.replace(/\r\n/g, '\n'))
+      .toContain('useShowConnectionBanner(\n    status,\n    connectionRecoveryError,');
     expect(routeSource).not.toContain('connectionError || (loading && !currentSession)');
     expect(syncSource).toContain("t('session.screen.awaitingSync')");
     expect(syncSource).toContain("t('session.screen.resync')");
@@ -101,9 +102,10 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
     expect(source).toContain('connectionEpoch');
-    expect(source).toContain('lastPresenceSnapshot');
+    expect(source).toContain('getPresenceAvailability(deviceId)');
     expect(source).toContain('targetAvailableRef');
-    expect(source).toContain("lastPresenceSnapshot.deviceId !== deviceId");
+    expect(source).toContain('wasAvailable !== true');
+    expect(source).not.toContain('lastPresenceSnapshot');
     expect(source).not.toContain('presenceVersion');
   });
 

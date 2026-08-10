@@ -27,6 +27,28 @@ afterEach(async () => {
 });
 
 describe("review read scope", () => {
+  it.runIf(Boolean(process.env.CINDY_REVIEW_REAL_WORKSPACE))(
+    "resolves a pnpm-linked source file in an explicitly requested real workspace",
+    async () => {
+      const workspace = process.env.CINDY_REVIEW_REAL_WORKSPACE!;
+      const source = path.join(
+        workspace,
+        "apps",
+        "mobile",
+        "modules",
+        "xdt-ios-app-distribution",
+        "src",
+        "index.ts",
+      );
+      expect((await fs.stat(source)).nlink).toBe(2);
+
+      const grants = await buildReviewReadGrants(workspace, []);
+      expect(await resolveReviewReadPath(source, workspace, grants)).toBe(
+        await fs.realpath(source),
+      );
+    },
+  );
+
   it("allows workspace files and exact external attachment grants", async () => {
     const root = await makeTempDir();
     const workspace = path.join(root, "workspace");
@@ -118,5 +140,78 @@ describe("review read scope", () => {
         grants,
       ),
     ).rejects.toThrow(/refused/i);
+  });
+
+  it("allows a two-link pnpm local package source only when its denied mirror is confined", async () => {
+    if (process.platform === "win32") return;
+    const root = await makeTempDir();
+    const workspace = path.join(root, "workspace");
+    const sourcePackage = path.join(
+      workspace,
+      "apps",
+      "mobile",
+      "modules",
+      "local-module",
+    );
+    const source = path.join(sourcePackage, "src", "index.ts");
+    const mirror = path.join(
+      workspace,
+      "node_modules",
+      "local-module",
+      "src",
+      "index.ts",
+    );
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.mkdir(path.dirname(mirror), { recursive: true });
+    await fs.writeFile(source, "export const value = 1;");
+    await fs.link(source, mirror);
+
+    const grants = await buildReviewReadGrants(workspace, [
+      sourcePackage,
+      source,
+    ]);
+    expect(await resolveReviewReadPath(source, workspace, grants)).toBe(
+      await fs.realpath(source),
+    );
+
+    const outside = path.join(root, "outside.ts");
+    await fs.link(source, outside);
+    expect(await resolveReviewReadPath(source, workspace, grants)).toBeNull();
+  });
+
+  it("uses a confined package manifest to resolve scoped pnpm mirrors", async () => {
+    if (process.platform === "win32") return;
+    const root = await makeTempDir();
+    const workspace = path.join(root, "workspace");
+    const packageRoot = path.join(workspace, "packages", "maker-core");
+    const manifest = path.join(packageRoot, "package.json");
+    const source = path.join(packageRoot, "src", "index.ts");
+    const mirror = path.join(
+      workspace,
+      "node_modules",
+      "@cindy",
+      "maker-core",
+      "src",
+      "index.ts",
+    );
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.mkdir(path.dirname(mirror), { recursive: true });
+    await fs.writeFile(manifest, '{"name":"@cindy/maker-core"}');
+    await fs.writeFile(source, "export const value = 1;");
+    await fs.link(source, mirror);
+
+    const grants = await buildReviewReadGrants(workspace, [
+      packageRoot,
+      source,
+    ]);
+    expect(await resolveReviewReadPath(source, workspace, grants)).toBe(
+      await fs.realpath(source),
+    );
+
+    const outsideManifest = path.join(root, "outside-package.json");
+    await fs.writeFile(outsideManifest, '{"name":"@cindy/maker-core"}');
+    await fs.unlink(manifest);
+    await fs.symlink(outsideManifest, manifest);
+    expect(await resolveReviewReadPath(source, workspace, grants)).toBeNull();
   });
 });

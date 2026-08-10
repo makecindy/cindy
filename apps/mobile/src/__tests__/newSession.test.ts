@@ -1827,7 +1827,7 @@ describe('new session worktree wiring (source locks)', () => {
       'applicable: worktreeApplicable,',
     );
     const createEntry = newSource.indexOf('const create = useCallback(async () => {');
-    const createBody = newSource.slice(createEntry, createEntry + 1_200);
+    const createBody = newSource.slice(createEntry, createEntry + 1_800);
     expect(createBody).not.toContain('|| worktreePreferenceSaving');
     expect(createBody).toContain('if (worktreeCreateBlocked) {');
     expect(newSource).toContain('worktreeBranchPreferenceSaving');
