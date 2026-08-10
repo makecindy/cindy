@@ -1070,7 +1070,7 @@ function consumesStdinAsProgram(tokens: string[]): boolean {
         const flag = args[flagIndex]!;
         if (flag === '-f') {
           const file = args[flagIndex + 1];
-          return file === '-';
+          return file === '-' || file === '/dev/stdin' || file === '/dev/fd/0';
         }
         if (/^-[A-Za-z]*f-$/.test(flag)) return true;
         if (/^-[A-Za-z]*f[A-Za-z]*$/.test(flag)) return false;
@@ -1427,6 +1427,29 @@ function decodedCharCodePieces(value: string): string[] {
     const code = parseInt(number, 0) & 0xffff;
     if (code > 0) pieces.push(String.fromCharCode(code));
   };
+  // Reversed string literals (`"..."[::-1]`, `reversed("...")`, node's
+  // `"..." .split("").reverse()`) reassemble an executor the literal scan
+  // cannot see; decode them into the assembly check.
+  const pushReversed = (literal: string): void => {
+    if (literal.length < 2) return;
+    for (const char of [...literal].reverse()) pieces.push(char);
+  };
+  for (const match of value.matchAll(/["']([^"'\n]*)["']\s*\[\s*::\s*-?\s*1\s*\]/g)) {
+    pushReversed(match[1] ?? '');
+  }
+  for (const match of value.matchAll(/\breversed\(\s*["']([^"'\n]*)["']\s*\)/g)) {
+    pushReversed(match[1] ?? '');
+  }
+  for (const match of value.matchAll(
+    /["']([^"'\n]*)["']\s*\.split\(\s*["']?["']?\s*\)\s*\[\s*::\s*-?\s*1\s*\]/g,
+  )) {
+    pushReversed(match[1] ?? '');
+  }
+  for (const match of value.matchAll(
+    /["']([^"'\n]*)["']\s*\.split\(\s*["']?["']?\s*\)\s*\.reverse\(\)/g,
+  )) {
+    pushReversed(match[1] ?? '');
+  }
   for (const match of value.matchAll(/\b(?:chr|String\.fromCharCode)\(([^)]*)\)/g)) {
     const numbers = (match[1] ?? '')
       .split(',')

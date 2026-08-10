@@ -296,6 +296,27 @@ AWK`,
     `awk -v x=1 <<'AWK'
 system("xcr" "un" " sim" "ctl shutdown DEVICE")
 AWK`,
+    `python3 - <<'PY'
+import os
+os.system("ECIVED nwodtuhs ltcmis nurxc"[::-1])
+PY`,
+    `python3 - <<'PY'
+import os
+os.system("".join(reversed("ECIVED nwodtuhs ltcmis nurxc")))
+PY`,
+    `python3 - <<'PY'
+import os
+os.system(" ".join("ECIVED nwodtuhs ltcmis nurxc".split()[::-1]))
+PY`,
+    `node - <<'JS'
+require("child_process").execSync("ECIVED nwodtuhs ltcmis nurxc".split("").reverse().join(""))
+JS`,
+    `awk -f /dev/stdin <<'AWK'
+system("xcrun simctl shutdown DEVICE")
+AWK`,
+    `awk -f /dev/fd/0 <<'AWK'
+system("xcr" "un" " sim" "ctl shutdown DEVICE")
+AWK`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
     `python3 -c 'import subprocess; subprocess.run(["/usr/bin/open","-a","Simulator"])'`,
@@ -454,6 +475,16 @@ print("hi")
 AWK`,
     `awk -v x=1 <<'AWK'
 print(x)
+AWK`,
+    `python3 - <<'PY'
+print("hello"[::-1])
+PY`,
+    `python3 - <<'PY'
+arr = [1, 2, 3]
+print(arr[::-1])
+PY`,
+    `awk -f /dev/stdin <<'AWK'
+print("hi")
 AWK`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',
