@@ -109,7 +109,8 @@ function headerRowsEqual(
  * 由 main 侧以 renderer 值优先覆盖,这里只决定「是否附带 savedProviderId」。
  */
 export function modelFetchCanReuseSavedCredentials(
-  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'>,
+  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'> &
+    Partial<Pick<ProviderModelFetchSignatureFields, 'requestPath'>>,
   baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode'>,
   authMode: CustomProviderAuthMode,
 ): boolean {
