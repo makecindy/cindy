@@ -7,10 +7,14 @@ import { type ToastItem, getToastSnapshot, subscribeToastStore } from '@/lib/toa
 import { Toast } from './Toast';
 
 // ────────────────────────────────────────────────────────────
-// ToastFadeWrapper — 纯 opacity 淡入淡出（整块，无裁切）
+// ToastTransitionWrapper — 从右侧滑入 + 淡入，退出滑回右侧 + 淡出
+// ---------------------------------------------------------------------------
+// 入场：从右侧 16px 外滑入（translate-x-4 → translate-x-0）+ opacity 0→1
+// 退场：滑回右侧（translate-x-0 → translate-x-4）+ opacity 1→0
+// 过渡时长 300ms，与 lib/toast.ts 的 EXIT_ANIMATION_MS 对齐
 // ────────────────────────────────────────────────────────────
 
-function ToastFadeWrapper({
+function ToastTransitionWrapper({
   item,
   toastId,
   children,
@@ -32,8 +36,8 @@ function ToastFadeWrapper({
     <div data-toast-id={toastId} data-exiting={item.exiting ? 'true' : undefined}>
       <div
         className={cn(
-          'transition-opacity duration-300 ease-out',
-          isVisible ? 'opacity-100' : 'opacity-0',
+          'transition-[opacity,transform] duration-300 ease-out',
+          isVisible ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4',
         )}
       >
         {children}
@@ -106,12 +110,12 @@ export function ToastContainer() {
       ref={containerRef}
       aria-label={t('commonUi.toastContainer.ariaLabel')}
       // z-[10100]: 高于所有 Radix Dialog (z-[10000]),避免 toast 被打开的对话框遮挡
-      className="pointer-events-none fixed inset-x-0 top-5 z-[10100] flex flex-col items-center gap-[10px]"
+      className="pointer-events-none fixed right-6 top-6 z-[10100] flex flex-col items-end gap-3"
     >
       {items.map((item) => (
-        <ToastFadeWrapper key={item.id} item={item} toastId={item.id}>
+        <ToastTransitionWrapper key={item.id} item={item} toastId={item.id}>
           <Toast item={item} />
-        </ToastFadeWrapper>
+        </ToastTransitionWrapper>
       ))}
     </div>
   );
