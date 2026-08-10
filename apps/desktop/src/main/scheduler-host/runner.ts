@@ -315,6 +315,11 @@ interface TurnCompletionWaiterOptions {
   requireTurnOrigin?: boolean;
 }
 
+interface SchedulerRunContextOwner {
+  session: Pick<Session, 'id' | 'setVendorOptions'>;
+  runId: string;
+}
+
 export class MakerScheduleRunner implements ScheduleRunner {
   private scheduler: Scheduler | null = null;
   /**
@@ -322,10 +327,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * an older fire must not clear a newer fire's binding. The map is the host's
    * ownership record for that value; it is deliberately not persisted.
    */
-  private readonly schedulerRunContextOwners = new Map<
-    string,
-    { session: Pick<Session, 'id' | 'setVendorOptions'>; runId: string }
-  >();
+  private readonly schedulerRunContextOwners = new Map<string, SchedulerRunContextOwner>();
 
   constructor(private readonly deps: MakerScheduleRunnerDeps) {}
 
@@ -346,12 +348,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
     holder: EphemeralSessionHolder,
   ): Promise<void> {
     if (typeof session.setVendorOptions !== 'function') return;
+    const owner: SchedulerRunContextOwner = { session, runId };
+    // Publish ownership before the async write starts. setVendorOptions mutates
+    // the shared session context before its promise necessarily settles, so an
+    // older fire must already see this generation and skip its late cleanup.
+    this.schedulerRunContextOwners.set(session.id, owner);
+    holder.schedulerRunContextOwner = owner;
     try {
       await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: runId });
-      this.schedulerRunContextOwners.set(session.id, { session, runId });
-      holder.schedulerRunContextSession = session;
-      holder.schedulerRunContextRunId = runId;
     } catch (err) {
+      if (this.schedulerRunContextOwners.get(session.id) === owner) {
+        this.schedulerRunContextOwners.delete(session.id);
+        holder.schedulerRunContextOwner = undefined;
+        try {
+          await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined });
+        } catch (rollbackErr) {
+          this.deps.logger.warn?.('[runner] scheduler run context rollback failed (non-fatal)', {
+            runId,
+            error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+          });
+        }
+      }
       this.deps.logger.warn?.('[runner] scheduler run context bind failed (non-fatal)', {
         runId,
         error: err instanceof Error ? err.message : String(err),
@@ -360,13 +377,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
   }
 
   private async clearSchedulerRunContext(holder: EphemeralSessionHolder): Promise<void> {
-    const session = holder.schedulerRunContextSession;
-    const runId = holder.schedulerRunContextRunId;
-    holder.schedulerRunContextSession = undefined;
-    holder.schedulerRunContextRunId = undefined;
-    if (!session || !runId || typeof session.setVendorOptions !== 'function') return;
-    const owner = this.schedulerRunContextOwners.get(session.id);
-    if (owner?.session !== session || owner.runId !== runId) {
+    const holderOwner = holder.schedulerRunContextOwner;
+    holder.schedulerRunContextOwner = undefined;
+    if (!holderOwner) return;
+    const { session, runId } = holderOwner;
+    if (typeof session.setVendorOptions !== 'function') return;
+    const currentOwner = this.schedulerRunContextOwners.get(session.id);
+    if (currentOwner !== holderOwner) {
       // Another fire now owns the shared session-level option. Do not let this
       // older fire erase the newer run's auto-resume context.
       return;
@@ -376,6 +393,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined });
     } catch (err) {
       this.deps.logger.warn?.('[runner] scheduler run context clear failed (non-fatal)', {
+        runId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -2584,9 +2602,8 @@ interface EphemeralSessionHolder {
   keepAlive?: boolean;
   /** heartbeat direct-send route lock; released immediately after Session.send settles. */
   releaseAgentSwitchLock?: () => void;
-  /** session context carrying the current scheduler run id until fire settles. */
-  schedulerRunContextSession?: Pick<Session, 'id' | 'setVendorOptions'>;
-  schedulerRunContextRunId?: string;
+  /** unique ownership generation for the session-level scheduler run context. */
+  schedulerRunContextOwner?: SchedulerRunContextOwner;
 }
 
 interface HeadlessGhostSetupTurnGuard {
