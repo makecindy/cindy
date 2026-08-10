@@ -787,4 +787,96 @@ describe('isLocalSentUserMessage (#2194)', () => {
     await flushPromises();
     expect(makerChatStore.isLocalSentUserMessage(sid, 'qh-2')).toBe(false);
   });
+
+  // Codex review P1（第十五轮）: active-turn 人工 Retry 的产物由 main 在返回
+  // projection 前 scheduleDrain（queueMicrotask）落库，可能抢在 IPC 回执前经
+  // onCreated 到达 MessageStream。main 的 emit 先于 drain——凭点击时的一次性
+  // 意图在投影事件里同步认领，不等回执。
+  it('active-turn Retry 产物在 IPC 回执前经投影事件同步认领', async () => {
+    const sid = `retry-intent-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [],
+        error: 'turn failed',
+        recovery: { kind: 'active-turn', item: queuedItem('failed-turn-y', 'original') },
+      }),
+    );
+    let resolveRetry!: (p: AgentInputProjection) => void;
+    retryLastError.mockImplementationOnce(
+      () => new Promise<AgentInputProjection>((res) => (resolveRetry = res)),
+    );
+
+    const p = makerChatStore.retryLastError(sid);
+    // main 的 emit 先于 scheduleDrain：生效投影（error/recovery 清空、队首是
+    // 本次续跑指令）在回执 settle 前到达，凭一次性意图同步认领。
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('continue-fast', 'continue', { originalSyntheticTrigger: 'continue' }),
+        ],
+      }),
+    );
+    // 回执尚未 settle，登记已生效。
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-fast')).toBe(true);
+
+    resolveRetry(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('continue-fast', 'continue', { originalSyntheticTrigger: 'continue' }),
+        ],
+      }),
+    );
+    await p;
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-fast')).toBe(true);
+  });
+
+  it('Retry 意图不被未生效投影（error 仍在）误消费', async () => {
+    const sid = `retry-intent-gate-${Math.random().toString(36).slice(2, 8)}`;
+    makerChatStore.initGlobalListeners();
+
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [],
+        error: 'turn failed',
+        recovery: { kind: 'active-turn', item: queuedItem('failed-turn-z', 'original') },
+      }),
+    );
+    let resolveRetry!: (p: AgentInputProjection) => void;
+    retryLastError.mockImplementationOnce(
+      () => new Promise<AgentInputProjection>((res) => (resolveRetry = res)),
+    );
+
+    const p = makerChatStore.retryLastError(sid);
+    // 未生效投影：error / recovery 仍在——队首的外部 continue 项不认领，意图保留。
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('ext-cont-pending', 'external', { originalSyntheticTrigger: 'continue' }),
+        ],
+        error: 'turn failed',
+        recovery: { kind: 'active-turn', item: queuedItem('failed-turn-z', 'original') },
+      }),
+    );
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'ext-cont-pending')).toBe(false);
+
+    // 生效投影到达：认领本次产物，外部项仍不认。
+    projectionHandler!(
+      projection(sid, {
+        pendingQueue: [
+          queuedItem('continue-real', 'continue', { originalSyntheticTrigger: 'continue' }),
+          queuedItem('ext-cont-pending', 'external', { originalSyntheticTrigger: 'continue' }),
+        ],
+      }),
+    );
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-real')).toBe(true);
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'ext-cont-pending')).toBe(false);
+
+    resolveRetry(projection(sid, { pendingQueue: [] }));
+    await p;
+    await flushPromises();
+    expect(makerChatStore.isLocalSentUserMessage(sid, 'continue-real')).toBe(true);
+  });
 });

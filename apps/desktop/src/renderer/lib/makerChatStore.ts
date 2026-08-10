@@ -2742,6 +2742,47 @@ function isLocalSentUserMessage(sessionId: string, clientId: string): boolean {
 }
 
 /**
+ * #2194: 人工 Retry（active-turn）的一次性本端意图。main 的
+ * performRetryLastError 在返回 projection 前就 emit 并 scheduleDrain
+ * （queueMicrotask），续跑 / 克隆行可能抢在 retry 的 IPC 回执前经
+ * localDb.messages.onCreated 落库、被 MessageStream 基线化为外部
+ * （Codex review P1）。但 main 的 emit 先于 scheduleDrain，投影事件必然
+ * 先于落库广播携带本次产物——点击时记下意图（含点击时刻的队列快照），
+ * applyInputProjection 时凭意图同步认领新 clientId，不等回执。
+ * 回执 settle 时无条件清意图（兜底清理）。
+ */
+const pendingLocalRetryIntents = new Map<string, { queueIds: Set<string> }>();
+
+/**
+ * 与 retryLastError 回执扫描同口径：retry 生效（resumed）时 main 在 unshift
+ * 前同步清掉 error / recovery，投影必然双空，且 unshift → emit 同步、队首
+ * 必然是本次产物；未生效的投影（含 superseded）里没有本次产物，意图继续
+ * pending 等生效投影或回执清理。点击后首个 error/recovery 双空的投影就是
+ * 本次生效投影（其它路径并发清 error 本身就让本次 retry superseded），
+ * 无论是否认领到产物都消费意图——一次性语义。
+ */
+function claimLocalRetryProductFromProjection(projection: AgentInputProjection): void {
+  const intent = pendingLocalRetryIntents.get(projection.sessionId);
+  if (!intent) return;
+  if (projection.error !== null || projection.recovery !== null) return;
+  pendingLocalRetryIntents.delete(projection.sessionId);
+  if (!sessions.has(projection.sessionId)) return;
+  const headClientId = projection.pendingQueue[0]?.clientId;
+  for (const item of projection.pendingQueue) {
+    if (intent.queueIds.has(item.clientId)) continue;
+    if (item.supersedesUserClientId) {
+      markLocalSentUserMessage(projection.sessionId, item.clientId);
+    } else if (
+      item.originalSyntheticTrigger === 'continue' &&
+      item.autoResume !== true &&
+      headClientId === item.clientId
+    ) {
+      markLocalSentUserMessage(projection.sessionId, item.clientId);
+    }
+  }
+}
+
+/**
  * F-SB-7: Global listeners — notified whenever ANY session's state changes.
  * Used by Sidebar to track running status across all sessions without needing
  * to subscribe to each session individually.
@@ -3123,6 +3164,7 @@ function _purgeSession(sessionId: string): void {
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
+  pendingLocalRetryIntents.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
   _stopTransitions.delete(sessionId);
@@ -3570,6 +3612,9 @@ function applyInputProjection(
   if (opts.supersedeQueries !== false) {
     supersedeInputProjectionRequests(projection.sessionId);
   }
+  // #2194: 人工 Retry 的一次性意图认领——必须在落库广播（onCreated）可能
+  // 到达之前完成登记，main 的 emit 先于 scheduleDrain，这里一定更早。
+  claimLocalRetryProductFromProjection(projection);
   // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
   // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
   const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
@@ -12269,6 +12314,14 @@ function retryLastError(sessionId: string): Promise<void> {
   const preRetryQueueIds = new Set(
     (sessions.get(sessionId)?.pendingQueue ?? []).map((item) => item.clientId),
   );
+  // active-turn 重试的产物 clientId 由 main 生成、点击时刻未知，而 main 的
+  // scheduleDrain（queueMicrotask）可能抢在 IPC 回执前把产物行落库——但
+  // main 的 emit 先于 scheduleDrain，投影事件更早。记下一次性意图（含点击
+  // 时刻队列快照），applyInputProjection 凭意图同步认领（Codex review P1）；
+  // 回执 settle 时清理。queue-head 分支不产生新项，走下面的 id 预登记。
+  if (preRetryRecovery?.kind === 'active-turn') {
+    pendingLocalRetryIntents.set(sessionId, { queueIds: preRetryQueueIds });
+  }
   // queue-head 重试的 clientId 点击时刻已知，但 main 的 scheduleDrain 经
   // queueMicrotask 在返回 projection 前就会跑，重发的队首行可能抢在回执
   // 回调前落库、被基线化为外部（Codex review P2）：先预登记，回执确认未
@@ -12281,6 +12334,9 @@ function retryLastError(sessionId: string): Promise<void> {
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
   ).then(
     ({ projection }) => {
+      // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领
+      // 并消费；未消费时（投影 stale 被丢 / 顺序异常）回执扫描仍是 fallback。
+      pendingLocalRetryIntents.delete(sessionId);
       // 扫**回执自带的投影快照**而非当前 state：回执由 main 在 scheduleDrain 之前
       // 同步生成（agent-input-coordinator.ts performRetryLastError 末尾），必然含
       // 本次克隆；drain 可能抢在本回调前消费克隆并推送新投影覆盖 state
@@ -12329,7 +12385,8 @@ function retryLastError(sessionId: string): Promise<void> {
       }
     },
     (err) => {
-      // IPC 失败：本次点击没有产生任何效果，回滚 queue-head 预登记。
+      // IPC 失败：本次点击没有产生任何效果，清意图 + 回滚 queue-head 预登记。
+      pendingLocalRetryIntents.delete(sessionId);
       if (preRetryQueueHeadClientId) {
         unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
       }
