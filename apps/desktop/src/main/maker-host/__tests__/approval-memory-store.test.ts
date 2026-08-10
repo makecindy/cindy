@@ -190,6 +190,42 @@ describe('approval-memory-store', () => {
     expect(await reopened.store.load('/repo')).toEqual(new Set());
   });
 
+  it('代次 sidecar 让热路径不必解析完整批准账本', async () => {
+    const { target, memory } = await fixture();
+    const signature = digest('sidecar-generation');
+    memory.store.add('/repo', signature, 'reviewer');
+    await memory.flush();
+
+    const generationPath = `${target}.generation`;
+    const generationRaw = await readFile(generationPath, 'utf8');
+    expect(generationRaw).not.toContain(signature);
+    expect(memory.getClearGeneration('/repo')).toBe('0:0');
+
+    // A fresh reader can still observe the token from the tiny sidecar even if the large ledger
+    // is unavailable; getClearGeneration must not parse/normalize the approval payload here.
+    const reader = createApprovalMemoryFileStore(() => target, { flushDelayMs: 60_000 });
+    await writeFile(target, '{broken ledger', 'utf8');
+    expect(reader.getClearGeneration('/repo')).toBe('0:0');
+  });
+
+  it('主账本交换中断时，较新的 sidecar 代次不会被旧 flush 覆盖', async () => {
+    const { target, memory } = await fixture();
+    const oldSignature = digest('sidecar-crash-old');
+    const newSignature = digest('sidecar-crash-new');
+    memory.store.add('/repo', oldSignature, 'reviewer');
+    await memory.flush();
+    const oldLedger = await readFile(target, 'utf8');
+
+    await expect(memory.clear('/repo')).resolves.toBe(1);
+    await writeFile(target, oldLedger, 'utf8');
+
+    const reopened = createApprovalMemoryFileStore(() => target, { flushDelayMs: 60_000 });
+    expect(await reopened.store.load('/repo')).toEqual(new Set());
+    reopened.store.add('/repo', newSignature, 'reviewer');
+    await reopened.flush();
+    expect(await reopened.store.load('/repo')).toEqual(new Set([newSignature]));
+  });
+
   it('两个实例并发写同一文件不会互相覆盖', async () => {
     const { target } = await fixture();
     const first = createApprovalMemoryFileStore(() => target, { flushDelayMs: 60_000 });

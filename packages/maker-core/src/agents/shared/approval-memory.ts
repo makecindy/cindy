@@ -740,6 +740,13 @@ export function createApprovalMemory(opts: ApprovalMemoryOptions): ApprovalMemor
       return;
     }
     if (next === observedStoreGeneration) return;
+    // The first approval in a brand-new profile creates the ledger and moves the host token
+    // from the missing sentinel to the initial 0:0 generation. That is initialization, not a
+    // revocation boundary; invalidate only real generation changes after the file exists.
+    if (observedStoreGeneration === 'missing' && next === '0:0') {
+      observedStoreGeneration = next;
+      return;
+    }
     observedStoreGeneration = next;
     invalidate();
   };

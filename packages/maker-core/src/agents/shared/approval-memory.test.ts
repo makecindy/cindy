@@ -1230,6 +1230,30 @@ describe('createApprovalMemory — 跨会话持久化', () => {
     memory.dispose();
   });
 
+  it('全新 profile 的 missing → 0:0 只代表账本初始化，不撤销首条批准', () => {
+    let clearGeneration = 'missing';
+    const memory = createApprovalMemory({
+      agentKind: 'pi',
+      workspaceKey: '/repo',
+      platform: 'darwin',
+      store: {
+        load: async () => new Set(),
+        add: () => {},
+        getClearGeneration: () => clearGeneration,
+      },
+    });
+    const action = exec('rm -rf build');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    const generation = memory.getGeneration();
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(true);
+
+    clearGeneration = '0:0';
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(true);
+    expect(memory.isGenerationCurrent(generation)).toBe(true);
+    expect(memory.size()).toBe(1);
+    memory.dispose();
+  });
+
   it('hydrate 与清除并发时不把清除前快照合并回来', async () => {
     let resolveLoad: ((value: ReadonlySet<string>) => void) | undefined;
     let clearListener: ((workspaceKey?: string) => void) | undefined;

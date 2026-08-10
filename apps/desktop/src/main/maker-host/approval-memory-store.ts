@@ -6,7 +6,7 @@
  * maker-core 负责动作安全边界；这里负责有界存储、跨进程串行和原子替换。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fs, readFileSync } from 'node:fs';
+import { promises as fs, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import type {
@@ -148,20 +148,117 @@ function clearToken(state: ApprovalFile, workspaceHashValue: string): string {
   return `${state.clearGeneration}:${state.workspaceClearGenerations[workspaceHashValue] ?? 0}`;
 }
 
+interface GenerationCacheEntry {
+  path: string;
+  stamp: string;
+  state: ApprovalFile;
+}
+
+function fileStamp(stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+function generationFilePath(target: string): string {
+  return `${target}.generation`;
+}
+
+function generationState(state: ApprovalFile): ApprovalFile {
+  return {
+    version: 3,
+    clearGeneration: state.clearGeneration,
+    workspaceClearGenerations: { ...state.workspaceClearGenerations },
+    workspaces: {},
+  };
+}
+
+function normalizeGeneration(raw: unknown): ApprovalFile {
+  if (!raw || typeof raw !== 'object') return emptyFile();
+  const source = raw as Record<string, unknown>;
+  return {
+    version: 3,
+    clearGeneration: finiteGeneration(source.clearGeneration),
+    workspaceClearGenerations: generationMap(source.workspaceClearGenerations),
+    workspaces: {},
+  };
+}
+
+/**
+ * 把 generation sidecar 作为撤销权威合并进主账本快照。sidecar 先写、主账本后写时，
+ * 进程可能恰好在两次原子替换之间退出；代次更高的 workspace 必须先丢弃旧 bucket，
+ * 不能让下一次 flush 把旧批准连同新批准一起写回。
+ */
+function reconcileGeneration(state: ApprovalFile, authority: ApprovalFile): void {
+  const globalHigher = authority.clearGeneration > state.clearGeneration;
+  if (globalHigher) {
+    state.workspaces = {};
+    state.workspaceClearGenerations = {};
+  }
+
+  for (const [workspace, generation] of Object.entries(authority.workspaceClearGenerations)) {
+    const current = state.workspaceClearGenerations[workspace] ?? 0;
+    if (generation > current) {
+      delete state.workspaces[workspace];
+      state.workspaceClearGenerations[workspace] = generation;
+    }
+  }
+  state.clearGeneration = Math.max(state.clearGeneration, authority.clearGeneration);
+}
+
+function readGenerationStateUnlocked(target: string): ApprovalFile | null {
+  try {
+    const raw = readFileSync(generationFilePath(target), 'utf8');
+    return normalizeGeneration(raw ? JSON.parse(raw) : null);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 /**
  * 轻量、无恢复副作用的代次读取，供同步的记忆命中路径和 add 入队使用。
- * 主文件正处于 atomicWriteFileSync 的备份交换窗口时返回哨兵；flush 会在持锁后重新
- * 读取完整状态，哨兵批次不会被写回，因而不会把旧批准复活。
+ * 优先读取独立的小 generation sidecar，避免热路径解析完整批准账本；旧版本没有 sidecar
+ * 时才回退读取主文件。主文件正处于 atomicWriteFileSync 的备份交换窗口时返回哨兵；flush
+ * 会在持锁后重新读取完整状态，哨兵批次不会被写回，因而不会把旧批准复活。
  */
-function readClearTokenSync(target: string, workspaceHashValue: string): string {
+function readClearTokenSync(
+  target: string,
+  workspaceHashValue: string,
+  cache: Map<string, GenerationCacheEntry>,
+): string {
+  const generationPath = generationFilePath(target);
   try {
+    const stat = statSync(generationPath);
+    const stamp = fileStamp(stat);
+    const cached = cache.get(target);
+    if (cached?.path === generationPath && cached.stamp === stamp) {
+      return clearToken(cached.state, workspaceHashValue);
+    }
+    const raw = readFileSync(generationPath, 'utf8');
+    const state = normalizeGeneration(raw ? JSON.parse(raw) : null);
+    cache.set(target, { path: generationPath, stamp, state });
+    return clearToken(state, workspaceHashValue);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return 'unavailable';
+  }
+
+  // Compatibility path for v2 files written before the sidecar existed. Cache the fallback by
+  // file identity/mtime so a legacy ledger is not reparsed on every query.
+  try {
+    const stat = statSync(target);
+    const stamp = fileStamp(stat);
+    const cached = cache.get(target);
+    if (cached?.path === target && cached.stamp === stamp) {
+      return clearToken(cached.state, workspaceHashValue);
+    }
     const raw = readFileSync(target, 'utf8');
-    if (!raw) return clearToken(emptyFile(), workspaceHashValue);
-    return clearToken(normalize(JSON.parse(raw)), workspaceHashValue);
+    const state = raw ? normalize(JSON.parse(raw)) : emptyFile();
+    cache.set(target, { path: target, stamp, state });
+    return clearToken(state, workspaceHashValue);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
       // 区分“首次还没有批准文件”和 atomicWriteFileSync 的备份交换窗口：对活动记忆
       // 两者都应先失效；flush 在持锁后会把首次写入的 `missing` 批次特判为可接受。
+      cache.delete(target);
       return 'missing';
     }
     return 'unavailable';
@@ -201,15 +298,26 @@ function readFileStateUnlocked(target: string, logger: StoreLogger): ApprovalFil
     });
     throw error;
   }
-  if (raw === null) return emptyFile();
+  if (raw === null) {
+    const state = emptyFile();
+    const authority = readGenerationStateUnlocked(target);
+    if (authority) reconcileGeneration(state, authority);
+    return state;
+  }
   try {
-    return normalize(JSON.parse(raw));
+    const state = normalize(JSON.parse(raw));
+    const authority = readGenerationStateUnlocked(target);
+    if (authority) reconcileGeneration(state, authority);
+    return state;
   } catch (error) {
     // 内容已损坏时按空状态恢复；权限面只会收紧，不会从坏文件加载任何批准。
     logger.warn('approval memory file contains invalid JSON; starting empty', {
       message: error instanceof Error ? error.message : String(error),
     });
-    return emptyFile();
+    const state = emptyFile();
+    const authority = readGenerationStateUnlocked(target);
+    if (authority) reconcileGeneration(state, authority);
+    return state;
   }
 }
 
@@ -317,6 +425,9 @@ async function withFileLock<T>(target: string, task: () => Promise<T>): Promise<
 function writeFileState(target: string, state: ApprovalFile): void {
   // 公共实现覆盖 Windows rename 不能直接替换已有目标的 EPERM/EEXIST，
   // 并用 .bak 交换保证第二步失败时旧文件仍可恢复。
+  // 先发布代次 sidecar：clear 失败在主账本交换前也会让其它进程失效，宁可多审一次，
+  // 不能让旧批准继续命中或让旧 pending 批次复活。
+  atomicWriteFileSync(generationFilePath(target), JSON.stringify(generationState(state)));
   atomicWriteFileSync(target, JSON.stringify(state));
 }
 
@@ -335,9 +446,20 @@ export function createApprovalMemoryFileStore(
   const pendingAdds: PendingAdd[] = [];
   const clearListeners = new Set<(workspaceKey?: string) => void>();
   const activeClears = new Map<number, ClearBarrier>();
+  const generationCache = new Map<string, GenerationCacheEntry>();
   let flushTimer: NodeJS.Timeout | null = null;
   let queue: Promise<unknown> = Promise.resolve();
   let nextClearId = 0;
+
+  const persistState = (target: string, state: ApprovalFile): void => {
+    try {
+      writeFileState(target, state);
+    } finally {
+      // mtime/ctime can have coarse resolution on some filesystems; never let our own write
+      // leave a same-process generation cache pointing at the previous clear token.
+      generationCache.delete(target);
+    }
+  };
 
   const notifyClear = (workspaceKey?: string): void => {
     for (const listener of clearListeners) {
@@ -411,7 +533,7 @@ export function createApprovalMemoryFileStore(
             }
             if (accepted === 0) return;
             evict(state);
-            writeFileState(target, state);
+            persistState(target, state);
           });
         } catch (error) {
           // 写失败不改变权限判定；只保留失败 owner 的批次，其他 owner 已落盘的批次不重放。
@@ -452,7 +574,7 @@ export function createApprovalMemoryFileStore(
         signature,
         origin,
         ts: now(),
-        clearToken: readClearTokenSync(target, workspaceHashValue),
+        clearToken: readClearTokenSync(target, workspaceHashValue, generationCache),
       });
       // A matching clear owns the pending batch until its lock/write boundary completes. Avoid
       // starting a competing timer in that window; a failed clear re-schedules in its finally.
@@ -462,7 +584,7 @@ export function createApprovalMemoryFileStore(
       if (!heldByClear) scheduleFlush();
     },
     getClearGeneration(workspaceKey): string {
-      return readClearTokenSync(resolveFilePath(), workspaceHash(workspaceKey));
+      return readClearTokenSync(resolveFilePath(), workspaceHash(workspaceKey), generationCache);
     },
     subscribeClear(listener): (() => void) {
       clearListeners.add(listener);
@@ -533,7 +655,7 @@ export function createApprovalMemoryFileStore(
             // the second pass but before the lock is released; it is restored only if writing
             // fails, never allowed to resurrect a successfully cleared approval.
             takePendingForBarrier(barrier);
-            writeFileState(target, state);
+            persistState(target, state);
             takePendingForBarrier(barrier);
             // Notify only after the replacement succeeds. The persisted generation is the
             // cross-process signal; this listener remains the low-latency same-process path.
