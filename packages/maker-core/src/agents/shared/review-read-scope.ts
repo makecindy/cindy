@@ -38,6 +38,62 @@ function statsReferToSameFile(left: Stats, right: Stats): boolean {
   return left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
 }
 
+const PACKAGE_MANIFEST_MAX_BYTES = 256 * 1024;
+
+function normalizeDeclaredPackageName(value: unknown): string | null {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 214 ||
+    value !== value.trim()
+  ) {
+    return null;
+  }
+  const component = "[a-z0-9][a-z0-9._-]*";
+  const pattern = value.startsWith("@")
+    ? new RegExp(`^@${component}/${component}$`, "i")
+    : new RegExp(`^${component}$`, "i");
+  return pattern.test(value) ? value : null;
+}
+
+async function readDeclaredPackageName(
+  packageRoot: string,
+  confinementRoot: string,
+): Promise<string | null> {
+  const manifestPath = path.join(packageRoot, "package.json");
+  if (!isPathWithin(confinementRoot, manifestPath)) return null;
+  const manifestLstat = await fs.lstat(manifestPath).catch(() => null);
+  if (
+    !manifestLstat ||
+    manifestLstat.isSymbolicLink() ||
+    !manifestLstat.isFile() ||
+    manifestLstat.size > PACKAGE_MANIFEST_MAX_BYTES
+  ) {
+    return null;
+  }
+  const realManifest = await fs.realpath(manifestPath).catch(() => null);
+  if (!realManifest || !isPathWithin(confinementRoot, realManifest)) return null;
+  const manifestStat = await fs.stat(realManifest).catch(() => null);
+  if (
+    !manifestStat ||
+    !manifestStat.isFile() ||
+    manifestStat.size > PACKAGE_MANIFEST_MAX_BYTES
+  ) {
+    return null;
+  }
+  const raw = await fs.readFile(realManifest, "utf8").catch(() => null);
+  if (raw == null || Buffer.byteLength(raw, "utf8") > PACKAGE_MANIFEST_MAX_BYTES) {
+    return null;
+  }
+  try {
+    return normalizeDeclaredPackageName(
+      (JSON.parse(raw) as { name?: unknown }).name,
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * pnpm mirrors local file packages into node_modules with hard links. A file
  * with exactly one denied mirror inside the same granted workspace cannot be
@@ -67,6 +123,11 @@ export async function reviewFileLinkLayoutIsSafe(
     )
       continue;
     const packageNames = [packageBase];
+    const declaredPackageName = await readDeclaredPackageName(
+      packageRoot,
+      confinementRoot,
+    );
+    if (declaredPackageName) packageNames.push(declaredPackageName);
     const scope = path.basename(path.dirname(packageRoot));
     if (scope.startsWith("@") && scope.length > 1)
       packageNames.push(path.join(scope, packageBase));

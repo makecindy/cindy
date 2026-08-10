@@ -197,6 +197,49 @@ function reviewStatsReferToSameFile(
   return left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
 }
 
+const REVIEW_PACKAGE_MANIFEST_MAX_BYTES = 256 * 1024;
+
+function normalizeReviewDeclaredPackageName(value: unknown): string | null {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > 214
+    || value !== value.trim()
+  ) return null;
+  const component = '[a-z0-9][a-z0-9._-]*';
+  const pattern = value.startsWith('@')
+    ? new RegExp('^@' + component + '/' + component + '$', 'i')
+    : new RegExp('^' + component + '$', 'i');
+  return pattern.test(value) ? value : null;
+}
+
+function reviewDeclaredPackageName(
+  packageRoot: string,
+  confinementRoot: string,
+): string | null {
+  try {
+    const manifestPath = path.join(packageRoot, 'package.json');
+    if (!isInsideRoot(manifestPath, confinementRoot)) return null;
+    const manifestLstat = lstatSync(manifestPath);
+    if (
+      manifestLstat.isSymbolicLink()
+      || !manifestLstat.isFile()
+      || manifestLstat.size > REVIEW_PACKAGE_MANIFEST_MAX_BYTES
+    ) return null;
+    const realManifest = realpathSync(manifestPath);
+    if (!isInsideRoot(realManifest, confinementRoot)) return null;
+    const manifestStat = statSync(realManifest);
+    if (!manifestStat.isFile() || manifestStat.size > REVIEW_PACKAGE_MANIFEST_MAX_BYTES) {
+      return null;
+    }
+    const raw = readFileSync(realManifest, 'utf8');
+    if (Buffer.byteLength(raw, 'utf8') > REVIEW_PACKAGE_MANIFEST_MAX_BYTES) return null;
+    return normalizeReviewDeclaredPackageName(JSON.parse(raw)?.name);
+  } catch {
+    return null;
+  }
+}
+
 function reviewFileLinkLayoutIsSafe(
   target: string,
   targetStat: ReturnType<typeof statSync>,
@@ -212,6 +255,8 @@ function reviewFileLinkLayoutIsSafe(
     const packageBase = path.basename(packageRoot);
     if (!packageBase || packageBase === path.sep || packageBase === 'node_modules') continue;
     const packageNames = [packageBase];
+    const declaredPackageName = reviewDeclaredPackageName(packageRoot, confinementRoot);
+    if (declaredPackageName) packageNames.push(declaredPackageName);
     const scope = path.basename(path.dirname(packageRoot));
     if (scope.startsWith('@') && scope.length > 1) {
       packageNames.push(path.join(scope, packageBase));

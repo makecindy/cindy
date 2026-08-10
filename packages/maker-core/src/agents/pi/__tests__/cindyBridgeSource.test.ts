@@ -84,7 +84,9 @@ function loadReviewSearchHelpers(
   const context: Partial<ReviewSearchHelpers> & Record<string, unknown> = {
     path,
     process: { cwd: () => workingDir, platform: process.platform },
+    Buffer,
     lstatSync: overrides.lstatSync ?? lstatSync,
+    readFileSync,
     realpathSync,
     statSync,
     spawn,
@@ -232,7 +234,9 @@ describe('cindy-bridge extension source', () => {
         } & Record<string, unknown> = {
           path,
           process: { cwd: () => workingDir, platform: process.platform },
+          Buffer,
           lstatSync,
+          readFileSync,
           realpathSync,
           statSync,
         };
@@ -272,29 +276,38 @@ describe('cindy-bridge extension source', () => {
           expect(defaultInput.path).toBe(realpathSync(workingDir));
         }
 
-        const localSource = path.join(
-          workingDir,
-          'apps',
-          'mobile',
-          'modules',
-          'local-module',
-          'src',
-          'index.ts',
-        );
+        const localPackage = path.join(workingDir, 'packages', 'maker-core');
+        const localSource = path.join(localPackage, 'src', 'index.ts');
         const localMirror = path.join(
           workingDir,
           'node_modules',
-          'local-module',
+          '@cindy',
+          'maker-core',
           'src',
           'index.ts',
         );
         mkdirSync(path.dirname(localSource), { recursive: true });
         mkdirSync(path.dirname(localMirror), { recursive: true });
+        writeFileSync(
+          path.join(localPackage, 'package.json'),
+          '{"name":"@cindy/maker-core"}',
+        );
         writeFileSync(localSource, 'export const value = 1;');
         linkSync(localSource, localMirror);
         expect(
           normalizeReviewReadInput('read', { path: localSource }, [workingDir]),
         ).toBe(true);
+
+        const outsideManifest = path.join(outsideDir, 'package.json');
+        const localManifest = path.join(localPackage, 'package.json');
+        writeFileSync(outsideManifest, '{"name":"@cindy/maker-core"}');
+        unlinkSync(localManifest);
+        symlinkSync(outsideManifest, localManifest);
+        expect(
+          normalizeReviewReadInput('read', { path: localSource }, [workingDir]),
+        ).toBe(false);
+        unlinkSync(localManifest);
+        writeFileSync(localManifest, '{"name":"@cindy/maker-core"}');
 
         linkSync(localSource, path.join(outsideDir, 'third-link.ts'));
         expect(
@@ -322,24 +335,26 @@ describe('cindy-bridge extension source', () => {
         mkdirSync(workingDir);
         mkdirSync(outsideDir);
 
-        const sourcePath = path.join(
+        const sourcePackage = path.join(
           workingDir,
-          "apps",
-          "mobile",
-          "modules",
-          "local-module",
-          "src",
-          "index.ts",
+          "packages",
+          "maker-core",
         );
+        const sourcePath = path.join(sourcePackage, "src", "index.ts");
         const mirrorPath = path.join(
           workingDir,
           "node_modules",
-          "local-module",
+          "@cindy",
+          "maker-core",
           "src",
           "index.ts",
         );
         mkdirSync(path.dirname(sourcePath), { recursive: true });
         mkdirSync(path.dirname(mirrorPath), { recursive: true });
+        writeFileSync(
+          path.join(sourcePackage, "package.json"),
+          '{"name":"@cindy/maker-core"}',
+        );
         writeFileSync(sourcePath, "export const safe = true;");
         linkSync(sourcePath, mirrorPath);
 

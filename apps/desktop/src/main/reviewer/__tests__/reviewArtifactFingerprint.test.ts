@@ -242,6 +242,38 @@ describe('review artifact fingerprint', () => {
     );
   });
 
+  it('accepts a scoped pnpm mirror derived from confined package metadata', async () => {
+    if (process.platform === 'win32') return;
+    const root = await makeTempDir();
+    const workspace = path.join(root, 'workspace');
+    const sourcePackage = path.join(workspace, 'packages', 'maker-core');
+    const manifest = path.join(sourcePackage, 'package.json');
+    const sourceFile = path.join(sourcePackage, 'src', 'index.ts');
+    const dependencyFile = path.join(
+      workspace,
+      'node_modules',
+      '@cindy',
+      'maker-core',
+      'src',
+      'index.ts',
+    );
+    await fs.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fs.mkdir(path.dirname(dependencyFile), { recursive: true });
+    await fs.writeFile(manifest, '{"name":"@cindy/maker-core"}');
+    await fs.writeFile(sourceFile, 'export const value = 1;');
+    await fs.link(sourceFile, dependencyFile);
+
+    await expect(fingerprintReviewArtifacts([workspace])).resolves.toMatch(/^[a-f0-9]{64}$/);
+
+    const outsideManifest = path.join(root, 'outside-package.json');
+    await fs.writeFile(outsideManifest, '{"name":"@cindy/maker-core"}');
+    await fs.unlink(manifest);
+    await fs.symlink(outsideManifest, manifest);
+    await expect(fingerprintReviewArtifacts([workspace])).rejects.toBeInstanceOf(
+      ReviewArtifactFingerprintChangedError,
+    );
+  });
+
   it('still rejects a local dependency mirror when the inode has any outside link', async () => {
     if (process.platform === 'win32') return;
     const root = await makeTempDir();

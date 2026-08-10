@@ -176,4 +176,37 @@ describe("review read scope", () => {
     await fs.link(source, outside);
     expect(await resolveReviewReadPath(source, workspace, grants)).toBeNull();
   });
+
+  it("uses a confined package manifest to resolve scoped pnpm mirrors", async () => {
+    if (process.platform === "win32") return;
+    const root = await makeTempDir();
+    const workspace = path.join(root, "workspace");
+    const packageRoot = path.join(workspace, "packages", "maker-core");
+    const manifest = path.join(packageRoot, "package.json");
+    const source = path.join(packageRoot, "src", "index.ts");
+    const mirror = path.join(
+      workspace,
+      "node_modules",
+      "@cindy",
+      "maker-core",
+      "src",
+      "index.ts",
+    );
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.mkdir(path.dirname(mirror), { recursive: true });
+    await fs.writeFile(manifest, '{"name":"@cindy/maker-core"}');
+    await fs.writeFile(source, "export const value = 1;");
+    await fs.link(source, mirror);
+
+    const grants = await buildReviewReadGrants(workspace, [source]);
+    expect(await resolveReviewReadPath(source, workspace, grants)).toBe(
+      await fs.realpath(source),
+    );
+
+    const outsideManifest = path.join(root, "outside-package.json");
+    await fs.writeFile(outsideManifest, '{"name":"@cindy/maker-core"}');
+    await fs.unlink(manifest);
+    await fs.symlink(outsideManifest, manifest);
+    expect(await resolveReviewReadPath(source, workspace, grants)).toBeNull();
+  });
 });
