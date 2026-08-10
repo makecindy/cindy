@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
-  canSendHydratedModelFetchApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
@@ -197,7 +196,7 @@ describe('canSendHydratedApiKey', () => {
     modelsUrl: apiKeyBaseline.modelsUrl,
   };
 
-  it('keeps an untouched hydrated key on the saved request target only', () => {
+  it('keeps an untouched hydrated key on the saved base/models endpoint', () => {
     expect(canSendHydratedApiKey(requestTarget, apiKeyBaseline, 'apiKey', 0)).toBe(true);
     expect(
       canSendHydratedApiKey(
@@ -227,20 +226,12 @@ describe('canSendHydratedApiKey', () => {
       ),
     ).toBe(true);
   });
-});
-
-describe('canSendHydratedModelFetchApiKey', () => {
-  const apiKeyBaseline: SavedProviderProbeBaseline = {
-    ...headerAuthBaseline,
-    authMode: 'apiKey',
-    apiKey: 'saved-key',
-  };
-
-  it('allows an unchanged model-discovery target when only requestPath changes', () => {
+  it('allows the hydrated key when only requestPath changes', () => {
     expect(
-      canSendHydratedModelFetchApiKey(
+      canSendHydratedApiKey(
         {
           baseUrl: apiKeyBaseline.baseUrl,
+          requestPath: '/tenant/acme/models',
           modelsUrl: apiKeyBaseline.modelsUrl,
         },
         apiKeyBaseline,
@@ -252,7 +243,7 @@ describe('canSendHydratedModelFetchApiKey', () => {
 
   it('still blocks a changed model-discovery endpoint until the key is edited', () => {
     expect(
-      canSendHydratedModelFetchApiKey(
+      canSendHydratedApiKey(
         { baseUrl: 'https://new.example/v1', modelsUrl: apiKeyBaseline.modelsUrl },
         apiKeyBaseline,
         'apiKey',
@@ -260,7 +251,7 @@ describe('canSendHydratedModelFetchApiKey', () => {
       ),
     ).toBe(false);
     expect(
-      canSendHydratedModelFetchApiKey(
+      canSendHydratedApiKey(
         { baseUrl: 'https://new.example/v1', modelsUrl: apiKeyBaseline.modelsUrl },
         apiKeyBaseline,
         'apiKey',

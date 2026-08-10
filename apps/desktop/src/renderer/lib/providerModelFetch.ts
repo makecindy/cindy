@@ -122,13 +122,15 @@ export function modelFetchCanReuseSavedCredentials(
 }
 
 /**
- * Decide whether a hydrated API key may be sent with an ad-hoc request.
- * A key that the user has not explicitly edited must stay bound to the saved
- * request target; otherwise changing an endpoint could send it to a new host.
+ * Decide whether a hydrated API key may be sent to the saved provider's endpoint.
+ * requestPath is a routing detail within the same base/models URL and does not
+ * change the credential target; baseUrl/modelsUrl changes still require an edit.
  */
 export function canSendHydratedApiKey(
-  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'requestPath' | 'modelsUrl'>,
-  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'requestPath' | 'modelsUrl' | 'authMode'>,
+  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'> &
+    Partial<Pick<ProviderModelFetchSignatureFields, 'requestPath'>>,
+  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode'> &
+    Partial<Pick<SavedProviderProbeBaseline, 'requestPath'>>,
   authMode: CustomProviderAuthMode,
   keyEditRevision: number,
 ): boolean {
@@ -136,20 +138,8 @@ export function canSendHydratedApiKey(
   return (
     authMode === baseline.authMode &&
     form.baseUrl.trim() === baseline.baseUrl.trim() &&
-    form.requestPath.trim() === baseline.requestPath.trim() &&
     form.modelsUrl.trim() === baseline.modelsUrl.trim()
   );
-}
-
-/** Model discovery only targets baseUrl/modelsUrl, so requestPath must not block key reuse. */
-export function canSendHydratedModelFetchApiKey(
-  form: Pick<ProviderModelFetchSignatureFields, 'baseUrl' | 'modelsUrl'>,
-  baseline: Pick<SavedProviderProbeBaseline, 'baseUrl' | 'modelsUrl' | 'authMode'>,
-  authMode: CustomProviderAuthMode,
-  keyEditRevision: number,
-): boolean {
-  if (keyEditRevision > 0) return true;
-  return modelFetchCanReuseSavedCredentials(form, baseline, authMode);
 }
 
 /**

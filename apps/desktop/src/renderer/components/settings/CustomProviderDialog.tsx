@@ -52,7 +52,6 @@ import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
-  canSendHydratedModelFetchApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
@@ -1028,7 +1027,7 @@ export function CustomProviderDialog({
     const canSendApiKey =
       authMode !== 'apiKey' ||
       !savedBaseline ||
-      canSendHydratedModelFetchApiKey(
+      canSendHydratedApiKey(
         rf,
         savedBaseline,
         authMode,
