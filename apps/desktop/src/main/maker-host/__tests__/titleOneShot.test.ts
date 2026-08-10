@@ -62,7 +62,11 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 // 自定义供应商凭证读取:tryCustomProviderTitle 走数据驱动路由时用。默认返回 null
 // (无凭证 → failed),单测按需 mockReturnValueOnce 给 key。
 const { mockReadCustomProviderKey } = vi.hoisted(() => ({
-  mockReadCustomProviderKey: vi.fn(() => null as string | null),
+  mockReadCustomProviderKey: vi.fn((providerId?: string, agentKind?: string) => {
+    void providerId;
+    void agentKind;
+    return null as string | null;
+  }),
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: mockReadCustomProviderKey,
@@ -837,6 +841,70 @@ function withDeepSeekCatalog<T>(fn: () => T | Promise<T>): Promise<T> {
 describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱动)', () => {
   // 默认无凭证:防止 mockReturnValueOnce 泄漏到下一个用例导致真实网络请求。
   beforeEach(() => mockReadCustomProviderKey.mockReturnValue(null));
+
+  it('device-link 任务保留的 kimi-code/k3 → 按会话供应商走自己的 Claude Code 路由', async () => {
+    const kimi: Provider = {
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      source: 'user',
+      agents: ['claude-code'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': {
+          upstream: 'https://api.kimi.com/coding',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'anthropic-messages',
+        },
+      },
+      models: {
+        'claude-code': [{
+          id: 'k3',
+          name: 'K3',
+          contextWindow: 262_144,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        }],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== 'kimi-code'), kimi];
+    setActiveCatalog(catalog);
+    mockReadCustomProviderKey.mockReturnValueOnce('kimi-key');
+
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { content: [{ type: 'text', text: '移动端创建的任务' }] },
+      }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 'device-link-session', agentKind: 'claude-code', prompt: '总结这个任务' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'kimi-code',
+          listConnectedProviders: async () => [providerStub('anthropic'), providerStub('kimi-code')],
+        },
+      );
+
+      expect(title).toBe('移动端创建的任务');
+      expect(mockReadCustomProviderKey).toHaveBeenCalledWith('kimi-code', 'claude-code');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      expect(url).toBe('https://api.kimi.com/coding/v1/messages');
+      expect(init.headers['x-api-key']).toBe('kimi-key');
+      expect(init.headers.Authorization).toBe('Bearer kimi-key');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'k3',
+        max_tokens: 32,
+        messages: [{ role: 'user', content: '总结这个任务' }],
+      });
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
 
   it('有 key + anthropic wire → 成功起名(不再落 default: null)', async () => {
     await withDeepSeekCatalog(async () => {
