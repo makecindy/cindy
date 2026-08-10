@@ -10,17 +10,22 @@ describe('dev-only plugin QA call boundary', () => {
       'utf8',
     );
     const preload = fs.readFileSync(path.resolve(process.cwd(), 'src/preload/preload.ts'), 'utf8');
-    const devOnlyStart = main.indexOf("if (!app.isPackaged) {");
-    const handlerStart = main.indexOf("ipcMain.handle('ghosts:dev-runtime'", devOnlyStart);
-    const handlerEnd = main.indexOf("\n    });", handlerStart);
+    const devOnlyStart = main.indexOf('if (!app.isPackaged) {');
+    const handlerNameStart = main.indexOf("'ghosts:dev-runtime'", devOnlyStart);
+    const handlerStart = main.lastIndexOf('ipcMain.handle(', handlerNameStart);
+    const handlerEnd = main.indexOf('\n    );', handlerNameStart);
     const handler = main.slice(handlerStart, handlerEnd);
 
     expect(devOnlyStart).toBeGreaterThanOrEqual(0);
+    expect(handlerNameStart).toBeGreaterThan(devOnlyStart);
     expect(handlerStart).toBeGreaterThan(devOnlyStart);
+    expect(handlerEnd).toBeGreaterThan(handlerNameStart);
     expect(handler).toContain('assertTrustedAppRendererEvent(event)');
     expect(handler).toContain("case 'call'");
     expect(handler).toContain('getGhostPipeDispatcher().callGhostTool');
-    expect(preload).toContain("ipcRenderer.invoke('ghosts:dev-runtime', 'call', id, { tool, args })");
-    expect(preload).not.toContain("devCall: (channel:");
+    expect(preload).toContain(
+      "ipcRenderer.invoke('ghosts:dev-runtime', 'call', id, { tool, args })",
+    );
+    expect(preload).not.toContain('devCall: (channel:');
   });
 });

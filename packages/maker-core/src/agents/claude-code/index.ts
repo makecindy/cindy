@@ -1620,6 +1620,29 @@ export class ClaudeCodeAgent extends BaseAgent {
       return 'prompt-each-time';
     };
 
+    const mcpApprovalPresentation = (
+      toolName: string,
+      input: unknown,
+    ) => {
+      const presenter = this.deps.getMcpToolApprovalPresentation;
+      if (!presenter) return undefined;
+      const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      if (!target) return undefined;
+      try {
+        return presenter({
+          serverName: target.serverName,
+          toolName: target.toolName,
+          toolParams: input,
+        });
+      } catch (error) {
+        log.error('MCP approval presentation threw -> vendor copy', {
+          serverName: target.serverName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      }
+    };
+
     // canUseTool dispatcher —— 三路分支(参考 agentManager.ts:1054-1162):
     //  1. AskUserQuestion: 模型问问题, 转 ask_user_question kind, decision.answers 拼回 updatedInput
     //  2. ExitPlanMode:   plan 模式提交计划, 转 plan_review kind, decision.editedPlan 覆盖 plan
@@ -1768,6 +1791,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
       const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
+      const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = turnPolicyForcePrompt;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
@@ -1815,9 +1839,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         requestId: options.toolUseID,
         toolName,
         input: input as Record<string, unknown>,
-        title: options.title,
+        title: hostApprovalPresentation?.title ?? options.title,
         displayName: options.displayName,
-        description: options.description,
+        description: hostApprovalPresentation?.description ?? options.description,
         // prompt-each-time 的语义是"每次都要人过目", 因此不把会话级 suggestion 交给
         // UI —— 否则用户点一次"总是允许"就把逐次确认的高风险 action 永久放行了。
         suggestions: forcePrompt
@@ -2802,6 +2826,10 @@ export class ClaudeCodeAgent extends BaseAgent {
               params.input ?? {},
             );
             const remoteMcpPolicy = classifyMcpApprovalPolicy(remoteToolName, params.input ?? {});
+            const remoteHostApprovalPresentation = mcpApprovalPresentation(
+              remoteToolName,
+              params.input ?? {},
+            );
             let remoteForcePrompt = remoteTurnPolicyForcePrompt;
             if (
               mutablePermissionMode === 'auto'
@@ -2839,9 +2867,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               requestId: params.requestId,
               toolName: params.toolName ?? 'unknown',
               input: params.input ?? {},
-              title: params.title,
+              title: remoteHostApprovalPresentation?.title ?? params.title,
               displayName: params.displayName,
-              description: params.description,
+              description: remoteHostApprovalPresentation?.description ?? params.description,
               suggestions: remoteForcePrompt
                 ? undefined
                 : this.normalizeSessionPermissionSuggestions(params.suggestions),

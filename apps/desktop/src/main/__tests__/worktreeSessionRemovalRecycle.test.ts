@@ -53,6 +53,16 @@ function makeMeta(sessionId: string, ephemeral = false): WorktreeMeta {
   };
 }
 
+function dbFor(rows: Array<{ id: string; status: string | null }>) {
+  return {
+    select: () => ({
+      from: () => ({
+        where: () => rows,
+      }),
+    }),
+  };
+}
+
 describe('sessionRemovalRecycle', () => {
   let mod: typeof import('../worktree/sessionRemovalRecycle');
 
@@ -120,6 +130,27 @@ describe('sessionRemovalRecycle', () => {
 
       expect(removeMock).not.toHaveBeenCalled();
     });
+
+    it('uses the captured owner database and stops its live guard after owner switch', async () => {
+      storeMap.set('shared-session-id', makeMeta('shared-session-id'));
+      sessionRows.push({ id: 'shared-session-id', status: 'active' });
+      const capturedRows = [{ id: 'shared-session-id', status: 'deleted' as string | null }];
+      let ownerCurrent = true;
+      removeMock.mockImplementationOnce(
+        async (_sessionId: string, options: { canRemove: () => Promise<boolean> }) => {
+          await expect(options.canRemove()).resolves.toBe(true);
+          ownerCurrent = false;
+          await expect(options.canRemove()).resolves.toBe(false);
+        },
+      );
+
+      await mod.recycleWorktreeForRemovedSession('shared-session-id', {
+        db: dbFor(capturedRows) as never,
+        isOwnerCurrent: () => ownerCurrent,
+      });
+
+      expect(removeMock).toHaveBeenCalledOnce();
+    });
   });
 
   describe('isSessionStillRemovable', () => {
@@ -134,6 +165,15 @@ describe('sessionRemovalRecycle', () => {
     it('fails closed when the status lookup fails', async () => {
       sessionLookupError = new Error('db closed');
       await expect(mod.isSessionStillRemovable('s1')).resolves.toBe(false);
+    });
+
+    it('uses an explicitly captured database instead of the current global owner', async () => {
+      sessionRows.push({ id: 'shared-session-id', status: 'active' });
+      const capturedDb = dbFor([{ id: 'shared-session-id', status: 'archived' }]);
+
+      await expect(
+        mod.isSessionStillRemovable('shared-session-id', capturedDb as never),
+      ).resolves.toBe(true);
     });
   });
 

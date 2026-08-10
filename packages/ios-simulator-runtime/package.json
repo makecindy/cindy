@@ -1,0 +1,43 @@
+{
+  "name": "@cindy/ios-simulator-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Host-neutral iOS Simulator discovery runtime for Cindy",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "native:build": "tsx scripts/build-native-sidecar.mjs",
+    "native:framebuffer-smoke": "tsx scripts/native-framebuffer-smoke.ts",
+    "native:h264-smoke": "tsx scripts/native-h264-smoke.ts",
+    "native:h264-fallback-smoke": "tsx scripts/native-h264-fallback-smoke.ts",
+    "native:h264-multi-resource-smoke": "tsx scripts/native-h264-multi-resource-smoke.ts",
+    "native:h264-rotation-smoke": "tsx scripts/native-h264-rotation-smoke.ts",
+    "native:h264-stability-smoke": "tsx scripts/native-h264-stability-smoke.ts",
+    "native:h264-webcodecs-smoke": "electron scripts/native-h264-webcodecs-smoke.mjs",
+    "native:h264-webcodecs-recovery-smoke": "electron scripts/native-h264-webcodecs-recovery-smoke.mjs",
+    "native:hid-smoke": "tsx scripts/native-hid-smoke.ts",
+    "native:compatibility-probe": "tsx scripts/native-compatibility-probe.ts",
+    "native:sandbox-smoke": "tsx scripts/native-sandbox-smoke.ts",
+    "test": "vitest run",
+    "compatibility:report": "tsx scripts/compatibility-report.ts",
+    "compatibility:smoke": "tsx scripts/compatibility-smoke.ts",
+    "test:real-multi-smoke": "tsx scripts/real-multi-smoke.ts",
+    "test:real-multi-recovery-smoke": "tsx scripts/real-multi-recovery-smoke.ts",
+    "test:real-smoke": "tsx scripts/real-smoke.ts",
+    "test:real-device-controls-smoke": "tsx scripts/real-device-controls-smoke.ts",
+    "test:real-push-smoke": "tsx scripts/real-push-smoke.ts",
+    "test:real-recovery-smoke": "tsx scripts/real-recovery-smoke.ts"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.7.0",
+    "tsx": "^4.20.6",
+    "vitest": "^3.2.4"
+  }
+}

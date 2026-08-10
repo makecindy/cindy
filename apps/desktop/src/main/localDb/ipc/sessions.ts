@@ -31,7 +31,7 @@ import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap';
 import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store';
 import * as imageCacheStore from '../../imageCacheStore';
-import { removeSessionRefs as removeSessionMediaRefs } from '../../cindy-media/ledger';
+import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { removeWechatSessionAttachmentDir } from '../../im/wechat/mediaStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
@@ -50,12 +50,11 @@ import {
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
-import {
-  dismissErrorMessage,
-  rebroadcastAgentSwitchBoundary,
-} from './messages';
+import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
+import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
+import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 
 const log = createLogger('sessions');
@@ -63,6 +62,29 @@ const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
+type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
+type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
+export interface SessionRecycleScope {
+  ownerScope: OwnerScope;
+  mediaDb: DbClient['drizzle'];
+}
+
+let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
+let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
+
+/** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
+export function setSessionRemovalCancelOperations(
+  cancelOperations: SessionRemovalCancelOperations | null,
+): void {
+  sessionRemovalCancelOperations = cancelOperations;
+}
+
+/** Composition-root injection for destructive cleanup after removal is revalidated. */
+export function setSessionRemovalCleanup(
+  cleanupRemovedSession: SessionRemovalCleanup | null,
+): void {
+  sessionRemovalCleanup = cleanupRemovedSession;
+}
 
 function captureOwnerScope(): OwnerScope {
   try {
@@ -82,6 +104,50 @@ function isOwnerScopeCurrent(scope: OwnerScope): boolean {
   } catch {
     return true;
   }
+}
+
+async function withStatusWriteLock<T>(
+  sessionId: string,
+  status: unknown,
+  task: () => Promise<T>,
+): Promise<T> {
+  if (status === undefined) return task();
+  return withSessionRouteLock(sessionId, task);
+}
+
+async function writeSessionPatch(
+  db: DbClient['drizzle'],
+  sessionId: string,
+  setObj: ReturnType<typeof sessionPatchToRow>,
+  status: unknown,
+): Promise<void> {
+  const deletedIsTerminal = status === 'active' || status === 'archived';
+  const result = await db
+    .update(sessions)
+    .set(setObj)
+    .where(
+      deletedIsTerminal
+        ? and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted'))
+        : eq(sessions.id, sessionId),
+    )
+    .run();
+  if (!deletedIsTerminal || result.changes > 0) return;
+
+  const [existing] = await db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId));
+  if (!existing) throwIpcError('NOT_FOUND', 'Session 不存在');
+  throwIpcError('PRECONDITION_FAILED', '已删除的任务不能恢复或归档');
+}
+
+export function captureSessionRecycleScope(
+  dbClient: DbClient = getDbClient(),
+): SessionRecycleScope {
+  return {
+    ownerScope: captureOwnerScope(),
+    mediaDb: dbClient.drizzle,
+  };
 }
 
 function getSafeOwnerPushStamp(): ReturnType<typeof broadcastTap.getSafeDataOwnerPushStamp> {
@@ -149,8 +215,9 @@ function broadcastWorktreeChanged(sessionId: string): void {
  *
  * fire-and-forget:回收失败不影响状态写库(启动期 reconcile 兜底 deleted 场景)。
  * 先关子进程再回收——Windows 下 CLI 子进程 cwd 在 worktree 内会锁目录。
- * 动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
- * 反向 import 本文件的 setWorktreePathInDb)。
+ * 既有动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
+ * 反向 import 本文件的 setWorktreePathInDb)。Simulator 清理由启动组合层静态注入，
+ * 避免在回收临界路径上延迟加载带原生副作用的 Host 模块。
  *
  * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
  * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
@@ -158,23 +225,62 @@ function broadcastWorktreeChanged(sessionId: string): void {
 export async function recycleSessionWorktreeForStatusChange(
   sessionId: string,
   status: unknown,
+  capturedScope?: SessionRecycleScope,
 ): Promise<void> {
   if (status !== 'deleted' && status !== 'archived') return;
   try {
-    const [mh, recycle, routeLock] = await Promise.all([
+    // Callers that already crossed an async status write pass the owner/DB
+    // captured at operation entry. The fallback is only for direct callers.
+    const ownerScope = capturedScope?.ownerScope ?? captureOwnerScope();
+    const mediaDb = capturedScope?.mediaDb ?? getDbClient().drizzle;
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    const cancelOperations = sessionRemovalCancelOperations;
+    const cleanupRemovedSession = sessionRemovalCleanup;
+    if (!cancelOperations || !cleanupRemovedSession) {
+      throw new Error('iOS Simulator session cleanup is not configured');
+    }
+    const [mh, recycle] = await Promise.all([
       import('../../maker-host/index.js'),
       import('../../worktree/sessionRemovalRecycle.js'),
-      import('../../maker-ipc/register.js'),
     ]);
-    if (!(await recycle.isSessionStillRemovable(sessionId))) return;
-    await routeLock.withSendToSessionLock(sessionId, async () => {
-      if (!(await recycle.isSessionStillRemovable(sessionId))) return;
-      await mh
-        .getMakerIfReady()
-        ?.closeSession(sessionId)
-        .catch(() => undefined);
+    const ownerIsCurrent = (): boolean => isOwnerScopeCurrent(ownerScope);
+    const isStillRemovable = async (id: string): Promise<boolean> =>
+      ownerIsCurrent() && recycle.isSessionStillRemovable(id, mediaDb);
+    if (!(await isStillRemovable(sessionId))) return;
+    await withSessionRouteLock(sessionId, async () => {
+      const shouldRecycle = await quiesceSessionBeforeWorktreeRecycle(sessionId, {
+        isOwnerCurrent: ownerIsCurrent,
+        isSessionStillRemovable: isStillRemovable,
+        cancelSessionOperations: cancelOperations,
+        cleanupRemovedSession,
+        closeSession: async (id) => {
+          await mh
+            .getMakerIfReady()
+            ?.closeSession(id)
+            .catch(() => undefined);
+        },
+      });
+      if (!shouldRecycle || !ownerIsCurrent()) return;
+
+      // Keep irreversible cleanup under the same task route lock as the final
+      // status check. A concurrent restore/start/send must not slip between
+      // quiescence and ref/worktree deletion.
+      await removeDeletedSessionMediaRefs(sessionId, mediaDb)
+        .then((count) => {
+          if (count > 0) log.info('session media refs removed', { sessionId, count });
+        })
+        .catch((err) => {
+          log.warn('session media ref cleanup failed', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+      if (!ownerIsCurrent()) return;
+      await recycle.recycleWorktreeForRemovedSession(sessionId, {
+        db: mediaDb,
+        isOwnerCurrent: ownerIsCurrent,
+      });
     });
-    await recycle.recycleWorktreeForRemovedSession(sessionId);
   } catch (err) {
     log.warn('worktree recycle after session status change failed', {
       sessionId,
@@ -185,8 +291,12 @@ export async function recycleSessionWorktreeForStatusChange(
   }
 }
 
-function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
-  void recycleSessionWorktreeForStatusChange(sessionId, status);
+function scheduleWorktreeRecycleForStatusChange(
+  sessionId: string,
+  status: unknown,
+  capturedScope?: SessionRecycleScope,
+): void {
+  void recycleSessionWorktreeForStatusChange(sessionId, status, capturedScope);
 }
 
 // shadow savepoint 链(refs/cindy/savepoints/<sid>)刻意**不**挂 status 变化
@@ -1170,38 +1280,42 @@ export function registerSessionIpc(
       }
 
       const db = getDbClient().drizzle;
-      // 显式 .run() 才能从生产 DbClient.drizzle proxy 拿到 changes；隐式 await
-      // 会丢弃写结果。CAS 是否命中必须以该原子 UPDATE 的 changes 判定。
-      const writeResult = await db
-        .update(sessions)
-        .set(sessionPatchToRow({ status: 'active' }))
-        .where(
-          and(
-            eq(sessions.id, sid),
-            eq(sessions.status, 'archived'),
-            expectedWorkingDir === null
-              ? isNull(sessions.workingDir)
-              : eq(sessions.workingDir, expectedWorkingDir),
-            eq(sessions.workspaceKind, expectedWorkspaceKind),
-            expectedRemoteHostId === null
-              ? isNull(sessions.remoteHostId)
-              : eq(sessions.remoteHostId, expectedRemoteHostId),
-          ),
-        )
-        .run();
+      const updated = await withSessionRouteLock(sid, async () => {
+        if (!isOwnerScopeCurrent(ownerScope)) return null;
+        // 显式 .run() 才能从生产 DbClient.drizzle proxy 拿到 changes；隐式 await
+        // 会丢弃写结果。CAS 是否命中必须以该原子 UPDATE 的 changes 判定。
+        const writeResult = await db
+          .update(sessions)
+          .set(sessionPatchToRow({ status: 'active' }))
+          .where(
+            and(
+              eq(sessions.id, sid),
+              eq(sessions.status, 'archived'),
+              expectedWorkingDir === null
+                ? isNull(sessions.workingDir)
+                : eq(sessions.workingDir, expectedWorkingDir),
+              eq(sessions.workspaceKind, expectedWorkspaceKind),
+              expectedRemoteHostId === null
+                ? isNull(sessions.remoteHostId)
+                : eq(sessions.remoteHostId, expectedRemoteHostId),
+            ),
+          )
+          .run();
 
-      if (writeResult.changes === 0) {
-        const [existing] = await db
-          .select({ id: sessions.id })
-          .from(sessions)
-          .where(eq(sessions.id, sid));
-        if (!existing) throwIpcError('NOT_FOUND', 'Session 不存在');
-        return null;
-      }
+        if (writeResult.changes === 0) {
+          const [existing] = await db
+            .select({ id: sessions.id })
+            .from(sessions)
+            .where(eq(sessions.id, sid));
+          if (!existing) throwIpcError('NOT_FOUND', 'Session 不存在');
+          return null;
+        }
 
-      const row = await selectSessionWithCount(db, sid);
-      if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-      const updated = sessionToCamel(row);
+        const row = await selectSessionWithCount(db, sid);
+        if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+        return sessionToCamel(row);
+      });
+      if (!updated) return null;
       notifyAgentIslandSessionPatch(updated.id, {
         status: updated.status,
         title: updated.title,
@@ -1308,7 +1422,7 @@ export function registerSessionIpc(
     // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
     // 按下过保存,这个方向的偏差是安全的。
     if (typeof p.title === 'string') noteUserTitleWritten(sid);
-    await db.update(sessions).set(setObj).where(eq(sessions.id, sid));
+    await withStatusWriteLock(sid, p.status, () => writeSessionPatch(db, sid, setObj, p.status));
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
@@ -1390,7 +1504,7 @@ export function registerSessionIpc(
       workingDir: updated.workingDir,
       workspaceKind: updated.workspaceKind,
     });
-    scheduleWorktreeRecycleForStatusChange(sid, p.status);
+    scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
     notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
     removeHookAttachmentDir(sid, p.status);
     return updated;
@@ -1457,10 +1571,12 @@ export async function patchSessionMetaInDb(
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
-  await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  const row = await selectSessionWithCount(db, sessionId);
-  if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-  const updated = sessionToCamel(row);
+  const updated = await withStatusWriteLock(sessionId, patch.status, async () => {
+    await writeSessionPatch(db, sessionId, setObj, patch.status);
+    const row = await selectSessionWithCount(db, sessionId);
+    if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    return sessionToCamel(row);
+  });
   notifyAgentIslandSessionPatch(updated.id, {
     status: updated.status,
     title: updated.title,
@@ -1474,19 +1590,6 @@ export async function patchSessionMetaInDb(
         err: err instanceof Error ? err.message : String(err),
       });
     });
-    // 媒体总仓对应清理:删本会话名下的媒体引用行(附件/导入/
-    // 消息出生引用;画廊等持久引用不动),引用归零的 blob 交回收器。
-    // fire-and-forget 与历史目录清理同语义:失败只警告,不阻塞删除。
-    void removeSessionMediaRefs(sessionId)
-      .then((n) => {
-        if (n > 0) log.info('session media refs removed', { sessionId, count: n });
-      })
-      .catch((err) => {
-        log.warn('session media ref cleanup failed', {
-          sessionId,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      });
     void removeWechatSessionAttachmentDir(sessionId).catch((err) => {
       log.warn('WeChat session attachment cleanup failed', {
         sessionId,
@@ -1495,7 +1598,7 @@ export async function patchSessionMetaInDb(
     });
   }
   removeHookAttachmentDir(sessionId, patch.status);
-  scheduleWorktreeRecycleForStatusChange(sessionId, patch.status);
+  scheduleWorktreeRecycleForStatusChange(sessionId, patch.status, { ownerScope, mediaDb: db });
   notifyGhostSessionStatusChange(sessionId, patch.status, updated.workingDir);
   // 远程 / MCP 改动绕过 renderer 乐观更新,故主动广播 sessions:patched:
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);
@@ -1614,16 +1717,17 @@ export async function setSessionsStatusInDb(
 ): Promise<SessionStatusChangeRow[]> {
   if (sessionIds.length === 0) return [];
   const ownerScope = captureOwnerScope();
-  const applied = await getDbClient()
-    .tx('sessions.setStatus', { sessionIds, status })
-    .catch((err) => {
+  const dbClient = getDbClient();
+  const applied = await withSessionRouteLocks(sessionIds, () =>
+    dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : String(err);
-      if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS') {
+      if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS' || code === 'PRECONDITION_FAILED') {
         throwIpcError(code, message);
       }
       throw err;
-    });
+    }),
+  );
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
       sessionId: item.sessionId,
@@ -1639,7 +1743,10 @@ export async function setSessionsStatusInDb(
       workspaceKind: item.workspaceKind,
     });
     broadcastSessionPatched(item.sessionId, { status: item.status }, ownerScope);
-    scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status);
+    scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status, {
+      ownerScope,
+      mediaDb: dbClient.drizzle,
+    });
     notifyGhostSessionStatusChange(item.sessionId, item.status, item.workingDir);
     removeHookAttachmentDir(item.sessionId, item.status);
   }
@@ -1658,13 +1765,12 @@ export async function setSessionsStatusInDb(
 function removeHookAttachmentDir(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   if (status === 'deleted') {
-    void removeTurnChangeSetsForSession(sessionId)
-      .catch((err) => {
-        log.warn('turn change-set cleanup failed', {
-          sessionId,
-          err: err instanceof Error ? err.message : String(err),
-        });
+    void removeTurnChangeSetsForSession(sessionId).catch((err) => {
+      log.warn('turn change-set cleanup failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
       });
+    });
   }
   const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
   const attachDir = path.join(attachRoot, sessionId);

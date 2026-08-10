@@ -15,7 +15,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Activity, Bot, FileDiff, FolderTree, Globe, ListTodo, Terminal } from 'lucide-react';
+import {
+  Activity,
+  Bot,
+  FileDiff,
+  FolderTree,
+  Globe,
+  ListTodo,
+  Smartphone,
+  Terminal,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TabKindId, TabKindMenuMeta } from './types';
@@ -39,6 +48,8 @@ interface AddTabDropdownProps {
    * dropdown 改 trailing 文案为"已打开"并维持 enabled(点击 = host 切到现有)。
    */
   existingKinds?: ReadonlySet<TabKindId>;
+  /** Host viewer is a public surface only while the product plugin is enabled. */
+  iosSimulatorAvailable?: boolean;
 }
 
 // Phase 1 硬编码。Phase 2 之后由 plugin registry 自动汇总。
@@ -90,6 +101,13 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     enabled: true,
   },
   {
+    kind: 'ios-simulator',
+    labelKey: 'rightSidebar.tabs.kinds.iosSimulator',
+    icon: Smartphone,
+    order: 25,
+    enabled: true,
+  },
+  {
     kind: 'terminal',
     labelKey: 'rightSidebar.tabs.kinds.terminal',
     icon: Terminal,
@@ -98,7 +116,13 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
   },
 ];
 
-export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: AddTabDropdownProps) {
+export function AddTabDropdown({
+  anchorRef,
+  onClose,
+  onSelect,
+  existingKinds,
+  iosSimulatorAvailable = false,
+}: AddTabDropdownProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
   // 定位:portal 到 body + fixed,按 anchor rect 摆位。原实现是「+」wrapper 内的
@@ -195,8 +219,11 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
     };
   }, [anchorRef, onClose]);
 
-  const enabled = MENU_ITEMS.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
-  const coming = MENU_ITEMS.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);
+  const visibleItems = MENU_ITEMS.filter(
+    (item) => item.kind !== 'ios-simulator' || iosSimulatorAvailable,
+  );
+  const enabled = visibleItems.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
+  const coming = visibleItems.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);
 
   return createPortal(
     <div

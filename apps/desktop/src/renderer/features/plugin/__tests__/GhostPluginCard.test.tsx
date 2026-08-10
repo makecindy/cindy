@@ -55,6 +55,7 @@ const commandPlugin: GhostPluginListItem = {
   enabled: true,
   canUse: true,
   tabPanel: false,
+  hostCapability: null,
 };
 
 const panelPlugin: GhostPluginListItem = {
@@ -69,6 +70,13 @@ const toolPlugin: GhostPluginListItem = {
   id: 'pure-tool',
   name: 'Pure Tool',
   canUse: false,
+};
+
+const simulatorPlugin: GhostPluginListItem = {
+  ...toolPlugin,
+  id: 'ios-simulator',
+  name: 'iOS Simulator',
+  hostCapability: 'ios-simulator',
 };
 
 const marketPlugin: PluginMarketItem = {
@@ -112,6 +120,15 @@ describe('GhostPluginCard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
     expect(onPrimary).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a conversation entry for a Host capability plugin', () => {
+    const onPrimary = vi.fn();
+    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
   });
 
   it('routes the manage icon to detail without firing the primary action', () => {
@@ -412,9 +429,7 @@ describe('MarketPluginCard', () => {
     expect((cardBody as HTMLButtonElement).disabled).toBe(true);
     expect(cardBody.className).toContain('cursor-not-allowed');
     expect(cardBody.className).not.toContain('cursor-wait');
-    const conflictDescription = screen.getByText(
-      'settings.ghosts.market.conflictDescription',
-    );
+    const conflictDescription = screen.getByText('settings.ghosts.market.conflictDescription');
     expect(conflictDescription.id).toBeTruthy();
     expect(cardBody.getAttribute('aria-describedby')).toBe(conflictDescription.id);
     const conflictAction = screen.getByRole('button', {

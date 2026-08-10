@@ -2581,6 +2581,24 @@ export class PiAgent extends BaseAgent {
           return true;
         }
       })();
+      const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const hostApprovalPresentation = (() => {
+        const presenter = this.deps.getMcpToolApprovalPresentation;
+        if (!presenter || !mcpTarget) return undefined;
+        try {
+          return presenter({
+            serverName: mcpTarget.serverName,
+            toolName: mcpTarget.toolName,
+            toolParams: input,
+          });
+        } catch (err) {
+          this.deps.logger.error('MCP approval presentation threw -> generic copy', {
+            serverName: mcpTarget.serverName,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          return undefined;
+        }
+      })();
       /**
        * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
        * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
@@ -2617,6 +2635,12 @@ export class PiAgent extends BaseAgent {
             requestId: id,
             toolName,
             input,
+            ...(hostApprovalPresentation?.title
+              ? { title: hostApprovalPresentation.title }
+              : {}),
+            ...(hostApprovalPresentation?.description
+              ? { description: hostApprovalPresentation.description }
+              : {}),
           })).then((decision) => {
             if (decision.kind !== 'permission') {
               this.deps.logger.warn('pi permission got mismatched decision kind', {
@@ -2693,24 +2717,23 @@ export class PiAgent extends BaseAgent {
         const mcpPolicy = ((): 'auto-approve' | 'prompt' | 'prompt-each-time' | null => {
           const classifier = this.deps.getMcpToolApprovalPolicy;
           if (!classifier) return null;
-          const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
-          if (!target) return null;
+          if (!mcpTarget) return null;
           try {
             const policy = classifier({
-              serverName: target.serverName,
-              toolName: target.toolName,
+              serverName: mcpTarget.serverName,
+              toolName: mcpTarget.toolName,
               toolParams: input,
             });
             if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
               return policy;
             }
             this.deps.logger.error('invalid MCP approval policy -> user confirmation', {
-              serverName: target.serverName,
+              serverName: mcpTarget.serverName,
               policy,
             });
           } catch (err) {
             this.deps.logger.error('MCP approval policy threw -> user confirmation', {
-              serverName: target.serverName,
+              serverName: mcpTarget.serverName,
               message: err instanceof Error ? err.message : String(err),
             });
           }
