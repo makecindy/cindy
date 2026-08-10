@@ -44,6 +44,7 @@ import {
   reviewActionRevealClass,
   scrollElementIntoContainerView,
   shouldShowBranchBaseLabel,
+  shouldOfferReviewOpenFile,
   shouldFallbackFromMissingSelectedCommit,
   shouldHideWhitespaceOnlyDiff,
   summaryEntryToPlaceholderDiff,
@@ -91,6 +92,12 @@ function branchDiffData(baseRef: string): ReviewBranchDiffData {
 }
 
 describe('ReviewTabBody Last turn actions', () => {
+  it('offers local file opening only when neither SSH nor device-link controls the task', () => {
+    expect(shouldOfferReviewOpenFile(null, null)).toBe(true);
+    expect(shouldOfferReviewOpenFile('ssh-host', null)).toBe(false);
+    expect(shouldOfferReviewOpenFile(null, 'device-id')).toBe(false);
+  });
+
   it('keeps Last turn as a read-only source while other sources retain file actions', () => {
     expect(actionForReviewDiff('unstaged', diff('unstaged', 'a.ts'))).toBe('stage');
     expect(actionForReviewDiff('staged', diff('staged', 'b.ts'))).toBe('unstage');

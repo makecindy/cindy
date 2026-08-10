@@ -84,6 +84,34 @@ export function shouldUnpinOnUpIntent({ scrollHeight, clientHeight }: UpIntentUn
   return scrollHeight - clientHeight > UNPIN_MIN_SCROLLABLE_PX;
 }
 
+export interface SelectTailUserMessageArgs<T extends { type: string }> {
+  /** 当前有界窗口是否覆盖完整 render-item 尾部。 */
+  windowCoversEnd: boolean;
+  /** 当前 DOM 窗口最后一个 render item。 */
+  visibleLastItem: T | undefined;
+  /** 内存中完整 render-item 序列最后一个 item。 */
+  realLastItem: T | undefined;
+  /** 从 render item 提取 user message id；非 user item 返回 null。 */
+  userMessageId: (item: T | undefined) => string | null;
+}
+
+/**
+ * 选择供「新用户发送」检测的尾消息。
+ *
+ * bounded window 未覆盖会话末尾时，visible 尾只代表历史切片边界，可能刚好是
+ * 一条旧 user message；拿它建基线会误判跳回底部或遮蔽真正的新发送。因此该态
+ * 必须无条件读取内存全量的真实尾部。窗口覆盖末尾时 visible 尾与真实尾同义，
+ * 保留 visible 路径避免纯扩窗造成额外观察变化。
+ */
+export function selectTailUserMessageId<T extends { type: string }>({
+  windowCoversEnd,
+  visibleLastItem,
+  realLastItem,
+  userMessageId,
+}: SelectTailUserMessageArgs<T>): string | null {
+  return userMessageId(windowCoversEnd ? visibleLastItem : realLastItem);
+}
+
 export interface ResolveRenderPinArgs {
   /** A saved non-bottom viewport is currently being restored. */
   restoring: boolean;

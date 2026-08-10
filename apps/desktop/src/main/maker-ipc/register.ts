@@ -23,6 +23,7 @@ import type {
   InteractionRequest,
   Maker,
   SendOrigin,
+  Session,
   SessionSendOptions,
   SessionSendResult,
   UserMessage,
@@ -311,6 +312,7 @@ import {
   ensureCodexMcpBridgeStartedForRemote,
   finalizeCodexAfterAuthModeChange,
   getMaker,
+  getMakerIfReady,
   getPluginRegistry,
   prepareCodexForAuthModeChange,
   restartCodexAfterAuthModeChange,
@@ -1017,6 +1019,14 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
     failPendingSchedulerAutoResume(sessionId, attemptToken),
   log: (message, fields) => log.debug(message, fields),
 });
+
+/**
+ * A Codex reconnect-stall retry is scheduled against the current runtime
+ * Session, but that provider may close/rebuild the exact instance before the
+ * backoff timer fires. Bind the lease to the instance, not only sessionId:
+ * a replacement Session can otherwise inherit a late close callback.
+ */
+const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();
 
 /**
  * 用户明确停止会话时统一撤销两类自动续跑与它们的退避簿记。
@@ -2411,6 +2421,31 @@ export async function withSendToSessionLock<T>(
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
+
+function getWiredSessionCloseReason(session: WiredSession) {
+  return getMakerIfReady()?.getSessionCloseReason(session) ?? 'unexpected';
+}
+
+/**
+ * Preserve only the narrow provider-rebuild handoff window for an interrupted
+ * Codex reconnect stall. Every check is deliberately instance- and token-
+ * scoped so a user close, a later retry, or an already-running callback cannot
+ * resurrect the old business session.
+ */
+function shouldPreserveCodexReconnectStalledAutoResume(
+  session: WiredSession,
+  closeReason: ReturnType<typeof getWiredSessionCloseReason>,
+): boolean {
+  const attemptToken = pendingCodexReconnectStalledRebuilds.get(session);
+  if (attemptToken === undefined) return false;
+  if (closeReason !== 'unexpected') return false;
+  if (!interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)) return false;
+  if (!autoResumeBookkeeping.isCurrentAttempt(session.id, attemptToken)) return false;
+  const coordinator = agentInputCoordinatorHolder;
+  if (!coordinator || !coordinator.isAutoResumePending(session.id)) return false;
+  if (coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken) return false;
+  return autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken);
+}
 
 /**
  * GoalController 已确认当前 turn 归自己所有后调用：复用输入协调器的 Stop 边界中断
@@ -4947,14 +4982,28 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           session,
         );
+        const closeReason = getWiredSessionCloseReason(session);
+        const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(
+          session,
+          closeReason,
+        );
+        pendingCodexReconnectStalledRebuilds.delete(session);
         try {
           cleanupPendingInteractionsForSession(session.id, 'session_closed');
-          // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
-          // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
-          // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
-          // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
-          interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
-          autoResumeBookkeeping.teardown(session.id);
+          if (preserveAutoResumeIntent) {
+            log.info('preserving scheduled Codex reconnect-stall auto-resume across provider rebuild', {
+              sessionId: session.id,
+              attemptToken: agentInputCoordinatorHolder?.getAutoResumeAttemptToken(session.id),
+              closeReason,
+            });
+          } else {
+            // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
+            // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
+            // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
+            // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
+            interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
+            autoResumeBookkeeping.teardown(session.id);
+          }
           // rehydrate / 凭证切换 close-rebuild 窗口:同一逻辑会话进程内重建,
           // 协调器状态应连续。窗口内保留 input boundary(不 abort,避免取消
           // 驱动本次重建的 signal → #1930 cancelled-before-dispatch),但
@@ -4964,6 +5013,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 标记 / wiring teardown)照常。
           agentInputCoordinatorHolder?.onSessionClosed(session.id, {
             preserveInputBoundary: rehydrateCloseSuppression.isSuppressed(session.id),
+            preserveAutoResumeIntent,
           });
           // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
           pendingCredentialSwitchHolder?.onSessionClosed(session.id);
@@ -10532,6 +10582,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : null;
       if (schedulerRunId) {
         beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
+      }
+      if (signals.reason === 'codex_reconnect_stalled') {
+        const runtimeSession = getStableSessionForTurnBoundary(sessionId);
+        if (runtimeSession) {
+          pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);
+        }
       }
       // 排期的撤旧、补落与令牌都在 AutoResumeBookkeeping.schedule 里(带单测),这里只给
       // 退避时长和到点要干的事。

@@ -12,8 +12,8 @@
  *    一律不实现,未知 op 确定性回 `{ok:false}`。
  *  - 入参只有 sessionId + 结构化查询字段(复用本机 IPC 的 parse* 校验),不接受
  *    任何客户端路径:workdir 由被控端 resolveReviewScope 从自己的 session 记录
- *    解析;SSH 远程会话由 scope 层返回 remote-session 禁用态(不二跳,对齐
- *    本机审查面板现状)。
+ *    解析;若被控端任务本身是 SSH 工作区,同样由被控端 Main 在目标 SSH 主机
+ *    上执行只读 Git,控制端仍看不到主机凭据或任意命令能力。
  *
  * oversize:响应序列化超 relay 帧限(MAX_FRAME_BYTES=2MiB)前主动预判——先
  * gzip(diff 文本压缩率高),仍超回结构化 `{ ok:false, code:'OVERSIZE' }`,
@@ -45,6 +45,7 @@ import {
   readReviewMarkdownPreview,
   readReviewSummary,
 } from './ipc.js';
+import { withSessionReviewExecution } from './sshReviewBackend.js';
 
 const log = createLogger('git-review/device-op');
 
@@ -92,33 +93,35 @@ async function dispatchRemoteOp(op: string, payload: unknown): Promise<unknown> 
   switch (op) {
     case 'get': {
       const { sessionId, options } = parseReviewDataPayload(payload);
-      return readReviewData(sessionId, options);
+      return withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options));
     }
-    case 'summary':
-      return readReviewSummary(parseSessionId(payload));
+    case 'summary': {
+      const sessionId = parseSessionId(payload);
+      return withSessionReviewExecution(sessionId, () => readReviewSummary(sessionId));
+    }
     case 'commits': {
       const { sessionId, baseRef } = parseCommitsPayload(payload);
-      return readReviewCommits(sessionId, baseRef);
+      return withSessionReviewExecution(sessionId, () => readReviewCommits(sessionId, baseRef));
     }
     case 'commit-diff': {
       const { sessionId, oid, options } = parseCommitDiffPayload(payload);
-      return readReviewCommitDiff(sessionId, oid, options);
+      return withSessionReviewExecution(sessionId, () => readReviewCommitDiff(sessionId, oid, options));
     }
     case 'branch-diff': {
       const { sessionId, baseRef, options } = parseBranchDiffPayload(payload);
-      return readReviewBranchDiff(sessionId, baseRef, options);
+      return withSessionReviewExecution(sessionId, () => readReviewBranchDiff(sessionId, baseRef, options));
     }
     case 'file-diff': {
       const { sessionId, request } = parseFileDiffPayload(payload);
-      return readReviewFileDiff(sessionId, request);
+      return withSessionReviewExecution(sessionId, () => readReviewFileDiff(sessionId, request));
     }
     case 'image-preview': {
       const { sessionId, request } = parseImagePreviewPayload(payload);
-      return readReviewImagePreview(sessionId, request);
+      return withSessionReviewExecution(sessionId, () => readReviewImagePreview(sessionId, request));
     }
     case 'markdown-preview': {
       const { sessionId, request } = parseMarkdownPreviewPayload(payload);
-      return readReviewMarkdownPreview(sessionId, request);
+      return withSessionReviewExecution(sessionId, () => readReviewMarkdownPreview(sessionId, request));
     }
     default:
       return null;
@@ -153,6 +156,10 @@ async function handleRemoteOp(args: GitReviewRemoteOpArgs): Promise<GitReviewRem
     // 避免把内部堆栈带回控制端。
     if (err instanceof Error && /\[(INVALID_PARAMS|PRECONDITION_FAILED)\]/.test(err.message)) throw err;
     const message = err instanceof Error ? err.message : String(err);
+    if (/\[SSH_[A-Z_]+\]/.test(message)) {
+      log.warn('git-review remote-op SSH backend unavailable', { op: args.op });
+      return bad('SSH workspace review is unavailable on the controlled device');
+    }
     log.warn('git-review remote-op failed', { op: args.op, message });
     return bad(message);
   }
