@@ -73,7 +73,7 @@ import type {
   VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
 
-import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
+import { isGhostInstallLockHeld, withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
 import { installedGhostContentDigest } from '../../cindy-brain/ghostPackageContentDigest';
 import { GhostPackagePermissionReviewRequiredError } from '../../cindy-brain/packagePermissionReview';
 import {
@@ -2103,6 +2103,95 @@ describe('PluginMarketService migration and defaultInstall', () => {
       count: 1,
       name: 'Test Plugin',
     });
+  });
+
+  it('verifies and purges an exact legacy organization package before creating provenance', async () => {
+    const notice = removal();
+    const item = summary({
+      scope: 'organization',
+      organizationId: notice.organizationId,
+    });
+    const h = harness([item], [notice]);
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-legacy-purge-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    fs.writeFileSync(path.join(installDir, 'main.js'), 'module.exports = "official";');
+    const contentDigest = await installedGhostContentDigest(installDir);
+    runtime.ghosts = [{ ...ghostEntry(notice.ghostId), dir: installDir }];
+    runtime.inspect.mockImplementation(async () => {
+      expect(isGhostInstallLockHeld(notice.ghostId)).toBe(true);
+      return {
+        manifest: manifest(),
+        canonicalManifest: manifest(),
+        trust: {
+          level: 'unverified',
+          publisherSigned: false,
+          publisherVerified: false,
+          reviewed: false,
+        },
+        packageSha256: item.currentRelease.sha256,
+        contentDigest: contentDigest!,
+      };
+    });
+    let catalogReads = 0;
+    h.api.listAll.mockImplementation(async () => {
+      catalogReads += 1;
+      if (catalogReads === 2) expect(isGhostInstallLockHeld(notice.ghostId)).toBe(true);
+      return { plugins: [item], removals: [notice] };
+    });
+    mockUninstallDropsGhost();
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [],
+      unavailableReason: null,
+    });
+
+    expect(h.api.listAll).toHaveBeenCalledTimes(2);
+    expect(runtime.uninstall).toHaveBeenCalledWith(notice.ghostId, {
+      skipMarketLedger: true,
+    });
+    const record = h.ledger.installationForGhost(notice.ghostId);
+    expect(record).toMatchObject({
+      pluginId: notice.pluginId,
+      ghostId: notice.ghostId,
+      source: 'market',
+      installed: false,
+    });
+    expect(h.recoveryStore.hasRemovalReceipt(record!)).toBe(true);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(false);
+    expect(h.service.consumeRemovalNotice()).toEqual({ count: 1, name: 'Test Plugin' });
+  });
+
+  it('does not purge a ledgerless same-id local package whose bytes lack official provenance', async () => {
+    const notice = removal();
+    const item = summary({
+      scope: 'organization',
+      organizationId: notice.organizationId,
+    });
+    const h = harness([item], [notice]);
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-local-collision-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    fs.writeFileSync(path.join(installDir, 'main.js'), 'module.exports = "local replacement";');
+    runtime.ghosts = [{ ...ghostEntry(notice.ghostId), dir: installDir }];
+    runtime.inspect.mockResolvedValue({
+      manifest: manifest(),
+      canonicalManifest: manifest(),
+      trust: {
+        level: 'unverified',
+        publisherSigned: false,
+        publisherVerified: false,
+        reviewed: false,
+      },
+      packageSha256: item.currentRelease.sha256,
+      contentDigest: 'f'.repeat(64),
+    });
+
+    await h.service.snapshot();
+
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(h.ledger.installationForGhost(notice.ghostId)).toBeNull();
+    expect(h.service.consumeRemovalNotice()).toBeNull();
   });
 
   it.each([

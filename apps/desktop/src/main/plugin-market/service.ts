@@ -250,6 +250,54 @@ function legacyRecordFrom(
   };
 }
 
+/**
+ * Builds a provisional market record for a ledgerless legacy install. The
+ * caller must prove the complete installed directory matches this exact
+ * release before persisting the record; identity and manifest alone are not
+ * provenance.
+ */
+function provisionalLegacyPurgeRecord(
+  plugin: VisiblePluginSummary,
+  removal: PluginRemovalNotice,
+  ghost: InstalledGhost,
+): PluginMarketInstallationRecord | null {
+  if (
+    removal.action !== 'purge' ||
+    plugin.id !== removal.pluginId ||
+    plugin.ghostId !== removal.ghostId ||
+    plugin.scope !== 'organization' ||
+    plugin.organizationId !== removal.organizationId ||
+    ghost.manifest.id !== plugin.ghostId ||
+    ghost.manifest.version !== plugin.currentRelease.version
+  ) {
+    return null;
+  }
+  const rawManifest = installedGhostRawManifest(ghost.dir);
+  if (
+    !rawManifest ||
+    rawManifest.id !== plugin.ghostId ||
+    rawManifest.version !== plugin.currentRelease.version
+  ) {
+    return null;
+  }
+  return {
+    pluginId: plugin.id,
+    ghostId: plugin.ghostId,
+    releaseId: plugin.currentRelease.id,
+    version: plugin.currentRelease.version,
+    sha256: plugin.currentRelease.sha256,
+    scope: plugin.scope,
+    organizationId: plugin.organizationId,
+    source: 'market',
+    // Persist fail-closed before physical cleanup: if the process exits after
+    // this record is written, the next purge attempt must verify full content
+    // again instead of treating provenance as committed.
+    installed: false,
+    updatedAt: new Date().toISOString(),
+    manifestDigest: ghostManifestDigest(rawManifest),
+  };
+}
+
 function ghostIdCounts(plugins: readonly VisiblePluginSummary[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const plugin of plugins) {
@@ -695,7 +743,7 @@ export class PluginMarketService {
     const availablePlugins = withoutActivePurges(plugins, removals);
     // A purge is an explicit server decision and wins over recovery/default
     // installation even if a stale catalog response still lists the Plugin.
-    await this.applyServerRemovals(removals, owner, ledger);
+    await this.applyServerRemovals(removals, plugins, owner, ledger);
     await this.ledgerMutation;
     await this.adoptLegacyInstallations(availablePlugins, ledger, owner);
     await this.backfillOfficialCindyGithubTrust(ledger, owner);
@@ -2489,8 +2537,40 @@ export class PluginMarketService {
       : 'mismatch';
   }
 
+  /** Re-read both sides of a stale-catalog purge before adopting legacy bytes. */
+  private async verifyOfficialLegacyPurgeSource(
+    record: PluginMarketInstallationRecord,
+    removal: PluginRemovalNotice,
+    owner: ActiveAppSession,
+  ): Promise<boolean> {
+    const catalog = await this.api.listAll();
+    requireSameMarketOwner(owner);
+    const purgeStillActive = catalog.removals.some(
+      (candidate) =>
+        candidate.action === 'purge' &&
+        candidate.pluginId === removal.pluginId &&
+        candidate.ghostId === removal.ghostId &&
+        candidate.scope === removal.scope &&
+        candidate.organizationId === removal.organizationId,
+    );
+    if (!purgeStillActive) return false;
+    const visible = visiblePluginsForOwner(owner, catalog.plugins);
+    const matches = visible.filter(
+      (candidate) =>
+        candidate.id === record.pluginId &&
+        candidate.ghostId === record.ghostId &&
+        candidate.scope === record.scope &&
+        candidate.organizationId === record.organizationId &&
+        candidate.currentRelease.id === record.releaseId &&
+        candidate.currentRelease.version === record.version &&
+        candidate.currentRelease.sha256 === record.sha256,
+    );
+    return matches.length === 1;
+  }
+
   private async applyServerRemovals(
     removals: readonly PluginRemovalNotice[],
+    plugins: readonly VisiblePluginSummary[],
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
   ): Promise<void> {
@@ -2516,7 +2596,10 @@ export class PluginMarketService {
       if (record.source !== 'market' && record.source !== 'legacy-adopted') {
         return 'non-server-source';
       }
-      if (record.scope !== 'organization') return 'non-organization-scope';
+      if (record.scope !== 'organization' || removal.scope !== 'organization') {
+        return 'non-organization-scope';
+      }
+      if (record.organizationId !== removal.organizationId) return 'organization-mismatch';
       return null;
     };
     const snapshot = ledger.read().installations;
@@ -2531,99 +2614,154 @@ export class PluginMarketService {
         continue;
       }
       const prefilterReason = ledgerGateReason(snapshot[removal.ghostId], removal);
-      if (prefilterReason) {
+      const provisionalPlugins = plugins.filter(
+        (plugin) =>
+          plugin.id === removal.pluginId &&
+          plugin.ghostId === removal.ghostId &&
+          plugin.scope === 'organization' &&
+          plugin.organizationId === removal.organizationId,
+      );
+      const mayVerifyLegacy =
+        prefilterReason === 'ledger-record-missing' && provisionalPlugins.length === 1;
+      if (prefilterReason && !mayVerifyLegacy) {
         skip(removal, prefilterReason);
         continue;
       }
       try {
-        const removed = await this.withMutation(removal.pluginId, async () => {
-          requireSameMarketOwner(owner);
-          const record = ledger.installationForGhost(removal.ghostId);
-          const reason = ledgerGateReason(record, removal);
-          if (reason) return skip(removal, reason);
+        const removed = await this.withMutation(removal.pluginId, () =>
+          withGhostInstallLock(removal.ghostId, async () => {
+            requireSameMarketOwner(owner);
+            let record = ledger.installationForGhost(removal.ghostId);
+            let legacyContentVerified = false;
+            ghostsById ??= new Map(
+              getGhostManager()
+                .list()
+                .map((ghost) => [ghost.manifest.id, ghost]),
+            );
+            const installed = ghostsById.get(removal.ghostId);
 
-          const finalizePurge = () =>
-            this.withCapturedLedgerMutation(ledger, () => {
-              const current = ledger.installationForGhost(removal.ghostId);
-              if (
-                ledgerGateReason(current, removal) !== null ||
-                pluginInstallationKey(current!) !== pluginInstallationKey(record!)
-              ) {
-                throwIpcError('PRECONDITION_FAILED', 'Plugin removal candidate changed');
+            if (!record) {
+              if (!installed) return skip(removal, 'ledger-record-missing');
+              const provisional = provisionalLegacyPurgeRecord(
+                provisionalPlugins[0]!,
+                removal,
+                installed,
+              );
+              if (!provisional) return skip(removal, 'legacy-provenance-unavailable');
+              let verification: RecoveryVerification;
+              try {
+                verification = await this.verifyRecoveryContent(provisional, installed, owner);
+              } catch (error) {
+                if (isIpcError(error) && error.code === 'PRECONDITION_FAILED') throw error;
+                verification = { state: 'deferred' };
+                log.warn('legacy server purge content verification deferred', {
+                  pluginId: removal.pluginId,
+                  ghostId: removal.ghostId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
               }
-              // userId=null keeps any pre-existing default-install choice.
-              if (current!.installed) ledger.markRemoved(removal.ghostId, null);
-              const removedRecord = ledger.installationForGhost(removal.ghostId);
-              if (removedRecord) {
-                this.recordRecoveryRemovalBestEffort(recoveryStore, removedRecord, 'server-purge');
+              if (verification.state !== 'match') {
+                return skip(removal, `legacy-content-${verification.state}`);
               }
-            });
-
-          ghostsById ??= new Map(
-            getGhostManager()
-              .list()
-              .map((ghost) => [ghost.manifest.id, ghost]),
-          );
-          const installed = ghostsById.get(removal.ghostId);
-          if (!installed) {
-            await finalizePurge();
-            return skip(removal, 'runtime-not-installed');
-          }
-          // 溯源摘要闸:账本记录只证明"市场装过这个 ghostId",不证明现在占位的
-          // 还是那份包——本地 .cindy 可原位替换,替换不写市场账本。摘要对不上
-          // (含 ghost.json 读不出)即视为非服务端安装,不删,与更新路径/连接授权
-          // 的 fail-closed 判据同口径。缺摘要的存量记录放行:被下架的插件已不在
-          // 目录里,digest 迁移永远补不上,fail-closed 会让老安装的合法清理永久失效。
-          if (
-            record?.manifestDigest != null &&
-            installedGhostRawManifestDigest(installed.dir) !== record.manifestDigest
-          ) {
-            await finalizePurge();
-            return skip(removal, 'manifest-digest-mismatch');
-          }
-
-          // Supporting a false ledger record is the new recovery compatibility
-          // path. Unlike the historical installed=true purge, it must prove the
-          // complete directory still equals the recorded release: the 0.1.38
-          // failure window also allowed a local package with the same manifest
-          // but different executable bytes to occupy this id.
-          if (!record!.installed) {
-            let verification: RecoveryVerification;
-            try {
-              verification = await this.verifyRecoveryContent(record!, installed, owner);
-            } catch (error) {
-              if (isIpcError(error) && error.code === 'PRECONDITION_FAILED') throw error;
-              verification = { state: 'deferred' };
-              log.warn('server plugin purge content verification deferred', {
-                pluginId: removal.pluginId,
-                ghostId: removal.ghostId,
-                error: error instanceof Error ? error.message : String(error),
+              if (!(await this.verifyOfficialLegacyPurgeSource(provisional, removal, owner))) {
+                return skip(removal, 'legacy-source-changed');
+              }
+              await this.withCapturedLedgerMutation(ledger, () => {
+                requireSameMarketOwner(owner);
+                if (ledger.installationForGhost(removal.ghostId)) {
+                  throwIpcError('PRECONDITION_FAILED', 'Plugin removal candidate changed');
+                }
+                ledger.upsertInstallation(provisional);
               });
+              requireSameMarketOwner(owner);
+              record = ledger.installationForGhost(removal.ghostId);
+              legacyContentVerified = true;
             }
-            if (verification.state !== 'match') {
-              await finalizePurge();
-              return skip(removal, `runtime-content-${verification.state}`);
-            }
-          }
+            const reason = ledgerGateReason(record, removal);
+            if (reason) return skip(removal, reason);
 
-          try {
-            await uninstallGhostAndCleanup(removal.ghostId, { skipMarketLedger: true });
-            ghostsById.delete(removal.ghostId);
-          } catch (error) {
-            // The authoritative purge still owns the ledger decision. A later
-            // snapshot can retry physical cleanup without making it recoverable.
+            const finalizePurge = () =>
+              this.withCapturedLedgerMutation(ledger, () => {
+                const current = ledger.installationForGhost(removal.ghostId);
+                if (
+                  ledgerGateReason(current, removal) !== null ||
+                  pluginInstallationKey(current!) !== pluginInstallationKey(record!)
+                ) {
+                  throwIpcError('PRECONDITION_FAILED', 'Plugin removal candidate changed');
+                }
+                // userId=null keeps any pre-existing default-install choice.
+                if (current!.installed) ledger.markRemoved(removal.ghostId, null);
+                const removedRecord = ledger.installationForGhost(removal.ghostId);
+                if (removedRecord) {
+                  this.recordRecoveryRemovalBestEffort(
+                    recoveryStore,
+                    removedRecord,
+                    'server-purge',
+                  );
+                }
+              });
+
+            if (!installed) {
+              await finalizePurge();
+              return skip(removal, 'runtime-not-installed');
+            }
+            // 溯源摘要闸:账本记录只证明"市场装过这个 ghostId",不证明现在占位的
+            // 还是那份包——本地 .cindy 可原位替换,替换不写市场账本。摘要对不上
+            // (含 ghost.json 读不出)即视为非服务端安装,不删,与更新路径/连接授权
+            // 的 fail-closed 判据同口径。缺摘要的存量记录放行:被下架的插件已不在
+            // 目录里,digest 迁移永远补不上,fail-closed 会让老安装的合法清理永久失效。
+            if (
+              record?.manifestDigest != null &&
+              installedGhostRawManifestDigest(installed.dir) !== record.manifestDigest
+            ) {
+              await finalizePurge();
+              return skip(removal, 'manifest-digest-mismatch');
+            }
+
+            // Supporting a false ledger record is the new recovery compatibility
+            // path. Unlike the historical installed=true purge, it must prove the
+            // complete directory still equals the recorded release: the 0.1.38
+            // failure window also allowed a local package with the same manifest
+            // but different executable bytes to occupy this id.
+            if (!record!.installed && !legacyContentVerified) {
+              let verification: RecoveryVerification;
+              try {
+                verification = await this.verifyRecoveryContent(record!, installed, owner);
+              } catch (error) {
+                if (isIpcError(error) && error.code === 'PRECONDITION_FAILED') throw error;
+                verification = { state: 'deferred' };
+                log.warn('server plugin purge content verification deferred', {
+                  pluginId: removal.pluginId,
+                  ghostId: removal.ghostId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              if (verification.state !== 'match') {
+                await finalizePurge();
+                return skip(removal, `runtime-content-${verification.state}`);
+              }
+            }
+
+            requireSameMarketOwner(owner);
+            try {
+              await uninstallGhostAndCleanup(removal.ghostId, { skipMarketLedger: true });
+              ghostsById.delete(removal.ghostId);
+            } catch (error) {
+              // The authoritative purge still owns the ledger decision. A later
+              // snapshot can retry physical cleanup without making it recoverable.
+              await finalizePurge();
+              throw error;
+            }
             await finalizePurge();
-            throw error;
-          }
-          await finalizePurge();
-          log.info('server plugin removal applied', {
-            pluginId: removal.pluginId,
-            ghostId: removal.ghostId,
-          });
-          return {
-            name: stripDirectionalControls(installed.manifest.name) || null,
-          };
-        });
+            log.info('server plugin removal applied', {
+              pluginId: removal.pluginId,
+              ghostId: removal.ghostId,
+            });
+            return {
+              name: stripDirectionalControls(installed.manifest.name) || null,
+            };
+          }),
+        );
         if (removed) removedNames.push(removed.name);
       } catch (error) {
         log.error('server plugin removal failed', {

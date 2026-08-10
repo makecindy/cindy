@@ -2,14 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PluginMarketApi } from '../api';
 
-const logger = vi.hoisted(() => ({
-  warn: vi.fn(),
-}));
 const serverApi = vi.hoisted(() => ({ serverApiFetch: vi.fn() }));
 
-vi.mock('../../logger.js', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: logger.warn, error: vi.fn() }),
-}));
 vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: serverApi.serverApiFetch }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => 'https://plugins.example.com',
@@ -119,7 +113,7 @@ describe('PluginMarketApi', () => {
     });
   });
 
-  it('keeps active plugins over conflicting removals across pages', async () => {
+  it('preserves an authoritative purge when a stale catalog page still lists the plugin', async () => {
     const fetcher = pagedFetcher(
       {
         plugins: [],
@@ -131,12 +125,8 @@ describe('PluginMarketApi', () => {
 
     await expect(new PluginMarketApi(fetcher).listAll()).resolves.toMatchObject({
       plugins: [{ id: PLUGIN_A }],
-      removals: [{ pluginId: PLUGIN_B }],
+      removals: [{ pluginId: PLUGIN_A }, { pluginId: PLUGIN_B }],
     });
-    expect(logger.warn).toHaveBeenCalledWith(
-      'market removal ignored because plugin is active',
-      { pluginId: PLUGIN_A },
-    );
   });
 
   it('fails closed when the server still returns schema v1', async () => {
