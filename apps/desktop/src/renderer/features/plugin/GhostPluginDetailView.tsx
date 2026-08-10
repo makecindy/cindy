@@ -7,17 +7,20 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
   AlertTriangle,
   ArrowUp,
+  Ban,
   Bot,
+  Check,
   ChevronDown,
   Copy,
   Cpu,
   Download,
+  Hand,
   MessageCircle,
   FileCode2,
   FilePen,
@@ -34,6 +37,7 @@ import {
   PanelLeft,
   PanelRight,
   Radio,
+  SlidersHorizontal,
   Smartphone,
   Sparkles,
   Terminal,
@@ -63,7 +67,10 @@ import {
   isOfficialGhostId,
   type GhostPermissionItem,
   type GhostToolDecl,
+  type GhostToolPermissionConfig,
+  type GlobalToolPolicy,
   type InstalledGhost,
+  type ToolApprovalMode,
 } from '../../../shared/ghost';
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
 import { GhostPluginIcon } from './GhostPluginIcon';
@@ -470,7 +477,9 @@ export function GhostPluginDetailView({
           </section>
         ) : null}
 
-        {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
+        {detail.tools.length > 0 ? (
+          <ToolsSection ghostId={detail.id} tools={detail.tools} />
+        ) : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
 
@@ -526,7 +535,7 @@ function MetadataDivider() {
   );
 }
 
-function DetailSectionHeader({
+export function DetailSectionHeader({
   id,
   title,
   action,
@@ -545,7 +554,7 @@ function DetailSectionHeader({
   );
 }
 
-function SectionTextAction({
+export function SectionTextAction({
   expanded,
   onClick,
   children,
@@ -566,39 +575,207 @@ function SectionTextAction({
   );
 }
 
-export function ToolsSection({ tools }: { tools: readonly GhostToolDecl[] }) {
+function PolicyStatusIcon({ policy }: { policy: GlobalToolPolicy }) {
+  if (policy === 'always-allow') return <Check size={14} className="text-[var(--text-primary)]" />;
+  if (policy === 'needs-approval') return <Hand size={14} className="text-[var(--text-primary)]" />;
+  if (policy === 'blocked') return <Ban size={14} className="text-[var(--warning-fg)]" />;
+  return <SlidersHorizontal size={14} className="text-[var(--text-tertiary)]" />;
+}
+
+export function ToolsSection({
+  ghostId,
+  tools,
+}: {
+  ghostId: string;
+  tools: readonly GhostToolDecl[];
+}) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
-  const canExpand = tools.length > 6;
+  const [config, setConfig] = useState<GhostToolPermissionConfig>(() => {
+    try {
+      return window.electronAPI.ghosts.toolPermissionsSync(ghostId)?.config ?? {};
+    } catch {
+      return {};
+    }
+  });
+
+  const updateConfig = (next: GhostToolPermissionConfig) => {
+    setConfig(next);
+    void window.electronAPI.ghosts.setToolPermissions(ghostId, next);
+  };
+
+  const currentGlobalPolicy: GlobalToolPolicy = useMemo(() => {
+    if (config.globalPolicy && config.globalPolicy !== 'custom') {
+      const toolModes = Object.values(config.tools ?? {});
+      if (toolModes.length === 0 || toolModes.every((m) => m === config.globalPolicy)) {
+        return config.globalPolicy;
+      }
+      return 'custom';
+    }
+    const toolModes = tools.map((tool) => config.tools?.[tool.name] ?? 'needs-approval');
+    if (toolModes.every((m) => m === 'always-allow')) return 'always-allow';
+    if (toolModes.every((m) => m === 'needs-approval')) return 'needs-approval';
+    if (toolModes.every((m) => m === 'blocked')) return 'blocked';
+    return 'custom';
+  }, [config, tools]);
+
+  const handleSetGlobalPolicy = (policy: ToolApprovalMode) => {
+    const updatedTools: Record<string, ToolApprovalMode> = {};
+    for (const tool of tools) {
+      updatedTools[tool.name] = policy;
+    }
+    updateConfig({
+      globalPolicy: policy,
+      tools: updatedTools,
+    });
+  };
+
+  const handleSetToolMode = (toolName: string, mode: ToolApprovalMode) => {
+    const nextTools = { ...(config.tools ?? {}), [toolName]: mode };
+    const allSame = tools.every((tool) => (nextTools[tool.name] ?? 'needs-approval') === mode);
+    updateConfig({
+      globalPolicy: allSame ? mode : 'custom',
+      tools: nextTools,
+    });
+  };
+
   return (
     <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-tools-title">
-      <DetailSectionHeader
-        id="ghost-tools-title"
-        title={t('settings.ghosts.detail.toolsTitle')}
-        action={
-          canExpand ? (
-            <SectionTextAction expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-              {t(
-                expanded
-                  ? 'settings.ghosts.detail.collapseTools'
-                  : 'settings.ghosts.detail.viewAllTools',
+      <div className="flex items-center justify-between gap-4">
+        <h2 id="ghost-tools-title" className={DETAIL_SECTION_HEADING_CLASS}>
+          {t('settings.ghosts.detail.toolsTitle')} ({tools.length})
+        </h2>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                DETAIL_SURFACE_CLASS,
+                DETAIL_SURFACE_INTERACTIVE_CLASS,
+                'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-13 font-medium text-[var(--text-primary)]',
               )}
-            </SectionTextAction>
-          ) : undefined
-        }
-      />
-      <div
-        className={cn(
-          DETAIL_SECTION_CONTENT_CLASS,
-          'flex flex-wrap gap-2',
-          !expanded && canExpand && 'max-h-8 overflow-hidden',
-        )}
-      >
-        {tools.map((tool) => (
-          <ToolDescriptionChip key={tool.name} tool={tool} />
-        ))}
+            >
+              <PolicyStatusIcon policy={currentGlobalPolicy} />
+              <span>{t(`settings.ghosts.detail.${currentGlobalPolicy}`)}</span>
+              <ChevronDown size={14} className="text-[var(--text-tertiary)]" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-[180px]">
+            <DropdownMenuItem onClick={() => handleSetGlobalPolicy('always-allow')}>
+              <Check size={14} className="mr-2 text-[var(--text-secondary)]" />
+              {t('settings.ghosts.detail.alwaysAllow')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleSetGlobalPolicy('needs-approval')}>
+              <Hand size={14} className="mr-2 text-[var(--text-secondary)]" />
+              {t('settings.ghosts.detail.needsApproval')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleSetGlobalPolicy('blocked')}>
+              <Ban size={14} className="mr-2 text-[var(--text-secondary)]" />
+              {t('settings.ghosts.detail.blocked')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <p className="mt-1 text-13 text-[var(--text-secondary)]">
+        {t('settings.ghosts.detail.chooseToolPermission')}
+      </p>
+
+      <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-2')}>
+        {tools.map((tool) => {
+          const mode =
+            config.tools?.[tool.name] ??
+            (config.globalPolicy !== 'custom' ? config.globalPolicy : undefined) ??
+            'needs-approval';
+          return (
+            <ToolPermissionRow
+              key={tool.name}
+              tool={tool}
+              mode={mode}
+              onChangeMode={(nextMode) => handleSetToolMode(tool.name, nextMode)}
+            />
+          );
+        })}
       </div>
     </section>
+  );
+}
+
+function ToolPermissionRow({
+  tool,
+  mode,
+  onChangeMode,
+}: {
+  tool: GhostToolDecl;
+  mode: ToolApprovalMode;
+  onChangeMode: (mode: ToolApprovalMode) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className={cn(
+        DETAIL_SURFACE_CLASS,
+        'flex flex-col gap-2 rounded-xl p-3.5 sm:flex-row sm:items-center sm:justify-between',
+      )}
+    >
+      <div className="min-w-0 flex-1 pr-2">
+        <div className="flex items-center gap-2">
+          <code className="font-mono text-13 font-semibold text-[var(--text-primary)]">
+            {tool.name}
+          </code>
+        </div>
+        {tool.description ? (
+          <p className="mt-0.5 text-12 leading-relaxed text-[var(--text-secondary)] line-clamp-2">
+            {tool.description}
+          </p>
+        ) : null}
+      </div>
+
+      {/* 3-State Segmented Control */}
+      <div className="flex shrink-0 items-center rounded-full border border-[color-mix(in_srgb,var(--border-default)_72%,transparent)] bg-[var(--surface)] p-0.5">
+        <button
+          type="button"
+          aria-label={t('settings.ghosts.detail.alwaysAllow')}
+          title={t('settings.ghosts.detail.alwaysAllow')}
+          onClick={() => onChangeMode('always-allow')}
+          className={cn(
+            'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150',
+            mode === 'always-allow'
+              ? 'bg-[var(--surface-chip)] text-[var(--text-primary)] shadow-sm'
+              : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+          )}
+        >
+          <Check size={13} />
+        </button>
+        <button
+          type="button"
+          aria-label={t('settings.ghosts.detail.needsApproval')}
+          title={t('settings.ghosts.detail.needsApproval')}
+          onClick={() => onChangeMode('needs-approval')}
+          className={cn(
+            'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150',
+            mode === 'needs-approval'
+              ? 'bg-[var(--surface-chip)] text-[var(--text-primary)] shadow-sm'
+              : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+          )}
+        >
+          <Hand size={13} />
+        </button>
+        <button
+          type="button"
+          aria-label={t('settings.ghosts.detail.blocked')}
+          title={t('settings.ghosts.detail.blocked')}
+          onClick={() => onChangeMode('blocked')}
+          className={cn(
+            'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150',
+            mode === 'blocked'
+              ? 'bg-[var(--surface-chip)] text-[var(--warning-fg)] shadow-sm'
+              : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+          )}
+        >
+          <Ban size={13} />
+        </button>
+      </div>
+    </div>
   );
 }
 

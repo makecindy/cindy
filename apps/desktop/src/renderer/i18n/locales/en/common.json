@@ -3692,6 +3692,11 @@
           "workdirClear": "Reset to default folder"
         },
         "toolsTitle": "Tools",
+        "alwaysAllow": "Always allow",
+        "needsApproval": "Needs approval",
+        "blocked": "Blocked",
+        "custom": "Custom",
+        "chooseToolPermission": "Choose when allowed to use tools",
         "permissionsTitle": "Permissions",
         "infoDescription": "Description",
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",

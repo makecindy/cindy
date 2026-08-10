@@ -3691,6 +3691,11 @@
           "workdirClear": "기본 폴더로 되돌리기"
         },
         "toolsTitle": "Tools",
+        "alwaysAllow": "항상 허용",
+        "needsApproval": "매번 확인",
+        "blocked": "차단됨",
+        "custom": "사용자 지정",
+        "chooseToolPermission": "도구 사용 허용 시점 선택",
         "permissionsTitle": "권한",
         "infoDescription": "설명",
         "customSlotAsleep": "이 플러그인은 비활성 상태입니다. 활성화하면 여기에 설정 화면이 표시됩니다.",

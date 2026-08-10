@@ -823,9 +823,10 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.queryByText('JSON Schema')).toBeNull();
   });
 
-  it('keeps the Tools title count-free and puts See All beside the title', () => {
+  it('renders Tools title with count and tool permission controls', () => {
     render(
       <ToolsSection
+        ghostId="demo-ghost"
         tools={Array.from({ length: 7 }, (_, index) => ({
           name: `tool_${index}`,
           description: `Tool ${index}`,
@@ -833,11 +834,10 @@ describe('Ghost plugin detail sections', () => {
       />,
     );
 
-    const heading = screen.getByRole('heading', { name: 'Tools' });
+    const heading = screen.getByRole('heading', { name: /Tools \(7\)/ });
     expect(heading).toBeTruthy();
     expect(heading.closest('section')?.className).not.toContain('border-t');
-    expect(screen.queryByRole('heading', { name: /Tools.*7/ })).toBeNull();
-    expect(screen.getByRole('button', { name: 'See All' })).toBeTruthy();
+    expect(screen.getByText('tool_0')).toBeTruthy();
   });
 
   it('shows every host permission except Tools and opens the same complete details', async () => {

@@ -200,6 +200,7 @@ import {
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
+import { readGhostToolPermissions, writeGhostToolPermissions } from './ghostToolPermissionsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
@@ -5216,6 +5217,27 @@ export function registerGhostIpc(): void {
       throwIpcError('INVALID_PARAMS', 'config must be an object or null');
     }
     const saved = writeGhostErrandConfig(ghostId, config as Record<string, unknown> | null);
+    return { config: saved };
+  });
+
+  // ── 插件/连接器工具粒度授权配置 (ghosts:tool-permissions) ──
+  ipcMain.on('ghosts:tool-permissions', (event, ghostId: unknown) => {
+    event.returnValue = {
+      config: typeof ghostId === 'string' ? readGhostToolPermissions(ghostId) : {},
+    };
+  });
+  ipcMain.handle('ghosts:tool-permissions:set', (_event, ghostId: unknown, config: unknown) => {
+    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    }
+    if (config !== null && (typeof config !== 'object' || Array.isArray(config))) {
+      throwIpcError('INVALID_PARAMS', 'config must be an object or null');
+    }
+    const saved = writeGhostToolPermissions(ghostId, config);
+    getGhostSetupChangeBus().emit(ghostId, {
+      source: 'host_config',
+      ref: 'tool-permissions',
+    });
     return { config: saved };
   });
 
