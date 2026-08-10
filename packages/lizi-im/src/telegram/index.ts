@@ -808,7 +808,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
     // DM 与群/topic 共用同一条流式呈现: send + editMessageText 覆盖同一条
-    // 消息, 过程区(工具时间线)与正文一起原地刷新, 定稿原地升级为 rich。
+    // 消息, 过程区(工具时间线)与正文一起原地刷新；定稿始终新发，避免最终答案
+    // 被过程载体的迟到更新或群 relay 替换。
     // 私聊曾走 sendMessageDraft 草稿通道 —— 草稿只能承载一行纯文本, 工具调用
     // 在私聊里因此整体不可见, 与群聊形成两套体验(Chris 2026-08 点名);
     // 呈现规则不再按 DM / 群分叉。
@@ -852,8 +853,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         // 本轮**每一个**触达 Telegram 的出站入口都先核验回合身份 —— 一个不漏。
         // 逐个核验不可省成"补送时查一次": 换 owner 可能发生在任意一次 await 之后,
         // 而 owner-only 变更**不换 api 客户端**, 剩下的出站照样能成功。
-        // 覆盖面: send / repost(新消息)、edit / editFinal(原位编辑——终稿的主投递
-        // 路径, 换主人后编辑成功就等于把答案写进已失权主人的聊天)、deleteMessage
+        // 覆盖面: send / repost(HTML 新消息) / sendFinal(Rich 新消息)、edit(过程
+        // 载体)、deleteMessage
         // (失权后连清理都不该再碰对方的聊天)、uploadImages(内部逐次再核验)。
         // 正常轮次里这些核验恒为空操作。
         send: async (markdown) => {
@@ -890,9 +891,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         },
         chunk: chunkTelegramSource,
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
-        editFinal: (messageId, markdown) => {
+        sendFinal: async (markdown, reuseReplyTarget) => {
           this.assertRoundStillLive(round);
-          return this.richEditFinal(messageId, markdown);
+          return this.sendRichFinal(
+            userId,
+            markdown,
+            reuseReplyTarget ? round.replyTargetId : undefined,
+          );
         },
         deleteMessage: async (messageId) => {
           this.assertRoundStillLive(round);
@@ -1790,27 +1795,46 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * Rich 原地定稿(editMessageText + rich_message, Bot API 10.1): 把流式占位
-   * 消息一步升级成 rich 渲染(表格/标题/代码块/LaTeX 原生, 32768 上限免分段)。
-   * DM 与群共用。404 → 实例级 latch; 400(本条解析不过)只回落本条。
+   * 新发 Rich 终稿(sendRichMessage + rich_message): 过程载体从不承担最终答案，
+   * 让最终消息拥有独立 message id，避免群 relay 与迟到过程更新覆盖它。
+   *
+   * Rich 不能用时返回 null，由调用方安全回落 HTML/Markdown 新发；404 代表方法
+   * 不可用，实例级熔断。其它错误（包括 429 退避失败、权限和网络）必须抛出，
+   * 因为这时无法判断 Telegram 是否已经接收，不能再发一份 HTML 造成重复。
    */
-  private async richEditFinal(messageId: string, markdown: string): Promise<boolean> {
-    if (this.richSendDisabled || !markdown.trim()) return false;
-    const api = this.api;
-    if (!api) return false;
+  private async sendRichFinal(
+    userId: string,
+    markdown: string,
+    reuseReplyTargetId?: string | null,
+  ): Promise<string | null> {
+    if (this.richSendDisabled || !markdown.trim()) return null;
+    const reusing = reuseReplyTargetId !== undefined;
+    const { params: replyParams, lease } = reusing
+      ? { params: replyParamsFor(reuseReplyTargetId), lease: null }
+      : this.leaseReplyTarget(userId);
     try {
-      const { chatId, messageId: nativeId } = decodeMessageId(messageId);
-      await api.call('editMessageText', {
-        chat_id: chatId,
-        message_id: Number(nativeId),
+      const sent = await this.callSend<TgMessage>('sendRichMessage', {
+        ...this.targetOf(userId),
+        ...replyParams,
         rich_message: { markdown },
       });
-      return true;
+      this.commitReplyTarget(lease);
+      this.recordOwnEcho(userId, markdown, sent);
+      return encodeMessageId(String(sent.chat.id), String(sent.message_id));
     } catch (err) {
-      if (err instanceof TelegramApiError && err.errorCode === 404) {
-        this.richSendDisabled = true;
+      if (
+        err instanceof TelegramApiError &&
+        (err.errorCode === 400 || err.errorCode === 404)
+      ) {
+        // 404 = API method missing; 400 = this rich payload cannot be parsed.
+        // Both are definite rejections, so the HTML fallback cannot duplicate a
+        // message Telegram already accepted.
+        if (err.errorCode === 404) {
+          this.richSendDisabled = true;
+        }
+        return null;
       }
-      return false;
+      throw err;
     }
   }
 

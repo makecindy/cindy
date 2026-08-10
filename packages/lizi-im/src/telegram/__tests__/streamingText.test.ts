@@ -3,10 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { startTelegramStreaming, type TelegramStreamingDeps } from '../streamingText.js';
 
 /**
- * 终稿原位编辑撞 Telegram 编辑 flood 时的兜底(2026-08-04 线上实测: 一个 11 分钟
- * 群轮次的 finalize 吃到 `429 retry after 26`, 整条答案永久丢失, 聊天里只剩一条
- * 停在"⚙️ 工作中"的僵尸消息)。这些用例钉住三件事: 答案必达、顺序是先发新后删旧、
- * 补送后的图片锚点跟到新消息。
+ * 终稿永远使用新消息(2026-08): 过程载体不再承担答案，避免最后一次编辑撞 flood
+ * 或被群 relay 覆盖。用例钉住三件事: 先发新后删旧、Rich 新发保留结构化内容、
+ * Rich 不可用时安全回落 HTML。
  */
 
 interface Harness {
@@ -26,6 +25,7 @@ function makeHarness(
     deleteImpl?: (messageId: string) => Promise<void>;
     chunk?: (text: string) => string[];
     extractImageUrls?: (markdown: string) => string[];
+    sendFinalImpl?: (markdown: string, reuseReplyTarget: boolean) => Promise<string | null>;
     /** 不提供 repost 时用于验证回落 send 的行为。 */
     withoutRepost?: boolean;
   } = {},
@@ -69,24 +69,33 @@ function makeHarness(
       return `msg-${nextId++}`;
     };
   }
+  if (overrides.sendFinalImpl) {
+    deps.sendFinal = async (markdown, reuseReplyTarget) => {
+      calls.push(`final:${markdown}:${reuseReplyTarget}`);
+      return overrides.sendFinalImpl!(markdown, reuseReplyTarget);
+    };
+  }
   return { deps, calls, sent, reposted, deleted, uploadAnchors };
 }
 
-describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
-  it('原位编辑成功时不新发、不删旧消息', async () => {
+describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
+  it('过程消息存在时终稿始终新发，随后才删除旧消息', async () => {
     const h = makeHarness();
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 3s');
     await handle.finalize('最终答案');
 
-    expect(h.calls).toEqual(['send:⚙️ 工作中 · 3s', 'edit:msg-1']);
-    expect(h.deleted).toEqual([]);
+    expect(h.calls).toEqual([
+      'send:⚙️ 工作中 · 3s',
+      'repost:最终答案',
+      'delete:msg-1',
+    ]);
+    expect(h.deleted).toEqual(['msg-1']);
   });
 
-  it('原位编辑失败 → 答案改由新消息承载, 且顺序是先发新后删旧', async () => {
-    const editErr = new Error('telegram editMessageText failed: 429 Too Many Requests: retry after 26');
+  it('不再依赖终稿 edit，即使 edit 会失败仍先发答案后删过程消息', async () => {
     const h = makeHarness({
       editImpl: async () => {
-        throw editErr;
+        throw new Error('must not edit final');
       },
     });
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 10m44s');
@@ -99,7 +108,6 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
     // 顺序不可对调: 新消息落地在删除之前。
     expect(h.calls).toEqual([
       'send:⚙️ 工作中 · 10m44s',
-      'edit:msg-1',
       'repost:完整的最终答案',
       'delete:msg-1',
     ]);
@@ -108,9 +116,6 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
 
   it('未提供 repost 时回落 send(兼容不关心回挂语义的调用方)', async () => {
     const h = makeHarness({
-      editImpl: async () => {
-        throw new Error('429');
-      },
       withoutRepost: true,
     });
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 6s');
@@ -120,32 +125,25 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
     expect(h.deleted).toEqual(['msg-1']);
   });
 
-  it('新发也失败时抛回原始编辑错误, 并且不删旧消息', async () => {
-    const editErr = new Error('editMessageText failed: 429');
+  it('新发失败时保留过程消息并抛出发送错误', async () => {
+    const sendErr = new Error('sendMessage failed: 429');
     let sendCount = 0;
     const h = makeHarness({
-      editImpl: async () => {
-        throw editErr;
-      },
       sendImpl: async () => {
         sendCount += 1;
         // 第一次是建流式占位, 第二次才是补送。
-        if (sendCount > 1) throw new Error('sendMessage failed: 429');
+        if (sendCount > 1) throw sendErr;
         return 'msg-1';
       },
     });
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 9m');
 
-    // 掩盖真实原因会让线上排障失去线索 —— 必须抛原始编辑错误。
-    await expect(handle.finalize('答案')).rejects.toBe(editErr);
+    await expect(handle.finalize('答案')).rejects.toBe(sendErr);
     expect(h.deleted).toEqual([]);
   });
 
   it('旧消息删不掉不影响已送达的答案', async () => {
     const h = makeHarness({
-      editImpl: async () => {
-        throw new Error('429');
-      },
       deleteImpl: async () => {
         throw new Error("message can't be deleted");
       },
@@ -158,9 +156,6 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
 
   it('补送后受管图片锚定到新消息, 不挂在已删的过程消息上', async () => {
     const h = makeHarness({
-      editImpl: async () => {
-        throw new Error('429');
-      },
       extractImageUrls: () => ['cindy-media://blobs/a.png'],
     });
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 1m');
@@ -187,20 +182,29 @@ describe('telegram streaming finalize — 原位定稿与 flood 兜底', () => {
     expect(h.sent).toEqual(['⚙️ 工作中 · 5m', '第二段', '第三段']);
   });
 
-  it('rich 原位定稿成功时既不走 HTML 编辑也不补送', async () => {
-    const h = makeHarness({
-      editImpl: async () => {
-        throw new Error('不该走到这里');
-      },
-    });
-    const editFinal = vi.fn(async () => true);
-    const handle = await startTelegramStreaming({ ...h.deps, editFinal }, '⚙️ 工作中 · 4s');
+  it('Rich 终稿新发成功时既不走 HTML 补送也不编辑过程消息', async () => {
+    const sendFinal = vi.fn(async () => 'rich-2');
+    const h = makeHarness();
+    const handle = await startTelegramStreaming({ ...h.deps, sendFinal }, '⚙️ 工作中 · 4s');
 
     await handle.finalize('rich 定稿的答案');
 
-    expect(editFinal).toHaveBeenCalledOnce();
+    expect(sendFinal).toHaveBeenCalledWith('rich 定稿的答案', true);
     expect(h.sent).toEqual(['⚙️ 工作中 · 4s']);
-    expect(h.deleted).toEqual([]);
+    expect(h.reposted).toEqual([]);
+    expect(h.deleted).toEqual(['msg-1']);
+  });
+
+  it('Rich 明确不可用时回落 HTML 补送，仍保持先发新后删旧', async () => {
+    const sendFinal = vi.fn(async () => null);
+    const h = makeHarness();
+    const handle = await startTelegramStreaming({ ...h.deps, sendFinal }, '⚙️ 工作中 · 4s');
+
+    await handle.finalize('降级后的答案');
+
+    expect(sendFinal).toHaveBeenCalledWith('降级后的答案', true);
+    expect(h.reposted).toEqual(['降级后的答案']);
+    expect(h.deleted).toEqual(['msg-1']);
   });
 
   it('NO_REPLY 沉默仍然是撤掉占位, 不会误走补送', async () => {
