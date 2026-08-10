@@ -453,6 +453,53 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(0);
   });
 
+  it('可变文件 producer 写入文件或 pipeline sink 时不可记忆', () => {
+    for (const command of [
+      'cat payload.json > dist/config.json',
+      'cat payload.json >> dist/config.json',
+      'cat payload.json >&dist/config.json',
+      'cat payload.json 2>&dist/config.json',
+      'cat payload.json &>dist/config.json',
+      'env cat payload.json > dist/config.json',
+      'cat payload.json | tee dist/config.json',
+      'cat payload.json | tee -a dist/config.json',
+      'cat payload.json | sponge dist/config.json',
+      'cat payload.json | jq . > dist/config.json',
+      'cat payload.json |& tee dist/config.json',
+      'head -n 20 payload.json | tee dist/config.json',
+      'sed -n 1,20p payload.json | sponge dist/config.json',
+      'true && cat payload.json >dist/config.json; echo done',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'cat payload.json',
+      'cat payload.json | wc -l',
+      'cat payload.json | tee',
+      'cat payload.json | tee --help',
+      'cat payload.json | sponge',
+      'cat payload.json 2>&1',
+      'cat payload.json >&2',
+      'echo payload.json | tee dist/config.json',
+      'printf payload | sponge dist/config.json',
+      "echo 'cat payload.json > dist/config.json'",
+      "cat 'payload > not-redirection'",
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    const action = exec('cat payload.json > dist/config.json');
+    memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+    expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    expect(memory.size()).toBe(0);
+  });
+
   it('输入重定向的紧贴、fd 前缀与 shell 分隔符形式均不可记忆', () => {
     for (const command of [
       'psql < input.sql',

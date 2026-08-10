@@ -6,6 +6,7 @@
  * maker-core 负责动作安全边界；这里负责有界存储、跨进程串行和原子替换。
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { promises as fs, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
@@ -327,13 +328,90 @@ const wait = (delayMs: number): Promise<void> =>
 interface FileLockOwner {
   pid: number;
   ownerId: string;
+  /** OS-verified process start/boot identity; `unknown` is fail-closed, not reclaimable while alive. */
+  incarnation: string;
+}
+
+type ProcessIncarnationReader = (pid: number) => string | null;
+
+interface FileLockOptions {
+  processIncarnation?: ProcessIncarnationReader;
+  platform?: NodeJS.Platform;
+  /** Cache the current process identity once per store instead of spawning ps/PowerShell per lock. */
+  ownerIncarnation?: string;
+}
+
+function readLinuxProcessIncarnation(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const afterCommand = stat.slice(stat.lastIndexOf(')') + 2);
+    const fields = afterCommand.trim().split(/\s+/);
+    // `/proc/<pid>/stat` field 22 (starttime) is index 19 after pid/comm/state.
+    const startTime = fields[19];
+    const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    return startTime && bootId ? `linux:${bootId}:${startTime}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function readWindowsProcessIncarnation(pid: number): string | null {
+  try {
+    const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+    const startTime = execFileSync(
+      powershell,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$p = Get-Process -Id ${pid} -ErrorAction Stop; `
+          + '($p | Select-Object -ExpandProperty StartTime).ToUniversalTime().Ticks',
+      ],
+      { encoding: 'utf8', timeout: 1_000, windowsHide: true, maxBuffer: 4 * 1024 },
+    ).trim();
+    return startTime ? `windows:${startTime}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPosixProcessIncarnation(pid: number): string | null {
+  try {
+    const startTime = execFileSync(
+      'ps',
+      ['-p', String(pid), '-o', 'lstart='],
+      { encoding: 'utf8', timeout: 1_000, maxBuffer: 4 * 1024 },
+    ).trim();
+    const boot = execFileSync(
+      'sysctl',
+      ['-n', 'kern.boottime'],
+      { encoding: 'utf8', timeout: 1_000, maxBuffer: 4 * 1024 },
+    ).trim();
+    return startTime && boot ? `posix:${boot}:${startTime}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function readProcessIncarnation(pid: number, platform = process.platform): string | null {
+  if (platform === 'linux') return readLinuxProcessIncarnation(pid);
+  if (platform === 'win32') return readWindowsProcessIncarnation(pid);
+  return readPosixProcessIncarnation(pid);
 }
 
 function parseLockOwner(raw: string): FileLockOwner | null {
   try {
     const value = JSON.parse(raw) as Partial<FileLockOwner>;
-    return Number.isInteger(value.pid) && (value.pid ?? 0) > 0 && typeof value.ownerId === 'string'
-      ? { pid: value.pid!, ownerId: value.ownerId }
+    return Number.isInteger(value.pid)
+      && (value.pid ?? 0) > 0
+      && typeof value.ownerId === 'string'
+      ? {
+          pid: value.pid!,
+          ownerId: value.ownerId,
+          // Old lock files are intentionally represented as unknown. They may be reclaimed only
+          // after the PID is proven dead; a live PID with no incarnation remains fail-closed.
+          incarnation: typeof value.incarnation === 'string' ? value.incarnation : 'unknown',
+        }
       : null;
   } catch {
     return null;
@@ -388,21 +466,89 @@ async function tryAcquireFileLock(lockPath: string, owner: FileLockOwner): Promi
   }
 }
 
-async function withFileLock<T>(target: string, task: () => Promise<T>): Promise<T> {
+/**
+ * Atomically move a stale candidate out of the public lock name before deleting it.
+ *
+ * A read-compare-unlink sequence can delete a new owner's file when the old owner releases and
+ * another process acquires between the second read and unlink. Rename gives the observed owner a
+ * private quarantine name first. If a replacement raced ahead, restore that replacement without
+ * overwriting any still newer public lock and leave it in force.
+ */
+async function reclaimObservedLock(lockPath: string, observed: string): Promise<boolean> {
+  const quarantinePath = `${lockPath}.${randomUUID()}.reclaim`;
+  try {
+    // Identity lookup may take measurable time (PowerShell/ps). Narrow the replacement race to
+    // the single rename syscall, then still verify the quarantined bytes after the move.
+    if (await fs.readFile(lockPath, 'utf8') !== observed) return false;
+    await fs.rename(lockPath, quarantinePath);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+  }
+
+  let quarantined: string;
+  try {
+    quarantined = await fs.readFile(quarantinePath, 'utf8');
+  } catch {
+    // Restore the moved lock best-effort. If that cannot be done, keep the quarantine file rather
+    // than deleting an owner whose identity could not be verified.
+    try {
+      await fs.link(quarantinePath, lockPath);
+      await fs.unlink(quarantinePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') {
+        await fs.unlink(quarantinePath).catch(() => undefined);
+      }
+      // fail-closed: an unreadable quarantine is never intentionally removed
+    }
+    return false;
+  }
+
+  if (quarantined === observed) {
+    await fs.unlink(quarantinePath);
+    return true;
+  }
+
+  try {
+    await fs.link(quarantinePath, lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') return false;
+  }
+  await fs.unlink(quarantinePath).catch(() => undefined);
+  return false;
+}
+
+async function withFileLock<T>(
+  target: string,
+  task: () => Promise<T>,
+  options: FileLockOptions = {},
+): Promise<T> {
   const lockPath = `${target}.lock`;
   await fs.mkdir(path.dirname(target), { recursive: true });
+  const identifyProcess = options.processIncarnation
+    ?? ((pid: number) => readProcessIncarnation(pid, options.platform));
+  const ownerIncarnation = options.ownerIncarnation
+    ?? identifyProcess(process.pid)
+    ?? 'unknown';
   for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt++) {
-    const owner: FileLockOwner = { pid: process.pid, ownerId: randomUUID() };
+    const owner: FileLockOwner = {
+      pid: process.pid,
+      ownerId: randomUUID(),
+      incarnation: ownerIncarnation,
+    };
     if (!await tryAcquireFileLock(lockPath, owner)) {
       try {
         const observed = await fs.readFile(lockPath, 'utf8');
         const activeOwner = parseLockOwner(observed);
         if (activeOwner && !processIsAlive(activeOwner.pid)) {
-          // 内容二次比对后再删，避免回收检查期间锁已换主。
-          if (await fs.readFile(lockPath, 'utf8') === observed) {
-            await fs.unlink(lockPath);
+          if (await reclaimObservedLock(lockPath, observed)) continue;
+        }
+        if (activeOwner && activeOwner.incarnation !== 'unknown') {
+          const liveIncarnation = identifyProcess(activeOwner.pid);
+          if (liveIncarnation && liveIncarnation !== activeOwner.incarnation) {
+            // The OS reused this PID for a different process. Quarantine the exact observed lock
+            // atomically so a replacement owner cannot be deleted by a read/unlink race.
+            if (await reclaimObservedLock(lockPath, observed)) continue;
           }
-          continue;
         }
         // 旧版本可能留下无法解析 owner 的锁。它也可能来自仍存活但被挂起的进程，无法安全
         // 回收；保持 fail-closed，等锁消失或本次操作超时，不以 mtime 猜测 owner 生死。
@@ -438,11 +584,19 @@ export function createApprovalMemoryFileStore(
     logger?: StoreLogger;
     flushDelayMs?: number;
     now?: () => number;
+    processIncarnation?: ProcessIncarnationReader;
+    platform?: NodeJS.Platform;
   } = {},
 ): ApprovalMemoryFileStore {
   const logger = options.logger ?? log;
   const flushDelayMs = options.flushDelayMs ?? FLUSH_DELAY_MS;
   const now = options.now ?? Date.now;
+  const identifyProcess = options.processIncarnation
+    ?? ((pid: number) => readProcessIncarnation(pid, options.platform));
+  const lockOptions: FileLockOptions = {
+    processIncarnation: identifyProcess,
+    ownerIncarnation: identifyProcess(process.pid) ?? 'unknown',
+  };
   const pendingAdds: PendingAdd[] = [];
   const clearListeners = new Set<(workspaceKey?: string) => void>();
   const activeClears = new Map<number, ClearBarrier>();
@@ -534,7 +688,7 @@ export function createApprovalMemoryFileStore(
             if (accepted === 0) return;
             evict(state);
             persistState(target, state);
-          });
+          }, lockOptions);
         } catch (error) {
           // 写失败不改变权限判定；只保留失败 owner 的批次，其他 owner 已落盘的批次不重放。
           pendingAdds.unshift(...additions);
@@ -562,7 +716,7 @@ export function createApprovalMemoryFileStore(
       return enqueue(() => withFileLock(target, async () => {
         const state = readFileStateUnlocked(target, logger);
         return new Set(Object.keys(state.workspaces[workspaceHash(workspaceKey)] ?? {}));
-      }));
+      }, lockOptions));
     },
     add(workspaceKey, signature, origin): void {
       if (!workspaceKey || !HASH_PATTERN.test(signature)) return;
@@ -612,7 +766,7 @@ export function createApprovalMemoryFileStore(
           }
         }
         return entries.sort((a, b) => b.ts - a.ts);
-      }));
+      }, lockOptions));
     },
     async clear(workspaceKey?: string): Promise<number> {
       const target = resolveFilePath();
@@ -662,7 +816,7 @@ export function createApprovalMemoryFileStore(
             notifyClear(workspaceKey);
             completed = true;
             return count;
-          });
+          }, lockOptions);
         });
         return removed;
       } finally {

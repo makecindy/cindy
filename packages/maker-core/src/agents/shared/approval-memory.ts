@@ -43,6 +43,7 @@ import {
   type AutoReviewRouteIdentity,
 } from './auto-review-decision.js';
 import {
+  commandExecutableSegments,
   commandExecutableInvocations,
   commandUsesExplicitExecutablePath,
   type ReviewableAction,
@@ -601,9 +602,106 @@ function hasPipedInvocation(command: string, executableName: string): boolean {
   return false;
 }
 
+/**
+ * 读取可变文件后把结果写出的 producer。
+ *
+ * `cat` 本身是安全只读命令，但 `cat payload.json > out` 的批准会把 payload 的内容
+ * 间接绑定到一个只含 argv 的摘要里。这里只覆盖明确的文件 producer / pipeline sink，
+ * 不把所有读取命令或所有重定向一刀切成通用黑名单。
+ */
+const FILE_PRODUCER_NAMES: ReadonlySet<string> = new Set([
+  'cat', 'head', 'tail', 'base64', 'md5', 'md5sum', 'sha256sum', 'cksum',
+  'od', 'hexdump', 'xxd', 'strings', 'cut', 'tr', 'sort', 'uniq', 'tac', 'nl',
+  'jq', 'yq', 'sed',
+]);
+
+const PIPELINE_FILE_SINK_NAMES: ReadonlySet<string> = new Set(['tee', 'sponge']);
+
+function consumesMutableInput(args: readonly string[]): boolean {
+  // Help/version output is deterministic and does not consume stdin or a file. Everything else
+  // in this deliberately small producer set either reads an operand or falls back to stdin.
+  if (args.length > 0 && args.every((arg) =>
+    /^(?:--?)(?:help|version)$/.test(arg))) return false;
+  return true;
+}
+
+function hasFileOperand(args: readonly string[]): boolean {
+  let optionsEnded = false;
+  for (const arg of args) {
+    if (!optionsEnded && arg === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith('-')) continue;
+    return true;
+  }
+  return false;
+}
+
+function hasOutputFileRedirection(segment: string): boolean {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let index = 0; index < segment.length; index++) {
+    const char = segment[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && !singleQuoted) {
+      escaped = true;
+      continue;
+    }
+    if (char === "'" && !doubleQuoted) {
+      singleQuoted = !singleQuoted;
+      continue;
+    }
+    if (char === '"' && !singleQuoted) {
+      doubleQuoted = !doubleQuoted;
+      continue;
+    }
+    if (singleQuoted || doubleQuoted || char !== '>') continue;
+    if (segment[index - 1] === '-' || segment[index - 1] === '=') continue;
+
+    let targetIndex = index + 1;
+    if (segment[targetIndex] === '>') targetIndex += 1;
+    if (segment[targetIndex] === '|') targetIndex += 1;
+    while (/\s/.test(segment[targetIndex] ?? '')) targetIndex += 1;
+    if (segment[targetIndex] === '&') {
+      targetIndex += 1;
+      while (/\s/.test(segment[targetIndex] ?? '')) targetIndex += 1;
+      const target = segment.slice(targetIndex).match(/^[^\s;&|<>]*/)?.[0] ?? '';
+      // `2>&1` / `>&2` / `2>&-` only duplicate or close an existing fd. A non-numeric
+      // target (`>&out`) is a file output in supported shells and must remain fail-closed.
+      if (/^(?:\d+|-)$/.test(target)) continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function pipelineHasMutableFileWrite(command: string): boolean {
+  const segments = commandExecutableSegments(command);
+  for (let index = 0; index < segments.length; index++) {
+    let start = index;
+    while (start > 0 && segments[start - 1]?.separatorAfter === 'pipe') start--;
+    let end = index;
+    while (end < segments.length - 1 && segments[end]?.separatorAfter === 'pipe') end++;
+    const pipeline = segments.slice(start, end + 1);
+    const writesFile = pipeline.some(({ name, args, text }) =>
+      hasOutputFileRedirection(text)
+      || (PIPELINE_FILE_SINK_NAMES.has(name) && hasFileOperand(args)));
+    if (!writesFile) continue;
+    if (pipeline.some(({ name, args }) =>
+      FILE_PRODUCER_NAMES.has(name) && consumesMutableInput(args))) return true;
+  }
+  return false;
+}
+
 export function isMutableIndirectExecutionCommand(command: string): boolean {
   if (MUTABLE_EXECUTION_ENV_PATTERN.test(command)) return true;
   if (DYNAMIC_COMMAND_INPUT_PATTERNS.some((pattern) => pattern.test(command))) return true;
+  if (pipelineHasMutableFileWrite(command)) return true;
   const invocations = commandExecutableInvocations(command);
   if (invocations.some(({ name, args }) =>
     name === 'curl' && curlMayLoadMutableFileState(args))) return true;

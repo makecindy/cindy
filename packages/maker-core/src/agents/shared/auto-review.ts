@@ -1330,7 +1330,7 @@ function executableName(token: string): string {
   return baseName(token).toLowerCase().replace(/\.exe$/, '');
 }
 
-type ShellSeparator = 'and' | 'or' | 'pipe' | 'sequence' | 'background' | 'end';
+export type ShellSeparator = 'and' | 'or' | 'pipe' | 'sequence' | 'background' | 'end';
 type ExecutableSegment = { text: string; fromPipe: boolean; separatorAfter: ShellSeparator };
 
 /** 仅供高影响执行判定：识别引号外的 shell 分隔符，避免把 `echo 'x | sh'` 误当执行。 */
@@ -3284,9 +3284,27 @@ function classifyShellSegment(
 export function commandExecutableInvocations(
   command: string,
 ): { name: string; args: string[] }[] {
+  return commandExecutableSegments(command).map(({ name, args }) => ({ name, args }));
+}
+
+/**
+ * 返回实际 executable 以及它所在的顶层 shell 段。
+ *
+ * 批准记忆需要知道一个读取文件的 producer 是否和文件写出位于同一条 pipeline；
+ * 只暴露这层已存在的 shell 分段信息，不把它变成通用命令白名单或新的执行判定入口。
+ */
+export interface CommandExecutableSegment {
+  name: string;
+  args: string[];
+  text: string;
+  fromPipe: boolean;
+  separatorAfter: ShellSeparator;
+}
+
+export function commandExecutableSegments(command: string): CommandExecutableSegment[] {
   if (typeof command !== 'string' || command.trim().length === 0) return [];
-  const invocations: { name: string; args: string[] }[] = [];
-  for (const { text } of splitExecutableSegments(command)) {
+  const invocations: CommandExecutableSegment[] = [];
+  for (const { text, fromPipe, separatorAfter } of splitExecutableSegments(command)) {
     // unwrapWrappers 已经剥掉 `env` / 环境变量赋值前缀等包装,`NODE_OPTIONS=… pnpm test`
     // 到这里 tokens[0] 就是 `pnpm`(有用例钉住)。这里只需兜住取不到 bin 的段。
     const tokens = unwrapWrappers(tokenize(text));
@@ -3294,7 +3312,13 @@ export function commandExecutableInvocations(
     // 仍取不到可执行文件名的段(空段、纯赋值段如 `FOO=1`)不贡献名字。**不是**跳过整条命令:
     // 其余段照常收集,所以 `FOO=1 rm -rf x && ls` 得到 {rm, ls},破坏性 bin 不会隐身。
     if (!bin || /^[A-Za-z_]\w*=/.test(bin)) continue;
-    invocations.push({ name: bin, args: tokens.slice(1) });
+    invocations.push({
+      name: bin,
+      args: tokens.slice(1),
+      text,
+      fromPipe,
+      separatorAfter,
+    });
   }
   return invocations;
 }

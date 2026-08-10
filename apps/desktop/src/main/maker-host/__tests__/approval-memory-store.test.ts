@@ -19,7 +19,10 @@ const directories: string[] = [];
 const digest = (text: string): string =>
   `sha256:${createHash('sha256').update(text).digest('hex')}`;
 
-async function fixture(options: { now?: () => number } = {}) {
+async function fixture(options: {
+  now?: () => number;
+  processIncarnation?: (pid: number) => string | null;
+} = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-approval-memory-'));
   directories.push(directory);
   const target = path.join(directory, 'auto-review-approvals.json');
@@ -27,6 +30,7 @@ async function fixture(options: { now?: () => number } = {}) {
   const memory = createApprovalMemoryFileStore(() => target, {
     flushDelayMs: 60_000,
     logger,
+    processIncarnation: options.processIncarnation ?? (() => 'test-process'),
     ...(options.now ? { now: options.now } : {}),
   });
   return { directory, target, logger, memory };
@@ -367,6 +371,111 @@ describe('approval-memory-store', () => {
     memory.store.add('/repo', signature, 'reviewer');
     await memory.flush();
     expect(await memory.store.load('/repo')).toEqual(new Set([signature]));
+  });
+
+  it.each(['flush', 'load', 'list', 'clear'] as const)(
+    '%s 在 PID 复用时回收不同 incarnation 的陈旧锁',
+    async (operation) => {
+      const currentIncarnation = 'current-process-incarnation';
+      const { target, memory } = await fixture({
+        processIncarnation: () => currentIncarnation,
+      });
+      const signature = digest(`after-pid-reuse-${operation}`);
+      if (operation !== 'flush') {
+        memory.store.add('/repo', signature, 'reviewer');
+        await memory.flush();
+      }
+
+      await writeFile(
+        `${target}.lock`,
+        JSON.stringify({
+          pid: process.pid,
+          ownerId: randomUUID(),
+          incarnation: 'crashed-process-incarnation',
+        }),
+        'utf8',
+      );
+
+      if (operation === 'flush') {
+        memory.store.add('/repo', signature, 'reviewer');
+        await memory.flush();
+        expect(await memory.store.load('/repo')).toEqual(new Set([signature]));
+      } else if (operation === 'load') {
+        expect(await memory.store.load('/repo')).toEqual(new Set([signature]));
+      } else if (operation === 'list') {
+        expect(await memory.list('/repo')).toEqual([
+          expect.objectContaining({ signature }),
+        ]);
+      } else {
+        expect(await memory.clear('/repo')).toBe(1);
+      }
+    },
+  );
+
+  it.each([
+    ['相同 incarnation', { incarnation: 'current-process-incarnation' }],
+    ['未知 incarnation', {}],
+  ] as const)(
+    '%s 的 live PID 锁保持 fail-closed 并超时',
+    async (_label, ownerFields) => {
+      const { target, memory } = await fixture({
+        processIncarnation: () => 'current-process-incarnation',
+      });
+      const lockPath = `${target}.lock`;
+      await writeFile(lockPath, JSON.stringify({
+        pid: process.pid,
+        ownerId: randomUUID(),
+        ...ownerFields,
+      }), 'utf8');
+
+      await expect(memory.store.load('/repo')).rejects.toThrow(
+        'approval memory lock timed out',
+      );
+      expect(fs.existsSync(lockPath)).toBe(true);
+    },
+    5_000,
+  );
+
+  it('陈旧锁检查后换主时恢复新 owner，不被回收者删除', async () => {
+    const currentIncarnation = 'current-process-incarnation';
+    const { directory, target, memory } = await fixture({
+      processIncarnation: () => currentIncarnation,
+    });
+    const lockPath = `${target}.lock`;
+    const staleRaw = JSON.stringify({
+      pid: process.pid,
+      ownerId: randomUUID(),
+      incarnation: 'crashed-process-incarnation',
+    });
+    const replacementRaw = JSON.stringify({
+      pid: process.pid,
+      ownerId: randomUUID(),
+      incarnation: currentIncarnation,
+    });
+    await writeFile(lockPath, staleRaw, 'utf8');
+
+    const realRename = fs.promises.rename.bind(fs.promises);
+    const renameSpy = vi.spyOn(fs.promises, 'rename')
+      .mockImplementationOnce(async (from, to) => {
+        expect(String(from)).toBe(lockPath);
+        await writeFile(lockPath, replacementRaw, 'utf8');
+        return realRename(from, to);
+      })
+      .mockImplementation(realRename);
+    try {
+      const loadPromise = memory.store.load('/repo');
+      await vi.waitFor(async () => {
+        const raw = await readFile(lockPath, 'utf8').catch(() => '');
+        expect(raw).toBe(replacementRaw);
+      });
+      expect(renameSpy).toHaveBeenCalled();
+      await rm(lockPath, { force: true });
+      await expect(loadPromise).resolves.toEqual(new Set());
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(fs.readdirSync(directory).some((name) => name.endsWith('.reclaim'))).toBe(false);
   });
 
   it('无 owner 的旧锁即使超过旧版时限也不穿透仍可能存活的持锁实例', async () => {
