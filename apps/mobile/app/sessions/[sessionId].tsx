@@ -892,6 +892,7 @@ export default function SessionScreen() {
   const {
     connectionEpoch,
     connectionIssue,
+    getPresenceAvailability,
     invoke,
     lastPresenceSnapshot,
     openLink,
@@ -1523,6 +1524,12 @@ export default function SessionScreen() {
   const [extraDirBrowseLoading, setExtraDirBrowseLoading] = useState(false);
   const [extraDirBrowseError, setExtraDirBrowseError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // UI 错误可被任意操作清掉；transport hold 独立保留到当前设备完成一次权威同步。
+  // 否则「加载更早 / 刷新用量」的 setError(null) 会误放行仍在断线恢复中的 outbox。
+  const [outboxTransportHold, setOutboxTransportHold] = useState<{
+    deviceId: string;
+    error: string;
+  } | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   // 会话已读回执的同步门槛 key:`${sessionId}:${connectionEpoch}`,由 syncSession 尾部写入。
   // 与 lastSyncedAt 不同,它按 session + 连接代区分——屏实例复用、原地切 session 时
@@ -1761,22 +1768,34 @@ export default function SessionScreen() {
     isDeviceAccessRevoked ? '[ACCESS_REVOKED] access revoked by target device' : error,
     isDeviceUnresponsive,
   );
-  // Presence 是全局流，最后一帧可能属于别的设备；只复用明确属于当前 deviceId 的
-  // 记忆，避免原地切设备后拿上一台电脑的 online 状态误派发。
-  const targetAvailableForDispatch = lastPresenceSnapshot?.deviceId === deviceId
-    ? lastPresenceSnapshot.online && lastPresenceSnapshot.remoteControlEnabled
-    : targetAvailableDeviceRef.current === deviceId
-      ? targetAvailableRef.current
-      : null;
+  // dispatch / Stop 只认 Context 内随 connection epoch 重置的三态 verdict。
+  // lastPresenceSnapshot 与下方 ref 只用于 false→true 的 resync edge，不能作为门禁：
+  // 它们会跨 epoch 保留，旧 offline 否则会把新连接永久卡死。
+  const targetAvailableForDispatch = getPresenceAvailability(deviceId);
   // 对齐 Desktop:断线恢复期间设置入口仍可操作,但明确知道电脑不可达时拦下停止任务。
   // presence 未知时仍允许尝试,避免旧缓存把停止入口永久锁死。
   const remoteStopUnavailable =
     status !== 'online' || targetAvailableForDispatch === false;
+  const screenAutoRecoveringError = connectionError && isAutoRecoveringRemoteError(connectionError)
+    ? connectionError
+    : null;
+  const heldOutboxTransportError = outboxTransportHold?.deviceId === deviceId
+    ? outboxTransportHold.error
+    : null;
+  const activeOutboxTransportError = screenAutoRecoveringError ?? heldOutboxTransportError;
+  useEffect(() => {
+    if (!deviceId || !screenAutoRecoveringError) return;
+    setOutboxTransportHold((current) => (
+      current?.deviceId === deviceId && current.error === screenAutoRecoveringError
+        ? current
+        : { deviceId, error: screenAutoRecoveringError }
+    ));
+  }, [deviceId, screenAutoRecoveringError]);
   const outboxConnectionState: MobileOutboxConnectionState = {
     relayOnline: status === 'online',
     targetAvailable: targetAvailableForDispatch,
     deviceUnresponsive: isDeviceUnresponsive,
-    autoRecoveringError: isAutoRecoveringRemoteError(connectionError),
+    autoRecoveringError: activeOutboxTransportError !== null,
     syncInProgress: loading,
   };
   // pumpOutbox 是跨 render 的 async 循环，每轮必须读最新连接态；只捕获某一帧会在
@@ -1787,7 +1806,13 @@ export default function SessionScreen() {
     outboxConnectionState,
   );
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
-  const showConnectionBanner = useShowConnectionBanner(status, connectionError, connectionIssue, isDeviceUnresponsive);
+  const connectionRecoveryError = activeOutboxTransportError ?? connectionError;
+  const showConnectionBanner = useShowConnectionBanner(
+    status,
+    connectionRecoveryError,
+    connectionIssue,
+    isDeviceUnresponsive,
+  );
   const hasCurrentSession = currentSession !== null;
   const currentAgentKind = useMemo(
     () => currentSession ? agentKindForSession(currentSession) : null,
@@ -3634,6 +3659,9 @@ export default function SessionScreen() {
       // 同步尾、无 await —— 否则乐观点亮 effect(依赖 lastSyncedAt===null)会在 await 间隙把刚校正成 false
       // 的「加载更早」入口重新点亮。将来切勿在两者之间插入 await。
       if (syncRun.isStale()) return;
+      // 当前设备的权威 session + projection 同步已完整落定，才解除独立 transport hold。
+      // 不在 connectionEpoch 刚推进时提前清，避免同一 commit 的 outbox effect 抢在 resync 前派发。
+      setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);
       setLastSyncedAt(Date.now());
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
       // 都取 sync 开始时的快照——原地切 session、重连、attention 上升沿之后,启动更早
@@ -4022,7 +4050,7 @@ export default function SessionScreen() {
   }, [deviceId, isDeviceUnresponsive, load, sessionId, status]);
 
   useEffect(() => {
-    if (!connectionError) {
+    if (!connectionRecoveryError) {
       if (!loading) autoRetrySyncKeyRef.current = null;
       return;
     }
@@ -4036,7 +4064,7 @@ export default function SessionScreen() {
     ) {
       return;
     }
-    const retryKey = `${deviceId}:${sessionId}:${connectionEpoch}:${connectionError}`;
+    const retryKey = `${deviceId}:${sessionId}:${connectionEpoch}:${connectionRecoveryError}`;
     if (autoRetrySyncKeyRef.current === retryKey) return;
     const timer = setTimeout(() => {
       autoRetrySyncKeyRef.current = retryKey;
@@ -4044,7 +4072,7 @@ export default function SessionScreen() {
     }, 900);
     return () => clearTimeout(timer);
   }, [
-    connectionError,
+    connectionRecoveryError,
     currentSession,
     deviceId,
     isDeviceAccessRevoked,

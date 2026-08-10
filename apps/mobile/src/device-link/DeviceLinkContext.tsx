@@ -121,6 +121,8 @@ export interface DeviceLinkContextValue {
   presenceVersion: number;
   connectionEpoch: number;
   lastPresenceSnapshot: PresenceSnapshot | null;
+  /** 当前 relay 连接代内的逐设备 availability；null = 本代尚无权威 verdict。 */
+  getPresenceAvailability(deviceId: string): boolean | null;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   /**
@@ -1053,12 +1055,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     await sendUnsubscribe(requireClient(clientRef.current), deviceId, toSend);
   }, []);
 
+  const getPresenceAvailability = useCallback((deviceId: string): boolean | null => (
+    presenceAvailableByDeviceRef.current.get(deviceId) ?? null
+  ), []);
+
   const value = useMemo<DeviceLinkContextValue>(() => ({
     status,
     connectionIssue,
     presenceVersion,
     connectionEpoch,
     lastPresenceSnapshot,
+    getPresenceAvailability,
     openLink,
     closeLink,
     invoke,
@@ -1068,6 +1075,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     closeLink,
     connectionEpoch,
     connectionIssue,
+    getPresenceAvailability,
     invoke,
     lastPresenceSnapshot,
     openLink,

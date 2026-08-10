@@ -84,6 +84,21 @@ describe('shouldHoldOutboxDispatchForConnection', () => {
       targetAvailable: null,
     })).toBe(false);
   });
+
+  it('新连接代把旧 offline 降为 unknown，且本代新 offline 仍会重新阻塞', () => {
+    expect(shouldHoldOutboxDispatchForConnection({
+      ...online,
+      targetAvailable: false,
+    })).toBe(true);
+    expect(shouldHoldOutboxDispatchForConnection({
+      ...online,
+      targetAvailable: null,
+    })).toBe(false);
+    expect(shouldHoldOutboxDispatchForConnection({
+      ...online,
+      targetAvailable: false,
+    })).toBe(true);
+  });
 });
 
 describe('isSafelyUnsentOutboxEnqueueError', () => {

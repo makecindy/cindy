@@ -46,14 +46,24 @@ describe('mobile optimistic composer while session is not ready', () => {
     // 模型 / effort / fast / 权限 / plan 继续可点;RPC 失败走既有乐观回滚。
     expect(source).toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession);');
     expect(source).not.toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession)\n    ||');
-    // 设置与队列动作都不能在尝试 RPC 前清掉连接错误,否则消息 outbox 会被误放行。
-    expect((source.match(/if \(!outboxConnectionDispatchBlocked\) setError\(null\);/g) ?? []))
-      .toHaveLength(4);
+    // UI error 可独立清理；transport hold 只在权威 sync 成功后解除，不再借共享 error
+    // 充当 outbox 门禁。
+    expect(source).toContain('const [outboxTransportHold, setOutboxTransportHold] = useState<');
+    expect(source).toContain('const activeOutboxTransportError = screenAutoRecoveringError ?? heldOutboxTransportError;');
+    expect(source).toContain('autoRecoveringError: activeOutboxTransportError !== null,');
+    expect(source).toContain('setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);');
+    expect(source).not.toContain('autoRecoveringError: isAutoRecoveringRemoteError(connectionError),');
     // Desktop 断线时仍允许尝试队列编辑类动作,不把整行切成只读。
     expect(queueGate).not.toContain('remoteUnavailableReason');
     expect(queueGate).not.toContain('outboxConnectionDispatchBlocked');
     // Stop 保持可见,但明确断线时不发送 RPC,只进入自动恢复提示。
     expect(source).toContain("status !== 'online' || targetAvailableForDispatch === false");
+    const dispatchPresenceStart = source.indexOf('const targetAvailableForDispatch =');
+    const dispatchPresenceEnd = source.indexOf(';', dispatchPresenceStart);
+    const dispatchPresence = source.slice(dispatchPresenceStart, dispatchPresenceEnd);
+    expect(dispatchPresence).toContain('getPresenceAvailability(deviceId)');
+    expect(dispatchPresence).not.toContain('lastPresenceSnapshot');
+    expect(dispatchPresence).not.toContain('targetAvailableRef');
     expect(source).toContain('canStop: canUseRemoteSessionControls && canStopComposer,');
     expect(stop).toContain('if (remoteStopUnavailable) {');
     expect(stop).toContain("'[DEVICE_OFFLINE] target device unavailable'");
