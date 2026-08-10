@@ -185,6 +185,24 @@ export class MakerMemoryManager {
   }
 
   /**
+   * 跨 await 作用域复核 — owner 竞态守卫的第二道闸 (review #2388 P1):
+   * 异步操作 (getStore 的 store.init、resetAll/resetDigests 的 fs 操作) 期间
+   * owner 可能已提交/切换。用 ownerScopeKey() 的**实时值**与入口捕获的
+   * scopeAtEntry 比较 (不能依赖 activeScopeKey —— 它只在 ensureOwnerScope
+   * 被再次调用时才刷新), 不一致立即中止 fail-closed, 绝不把旧 owner 的结果
+   * 提交到新 owner 的池/文件系统。
+   */
+  private assertScopeUnchanged(scopeAtEntry: string | null): void {
+    if (!this.deps.ownerScopeKey) return;
+    if (this.deps.ownerScopeKey() !== scopeAtEntry) {
+      throw new MemoryError(
+        'not-ready',
+        'owner scope changed during async memory operation; aborting (retry against current scope)',
+      );
+    }
+  }
+
+  /**
    * Bootstrap-time agents 注入 — 解决"manager 需要 agents, agents 需要 manager"
    * 的鸡生蛋时序: manager 先建 (agents 传 {}) → agents 创建时拿 manager 引用 →
    * setAgents() 把 agents 挂回 manager。后续 enable() 才能遍历到。
@@ -296,10 +314,15 @@ export class MakerMemoryManager {
     const cached = this.stores.get(absWorkdir);
     if (cached) return cached.store;
 
+    // 异步初始化期间的竞态锚点 (review #2388 P1): 整个流程用入口捕获的 scope +
+    // root, 不再跨 await re-read 动态根; 完成后复核 scope 未变才提交入池。
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
+    const rootAtEntry = this.resolvedBasePath!;
+
     // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
     // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
     const sanitized = memoryScopeDirName(absWorkdir);
-    const storageDir = path.join(this.resolvedBasePath!, MEMORY_SUBDIR, sanitized);
+    const storageDir = path.join(rootAtEntry, MEMORY_SUBDIR, sanitized);
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 
     // mkdir 在 storage.init() 里也会做, 但 db open 时父目录必须存在 — 提前 mkdir
@@ -315,6 +338,33 @@ export class MakerMemoryManager {
       ...(this.deps.config ? { config: this.deps.config } : {}),
     });
     await store.init();
+    // 跨 await 复核: 期间 owner 已切换 → 丢弃刚建的旧 owner store, fail-closed,
+    // 绝不入池。用实时 ownerScopeKey() 比较 (不依赖 activeScopeKey 被刷新)。
+    if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
+      try {
+        db.close();
+      } catch {
+        /* swallow */
+      }
+      this.logger.warn('getStore aborted: owner scope changed during async init', {
+        scopeAtEntry,
+        activeScope: this.activeScopeKey,
+      });
+      throw new MemoryError(
+        'not-ready',
+        'owner scope changed during store init; retry against current scope',
+      );
+    }
+    // 并发去重: 同 workdir 的并发 getStore 可能已把 store 提交入池, 复用池内实例。
+    const existing = this.stores.get(absWorkdir);
+    if (existing) {
+      try {
+        db.close();
+      } catch {
+        /* swallow */
+      }
+      return existing.store;
+    }
     this.stores.set(absWorkdir, { store, db });
     this.logger.debug('memory store opened', { workdir: absWorkdir, sanitized });
     return store;
@@ -342,6 +392,10 @@ export class MakerMemoryManager {
    */
   async resetDigests(): Promise<{ removedCount: number }> {
     this.ensureOwnerScope();
+    // 竞态锚点 (review #2388 P1): 捕获 scope + root, 跨 await 不再 re-read 动态根;
+    // 每次 fs 写操作前复核, owner 已切换则中止, 绝不扫/删新 owner 的目录。
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
+    const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
     let total = 0;
     const activeDirs = new Set<string>();
     for (const [workdir, { store }] of this.stores) {
@@ -350,7 +404,7 @@ export class MakerMemoryManager {
     }
 
     const fs = await import('node:fs/promises');
-    const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
+    this.assertScopeUnchanged(scopeAtEntry);
     let entries: string[];
     try {
       entries = await fs.readdir(memoryRoot);
@@ -363,6 +417,7 @@ export class MakerMemoryManager {
       let filenames: string[];
       try {
         if (!(await fs.stat(dir)).isDirectory()) continue;
+        this.assertScopeUnchanged(scopeAtEntry);
         filenames = await fs.readdir(dir);
       } catch {
         continue;
@@ -370,9 +425,11 @@ export class MakerMemoryManager {
       for (const filename of filenames) {
         if (parseFilename(filename)?.type !== 'digest') continue;
         try {
+          this.assertScopeUnchanged(scopeAtEntry);
           await fs.unlink(path.join(dir, filename));
           total += 1;
         } catch (error) {
+          if (error instanceof MemoryError && error.code === 'not-ready') throw error;
           this.logger.warn('resetDigests: failed to remove digest', {
             filename,
             error: String(error),
@@ -386,10 +443,14 @@ export class MakerMemoryManager {
   /** 清空所有 workdir 全部 memory. 慎用. */
   async resetAll(): Promise<{ removedCount: number }> {
     this.ensureOwnerScope();
+    // 竞态锚点 (review #2388 P1): 捕获 scope + root, 跨 await 不再 re-read 动态根;
+    // 每次目录删除前复核, owner 已切换则中止, 绝不递归删新 owner 的 maker-memory。
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
+    const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
     let total = 0;
     // 还没 open 的 workdir 文件也要清: 扫 basePath/maker-memory 下所有目录
     const fs = await import('node:fs/promises');
-    const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
+    this.assertScopeUnchanged(scopeAtEntry);
     let entries: string[] = [];
     try {
       entries = await fs.readdir(memoryRoot);
@@ -401,9 +462,11 @@ export class MakerMemoryManager {
       try {
         const stat = await fs.stat(dir);
         if (!stat.isDirectory()) continue;
+        this.assertScopeUnchanged(scopeAtEntry);
         await fs.rm(dir, { recursive: true, force: true });
         total += 1;
       } catch (e) {
+        if (e instanceof MemoryError && e.code === 'not-ready') throw e;
         this.logger.warn('resetAll: failed to remove workdir memory dir', {
           dir,
           error: String(e),

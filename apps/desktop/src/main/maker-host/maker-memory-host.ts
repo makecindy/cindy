@@ -32,7 +32,11 @@ import { desktopMakerLogger } from './logger-adapter.js';
 import { isAgentOneShotRouteDisabled } from './model-route-guard-live.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
-import { dataOwnerStorageKey, getActiveAppSession } from '../appSessionState.js';
+import {
+  dataOwnerStorageKey,
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
 
 const sqliteFactory: SqliteFactory = (filePath) => {
   // better-sqlite3 sync open. WAL 让多 session 并发读写更稳, busyTimeout 防小撞锁。
@@ -62,6 +66,10 @@ export function createDesktopMakerMemoryManager(): MakerMemoryManager {
   // owner 存储根: 有 owner → userData/owners/<hash>; 无 owner → null (fail-closed,
   // 不再退到 %TEMP%\cindy-no-session\<pid>\, 那是 #2341 静默丢失的根源)。
   const resolveBasePath = (): string | null => {
+    // 会话边界窗口 (beginAppSessionBoundary 已调、commitActiveAppSession 未落定)
+    // 期间 getActiveAppSession() 仍返回旧 owner — 此时也必须 fail-closed,
+    // 否则边界期读写会继续落旧账号 (review #2388 P1)。
+    if (isAppSessionBoundaryPending()) return null;
     const ownerId = getActiveAppSession().dataOwnerId;
     if (!ownerId) return null;
     return path.join(app.getPath('userData'), 'owners', dataOwnerStorageKey(ownerId));

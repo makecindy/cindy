@@ -176,4 +176,86 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(sqlite.closes).toHaveLength(0);
     manager.dispose();
   });
+
+  // ── 异步竞态 (review #2388 P1) ──────────────────────────────────────────
+
+  it('getStore 异步 init 期间 owner 切换 → 抛 not-ready 且旧 store 不入池', async () => {
+    let currentRoot = rootA;
+    let currentScope = 'cloud:old:1';
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => currentRoot,
+      ownerScopeKey: () => currentScope,
+      sqliteFactory: (filePath) => {
+        // 模拟「初始化 await 窗口内 owner commit」: factory 在 mkdir 后、
+        // store.init 前被调用, 此时切换 scope/root 等效于窗口期切换账号。
+        currentRoot = rootB;
+        currentScope = 'cloud:new:2';
+        return sqlite.factory(filePath);
+      },
+      agents: {},
+      logger: noopLogger,
+    });
+
+    // 旧 owner 的 getStore 必须 fail-closed, 不得把旧 root store 提交入池
+    await expect(manager.getStore(WORKDIR)).rejects.toThrow(/memory:not-ready/);
+
+    // 当前 scope 已是 new/rootB: 后续 getStore 建在新根
+    const store = await manager.getStore(WORKDIR);
+    expect(store).toBeDefined();
+    expect(existsSync(memoryDirFor(rootB))).toBe(true);
+    manager.dispose();
+  });
+
+  it('owner 切换后 resetAll 扫新根, 不删旧 owner 数据', async () => {
+    let currentRoot = rootA;
+    let currentScope = 'cloud:old:1';
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => currentRoot,
+      ownerScopeKey: () => currentScope,
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+
+    // 旧 owner 在 rootA 写入一条 memory
+    const storeA = await manager.getStore(WORKDIR);
+    await storeA.write({
+      type: 'project', name: 'keep', title: 'A', description: 'desc', body: 'content-A',
+    });
+    expect(existsSync(path.join(memoryDirFor(rootA), 'project_keep.md'))).toBe(true);
+
+    // 切换 owner → resetAll 入口 ensureOwnerScope 换根到 rootB, 只扫 rootB (空)
+    currentRoot = rootB;
+    currentScope = 'cloud:new:2';
+    const result = await manager.resetAll();
+    expect(result.removedCount).toBe(0);
+    // rootA (旧 owner) 数据完好
+    expect(existsSync(path.join(memoryDirFor(rootA), 'project_keep.md'))).toBe(true);
+    manager.dispose();
+  });
+
+  it('同 workdir 并发 getStore 复用池内实例, 多余 db 被关闭', async () => {
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => 'cloud:abc:1',
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+
+    const [s1, s2] = await Promise.all([
+      manager.getStore(WORKDIR),
+      manager.getStore(WORKDIR),
+    ]);
+    expect(s1).toBe(s2); // 池内单实例
+    // 后完成的那次打开了多余 db, 发现池中已有实例后必须关闭 (不泄漏句柄)
+    expect(sqlite.closes.length).toBeGreaterThan(0);
+    manager.dispose();
+  });
 });
