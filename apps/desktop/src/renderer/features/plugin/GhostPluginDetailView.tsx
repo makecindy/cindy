@@ -619,22 +619,30 @@ export function ToolsSection({
   }, [config, tools]);
 
   const handleSetGlobalPolicy = (policy: ToolApprovalMode) => {
-    const updatedTools: Record<string, ToolApprovalMode> = {};
-    for (const tool of tools) {
-      updatedTools[tool.name] = policy;
-    }
-    updateConfig({
-      globalPolicy: policy,
-      tools: updatedTools,
+    setConfig((prev) => {
+      const updatedTools: Record<string, ToolApprovalMode> = {};
+      for (const tool of tools) {
+        updatedTools[tool.name] = policy;
+      }
+      const next: GhostToolPermissionConfig = {
+        globalPolicy: policy,
+        tools: updatedTools,
+      };
+      void window.electronAPI.ghosts.setToolPermissions(ghostId, next);
+      return next;
     });
   };
 
   const handleSetToolMode = (toolName: string, mode: ToolApprovalMode) => {
-    const nextTools = { ...(config.tools ?? {}), [toolName]: mode };
-    const allSame = tools.every((tool) => (nextTools[tool.name] ?? 'needs-approval') === mode);
-    updateConfig({
-      globalPolicy: allSame ? mode : 'custom',
-      tools: nextTools,
+    setConfig((prev) => {
+      const nextTools = { ...(prev.tools ?? {}), [toolName]: mode };
+      const allSame = tools.every((tool) => (nextTools[tool.name] ?? 'needs-approval') === mode);
+      const next: GhostToolPermissionConfig = {
+        globalPolicy: allSame ? mode : 'custom',
+        tools: nextTools,
+      };
+      void window.electronAPI.ghosts.setToolPermissions(ghostId, next);
+      return next;
     });
   };
 

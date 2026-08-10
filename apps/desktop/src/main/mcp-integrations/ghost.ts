@@ -70,6 +70,7 @@ import {
 } from '../cindy-brain/index.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { resolveToolApprovalMode } from '../cindy-brain/ghostToolPermissionsStore.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
@@ -969,6 +970,16 @@ export function getCindyGhostsMcpDeps(
           errorCode: 'TOOL_NOT_FOUND',
           message: toolNotFoundMessage(ghostId, tool, target.manifest.tools),
         };
+      }
+      if (!grantOnly) {
+        const approvalMode = resolveToolApprovalMode(ghostId, tool);
+        if (approvalMode === 'blocked') {
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: `Tool '${tool}' in plugin '${ghostId}' is blocked by user security policy`,
+          };
+        }
       }
       if (grantOnly && (!attachments || attachments.length === 0)) {
         return {
