@@ -1061,7 +1061,20 @@ function consumesStdinAsProgram(tokens: string[]): boolean {
   } else if (executable === 'osascript') {
     if (args.some((arg) => arg === '-e' || arg.startsWith('-e'))) return false;
   } else if (PROGRAMMABLE_INTERPRETER.test(executable)) {
-    if (/^(?:(?:g|m|n)?awk)$/.test(executable)) return false;
+    if (/^(?:(?:g|m|n)?awk)$/.test(executable)) {
+      // awk reads its program from a file with `-f progfile`, but `-f -`
+      // reads the program from stdin, which is executable heredoc input.
+      let flagIndex = 0;
+      while (flagIndex < args.length) {
+        const flag = args[flagIndex]!;
+        if (flag === '-f') return args[flagIndex + 1] === '-';
+        if (/^-[A-Za-z]*f[A-Za-z]*$/.test(flag) && flag.slice(flag.indexOf('f') + 1) === '-') {
+          return true;
+        }
+        flagIndex += 1;
+      }
+      return false;
+    }
     if (args.some((arg) => /^(?:-c|-e|-p|-m|--eval|--print|--input-type|--module)$/.test(arg))) {
       return false;
     }

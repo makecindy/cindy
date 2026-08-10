@@ -270,6 +270,12 @@ JS`,
 $(printf xcr) $(printf un) shutdown DEVICE`,
     `cat <<< EOF
 $(printf xcr) $(printf un) shutdown DEVICE`,
+    `awk -f - <<'AWK'
+system("xcrun simctl shutdown DEVICE")
+AWK`,
+    `awk -f - <<'AWK'
+system("xcr" "un" " sim" "ctl shutdown DEVICE")
+AWK`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
     `python3 -c 'import subprocess; subprocess.run(["/usr/bin/open","-a","Simulator"])'`,
@@ -408,6 +414,15 @@ console.log(\`hello \${name}\`);
 JS`,
     `cat <<<hello`,
     `cat <<< 'simctl'`,
+    `awk -f - <<'AWK'
+print("hi")
+AWK`,
+    `awk '{print}' <<'AWK'
+data line
+AWK`,
+    `awk -f script.awk <<'AWK'
+data line
+AWK`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',
     'find . -maxdepth 1 -name simctl',
