@@ -26,6 +26,8 @@ import * as path from 'node:path';
 import type Database from 'better-sqlite3';
 
 import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
+import { resolveMemoryScopeKey } from './scope-resolver.js';
+import { SSH_SCOPE_KEY_PREFIX } from './storage.js';
 import {
   type MemoryConfig,
   type WriteOptions,
@@ -202,17 +204,26 @@ export class MakerMemoryManager {
    * key 语义: 本地会话传 workdir 绝对路径; SSH remote 会话传
    * buildMemoryScopeKey 产出的 `ssh:<hostId>:<path>` 复合键 (调用方负责,
    * manager 不自己判远端) — 见 storage.ts buildMemoryScopeKey。
+   *
+   * worktree 归一化兜底 (#2379): agent 启动注入 / MCP withStore 已在调用侧
+   * 经 resolveMemoryScopeKey 解析 (进程内缓存, 此处命中零成本); 本层对非
+   * `ssh:` 入参再解析一次, resetWorkdir/runReview/UI 等旁路即使传入未归一化
+   * 的 worktree 路径也落到同一 Store, 不留第二套语义。归一化幂等 (主仓路径
+   * 再解析返回自身), 重复解析无副作用。
    */
   async getStore(absWorkdir: string): Promise<MakerMemoryStore> {
     if (!absWorkdir || absWorkdir.length === 0) {
       throw new Error('MakerMemoryManager.getStore: absWorkdir required');
     }
-    const cached = this.stores.get(absWorkdir);
+    const scopeKey = absWorkdir.startsWith(SSH_SCOPE_KEY_PREFIX)
+      ? absWorkdir
+      : await resolveMemoryScopeKey(absWorkdir);
+    const cached = this.stores.get(scopeKey);
     if (cached) return cached.store;
 
     // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
     // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
-    const sanitized = memoryScopeDirName(absWorkdir);
+    const sanitized = memoryScopeDirName(scopeKey);
     const storageDir = path.join(this.deps.basePath, MEMORY_SUBDIR, sanitized);
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 
@@ -223,14 +234,14 @@ export class MakerMemoryManager {
     const db = this.deps.sqliteFactory(dbPath);
     const store = new MakerMemoryStore({
       storageDir,
-      absWorkdir,
+      absWorkdir: scopeKey,
       db,
       logger: this.logger.child(`memory:${sanitized}`),
       ...(this.deps.config ? { config: this.deps.config } : {}),
     });
     await store.init();
-    this.stores.set(absWorkdir, { store, db });
-    this.logger.debug('memory store opened', { workdir: absWorkdir, sanitized });
+    this.stores.set(scopeKey, { store, db });
+    this.logger.debug('memory store opened', { workdir: scopeKey, sanitized });
     return store;
   }
 

@@ -58,6 +58,12 @@ export {
   validateSlug,
   type MemoryStorageMeta,
 } from './memory/storage.js';
+export {
+  resolveMemoryScopeKey,
+  __clearMemoryScopeKeyCacheForTests,
+  type GitProbe,
+  type ResolveMemoryScopeKeyDeps,
+} from './memory/scope-resolver.js';
 export { MemoryFts } from './memory/fts.js';
 export {
   MakerMemoryStore,
