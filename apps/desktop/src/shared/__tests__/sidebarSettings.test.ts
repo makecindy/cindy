@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isSidebarSettingsSnapshot } from '../sidebarSettings';
+import { isSidebarLegacyRendererOwnerClaim, isSidebarSettingsSnapshot } from '../sidebarSettings';
 
 const OWNER_STAMP = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 
@@ -52,6 +52,43 @@ describe('sidebar settings snapshot validation', () => {
         pinnedOrderIsAuthoritative: 'yes',
         pinnedOrder: [],
         hiddenProjectKeys: [],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('legacy Renderer owner claim validation', () => {
+  it('requires an owner stamp and an explicit claim result', () => {
+    expect(
+      isSidebarLegacyRendererOwnerClaim({
+        ...OWNER_STAMP,
+        claimed: true,
+        canInitialize: true,
+        pinnedLegacyConsumed: false,
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarLegacyRendererOwnerClaim({
+        ...OWNER_STAMP,
+        claimed: false,
+        canInitialize: false,
+        pinnedLegacyConsumed: true,
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarLegacyRendererOwnerClaim({
+        ...OWNER_STAMP,
+        claimed: true,
+        pinnedLegacyConsumed: false,
+      }),
+    ).toBe(false);
+    expect(
+      isSidebarLegacyRendererOwnerClaim({
+        dataOwnerId: 'owner-a',
+        ownerGeneration: -1,
+        claimed: true,
+        canInitialize: true,
+        pinnedLegacyConsumed: false,
       }),
     ).toBe(false);
   });

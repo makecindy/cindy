@@ -36,6 +36,12 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     platform: 'linux',
     sidebarSettings: {
+      claimLegacyRendererOwner: () => ({
+        ...OWNER_STAMP,
+        claimed: true,
+        canInitialize: true,
+        pinnedLegacyConsumed: false,
+      }),
       loadSnapshot: () => ({
         ...OWNER_STAMP,
         pinnedOrderIsAuthoritative: false,

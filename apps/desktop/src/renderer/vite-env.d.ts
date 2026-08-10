@@ -3934,6 +3934,7 @@ interface ElectronAPI {
   };
 
   sidebarSettings: {
+    claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;
     loadSnapshot: () => import('../shared/sidebarSettings').SidebarSettingsSnapshot;
     mutatePinnedOrder: (
       mutation: import('../shared/sidebarSettings').SidebarPinnedOrderMutation,

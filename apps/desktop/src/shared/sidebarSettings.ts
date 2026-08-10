@@ -10,6 +10,16 @@ export interface SidebarSettingsSnapshot extends DataOwnerPushStamp {
   readonly hiddenProjectKeys: string[];
 }
 
+/** Main's durable arbitration result for the one unscoped Renderer namespace. */
+export interface SidebarLegacyRendererOwnerClaim extends DataOwnerPushStamp {
+  /** The durable marker belongs to this owner, so an existing envelope is readable. */
+  readonly claimed: boolean;
+  /** This process is currently exclusive and may publish a new legacy envelope. */
+  readonly canInitialize: boolean;
+  /** Main has durably consumed or superseded the legacy Renderer pin staging. */
+  readonly pinnedLegacyConsumed: boolean;
+}
+
 export type SidebarPinnedOrderMutation =
   | {
       readonly kind: 'reorder';
@@ -59,6 +69,17 @@ export function isSidebarSettingsSnapshot(value: unknown): value is SidebarSetti
     isStringArray(candidate.pinnedOrder) &&
     isStringArray(candidate.hiddenProjectKeys) &&
     (candidate.pinnedOrderIsAuthoritative || candidate.pinnedOrder.length === 0)
+  );
+}
+
+export function isSidebarLegacyRendererOwnerClaim(
+  value: unknown,
+): value is SidebarLegacyRendererOwnerClaim {
+  return (
+    isDataOwnerPushStamp(value) &&
+    typeof (value as Partial<SidebarLegacyRendererOwnerClaim>).claimed === 'boolean' &&
+    typeof (value as Partial<SidebarLegacyRendererOwnerClaim>).canInitialize === 'boolean' &&
+    typeof (value as Partial<SidebarLegacyRendererOwnerClaim>).pinnedLegacyConsumed === 'boolean'
   );
 }
 

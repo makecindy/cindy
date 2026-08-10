@@ -86,7 +86,9 @@ import type {
 } from '../shared/voiceInputRefinerProfiles';
 import { isIpcErrorCode, type IpcErrorCode } from '../shared/ipc-errors';
 import {
+  isSidebarLegacyRendererOwnerClaim,
   isSidebarSettingsSnapshot,
+  type SidebarLegacyRendererOwnerClaim,
   type SidebarPinnedOrderMutation,
   type SidebarSettingsSnapshot,
 } from '../shared/sidebarSettings';
@@ -4386,6 +4388,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.
   sidebarSettings: {
+    claimLegacyRendererOwner: (): SidebarLegacyRendererOwnerClaim => {
+      const value: unknown = ipcRenderer.sendSync(
+        'sidebar-settings:claim-renderer-legacy-owner-sync',
+      );
+      return isSidebarLegacyRendererOwnerClaim(value)
+        ? value
+        : {
+            dataOwnerId: null,
+            ownerGeneration: 0,
+            claimed: false,
+            canInitialize: false,
+            pinnedLegacyConsumed: false,
+          };
+    },
     loadSnapshot: (): SidebarSettingsSnapshot => {
       const value: unknown = ipcRenderer.sendSync('sidebar-settings:load-snapshot-sync');
       return isSidebarSettingsSnapshot(value)

@@ -7,6 +7,7 @@
  */
 
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -19,11 +20,13 @@ import {
   SIDEBAR_PINNED_ORDER_MAX_ENTRIES,
   type SidebarPinnedOrderMutation,
   type SidebarPinnedOrderWriteRequest,
+  type SidebarLegacyRendererOwnerClaim,
   type SidebarProjectHiddenWriteRequest,
   type SidebarSettingsSnapshot,
 } from '../shared/sidebarSettings.js';
 import {
   activeOwnerScopeKey,
+  dataOwnerStorageKey,
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
@@ -32,10 +35,13 @@ import {
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import {
+  hasLegacyOwnerNamespaceClaim,
+  hasExclusiveSharedLegacyUserDataAccess,
   isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
 
@@ -49,7 +55,10 @@ const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
 const SETTINGS_FILE_NAME = 'sidebar-settings.json';
-// An explicit empty snapshot must remain durable after the user clears the list.
+const LEGACY_RENDERER_OWNER_MARKER_FILE = 'sidebar-renderer-legacy-owner.v1.json';
+const MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES = 1_024;
+// An explicit empty scoped snapshot must remain durable, otherwise a preserved
+// legacy file could become authoritative again after the user clears the list.
 const SIDEBAR_WRITE_OPTIONS = { preserveDefaults: true } as const;
 
 const log = createLogger('sidebar-settings');
@@ -89,73 +98,16 @@ function normalizeSettings(raw: unknown): SidebarSettingsShape {
   };
 }
 
+function sidebarSettingsErrorCode(error: unknown): string {
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? (error as NodeJS.ErrnoException).code
+      : undefined;
+  return typeof code === 'string' && /^E[A-Z0-9_]{1,31}$/.test(code) ? code : 'INVALID_SETTINGS';
+}
+
 function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
-type SidebarPathState = 'missing' | 'regular-file' | 'blocked';
-
-function sidebarPathState(file: string): SidebarPathState {
-  try {
-    const primary = fs.lstatSync(file);
-    return primary.isFile() ? 'regular-file' : 'blocked';
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 'blocked';
-  }
-
-  // A leftover atomic-write backup can be the only recoverable snapshot.
-  // Never create a different authority while it remains unresolved.
-  try {
-    fs.lstatSync(`${file}.bak`);
-    return 'blocked';
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'blocked';
-  }
-}
-
-type SidebarStoreAccessResult = { status: 'blocked' } | { status: 'ready'; filePath: string };
-
-function sidebarStoreAccessResult(): SidebarStoreAccessResult {
-  const session = getActiveAppSession();
-  if (!session.dataOwnerId) return { status: 'blocked' };
-  if (session.mode !== 'local' && session.mode !== 'cloud') return { status: 'blocked' };
-
-  const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
-  if (session.mode === 'local') {
-    return sidebarPathState(scopedPath) === 'blocked'
-      ? { status: 'blocked' }
-      : { status: 'ready', filePath: scopedPath };
-  }
-
-  // The immutable global claim assigns the pre-owner file to exactly one
-  // verified cloud owner. Keep that owner's file at the legacy path so the
-  // parent release and this release always read and write the same snapshot
-  // across downgrade/re-upgrade. Other owners never inspect or consume it.
-  if (isLegacyOwnerNamespaceClaimedByOtherOwner(session.dataOwnerId)) {
-    return sidebarPathState(scopedPath) === 'blocked'
-      ? { status: 'blocked' }
-      : { status: 'ready', filePath: scopedPath };
-  }
-  // Sidebar no longer performs a move: once the immutable marker names this
-  // owner, the fixed root path is already its authority. Claim completeness,
-  // passive mode, and live peers only gate consumers that relocate legacy
-  // files; using them here would make ordinary shared state disappear.
-  if (!isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId)) {
-    return { status: 'blocked' };
-  }
-
-  const legacyPath = path.join(app.getPath('userData'), SETTINGS_FILE_NAME);
-  const legacyState = sidebarPathState(legacyPath);
-  if (legacyState === 'blocked') return { status: 'blocked' };
-  return { status: 'ready', filePath: legacyPath };
-}
-
-function requireSidebarStorePath(): string {
-  const result = sidebarStoreAccessResult();
-  if (result.status === 'blocked') {
-    throwIpcError('PRECONDITION_FAILED', 'sidebar settings owner claim is pending');
-  }
-  return result.filePath;
 }
 
 function currentStore() {
@@ -167,7 +119,7 @@ function currentStore() {
   let store = stores.get(ownerRoot);
   if (!store) {
     store = createOverrideSettingsFile<SidebarSettingsShape>({
-      filePath: requireSidebarStorePath,
+      filePath: () => path.join(ownerRoot, SETTINGS_FILE_NAME),
       defaults: DEFAULTS,
       normalize: normalizeSettings,
       log,
@@ -183,6 +135,33 @@ function currentStore() {
   return store;
 }
 
+type SidebarStoreAccessResult = 'blocked' | 'ready' | 'snapshot-changed';
+
+function sidebarStoreAccessResult(): SidebarStoreAccessResult {
+  const session = getActiveAppSession();
+  if (!session.dataOwnerId) return 'blocked';
+  if (session.mode !== 'local' && session.mode !== 'cloud') return 'blocked';
+
+  const scopedPathState = scopedSidebarPathState(ownerScopedUserDataPath(SETTINGS_FILE_NAME));
+  // The old schema cannot express unpin/unhide tombstones. Once scoped state
+  // exists, it is the sole authority; preserve any conflicting legacy bytes.
+  if (scopedPathState === 'regular-file') return 'ready';
+  if (scopedPathState === 'blocked') return 'blocked';
+
+  if (session.mode === 'local') return 'ready';
+  return claimLegacySidebarSettingsResult();
+}
+
+function requireSidebarStoreAccess(options: { rejectSnapshotChange?: boolean } = {}): void {
+  const result = sidebarStoreAccessResult();
+  if (result === 'blocked') {
+    throwIpcError('PRECONDITION_FAILED', 'sidebar settings migration is pending');
+  }
+  if (options.rejectSnapshotChange && result === 'snapshot-changed') {
+    throwIpcError('PRECONDITION_FAILED', 'sidebar settings changed during mutation');
+  }
+}
+
 function hasAuthoritativePinnedOrder(customizedKeys: readonly string[]): boolean {
   // Historical electron-store files may contain an auto-written empty default
   // that is indistinguishable from an explicit clear. Product policy prefers
@@ -195,7 +174,7 @@ function readCurrentSettings(): {
   pinnedOrderIsAuthoritative: boolean;
 } {
   const accessResult = sidebarStoreAccessResult();
-  if (accessResult.status === 'blocked') {
+  if (accessResult === 'blocked') {
     return { settings: { ...DEFAULTS }, pinnedOrderIsAuthoritative: false };
   }
   const store = currentStore();
@@ -405,14 +384,14 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
     dataOwnerId: request.dataOwnerId,
     ownerGeneration: request.ownerGeneration,
   };
-  requireSidebarStorePath();
+  requireSidebarStoreAccess();
   const store = currentStore();
   let changed = false;
   let nextSettings: SidebarSettingsShape;
   try {
     nextSettings = await enqueueWrite(scopeKey, () =>
       store.updateAtomic((current) => {
-        requireSidebarStorePath();
+        requireSidebarStoreAccess({ rejectSnapshotChange: true });
         const nextOrder = applyPinnedMutation(
           current.value.pinnedOrder,
           mutation,
@@ -450,14 +429,14 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
     dataOwnerId: request.dataOwnerId,
     ownerGeneration: request.ownerGeneration,
   };
-  requireSidebarStorePath();
+  requireSidebarStoreAccess();
   const store = currentStore();
   let changed = false;
   let nextSettings: SidebarSettingsShape;
   try {
     nextSettings = await enqueueWrite(scopeKey, () =>
       store.updateAtomic((current) => {
-        requireSidebarStorePath();
+        requireSidebarStoreAccess({ rejectSnapshotChange: true });
         const currentKeys = current.value.hiddenProjectKeys;
         const comparisonKey = projectKeyComparisonKey(projectKey, process.platform) ?? projectKey;
         const alreadyHidden = currentKeys.some(
@@ -492,7 +471,269 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
   return changed;
 }
 
+type SidebarPathState = 'missing' | 'regular-file' | 'blocked';
+
+function sidebarPathState(file: string): SidebarPathState {
+  try {
+    return fs.lstatSync(file).isFile() ? 'regular-file' : 'blocked';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 'blocked';
+  }
+
+  // A leftover atomic-write backup can be the only recoverable snapshot.
+  // Never create a different authority while it remains unresolved.
+  try {
+    fs.lstatSync(`${file}.bak`);
+    return 'blocked';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'blocked';
+  }
+}
+
+function scopedSidebarPathState(file: string): SidebarPathState {
+  return sidebarPathState(file);
+}
+
+interface LegacyRendererOwnerMarker {
+  version: 1;
+  ownerKey: string;
+  pinnedLegacyConsumed: boolean;
+}
+
+type LegacyRendererOwnerMarkerState =
+  { kind: 'missing' | 'blocked' } | { kind: 'valid'; marker: LegacyRendererOwnerMarker };
+
+function boundedMarkerPathState(file: string): SidebarPathState {
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && stat.size <= MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES
+      ? 'regular-file'
+      : 'blocked';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'blocked';
+  }
+}
+
+function readLegacyRendererOwnerMarker(
+  markerPath: string,
+  recoverBackup: boolean,
+): LegacyRendererOwnerMarkerState {
+  try {
+    const primaryState = boundedMarkerPathState(markerPath);
+    if (primaryState === 'blocked') return { kind: 'blocked' };
+    let readPath = markerPath;
+    if (primaryState === 'missing') {
+      readPath = `${markerPath}.bak`;
+      const backupState = boundedMarkerPathState(readPath);
+      if (backupState === 'blocked') return { kind: 'blocked' };
+      if (backupState === 'missing') return { kind: 'missing' };
+    }
+
+    const raw = recoverBackup
+      ? readAtomicFileSync(markerPath)
+      : fs.readFileSync(readPath, 'utf-8');
+    if (raw === null) return { kind: 'missing' };
+    if (Buffer.byteLength(raw, 'utf-8') > MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES) {
+      return { kind: 'blocked' };
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed) ||
+      (parsed as { version?: unknown }).version !== 1 ||
+      typeof (parsed as { ownerKey?: unknown }).ownerKey !== 'string' ||
+      typeof (parsed as { pinnedLegacyConsumed?: unknown }).pinnedLegacyConsumed !== 'boolean'
+    ) {
+      return { kind: 'blocked' };
+    }
+    return { kind: 'valid', marker: parsed as LegacyRendererOwnerMarker };
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'missing' }
+      : { kind: 'blocked' };
+  }
+}
+
+function currentPinnedOrderIsAuthoritative(): boolean {
+  try {
+    return readCurrentSettings().pinnedOrderIsAuthoritative;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Atomically picks the only owner allowed to consume the shared Renderer
+ * localStorage namespace. The marker contains only the opaque owner key; the
+ * legacy values remain in Renderer storage until its envelope commit succeeds.
+ */
+function claimLegacyRendererSidebarOwner(): SidebarLegacyRendererOwnerClaim {
+  const stamp = getActiveDataOwnerPushStamp();
+  if (!stamp.dataOwnerId || isAppSessionBoundaryPending()) {
+    return { ...stamp, claimed: false, canInitialize: false, pinnedLegacyConsumed: false };
+  }
+
+  const ownerKey = dataOwnerStorageKey(stamp.dataOwnerId);
+  const markerPath = path.join(app.getPath('userData'), LEGACY_RENDERER_OWNER_MARKER_FILE);
+  const exclusiveAtStart = hasExclusiveSharedLegacyUserDataAccess();
+  // Existing immutable envelopes remain readable without exclusivity. In that
+  // mode inspect the primary or backup in place: restoring a backup would
+  // mutate the shared profile while another build may still own it.
+  let state = readLegacyRendererOwnerMarker(markerPath, exclusiveAtStart);
+  if (state.kind === 'missing' && exclusiveAtStart) {
+    const temporaryPath = `${markerPath}.init-${process.pid}-${randomUUID()}`;
+    try {
+      fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+      const marker: LegacyRendererOwnerMarker = {
+        version: 1,
+        ownerKey,
+        pinnedLegacyConsumed: currentPinnedOrderIsAuthoritative(),
+      };
+      fs.writeFileSync(temporaryPath, JSON.stringify(marker), {
+        encoding: 'utf-8',
+        flag: 'wx',
+        mode: 0o600,
+      });
+      fs.linkSync(temporaryPath, markerPath);
+      log.info('legacy Renderer sidebar owner claimed', { ownerKey });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+        log.warn('failed to claim legacy Renderer sidebar owner', {
+          ownerKey,
+          errorCode: sidebarSettingsErrorCode(err),
+        });
+      }
+    } finally {
+      try {
+        fs.unlinkSync(temporaryPath);
+      } catch {
+        // The temporary marker is never authoritative until its hard link exists.
+      }
+    }
+    state = readLegacyRendererOwnerMarker(markerPath, true);
+  }
+
+  if (state.kind !== 'valid' || state.marker.ownerKey !== ownerKey) {
+    return { ...stamp, claimed: false, canInitialize: false, pinnedLegacyConsumed: false };
+  }
+
+  if (
+    exclusiveAtStart &&
+    !state.marker.pinnedLegacyConsumed &&
+    currentPinnedOrderIsAuthoritative()
+  ) {
+    try {
+      atomicWriteFileSync(
+        markerPath,
+        JSON.stringify({ ...state.marker, pinnedLegacyConsumed: true }),
+      );
+      state = readLegacyRendererOwnerMarker(markerPath, true);
+    } catch (err) {
+      log.warn('failed to record consumed legacy Renderer pins', {
+        ownerKey,
+        errorCode: sidebarSettingsErrorCode(err),
+      });
+    }
+  }
+
+  const marker = state.kind === 'valid' && state.marker.ownerKey === ownerKey ? state.marker : null;
+  return {
+    ...stamp,
+    claimed: marker !== null,
+    canInitialize:
+      marker !== null && exclusiveAtStart && hasExclusiveSharedLegacyUserDataAccess(),
+    pinnedLegacyConsumed: marker?.pinnedLegacyConsumed === true,
+  };
+}
+
+type LegacySidebarClaimResult = 'blocked' | 'ready' | 'snapshot-changed';
+
+function initializeScopedSidebarSettings(
+  scopedPath: string,
+  ownerKey: string,
+): LegacySidebarClaimResult {
+  const temporaryPath = `${scopedPath}.init-${process.pid}-${randomUUID()}`;
+  try {
+    fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
+    // File existence is the durable "legacy checked" bit. Keep the object
+    // empty so Renderer localStorage pins may still perform their own migration.
+    // Linking a fully written same-directory temporary file publishes it
+    // atomically without overwriting a snapshot created by another process.
+    fs.writeFileSync(temporaryPath, '{}', { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
+    fs.linkSync(temporaryPath, scopedPath);
+    log.info('sidebar settings owner namespace initialized', { ownerKey });
+    return 'snapshot-changed';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      return isReadableSidebarSettingsFile(scopedPath) ? 'snapshot-changed' : 'blocked';
+    }
+    log.warn('failed to initialize sidebar settings owner namespace', {
+      ownerKey,
+      errorCode: sidebarSettingsErrorCode(err),
+    });
+    return 'blocked';
+  } finally {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {
+      // The temporary file contains only an empty object and is never an authority.
+    }
+  }
+}
+
+function isReadableSidebarSettingsFile(file: string): boolean {
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.size > MAX_SETTINGS_BYTES) return false;
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
+function claimLegacySidebarSettingsResult(): LegacySidebarClaimResult {
+  const session = getActiveAppSession();
+  if (session.mode !== 'cloud' || !session.dataOwnerId) return 'blocked';
+
+  const root = app.getPath('userData');
+  const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
+  const legacyPath = path.join(root, SETTINGS_FILE_NAME);
+  const scopedPath = ownerScopedUserDataPath(SETTINGS_FILE_NAME);
+
+  if (isLegacyOwnerNamespaceClaimedByOtherOwner(session.dataOwnerId)) return 'ready';
+  const legacyPathState = sidebarPathState(legacyPath);
+
+  if (!hasLegacyOwnerNamespaceClaim(session.dataOwnerId)) {
+    return isLegacyOwnerNamespaceClaimOwnedBy(session.dataOwnerId) && legacyPathState === 'missing'
+      ? initializeScopedSidebarSettings(scopedPath, ownerKey)
+      : 'blocked';
+  }
+
+  if (legacyPathState === 'missing') {
+    return initializeScopedSidebarSettings(scopedPath, ownerKey);
+  }
+  if (legacyPathState === 'blocked') return 'blocked';
+  try {
+    fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
+    fs.renameSync(legacyPath, scopedPath);
+    log.info('legacy sidebar settings moved into owner namespace', { ownerKey });
+    return 'snapshot-changed';
+  } catch (err) {
+    log.warn('failed to migrate legacy sidebar settings', {
+      ownerKey,
+      errorCode: sidebarSettingsErrorCode(err),
+    });
+    return 'blocked';
+  }
+}
+
 export function registerSidebarSettingsIpc(): void {
+  ipcMain.on('sidebar-settings:claim-renderer-legacy-owner-sync', (event) => {
+    assertTrustedAppRendererEvent(event);
+    event.returnValue = claimLegacyRendererSidebarOwner();
+  });
   ipcMain.on('sidebar-settings:load-snapshot-sync', (event) => {
     assertTrustedAppRendererEvent(event);
     event.returnValue = loadSidebarSettingsSnapshot();
@@ -510,5 +751,7 @@ export function registerSidebarSettingsIpc(): void {
 export const __testing = {
   normalizeSettings,
   MAX_SETTINGS_BYTES,
+  LEGACY_RENDERER_OWNER_MARKER_FILE,
+  MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES,
   pendingWriteChainCount: () => writeChains.size,
 };

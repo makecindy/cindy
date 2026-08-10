@@ -422,7 +422,8 @@ export function moveManualProjectOrder(
  * 数据落在 main 进程 owner namespace，通过 IPC 同步读 / 异步写。
  *
  * 一次性 migration:老版本数据在 renderer 的 localStorage 里；Main 明确报告 scoped
- * 状态尚未初始化时才搬过去，并在确认落盘之后清掉老 key。
+ * 状态尚未初始化时才搬过去。确认落盘后由 Main 的单调 consumed 标记停止读取旧值；
+ * unscoped key 继续保留，避免破坏仍在使用它的旧版本实例。
  */
 export interface LoadedManualPinnedOrder {
   order: string[];
@@ -431,8 +432,8 @@ export interface LoadedManualPinnedOrder {
 
 export function loadManualPinnedOrder(snapshot: SidebarSettingsSnapshot): LoadedManualPinnedOrder {
   if (snapshot.pinnedOrderIsAuthoritative) {
-    // Main authority includes an explicit empty snapshot. Leaving a claimed
-    // legacy copy behind would resurrect stale pins after the user clears all.
+    // Main authority includes an explicit empty snapshot. Its durable consumed
+    // bit makes the captured copy unreadable without deleting the compatibility key.
     clearClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, snapshot.dataOwnerId);
     return {
       order: Array.from(snapshot.pinnedOrder),

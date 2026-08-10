@@ -218,6 +218,22 @@ function hasConcurrentLiveInstanceSync(
 }
 
 /**
+ * Whether this process may safely inspect or claim state from the shared,
+ * pre-owner userData namespace. Unlike hasLegacyOwnerNamespaceClaim, this
+ * predicate does not require a verified cloud-owner marker, so stable local
+ * profiles can use it for their own one-time owner attribution.
+ */
+export function hasExclusiveSharedLegacyUserDataAccess(
+  userDataDir = app.getPath('userData'),
+  isPidAlive: (pid: number) => boolean = isPidAliveDefault,
+): boolean {
+  return (
+    process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1' &&
+    !hasConcurrentLiveInstanceSync(userDataDir, isPidAlive)
+  );
+}
+
+/**
  * Legacy secrets may only be imported by the cloud owner that won the global
  * pre-namespace claim. The marker is intentionally outside owner roots so a
  * later account cannot reinterpret the same shared legacy credential files.
@@ -239,7 +255,7 @@ export function hasLegacyOwnerNamespaceClaim(
   userDataDir = app.getPath('userData'),
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
 ): boolean {
-  if (process.env.XDT_PASSIVE_SHARED_USER_DATA === '1') return false;
+  if (!hasExclusiveSharedLegacyUserDataAccess(userDataDir, isPidAlive)) return false;
   try {
     const parsed = JSON.parse(
       fsSync.readFileSync(path.join(userDataDir, CLAIM_MARKER), 'utf-8'),
@@ -254,7 +270,7 @@ export function hasLegacyOwnerNamespaceClaim(
   } catch {
     return false;
   }
-  return !hasConcurrentLiveInstanceSync(userDataDir, isPidAlive);
+  return true;
 }
 
 function readMarkerSync(

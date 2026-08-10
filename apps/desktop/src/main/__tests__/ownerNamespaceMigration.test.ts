@@ -8,6 +8,7 @@ import {
   claimLegacyOwnerNamespace,
   getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
+  hasExclusiveSharedLegacyUserDataAccess,
   isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
   listLegacyGhostTombstoneRoots,
@@ -1501,6 +1502,33 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
       delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
     }
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
+  });
+});
+
+describe('hasExclusiveSharedLegacyUserDataAccess', () => {
+  beforeEach(() => {
+    delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
+  });
+
+  it('does not require a cloud owner claim when the shared profile is exclusive', async () => {
+    const root = await tempRoot();
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root)).toBe(true);
+
+    process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
+    try {
+      expect(hasExclusiveSharedLegacyUserDataAccess(root)).toBe(false);
+    } finally {
+      delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
+    }
+  });
+
+  it('fails closed while another live instance shares the profile', async () => {
+    const root = await tempRoot();
+    await writeDevInstanceRecord(root, 4242);
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
   });
 });
 
