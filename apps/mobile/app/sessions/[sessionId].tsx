@@ -5638,7 +5638,6 @@ export default function SessionScreen() {
         acceptanceUnknown
         && outboxSessionAliveRef.current === item.sessionId
       ) {
-        // Preserve the original optimistic clientId and hold further dispatch until sync.
         setError(formatRemoteError(err));
       }
     } finally {

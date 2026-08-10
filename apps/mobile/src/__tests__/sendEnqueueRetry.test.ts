@@ -9,8 +9,6 @@ import { describe, expect, it } from 'vitest';
  * - BACKPRESSURE 要么在本地发送前拒绝,要么由被控端 admission 明确拒绝执行;
  * - projection 也无法证明未入队——空闲 agent 下 enqueue-immediate 会把消息瞬间
  *   slice 进 activeTurn,pendingQueue 里查不到;
- * 因此自动重发只允许发生在「保证未发出」的失败上(inFlight 未置位);in-flight
- * 或超时歧义失败必须保留同一 clientId,不能恢复成可重试输入。
  */
 describe('send enqueue weak-network retry ordering', () => {
   const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
