@@ -51,54 +51,43 @@ export function Toast({ item }: ToastProps) {
       role={meta.role}
       aria-live={meta.ariaLive}
       data-state={item.exiting ? 'exiting' : 'entering'}
-      // hover 悬停时暂停自动关闭，移开后按剩余时长继续（正在阅读时不消失）
       onMouseEnter={() => toast.pauseAutoDismiss(item.id)}
       onMouseLeave={() => toast.resumeAutoDismiss(item.id)}
       className={cn(
-        // 基础布局：单行 pill，内容驱动宽度
-        'pointer-events-auto inline-flex items-center gap-2',
-        // pill 外观：完全圆角 + Card + Board
-        'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-        // padding 对称
-        'px-4 py-[10px]',
+        'pointer-events-auto flex gap-3 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+        'px-4 py-3',
       )}
     >
-      {/* Icon 16×16（彩色，硬编码内联 style） */}
-      <Icon
-        aria-hidden
-        className="h-4 w-4 shrink-0"
-        style={{ color: meta.color }}
-        strokeWidth={2}
-      />
-
-      {/* 来源身份头（第三方供文案时宿主画:图标+名字,内容是谁说的一眼可辨） */}
-      {item.source && (
-        <span className="inline-flex shrink-0 items-center gap-1.5">
-          {item.source.iconDataUrl && (
-            <img
-              src={item.source.iconDataUrl}
-              alt=""
-              draggable={false}
-              className="h-4 w-4 rounded-[4px] object-cover"
-            />
-          )}
-          <span className="max-w-[160px] truncate text-13 font-medium leading-snug text-[var(--text-tertiary)]">
-            {item.source.name}
-          </span>
-          <span aria-hidden className="text-13 leading-snug text-[var(--text-tertiary)] opacity-60">
-            ·
-          </span>
+      <div className="shrink-0 mt-0.5">
+        <Icon
+          aria-hidden
+          className="h-4 w-4"
+          style={{ color: meta.color }}
+          strokeWidth={2}
+        />
+      </div>
+      <div className="flex-1 min-w-0 flex flex-col gap-1">
+        <span
+          className="text-sm font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line max-w-[480px] break-words"
+        >
+          {item.message}
         </span>
-      )}
-
-      {/* Message — 默认单行 nowrap, 但允许多行 (whitespace-pre-line) 给诊断类
-          toast 用 (例如 silent install 失败时把 install log 尾巴拼进 message)。
-          单行短文本仍然展示成一行不变化, 因为没有 \n 就不会换。 */}
-      <span
-        className="text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line max-w-[480px] break-words"
-      >
-        {item.message}
-      </span>
+        {item.source && (
+          <span className="inline-flex items-center gap-1.5">
+            {item.source.iconDataUrl && (
+              <img
+                src={item.source.iconDataUrl}
+                alt=""
+                draggable={false}
+                className="h-3.5 w-3.5 rounded-[4px] object-cover"
+              />
+            )}
+            <span className="text-xs leading-snug text-[var(--text-tertiary)]">
+              {item.source.name}
+            </span>
+          </span>
+        )}
+      </div>
     </div>
   );
 }
