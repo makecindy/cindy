@@ -98,6 +98,15 @@ export interface SchedulerOptions {
    */
   isManagedWorkspaceDir?: (dir: string) => boolean;
   /**
+   * Host-owned validation for a persisted bound-session target. The scheduler
+   * calls it before CRUD persistence and again immediately before every fire,
+   * so a row restored from an older process cannot bypass a newer host policy.
+   */
+  validateTargetSession?: (
+    targetSessionId: string,
+    operation: 'create' | 'update' | 'fire',
+  ) => Promise<void>;
+  /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
    * (那是活跃实例的 in-flight,不能被本实例误标 interrupted)。CRUD / runNow /
    * 事件广播全部照常。用途:同一台机器 dev / release 双开共用同一 DB 时,给其中
@@ -333,6 +342,7 @@ export class Scheduler extends EventEmitter {
 
   private readonly notifyForcedFailureHook?: SchedulerOptions['notifyForcedFailure'];
   private readonly isManagedWorkspaceDir?: (dir: string) => boolean;
+  private readonly validateTargetSession?: SchedulerOptions['validateTargetSession'];
   private readonly passive: boolean;
   private lastDbSyncAt = 0;
 
@@ -377,6 +387,7 @@ export class Scheduler extends EventEmitter {
     this.tickIntervalMs = opts.tickIntervalMs ?? DEFAULT_TICK_MS;
     this.generateId = opts.generateId ?? defaultGenerateId;
     this.isManagedWorkspaceDir = opts.isManagedWorkspaceDir;
+    this.validateTargetSession = opts.validateTargetSession;
     this.notifyForcedFailureHook = opts.notifyForcedFailure;
     this.passive = opts.passive ?? false;
     this.maxConcurrentRuns = Math.max(1, opts.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS);
@@ -756,6 +767,9 @@ export class Scheduler extends EventEmitter {
     let skipped = false;
     this.updateInflightAttempt(runId, 'running');
     try {
+      if (schedule.targetSessionId) {
+        await this.validateTargetSession?.(schedule.targetSessionId, 'fire');
+      }
       const result = await this.runner.fire(schedule, {
         runId,
         firedAt,
@@ -1053,6 +1067,9 @@ export class Scheduler extends EventEmitter {
     let skipped = false;
     this.updateInflightAttempt(runId, 'running');
     try {
+      if (schedule.targetSessionId) {
+        await this.validateTargetSession?.(schedule.targetSessionId, 'fire');
+      }
       const result = await this.runner.fire(schedule, {
         runId,
         firedAt,
@@ -1276,6 +1293,9 @@ export class Scheduler extends EventEmitter {
       nextFireAt: firstFireAt,
     };
     validateScheduleExecutionShape(schedule);
+    if (schedule.targetSessionId) {
+      await this.validateTargetSession?.(schedule.targetSessionId, 'create');
+    }
     const inserted = await this.storage.insert(schedule);
     this.activeSchedules.set(id, inserted);
     this.emitEvent({ type: 'changed', scheduleId: id });
@@ -1335,6 +1355,9 @@ export class Scheduler extends EventEmitter {
           Object.prototype.hasOwnProperty.call(patch, 'prompt'),
       },
     );
+    if (candidate.targetSessionId) {
+      await this.validateTargetSession?.(candidate.targetSessionId, 'update');
+    }
     // expired 是一次性任务已消费的终态。编辑后的配置若已经表达为“循环且非手动”，
     // 继续保留 expired 会让持久化状态与排期语义冲突：即使算出了 nextFireAt，任务也
     // 不会进入 activeSchedules，重启后 listActive() 同样加载不到。状态恢复集中在引擎

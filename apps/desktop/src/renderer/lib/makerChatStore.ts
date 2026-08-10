@@ -62,6 +62,7 @@ import type {
 } from '../../shared/agentInputQueue';
 import { normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue';
 import { hasUserVisibleText } from '../../shared/visibleText';
+import { readReviewRunMeta } from '../../shared/reviewRun';
 import {
   deriveAutoTitleSeed,
   reconcileSessionRefsForText,
@@ -458,6 +459,7 @@ export interface ChatMessage {
     | 'goal-complete'
     | 'goal-resumed'
     | 'learn'
+    | 'review'
     | 'auto-resume'
     /**
      * 中断自愈**进行中**(退避窗口内,由 projection.autoResumePending 驱动的 ephemeral
@@ -14657,6 +14659,20 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         systemCardType: 'goal-resumed' as const,
         systemCardData: { kind: m.agentMeta.goalNotice },
+      };
+    }
+    const reviewRun = m.role === 'assistant' ? readReviewRunMeta(m.agentMeta?.reviewRun) : null;
+    if (reviewRun) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'review' as const,
+        systemCardData: {
+          ...reviewRun,
+          result: typeof m.content === 'string' ? m.content : '',
+        },
       };
     }
     const agentMeta = m.agentMeta;

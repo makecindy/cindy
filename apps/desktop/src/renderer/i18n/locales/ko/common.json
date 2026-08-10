@@ -4435,6 +4435,7 @@
         "browser": "브라우저",
         "terminal": "터미널",
         "review": "리뷰",
+        "subagents": "하위 에이전트",
         "backgroundTasks": "백그라운드 작업",
         "resourceUsage": "리소스 사용량",
         "collaboration": "협업",
@@ -4460,6 +4461,8 @@
         "fileSub": "Files",
         "openReview": "리뷰 열기",
         "reviewSub": "Review",
+        "openSubagents": "하위 에이전트 열기",
+        "subagentsSub": "나중에도 볼 수 있는 하위 작업",
         "openBackgroundTasks": "백그라운드 작업 열기",
         "backgroundTasksSub": "Background tasks",
         "openResourceUsage": "리소스 사용량 열기",
@@ -4828,6 +4831,58 @@
       "touchCountAria_other": "{{count}}회 편집됨",
       "expandAllAria": "모든 파일 펼치기",
       "collapseAllAria": "모든 파일 접기"
+    },
+    "subagents": {
+      "running": "실행 중",
+      "finished": "종료됨",
+      "empty": "이 작업에는 아직 하위 에이전트가 없습니다",
+      "emptyDetail": "이 작업에서 생성된 하위 에이전트는 계속 여기에 보관됩니다.",
+      "loading": "하위 에이전트 불러오는 중…",
+      "unavailable": "하위 에이전트 기록을 사용할 수 없습니다",
+      "unavailableDetail": "이 원격 기기 또는 이전 앱 버전은 아직 영구 하위 에이전트 기록을 제공하지 않습니다.",
+      "loadFailed": "하위 에이전트를 불러올 수 없습니다",
+      "retry": "다시 시도",
+      "loadEarlier": "이전 하위 에이전트 불러오기",
+      "untitled": "하위 에이전트",
+      "notFound": "하위 에이전트를 찾을 수 없습니다",
+      "back": "뒤로",
+      "harness": "Harness",
+      "model": "모델",
+      "context": "상위 작업 컨텍스트",
+      "contextValues": {
+        "unknown": "Harness에서 보고하지 않음",
+        "snapshot": "상위 작업 스냅샷",
+        "live": "실시간 상위 작업"
+      },
+      "assignment": "할당 내용",
+      "returnedResult": "반환된 결과",
+      "resultTruncated": "반환된 결과가 표시를 위해 일부 생략되었습니다.",
+      "latestUpdate": "최근 업데이트",
+      "activity": "활동",
+      "noActivity": "활동 세부 정보가 보고되지 않았습니다.",
+      "transcript": "전체 기록",
+      "noTranscript": "전체 기록 항목이 보고되지 않았습니다.",
+      "transcriptUnavailable": "이 Harness는 아직 전체 하위 작업 기록을 Cindy에 제공하지 않습니다. 반환된 결과와 수명 주기 활동은 계속 보관됩니다.",
+      "transcriptRoles": {
+        "parent": "상위 작업",
+        "subagent": "하위 에이전트",
+        "tool": "도구",
+        "system": "시스템"
+      },
+      "lastTool": "최근 도구: {{tool}}",
+      "tokens": "{{value}} tokens",
+      "activityKinds": {
+        "started": "시작됨",
+        "progress": "진행",
+        "message": "메시지",
+        "question": "질문",
+        "decision": "결정",
+        "resumed": "재개됨",
+        "steered": "방향 조정됨",
+        "completed": "완료됨",
+        "failed": "실패",
+        "stopped": "중지됨"
+      }
     },
     "backgroundTasks": {
       "running": "실행 중",
@@ -6180,6 +6235,24 @@
         "handoffTitle": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "handoffTitleEnglishSource": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "resumedBadge": "세션 재개됨"
+      },
+      "review": {
+        "running": "현재 결과물을 검토하는 중",
+        "completed": "검토 완료",
+        "failed": "검토를 완료하지 못했습니다",
+        "openTask": "검토 작업 열기",
+        "readOnlyHint": "독립 작업 · 개발 메모리 없음 · 읽기 전용",
+        "noResult": "검토 결과가 반환되지 않았습니다",
+        "failure": {
+          "reviewerClosed": "검토 작업이 완료되기 전에 닫혔습니다",
+          "cancelledBeforeStart": "검토가 시작되기 전에 취소되었습니다",
+          "interrupted": "Cindy가 종료될 때 검토가 중단되었습니다. /review를 다시 실행하세요.",
+          "sourceWorkspaceChanged": "원본 작업의 작업 공간이 변경되었습니다. 현재 작업 공간에서 /review를 다시 실행하세요.",
+          "sourceConversationChanged": "원본 작업이 변경되었습니다. 현재 작업에 대해 /review를 다시 실행하세요.",
+          "sourceFilesChanged": "원본 작업의 파일이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
+          "artifactChanged": "검토 대상 결과물이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
+          "providerFailed": "검토 작업 실행에 실패했습니다"
+        }
       }
     },
     "markdownRenderer": {
@@ -8782,6 +8855,21 @@
       "failed": "목표 설정에 실패했습니다",
       "set": "목표를 설정했습니다 — 자동으로 진행합니다",
       "cleared": "목표를 지웠습니다"
+    }
+  },
+  "review": {
+    "sessionTitle": "검토 · {{title}}",
+    "toast": {
+      "failed": "검토를 시작할 수 없습니다",
+      "remoteUnsupported": "이 버전에서는 로컬 작업만 검토할 수 있습니다"
+    },
+    "externalArtifactConfirm": {
+      "title": "작업 공간 밖의 결과물을 검토할까요?",
+      "message": "이 검토는 작업 공간 밖 또는 메모리에 있는 {{count}}개 항목을 설정된 모델로 보냅니다.",
+      "detail": "이번 검토에는 아래 항목만 허용됩니다. 계속하기 전에 확인하세요.",
+      "inline": "메모리 첨부 파일",
+      "allow": "이번만 허용",
+      "cancel": "취소"
     }
   },
   "learn": {

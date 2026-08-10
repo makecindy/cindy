@@ -89,7 +89,7 @@ interface QueueTask {
 
 export class ImageResizer {
   private readonly cfg: Required<Omit<ImageResizerConfig, 'logger'>> & { logger: ImageResizerLogger | undefined };
-  private readonly cacheDirReady: Promise<void>;
+  private readonly cacheDirReady: Promise<boolean>;
   private readonly inflight = new Map<string, Promise<string>>();
   private active = 0;
   private readonly waiting: QueueTask[] = [];
@@ -107,14 +107,14 @@ export class ImageResizer {
       timeoutMs: cfg.timeoutMs ?? DEFAULTS.timeoutMs,
       logger: cfg.logger,
     };
-    this.cacheDirReady = fs
-      .mkdir(this.cfg.cacheDir, { recursive: true })
-      .then(() => undefined)
+    this.cacheDirReady = this.preparePrivateCacheDir()
+      .then(() => true)
       .catch((e) => {
-        this.cfg.logger?.warn('image-resizer: cache mkdir failed', {
+        this.cfg.logger?.warn('image-resizer: private cache setup failed', {
           dir: this.cfg.cacheDir,
           error: String(e),
         });
+        return false;
       });
   }
 
@@ -134,6 +134,7 @@ export class ImageResizer {
    * 不抛错, 永远 resolve 一个可用 path。
    */
   async process(absPath: string): Promise<string> {
+    if (!(await this.cacheDirReady)) return absPath;
     if (!absPath || typeof absPath !== 'string') return absPath;
 
     let stat: Awaited<ReturnType<typeof fs.stat>>;
@@ -159,7 +160,9 @@ export class ImageResizer {
 
     // 命中缓存 → 直接返回 (touch atime 让 LRU 把它判为最近用过)
     try {
-      await fs.stat(cachedPath);
+      const cached = await fs.lstat(cachedPath);
+      if (!cached.isFile() || cached.isSymbolicLink()) throw new Error('unsafe cache entry');
+      await fs.chmod(cachedPath, 0o600);
       this.touchAtime(cachedPath).catch(() => undefined);
       return cachedPath;
     } catch {
@@ -183,7 +186,6 @@ export class ImageResizer {
     cachedPath: string,
     sharp: SharpModule,
   ): Promise<string> {
-    await this.cacheDirReady;
     return this.acquireSlot(async () => {
       const work = this.doResize(absPath, cachedPath, sharp);
       const timeout = new Promise<'timeout'>((resolve) => {
@@ -221,8 +223,9 @@ export class ImageResizer {
 
       // 写到临时文件再 rename, 避免并发读到半截文件
       const tmpPath = `${cachedPath}.${process.pid}.${Date.now()}.tmp`;
-      await fs.writeFile(tmpPath, buf);
+      await fs.writeFile(tmpPath, buf, { flag: 'wx', mode: 0o600 });
       await fs.rename(tmpPath, cachedPath);
+      await fs.chmod(cachedPath, 0o600);
       this.cfg.logger?.debug?.('image-resizer: cached', {
         absPath,
         cachedPath,
@@ -280,6 +283,25 @@ export class ImageResizer {
       .update('|')
       .update(DEFAULTS.cacheVersion)
       .digest('hex');
+  }
+
+  private async preparePrivateCacheDir(): Promise<void> {
+    await fs.mkdir(this.cfg.cacheDir, { recursive: true, mode: 0o700 });
+    const cacheDirStat = await fs.lstat(this.cfg.cacheDir);
+    if (!cacheDirStat.isDirectory() || cacheDirStat.isSymbolicLink()) {
+      throw new Error('cache path is not a private directory');
+    }
+    await fs.chmod(this.cfg.cacheDir, 0o700);
+    const entries = await fs.readdir(this.cfg.cacheDir);
+    await Promise.all(
+      entries.map(async (name) => {
+        const entryPath = path.join(this.cfg.cacheDir, name);
+        const entry = await fs.lstat(entryPath).catch(() => null);
+        if (entry?.isFile() && !entry.isSymbolicLink()) {
+          await fs.chmod(entryPath, 0o600);
+        }
+      }),
+    );
   }
 
   private async touchAtime(p: string): Promise<void> {

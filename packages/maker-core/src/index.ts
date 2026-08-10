@@ -16,6 +16,14 @@ export * from './interfaces/index.js';
 // agents
 export * from './agents/index.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
+export {
+  assertReviewMessageContentPaths,
+  buildReviewReadGrants,
+  pathIsWithinReviewGrant,
+  resolveReviewReadPath,
+  type ReviewReadGrant,
+} from './agents/shared/review-read-scope.js';
+export { isReviewSensitiveCredentialPath } from './agents/shared/sensitive-credential-paths.js';
 
 // codex app-server transport interface — host 实现自定义 transport (e.g. SSH-bridged
 // for remote codex) 时需要这个接口形状。

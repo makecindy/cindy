@@ -506,6 +506,7 @@ export function RightSidebarShell({
           <EmptyState
             onAddFileTab={() => handleAdd('file-browser')}
             onAddReviewTab={() => handleAdd('review')}
+            onAddSubagentsTab={() => handleAdd('subagents')}
             onAddBackgroundTasksTab={() => handleAdd('background-tasks')}
             onAddResourceUsageTab={() => handleAdd('resource-usage')}
             onAddBrowserTab={() => handleAdd('web-browser')}

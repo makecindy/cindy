@@ -4437,6 +4437,7 @@
         "browser": "Browser",
         "terminal": "Terminal",
         "review": "Review",
+        "subagents": "Subagent",
         "backgroundTasks": "Background tasks",
         "resourceUsage": "Resource Usage",
         "collaboration": "Team",
@@ -4462,6 +4463,8 @@
         "fileSub": "Files",
         "openReview": "Open review",
         "reviewSub": "Review",
+        "openSubagents": "Open Subagent",
+        "subagentsSub": "Durable child work",
         "openBackgroundTasks": "Open background tasks",
         "backgroundTasksSub": "Background tasks",
         "openResourceUsage": "Open Resource Usage",
@@ -4830,6 +4833,58 @@
       "touchCountAria_other": "Edited {{count}} times",
       "expandAllAria": "Expand all files",
       "collapseAllAria": "Collapse all files"
+    },
+    "subagents": {
+      "running": "Running",
+      "finished": "Finished",
+      "empty": "No Subagent in this task yet",
+      "emptyDetail": "Subagents created while this task runs will remain available here.",
+      "loading": "Loading Subagents…",
+      "unavailable": "Subagent history is unavailable",
+      "unavailableDetail": "This remote device or older app version does not expose durable Subagent records yet.",
+      "loadFailed": "Could not load Subagents",
+      "retry": "Retry",
+      "loadEarlier": "Load earlier Subagents",
+      "untitled": "Subagent",
+      "notFound": "Subagent not found",
+      "back": "Back",
+      "harness": "Harness",
+      "model": "Model",
+      "context": "Parent context",
+      "contextValues": {
+        "unknown": "Not reported by the Harness",
+        "snapshot": "Parent task snapshot",
+        "live": "Live parent task"
+      },
+      "assignment": "Assignment",
+      "returnedResult": "Returned result",
+      "resultTruncated": "The returned result was truncated for display.",
+      "latestUpdate": "Latest update",
+      "activity": "Activity",
+      "noActivity": "No activity details were reported.",
+      "transcript": "Transcript",
+      "noTranscript": "No transcript entries were reported.",
+      "transcriptUnavailable": "This Harness has not exposed a full child transcript to Cindy yet. Returned results and lifecycle activity remain available.",
+      "transcriptRoles": {
+        "parent": "Parent",
+        "subagent": "Subagent",
+        "tool": "Tool",
+        "system": "System"
+      },
+      "lastTool": "Last tool: {{tool}}",
+      "tokens": "{{value}} tokens",
+      "activityKinds": {
+        "started": "Started",
+        "progress": "Progress",
+        "message": "Message",
+        "question": "Question",
+        "decision": "Decision",
+        "resumed": "Resumed",
+        "steered": "Steered",
+        "completed": "Completed",
+        "failed": "Failed",
+        "stopped": "Stopped"
+      }
     },
     "backgroundTasks": {
       "running": "Running",
@@ -6183,6 +6238,24 @@
         "handoffTitle": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "resumedBadge": "session resumed"
+      },
+      "review": {
+        "running": "Reviewing current work",
+        "completed": "Review complete",
+        "failed": "Review did not complete",
+        "openTask": "Open review task",
+        "readOnlyHint": "Independent task · no development memory · read-only",
+        "noResult": "The reviewer returned no visible conclusion",
+        "failure": {
+          "reviewerClosed": "The review task closed before it finished",
+          "cancelledBeforeStart": "The review was cancelled before it started",
+          "interrupted": "The review was interrupted when Cindy closed. Run /review again.",
+          "sourceWorkspaceChanged": "The source task workspace changed. Run /review again in the current workspace.",
+          "sourceConversationChanged": "The source task changed. Run /review again for the current task.",
+          "sourceFilesChanged": "The source task files changed. Run /review again for the current result.",
+          "artifactChanged": "A review artifact changed. Run /review again for the current result.",
+          "providerFailed": "The review task failed"
+        }
       }
     },
     "markdownRenderer": {
@@ -8796,6 +8869,21 @@
       "failed": "Failed to set goal",
       "set": "Goal set — working toward it",
       "cleared": "Goal cleared"
+    }
+  },
+  "review": {
+    "sessionTitle": "Review · {{title}}",
+    "toast": {
+      "failed": "Couldn't start review",
+      "remoteUnsupported": "This version can only review local tasks"
+    },
+    "externalArtifactConfirm": {
+      "title": "Allow review of external files?",
+      "message": "Review will send {{count}} external or in-memory item(s) to your configured model.",
+      "detail": "Only the items listed below are allowed for this review. Check them before continuing.",
+      "inline": "in-memory attachment",
+      "allow": "Allow once",
+      "cancel": "Cancel"
     }
   },
   "learn": {

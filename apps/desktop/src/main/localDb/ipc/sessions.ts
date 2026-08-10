@@ -56,6 +56,7 @@ import {
 } from './messages';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
+import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -827,6 +828,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
       },
       ownerScope,
     );
+    broadcastSubagentRunsInvalidated(sessionId, ownerScope);
   }
 }
 
@@ -1236,6 +1238,31 @@ export function registerSessionIpc(
     }
     if (typeof p.workingDir === 'string') {
       p.workingDir = normalizeWorkingDirForStorage(p.workingDir) ?? null;
+    }
+    const REVIEW_IMMUTABLE_FIELDS = new Set([
+      'workingDir',
+      'workspaceKind',
+      'model',
+      'providerId',
+      'effort',
+      'permissionMode',
+      'fastMode',
+      'planModeEnabled',
+      'orcaRole',
+      'extraDirs',
+    ]);
+    if (Object.keys(p).some((key) => REVIEW_IMMUTABLE_FIELDS.has(key))) {
+      const [target] = await db
+        .select({ source: sessions.source })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      if (target?.source === 'review') {
+        throwIpcError(
+          'UNSUPPORTED_CAPABILITY',
+          'Review task settings are fixed to the source task',
+        );
+      }
     }
     // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
     // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报

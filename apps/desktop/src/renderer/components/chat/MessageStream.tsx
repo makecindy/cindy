@@ -4280,6 +4280,7 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
+        workingDir={workingDir}
         // 「这条自愈记录此刻真的在飞吗」：main 持有 vendor-turn owner，只有旧端缺省该字段时
         // 才回落到兼容启发式；supported / unknown 不再依赖 Renderer 的 sticky memory。
         autoResumeInFlight={isAutoResumeRowInFlight({
@@ -4329,6 +4330,7 @@ const MessageItem = memo(function MessageItem({
             cardType={message.systemCardType}
             data={message.systemCardData}
             sessionId={sessionId}
+            workingDir={workingDir}
           />
         );
       }

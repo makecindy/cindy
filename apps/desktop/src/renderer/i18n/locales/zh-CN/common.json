@@ -4435,6 +4435,7 @@
         "browser": "浏览器",
         "terminal": "终端",
         "review": "审查",
+        "subagents": "Subagent",
         "backgroundTasks": "后台任务",
         "resourceUsage": "资源用量",
         "collaboration": "协同",
@@ -4460,6 +4461,8 @@
         "fileSub": "Files",
         "openReview": "打开审查",
         "reviewSub": "Review",
+        "openSubagents": "打开 Subagent",
+        "subagentsSub": "可持续回看的子任务",
         "openBackgroundTasks": "打开后台任务",
         "backgroundTasksSub": "Background tasks",
         "openResourceUsage": "打开资源用量",
@@ -4828,6 +4831,58 @@
       "touchCountAria_other": "已修改 {{count}} 次",
       "expandAllAria": "展开所有文件",
       "collapseAllAria": "收起所有文件"
+    },
+    "subagents": {
+      "running": "运行中",
+      "finished": "已结束",
+      "empty": "本任务还没有 Subagent",
+      "emptyDetail": "任务运行时创建的 Subagent 会持续保留在这里。",
+      "loading": "正在读取 Subagent…",
+      "unavailable": "Subagent 历史暂不可用",
+      "unavailableDetail": "该远端设备或旧版应用尚未提供持久化的 Subagent 记录。",
+      "loadFailed": "无法读取 Subagent",
+      "retry": "重试",
+      "loadEarlier": "读取更早的 Subagent",
+      "untitled": "Subagent",
+      "notFound": "未找到该 Subagent",
+      "back": "返回",
+      "harness": "Harness",
+      "model": "模型",
+      "context": "父任务上下文",
+      "contextValues": {
+        "unknown": "Harness 未报告",
+        "snapshot": "父任务快照",
+        "live": "实时父任务"
+      },
+      "assignment": "任务内容",
+      "returnedResult": "回传结果",
+      "resultTruncated": "回传结果过长，当前仅显示部分内容。",
+      "latestUpdate": "最近更新",
+      "activity": "活动记录",
+      "noActivity": "Harness 暂未提供活动详情。",
+      "transcript": "完整记录",
+      "noTranscript": "Harness 暂未提供完整记录。",
+      "transcriptUnavailable": "该 Harness 尚未向 Cindy 提供完整的子任务记录；已回传的结果和生命周期活动仍会保留。",
+      "transcriptRoles": {
+        "parent": "父任务",
+        "subagent": "Subagent",
+        "tool": "工具",
+        "system": "系统"
+      },
+      "lastTool": "最近工具：{{tool}}",
+      "tokens": "{{value}} tokens",
+      "activityKinds": {
+        "started": "已启动",
+        "progress": "进展",
+        "message": "消息",
+        "question": "提问",
+        "decision": "决定",
+        "resumed": "已继续",
+        "steered": "已调整方向",
+        "completed": "已完成",
+        "failed": "失败",
+        "stopped": "已停止"
+      }
     },
     "backgroundTasks": {
       "running": "运行中",
@@ -6180,6 +6235,24 @@
         "handoffTitle": "交接内容——切换时发送给新引擎的上下文摘要(不计入对话记录，仅在此展示)",
         "handoffTitleEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文(不计入对话记录，仅在此展示)",
         "resumedBadge": "已续接原任务"
+      },
+      "review": {
+        "running": "正在审查当前成果",
+        "completed": "审查完成",
+        "failed": "审查未完成",
+        "openTask": "打开审查任务",
+        "readOnlyHint": "独立任务 · 无开发记忆 · 只读",
+        "noResult": "审查任务没有返回可见结论",
+        "failure": {
+          "reviewerClosed": "审查任务在完成前已关闭",
+          "cancelledBeforeStart": "审查在开始前已取消",
+          "interrupted": "Cindy 关闭时审查被中断，请重新运行 /review。",
+          "sourceWorkspaceChanged": "来源任务的工作区已变化，请在当前工作区重新运行 /review。",
+          "sourceConversationChanged": "来源任务已变化，请针对当前任务重新运行 /review。",
+          "sourceFilesChanged": "来源任务的文件已变化，请针对当前成果重新运行 /review。",
+          "artifactChanged": "审查成果已变化，请针对当前成果重新运行 /review。",
+          "providerFailed": "审查任务执行失败"
+        }
       }
     },
     "markdownRenderer": {
@@ -8782,6 +8855,21 @@
       "failed": "设置目标失败",
       "set": "目标已设置，开始自动推进",
       "cleared": "目标已清除"
+    }
+  },
+  "review": {
+    "sessionTitle": "审查 · {{title}}",
+    "toast": {
+      "failed": "无法开始审查",
+      "remoteUnsupported": "当前版本只支持审查本机任务"
+    },
+    "externalArtifactConfirm": {
+      "title": "允许审查工作区外的成果？",
+      "message": "本次审查会把 {{count}} 项工作区外或内存中的成果发送给你配置的模型。",
+      "detail": "本次只会授权下列成果。继续前请确认它们确实需要审查。",
+      "inline": "内存附件",
+      "allow": "仅本次允许",
+      "cancel": "取消"
     }
   },
   "learn": {

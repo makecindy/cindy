@@ -1145,35 +1145,39 @@ export function getMaker(): Maker {
             codexBrowserUseAvailable: true,
           };
         }
+        const isControlPlane = ctx.hostPurpose === 'control-plane';
+        const isReview = ctx.hostPurpose === 'review';
+        const usesIsolatedProxy = isControlPlane || isReview;
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
         let buildSessionMcpConfig:
           | ((sessionInstanceId: string) => Record<string, unknown>)
           | undefined;
-        try {
-          const cfg = await getCodexExtraSpawnConfig({
-            mcpProviders: providers,
-            logger: desktopMakerLogger,
-          });
-          // getCodexExtraSpawnConfig may return a cached array; per-host
-          // Browser overrides must never mutate that shared snapshot.
-          mcpExtraArgs = [...cfg.extraArgs];
-          mcpExtraEnv = cfg.extraEnv;
-          buildSessionMcpConfig = cfg.buildSessionMcpConfig;
-          // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
-          // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
-          // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
-          // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
-          codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
-        } catch (err) {
-          desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
-            message: err instanceof Error ? err.message : String(err),
-          });
-          // bridge 整体缺席 = cindy_contacts 必然不可达
-          codexAppliedContactsEnabled = false;
+        if (!isReview) {
+          try {
+            const cfg = await getCodexExtraSpawnConfig({
+              mcpProviders: providers,
+              logger: desktopMakerLogger,
+            });
+            // getCodexExtraSpawnConfig may return a cached array; per-host
+            // Browser overrides must never mutate that shared snapshot.
+            mcpExtraArgs = [...cfg.extraArgs];
+            mcpExtraEnv = cfg.extraEnv;
+            buildSessionMcpConfig = cfg.buildSessionMcpConfig;
+            // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
+            // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
+            // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
+            // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
+            codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
+          } catch (err) {
+            desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
+              message: err instanceof Error ? err.message : String(err),
+            });
+            // bridge 整体缺席 = cindy_contacts 必然不可达
+            codexAppliedContactsEnabled = false;
+          }
         }
-        const isControlPlane = ctx.hostPurpose === 'control-plane';
-        const browserCompanion = isControlPlane
+        const browserCompanion = usesIsolatedProxy
           ? null
           : await prepareCodexBrowserCompanion({ codexHome: getCodexHome() });
         const browserCompanionSpawnConfig =
@@ -1207,7 +1211,7 @@ export function getMaker(): Maker {
               ? 'provider-oauth'
               : 'env-key';
         const useOAuthBearer = authInjection === 'oauth-bearer';
-        if (!isControlPlane) {
+        if (!usesIsolatedProxy) {
           setCodexProxyAuthInjection(authInjection);
           await broadcastCodexRuntimeRoute();
         }
@@ -1215,12 +1219,12 @@ export function getMaker(): Maker {
 
         // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
         // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
-        if (isControlPlane) {
+        if (usesIsolatedProxy) {
           await ensureCodexControlPlaneProxyReady(authInjection);
         } else {
           await ensureCodexProxyReady();
         }
-        const ready = isControlPlane
+        const ready = usesIsolatedProxy
           ? isCodexControlPlaneProxyHandleReady(authInjection)
           : isCodexProxyHandleReady();
         if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
@@ -1234,7 +1238,7 @@ export function getMaker(): Maker {
           throw error;
         }
         // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
-        const endpoint = isControlPlane
+        const endpoint = usesIsolatedProxy
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
         const subagentModelSettings = readSubagentModelSettings();
@@ -1248,7 +1252,7 @@ export function getMaker(): Maker {
           // model/list 无影响,不加 hostPurpose 分支。
           extraArgs: [
             ...mcpExtraArgs,
-            ...buildCodexSubagentSpawnArgs(subagentModelSettings),
+            ...(!isReview ? buildCodexSubagentSpawnArgs(subagentModelSettings) : []),
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,

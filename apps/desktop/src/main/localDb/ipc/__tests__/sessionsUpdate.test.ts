@@ -129,6 +129,11 @@ function createDb(): void {
   insert.run('cc-local', '/old/dir', 'cc', null, 'dialogue');
   insert.run('codex-local', '/old/dir', 'codex', null, 'dialogue');
   insert.run('cc-remote', '/remote/dir', 'cc', 'host-1', 'project');
+  sqlite.prepare(`
+    INSERT INTO sessions (
+      id, working_dir, agent_kind, remote_host_id, workspace_kind, source, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'review', 1, 1)
+  `).run('review-local', '/review/dir', 'codex', null, 'dialogue');
   h.sqlite = sqlite;
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
 }
@@ -148,6 +153,18 @@ beforeEach(() => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
+    await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
+      /Review task settings are fixed/,
+    );
+    await invokeUpdate('review-local', { title: '审查记录' });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT effort, title FROM sessions WHERE id = ?')
+      .get('review-local') as { effort: string; title: string };
+    expect(persisted).toEqual({ effort: 'high', title: '审查记录' });
+  });
+
   it('persists and broadcasts title-only patches to device-link subscribers', async () => {
     await invokeUpdate('codex-local', { title: '排查远程标题同步' });
 

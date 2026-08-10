@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   REMOTE_INVOKE_ALLOWLIST,
+  REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS,
   PUSH_FORWARD_ALLOWLIST,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   computeAllowlistHash,
@@ -21,6 +22,13 @@ import {
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('keeps every Review external-input classification inside the remote allowlist', () => {
+    for (const channel of REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS.has('maker:input:get-projection')).toBe(false);
+  });
+
   it('放行核心会话链路', () => {
     for (const ch of [
       'maker:create-session',

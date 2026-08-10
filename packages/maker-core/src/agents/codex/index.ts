@@ -83,6 +83,10 @@ import {
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import {
+  assertReviewMessageContentPaths,
+  buildReviewReadGrants,
+} from '../shared/review-read-scope.js';
+import {
   classifyLocalAutoReviewTier,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
@@ -97,6 +101,7 @@ import { logAutoReviewDecision } from '../shared/auto-review-log.js';
 import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
+import { REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS } from '../shared/sensitive-credential-paths.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import {
   OVERLOAD_RETRY_MAX_ATTEMPTS,
@@ -192,6 +197,7 @@ import {
   type McpServerElicitationRequestParams,
   type CollaborationModeParam,
   type McpServerElicitationRequestResponse,
+  type CodexMcpServerStatusListResponse,
   type PermissionsRequestApprovalParams,
   type PermissionsRequestApprovalResponse,
   type ServerRequestResolvedNotification,
@@ -401,6 +407,17 @@ function isLocalForkHostKey(key: string): boolean {
   return key.startsWith(LOCAL_FORK_HOST_PREFIX);
 }
 
+/** Review threads use a one-session app-server so native Codex memory cannot leak in. */
+const LOCAL_REVIEW_HOST_PREFIX = 'local-review:';
+
+function localReviewHostKey(sessionId: string): string {
+  return `${LOCAL_REVIEW_HOST_PREFIX}${sessionId || randomUUID()}`;
+}
+
+function isLocalReviewHostKey(key: string): boolean {
+  return key.startsWith(LOCAL_REVIEW_HOST_PREFIX);
+}
+
 /**
  * maker permissionMode → app-server { approvalPolicy, approvalsReviewer, sandbox }。
  *
@@ -507,6 +524,48 @@ function supportsCodexForkExcludeTurns(userAgent: string | undefined): boolean {
 }
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
+const REVIEW_PERMISSION_PROFILE = 'cindy-review-readonly';
+const REVIEW_CREDENTIAL_GLOB_DENIES: Record<string, 'deny'> = Object.fromEntries(
+  REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.map((pattern) => [pattern, 'deny'] as const),
+);
+
+function quoteReviewConfigSegment(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function renderReviewConfigSegment(value: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(value) ? value : quoteReviewConfigSegment(value);
+}
+
+function pluginIdFromCodexSkillPath(skillPath: string): string | null {
+  const segments = skillPath.replace(/\\/g, '/').split('/');
+  for (let index = 0; index < segments.length; index += 1) {
+    if (
+      segments[index] === 'plugins' &&
+      segments[index + 1] === 'cache' &&
+      segments[index + 2] &&
+      segments[index + 3]
+    ) {
+      return `${segments[index + 3]}@${segments[index + 2]}`;
+    }
+    if (
+      segments[index] === 'bundled-marketplaces' &&
+      segments[index + 1] &&
+      segments[index + 2] === 'plugins' &&
+      segments[index + 3]
+    ) {
+      const marketplace = segments[index + 1].replace(/\.staging-[^/]+$/, '');
+      return `${segments[index + 3]}@${marketplace}`;
+    }
+  }
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
 
 /**
  * SandboxMode (thread/start 用 kebab enum) → SandboxPolicy (turn/start 用 tag union)。
@@ -1990,7 +2049,7 @@ export class CodexAgent extends BaseAgent {
     opts: {
       ignoreBindingLeases?: number;
       keyOverride?: string;
-      hostPurpose?: 'control-plane';
+      hostPurpose?: 'control-plane' | 'review';
     } = {},
   ): Promise<AppServerHost> {
     const key = opts.keyOverride ?? hostKey(remoteHostId);
@@ -2290,7 +2349,7 @@ export class CodexAgent extends BaseAgent {
     credentialMode: AgentCredentialMode | undefined,
     generation: number,
     onSpawnCredentialModeResolved?: (mode: AgentCredentialMode | undefined) => void,
-    hostPurpose?: 'control-plane',
+    hostPurpose?: 'control-plane' | 'review',
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -2670,6 +2729,10 @@ export class CodexAgent extends BaseAgent {
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
+    const reviewMode = opts.reviewMode === true;
+    if (reviewMode && opts.remoteHostId) {
+      throw new Error('Cindy Review currently supports local Codex sessions only');
+    }
 
     log.info('startSession', {
       model: opts.model,
@@ -2679,6 +2742,7 @@ export class CodexAgent extends BaseAgent {
       workDir: opts.workingDir,
       resume: opts.resumeSessionId ?? 'new',
       remoteHostId: opts.remoteHostId ?? null,
+      reviewMode,
       mcpProvidersCount: this.deps.mcpProviders?.length ?? 0,
     });
 
@@ -2695,8 +2759,9 @@ export class CodexAgent extends BaseAgent {
     let makerMemoryIndex = '';
     let memoryFlushController: MemoryFlushController | null = null;
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig。
-    const makerMemoryFlag =
-      opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
+    const makerMemoryFlag = reviewMode
+      ? false
+      : opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
     // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
@@ -3407,8 +3472,15 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableCatalogModel: string | undefined = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
-    let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'ask';
+    let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
+    const reviewReadGrants = reviewMode
+      ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? [])
+      : [];
+    const reviewReadPaths = reviewReadGrants.map((grant) => grant.realPath);
+    const reviewReadDirectories = new Set(
+      reviewReadGrants.filter((grant) => grant.directory).map((grant) => grant.realPath),
+    );
     // Named profiles defined through thread/start.config are thread-local. Codex
     // 0.145.0 cannot resolve that thread-local definition when the selector is
     // repeated on turn/start, so remember whether the thread is already using it.
@@ -3422,7 +3494,7 @@ export class CodexAgent extends BaseAgent {
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮「计划 → 审阅 → 修订/批准」循环由 planCycleActive 承载:
     // 修订 turn 保持 plan, 批准/取消/计划轮空跑(没产出计划)/turn 失败都会结束循环。
-    let mutablePlanMode = opts.planMode === true;
+    let mutablePlanMode = !reviewMode && opts.planMode === true;
     let planCycleActive = false;
     let currentTurnPlanModeActive = false;
     let pendingTurnStartPlanMode: boolean | null = null;
@@ -3456,7 +3528,7 @@ export class CodexAgent extends BaseAgent {
           providerId: opts.providerId,
           model: opts.model,
         });
-    const currentHostKey = hostKey(opts.remoteHostId);
+    const currentHostKey = reviewMode ? localReviewHostKey(sid) : hostKey(opts.remoteHostId);
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -3473,7 +3545,12 @@ export class CodexAgent extends BaseAgent {
       // session 已拿到旧 host、但尚未 thread/start 订阅时，credential 切换看不到它。
       await this.waitForHostCredentialModeSwitch(currentHostKey);
       acquireHostBindingLeaseIfNeeded();
-      return await this.getHost(opts.remoteHostId, credentialMode, { ignoreBindingLeases: 1 });
+      return await this.getHost(opts.remoteHostId, credentialMode, {
+        ignoreBindingLeases: 1,
+        ...(reviewMode
+          ? { keyOverride: currentHostKey, hostPurpose: 'review' as const }
+          : {}),
+      });
     };
     const host = await getSessionHost().catch((error) => {
       releaseHostBindingLeaseIfNeeded();
@@ -3578,6 +3655,14 @@ export class CodexAgent extends BaseAgent {
         isolatedPluginOverlays: !opts.remoteHostId,
       },
     );
+    const capabilityRoutingProtocolSupported =
+      supportsCodexCapabilityRoutingProtocol(initResp.userAgent);
+    if (reviewMode && !capabilityRoutingProtocolSupported) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Cindy Review requires Codex app-server 0.145.0 or newer for plugin and Skill isolation (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     if (requiresCodexCapabilitySkillDiscovery(capabilityRoutingPolicy)) {
       try {
         assertCurrentHost('capability Skill discovery');
@@ -3607,8 +3692,83 @@ export class CodexAgent extends BaseAgent {
         );
       }
     }
-    const capabilityRoutingProtocolSupported =
-      supportsCodexCapabilityRoutingProtocol(initResp.userAgent);
+    if (reviewMode) {
+      try {
+        assertCurrentHost('Review capability isolation');
+        const { skills, errors } = await this.listSkillsForHost(
+          host,
+          opts.workingDir,
+          false,
+          CRITICAL_THREAD_RPC_TIMEOUT_MS,
+        );
+        const unscopedSkillError = errors.find((error) => !error.path);
+        if (unscopedSkillError) throw new Error(unscopedSkillError.message);
+
+        const configResponse = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead,
+          { includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        const effectiveConfig = asRecord(configResponse.config);
+        const configuredMcp = asRecord(effectiveConfig.mcp_servers);
+        const configuredPlugins = asRecord(effectiveConfig.plugins);
+        const mcpServerNames = new Set(Object.keys(configuredMcp));
+        let cursor: string | null = null;
+        do {
+          const status: CodexMcpServerStatusListResponse =
+            await host.request<CodexMcpServerStatusListResponse>(
+            Method.McpServerStatusList,
+            { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId: null },
+            { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+          );
+          for (const server of status.data) mcpServerNames.add(server.name);
+          cursor = status.nextCursor;
+        } while (cursor !== null);
+
+        const skillPaths = new Set([
+          ...skills.map((skill) => skill.path),
+          ...errors.flatMap((error) => (error.path ? [error.path] : [])),
+        ]);
+        const pluginIds = new Set(Object.keys(configuredPlugins));
+        for (const skillPath of skillPaths) {
+          const pluginId = pluginIdFromCodexSkillPath(skillPath);
+          if (pluginId) pluginIds.add(pluginId);
+        }
+
+        const reviewCapabilityConfig: Record<string, unknown> = {};
+        if (skillPaths.size > 0) {
+          reviewCapabilityConfig['skills.config'] = [...skillPaths]
+            .sort()
+            .map((skillPath) => ({ path: skillPath, enabled: false }));
+        }
+        for (const serverName of mcpServerNames) {
+          reviewCapabilityConfig[
+            `mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
+          ] = false;
+        }
+        for (const pluginId of pluginIds) {
+          reviewCapabilityConfig[
+            `plugins.${quoteReviewConfigSegment(pluginId)}.enabled`
+          ] = false;
+          const pluginMcp = asRecord(asRecord(configuredPlugins[pluginId]).mcp_servers);
+          for (const serverName of Object.keys(pluginMcp)) {
+            reviewCapabilityConfig[
+              `plugins.${quoteReviewConfigSegment(pluginId)}.mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
+            ] = false;
+          }
+        }
+        capabilityRoutingConfig = {
+          ...capabilityRoutingConfig,
+          ...reviewCapabilityConfig,
+        };
+        assertCurrentHost('Review capability isolation');
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw new Error(
+          `Cannot start Codex Review safely because Cindy could not disable local Skills, plugins, and MCP servers: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     if (
       Object.keys(capabilityRoutingConfig).length > 0 &&
       !capabilityRoutingProtocolSupported
@@ -3626,6 +3786,12 @@ export class CodexAgent extends BaseAgent {
     let approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
+    if (reviewMode && !readonlyReferenceDirsSupported) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Cindy Review requires Codex permission profiles from app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     if (mutableExtraDirs.length > 0 && !readonlyReferenceDirsSupported) {
       releaseHostBindingLeaseIfNeeded();
       throw new Error(
@@ -3658,8 +3824,11 @@ export class CodexAgent extends BaseAgent {
       this.codexHome?.startsWith('/')
         ? `${this.codexHome.replace(/\/+$/, '')}/${sub}`
         : path.join(this.codexHome ?? '', sub);
-    const codexExtraWritableRoots = this.codexHome ? [joinCodexHome('memories')] : [];
-    const runtimeWorkspaceRoots = (): string[] => [opts.workingDir, ...mutableExtraDirs];
+    const codexExtraWritableRoots = reviewMode || !this.codexHome
+      ? []
+      : [joinCodexHome('memories')];
+    const runtimeWorkspaceRoots = (): string[] =>
+      reviewMode ? [opts.workingDir] : [opts.workingDir, ...mutableExtraDirs];
     // Auto-review 传给 core 的会话平台(决定是否抹平 macOS /private firmlink)。远端会话的 host
     // process.platform 不代表远端 OS(host 可能 macOS、远端 Linux)——远端 OS 未接入前保守传 'linux'
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
@@ -3767,19 +3936,66 @@ export class CodexAgent extends BaseAgent {
         network: { enabled: false },
       },
     };
+    const reviewPermissionsConfig: Record<string, unknown> = {
+      [`permissions.${REVIEW_PERMISSION_PROFILE}`]: {
+        filesystem: {
+          ':root': 'deny',
+          ':minimal': 'read',
+          ':tmpdir': 'deny',
+          ':slash_tmp': 'deny',
+          ':workspace_roots': {
+            '.': 'read',
+            ...REVIEW_CREDENTIAL_GLOB_DENIES,
+          },
+          ...Object.fromEntries(
+            reviewReadPaths.map((candidate) => [
+              candidate,
+              reviewReadDirectories.has(candidate)
+                ? { '.': 'read', ...REVIEW_CREDENTIAL_GLOB_DENIES }
+                : 'read',
+            ]),
+          ),
+        },
+        network: { enabled: false },
+      },
+    };
     // Codex same-turn 插话走 `turn/steer` 方法，不走
     // `experimentalFeature/enablement/set`。这里特意不 push `{ steer: true }`:
     // 2026-06 实测当前内置 app-server 的 enablement 白名单没有 `steer`，
     // 强行写入会让整次 enablement/set 失败，并连带破坏 memory override 热更新。
     // memory 覆盖只在 host 起来后能 push (RPC); 第一次 startSession 触发, 后续 setMemory 自己 push。
-    // 失败 → warn + 继续, 不让 memory 配置阻塞主对话。
+    // 普通会话失败仍降级继续；Review 的“无记忆”是安全边界，关闭失败必须拒绝启动。
     assertCurrentHost('memory override');
     if (!opts.remoteHostId) {
-      await this.ensureMemoryOverridePushed(host, currentHostKey).catch((e) => {
+      try {
+        await this.ensureMemoryOverridePushed(
+          host,
+          currentHostKey,
+          reviewMode ? false : undefined,
+        );
+      } catch (e) {
+        if (reviewMode) {
+          releaseHostBindingLeaseIfNeeded();
+          await this.retireHostKey(
+            currentHostKey,
+            'Cindy Review could not disable Codex memory',
+            {
+              failIfActive: false,
+              logPrefix: 'codex review memory isolation',
+              ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
+              expectedGeneration: hostGeneration,
+            },
+          ).catch((retireError) => {
+            log.warn('failed to retire Review host after memory isolation failure', {
+              error: retireError instanceof Error ? retireError.message : String(retireError),
+            });
+          });
+          throw new Error('Cindy Review could not disable Codex memory; review was not started');
+        }
         log.warn('ensureMemoryOverridePushed failed, continuing without memory override', {
           error: e instanceof Error ? e.message : String(e),
         });
-      });
+      }
     }
 
     const registerCodexMcpContext = (
@@ -3789,7 +4005,7 @@ export class CodexAgent extends BaseAgent {
       // remoteHostId 不再跳过:远端 daemon 经 SSH remote-forward 直连本机
       // HTTP MCP bridge 后,tool call 同样按 params._meta.threadId 路由,
       // 需要这条注册让 CodexMcpThreadContextStore 能解析 remote thread。
-      if (!sid) return;
+      if (!sid || reviewMode) return;
       try {
         const register = this.deps.registerCodexMcpThreadContext;
         if (!register) return;
@@ -3886,6 +4102,11 @@ export class CodexAgent extends BaseAgent {
           taskId: update.taskId,
           parentToolUseId: update.taskId,
           status: update.status,
+          subagentObservation: {
+            kind: update.status === 'running' ? 'progress' : 'terminal',
+            logicalSubagentId: update.taskId,
+            parentToolUseId: update.taskId,
+          },
           ...(update.agentPath ? { title: update.agentPath } : {}),
           ...(update.model !== undefined ? { model: update.model } : {}),
           usage: {
@@ -4206,6 +4427,9 @@ export class CodexAgent extends BaseAgent {
       cleanup: () => host.unsubscribeThread(detachedThreadId),
     });
     function currentApprovalConfig(): CodexPermissionConfig {
+      if (reviewMode) {
+        return { approvalPolicy: 'never', sandbox: 'read-only' };
+      }
       return mapPermissionToCodex(
         mutablePermissionMode,
         approvalsReviewerProtocolSupported,
@@ -4215,9 +4439,10 @@ export class CodexAgent extends BaseAgent {
 
     function shouldUseReadonlyReferencesProfile(): boolean {
       return (
-        readonlyReferenceDirsSupported &&
-        mutableExtraDirs.length > 0 &&
-        mutablePermissionMode !== 'bypassPermissions'
+        reviewMode ||
+        (readonlyReferenceDirsSupported &&
+          mutableExtraDirs.length > 0 &&
+          mutablePermissionMode !== 'bypassPermissions')
       );
     }
 
@@ -4234,7 +4459,18 @@ export class CodexAgent extends BaseAgent {
       const config = {
         ...capabilityRoutingConfig,
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig : {}),
-        ...host.getSessionMcpConfig(opts.sessionInstanceId),
+        ...(reviewMode ? reviewPermissionsConfig : {}),
+        ...(reviewMode
+          ? {
+              web_search: 'disabled',
+              'features.apps': false,
+              'features.goals': false,
+              'features.hooks': false,
+              'features.multi_agent': false,
+              'features.remote_plugin': false,
+            }
+          : {}),
+        ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),
       };
       const shared = {
         approvalPolicy,
@@ -4249,7 +4485,9 @@ export class CodexAgent extends BaseAgent {
       if (shouldUseReadonlyReferencesProfile()) {
         return {
           ...shared,
-          permissions: READONLY_REFERENCES_PERMISSION_PROFILE,
+          permissions: reviewMode
+            ? REVIEW_PERMISSION_PROFILE
+            : READONLY_REFERENCES_PERMISSION_PROFILE,
         };
       }
       return { ...shared, sandbox };
@@ -4265,12 +4503,14 @@ export class CodexAgent extends BaseAgent {
       // A policy turn must make execution observable to the host. Read-only +
       // untrusted routes command/file escalations through the request handlers;
       // those handlers auto-accept non-forced actions in Auto mode.
-      const turnApprovalConfig: CodexPermissionConfig = activeTurnPermissionPolicy
-        ? {
+      const turnApprovalConfig: CodexPermissionConfig = reviewMode
+        ? { approvalPolicy: 'never', sandbox: 'read-only' }
+        : activeTurnPermissionPolicy
+          ? {
             approvalPolicy: 'untrusted',
             sandbox: 'read-only',
           }
-        : currentApprovalConfig();
+          : currentApprovalConfig();
       const { approvalPolicy, approvalsReviewer, sandbox } = turnApprovalConfig;
       const shared = {
         approvalPolicy,
@@ -4343,6 +4583,12 @@ export class CodexAgent extends BaseAgent {
     }
 
     const toTurnInput = async (content: UserMessage['content']): Promise<UserInput[]> => {
+      if (reviewMode) {
+        await assertReviewMessageContentPaths(content, opts.workingDir, reviewReadGrants);
+        // Review never resolves leading slash text as a user/project Skill. Its
+        // prompt and evidence must stay independent from task customizations.
+        return toAppServerInput(content, opts.workingDir);
+      }
       if (typeof content !== 'string') return toAppServerInput(content, opts.workingDir);
 
       const slash = parseLeadingSlashToken(content.trim());
@@ -4457,7 +4703,7 @@ export class CodexAgent extends BaseAgent {
     // host 的有效状态计算已含: 全局开关 ∧ 工作区/用户覆盖 ∧ 实际应用到 running
     // app-server 的 spawn 快照(失效失败留下 stale 配置时返回 unavailable, 本段
     // 静默, 不指挥模型调 stale 桥里没有的工具)。
-    const contactsState = opts.remoteHostId
+    const contactsState = opts.remoteHostId || reviewMode
       ? undefined
       : this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
     const contactsRules =
@@ -4469,7 +4715,7 @@ export class CodexAgent extends BaseAgent {
     // 远端 Codex 的 workingDir 属于 SSH 主机，本地插件目录停用偏好无法可靠匹配；
     // 远端 SSH remote-forward 只下发白名单 MCP，固定 cindy ghost server 不在其中，
     // 因此与 Claude 远端路径一致地 fail-closed，不把召回清单注入到不可达会话。
-    const ghostRosterPrompt = opts.remoteHostId
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode
       ? ''
       : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
     const developerInstructions = buildCodexDeveloperInstructions({
@@ -4478,7 +4724,7 @@ export class CodexAgent extends BaseAgent {
       ghostRosterPrompt,
       runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
-      userPrompt: opts.userPrompt,
+      userPrompt: reviewMode ? undefined : opts.userPrompt,
     });
     const useProxyChannel = isCodexProxyChannelReady();
     let threadId: string;
@@ -4626,7 +4872,9 @@ export class CodexAgent extends BaseAgent {
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
         ...currentThreadWorkspaceConfig(),
-        ...(shouldRegisterAskUserDynamicTool(opts) ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] } : {}),
+        ...(!reviewMode && shouldRegisterAskUserDynamicTool(opts)
+          ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] }
+          : {}),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
@@ -4762,7 +5010,9 @@ export class CodexAgent extends BaseAgent {
           request: () => host.request<ThreadStartResponse>(Method.ThreadStart, {
             cwd: opts.workingDir,
             ...currentThreadWorkspaceConfig(),
-            ...(shouldRegisterAskUserDynamicTool(opts) ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] } : {}),
+            ...(!reviewMode && shouldRegisterAskUserDynamicTool(opts)
+              ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] }
+              : {}),
             ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
             ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
             ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
@@ -5941,6 +6191,7 @@ export class CodexAgent extends BaseAgent {
     const commandExecutionApproval = async (
       params: CommandExecutionRequestApprovalParams,
     ): Promise<CommandExecutionRequestApprovalResponse> => {
+      if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
@@ -5975,6 +6226,7 @@ export class CodexAgent extends BaseAgent {
     const fileChangeApproval = async (
       params: FileChangeRequestApprovalParams,
     ): Promise<FileChangeRequestApprovalResponse> => {
+      if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
@@ -6107,6 +6359,7 @@ export class CodexAgent extends BaseAgent {
     const mcpServerElicitation = async (
       params: McpServerElicitationRequestParams,
     ): Promise<McpServerElicitationRequestResponse> => {
+      if (reviewMode) return { action: 'decline', content: null, _meta: null };
       // buffered/墓碑 turn 的 elicitation 不得上 UI / auto-approve (codex R12 P1)。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { action: 'decline', content: null, _meta: null };
@@ -6245,6 +6498,7 @@ export class CodexAgent extends BaseAgent {
     const permissionsApproval = async (
       params: PermissionsRequestApprovalParams,
     ): Promise<PermissionsRequestApprovalResponse> => {
+      if (reviewMode) return { permissions: {}, scope: 'turn' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒
       // (空 permissions 即拒绝授权, 与非 accept 分支同款)。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
@@ -6551,6 +6805,7 @@ export class CodexAgent extends BaseAgent {
       params: ToolRequestUserInputParams,
       meta: { requestId: string | number },
     ): Promise<ToolRequestUserInputResponse> => {
+      if (reviewMode) return { answers: {} };
       // buffered/墓碑 turn 的输入请求不得上 UI (codex R12 P1) — 空 answers 即拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { answers: {} };
@@ -6612,6 +6867,12 @@ export class CodexAgent extends BaseAgent {
       params: DynamicToolCallParams,
       meta: { requestId: string | number },
     ): Promise<DynamicToolCallResponse> => {
+      if (reviewMode) {
+        return {
+          contentItems: [{ type: 'inputText', text: 'Cindy Review does not allow dynamic tools.' }],
+          success: false,
+        };
+      }
       // buffered/墓碑 turn 的 tool call 不得上 UI (codex R12 P1)。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) {
@@ -9153,6 +9414,19 @@ export class CodexAgent extends BaseAgent {
       });
       try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     }
+    const retireReviewHost = async (): Promise<void> => {
+      if (!reviewMode) return;
+      await this.retireHostKey(currentHostKey, 'Cindy Review host is single-session', {
+        failIfActive: false,
+        logPrefix: 'codex review host cleanup',
+        ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
+        expectedGeneration: hostGeneration,
+      }).catch((error) => {
+        log.warn('review host retire failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
 
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const handle: AgentSessionHandle = {
@@ -10094,6 +10368,7 @@ export class CodexAgent extends BaseAgent {
 
       async close() {
         await closeSessionHandle();
+        await retireReviewHost();
       },
 
       events(): AsyncIterable<AgentEvent> {
@@ -10110,6 +10385,7 @@ export class CodexAgent extends BaseAgent {
 
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
       async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
+        if (reviewMode) return;
         // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
         // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
         const prevProviderId = mutableProviderId;
@@ -10167,6 +10443,7 @@ export class CodexAgent extends BaseAgent {
       },
 
       async setEffort(newEffort: Effort) {
+        if (reviewMode) return;
         if (newEffort === mutableEffort) return; // 去重: 值没变不重推
         const clamped = clampEffortForCodex(mutableModel, newEffort);
         log.debug('setEffort', { from: mutableEffort, to: newEffort, clamped });
@@ -10177,6 +10454,12 @@ export class CodexAgent extends BaseAgent {
       },
 
       async setPermissionMode(newMode: PermissionMode) {
+        if (reviewMode) {
+          log.debug('setPermissionMode ignored for hard read-only Review session', {
+            requested: newMode,
+          });
+          return;
+        }
         log.debug('setPermissionMode', { from: mutablePermissionMode, to: newMode });
         // 用户自己动过权限档 → 一次性提示重新武装(与 Claude 同口径)。
         // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
@@ -10233,6 +10516,7 @@ export class CodexAgent extends BaseAgent {
       },
 
       async setExtraDirs(newDirs: string[]) {
+        if (reviewMode) return;
         if (newDirs.length > 0 && !readonlyReferenceDirsSupported) {
           throw new Error(
             `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
@@ -10243,6 +10527,7 @@ export class CodexAgent extends BaseAgent {
       },
 
       async setPlanMode(enabled: boolean) {
+        if (reviewMode) return;
         if (mutablePlanMode === enabled) return;
         mutablePlanMode = enabled;
         log.debug('setPlanMode', { enabled });
@@ -10255,6 +10540,7 @@ export class CodexAgent extends BaseAgent {
       },
 
       async setFastMode(enabled: boolean) {
+        if (reviewMode) return;
         // 去重以"fast 是否开启"为准: undefined(未覆盖) / null / 'default' 都视为未开,
         // 重复关 fast 或重复开 fast 不重推 (renderer 单次切换会全量重调 set*)。
         if (isFastServiceTier(mutableServiceTier) === enabled) return;
@@ -10666,10 +10952,10 @@ export class CodexAgent extends BaseAgent {
   async forceDisposeLocalHostForAuthChange(reason = 'CodexAgent local auth changed'): Promise<void> {
     const keys = new Set<string>([hostKey()]);
     for (const key of this.hosts.keys()) {
-      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key)) keys.add(key);
+      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key) || isLocalReviewHostKey(key)) keys.add(key);
     }
     for (const key of this.hostPromises.keys()) {
-      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key)) keys.add(key);
+      if (isLocalControlPlaneHostKey(key) || isLocalForkHostKey(key) || isLocalReviewHostKey(key)) keys.add(key);
     }
     await Promise.all(Array.from(keys, (key) =>
       this.retireHostKey(key, reason, {
@@ -10833,7 +11119,8 @@ export class CodexAgent extends BaseAgent {
         ([key]) =>
           !key.startsWith('remote:') &&
           !isLocalControlPlaneHostKey(key) &&
-          !isLocalForkHostKey(key),
+          !isLocalForkHostKey(key) &&
+          !isLocalReviewHostKey(key),
       );
       if (localSessionHosts.length === 0) {
         log.info('setMemory ◀ no live app-server, will apply on next session');
@@ -10885,15 +11172,20 @@ export class CodexAgent extends BaseAgent {
    * 失败语义: 抛错由调用方决定。startSession 那边会 catch + warn + 继续, 不让
    * memory 配置 block 主对话流。
    */
-  private async ensureMemoryOverridePushed(host: AppServerHost, key: string): Promise<void> {
-    if (this.memoryOverride === undefined) return; // 没设 override 不动 server, 让 server 走自带配置
-    if (this.memoryOverridePushedByHost.get(key) === this.memoryOverride) return; // 已 push 同值, no-op
+  private async ensureMemoryOverridePushed(
+    host: AppServerHost,
+    key: string,
+    forcedValue?: boolean,
+  ): Promise<void> {
+    const targetValue = forcedValue ?? this.memoryOverride;
+    if (targetValue === undefined) return; // 没设 override 不动 server, 让 server 走自带配置
+    if (this.memoryOverridePushedByHost.get(key) === targetValue) return; // 已 push 同值, no-op
     await host.request(Method.ExperimentalFeatureEnablementSet, {
-      enablement: { memories: this.memoryOverride },
+      enablement: { memories: targetValue },
     });
-    this.memoryOverridePushedByHost.set(key, this.memoryOverride);
+    this.memoryOverridePushedByHost.set(key, targetValue);
     this.deps.logger.info('codex: memoryOverride pushed to app-server', {
-      memories: this.memoryOverride,
+      memories: targetValue,
     });
   }
 }

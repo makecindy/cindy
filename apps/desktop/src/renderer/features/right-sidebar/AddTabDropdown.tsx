@@ -15,7 +15,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Activity, FileDiff, FolderTree, Globe, ListTodo, Terminal } from 'lucide-react';
+import { Activity, Bot, FileDiff, FolderTree, Globe, ListTodo, Terminal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TabKindId, TabKindMenuMeta } from './types';
@@ -55,6 +55,14 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     labelKey: 'rightSidebar.tabs.kinds.review',
     icon: FileDiff,
     order: 15,
+    enabled: true,
+    singleton: true,
+  },
+  {
+    kind: 'subagents',
+    labelKey: 'rightSidebar.tabs.kinds.subagents',
+    icon: Bot,
+    order: 16,
     enabled: true,
     singleton: true,
   },

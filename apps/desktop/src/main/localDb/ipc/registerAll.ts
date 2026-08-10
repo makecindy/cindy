@@ -19,6 +19,7 @@ import { registerSessionShareIpc } from './session-share';
 import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';
 import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
+import { registerSubagentRunsIpc } from './subagentRuns';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search';
 import { registerRemoteHistoryIpc } from './history';
@@ -130,6 +131,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerRecentWorkdirsIpc();
   registerProjectAliasesIpc();
   registerRightSidebarTabsIpc();
+  registerSubagentRunsIpc();
   registerSearchIpc();
   registerDevSqliteVecIpc();
 }

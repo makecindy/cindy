@@ -379,6 +379,8 @@ function installFakeHost(
         data: cwds.map((cwd) => ({ cwd, skills: [], errors: [] })),
       };
     }
+    if (method === Method.ConfigRead) return { config: {} };
+    if (method === Method.McpServerStatusList) return { data: [], nextCursor: null };
     if (method === Method.ThreadFork) {
       return {
         thread: { id: 'fork-thread-id' },
@@ -465,6 +467,243 @@ describe('CodexAgent permissions', () => {
       supported: { supported: true },
       unsupportedPermissionModes: ['bypassPermissions'],
     });
+  });
+
+  it('starts Review on an isolated memory-free host with an immutable read-only sandbox', async () => {
+    const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-artifact-'));
+    tempRoots.push(artifactDir);
+    const artifactPath = path.join(artifactDir, 'artifact.txt');
+    const markdownPath = path.join(artifactDir, 'launch.md');
+    const pdfPath = path.join(artifactDir, 'contract.pdf');
+    const imagePath = path.join(artifactDir, 'poster.png');
+    const dotenvPath = path.join(artifactDir, '.env.local');
+    const gitConfigPath = path.join(artifactDir, '.git', 'config');
+    await fs.writeFile(artifactPath, 'review me');
+    await fs.writeFile(markdownPath, '# Launch\nBudget: 100 vs 80 + 50');
+    await fs.writeFile(pdfPath, '%PDF-1.4\n% review transport fixture');
+    await fs.writeFile(
+      imagePath,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+        'base64',
+      ),
+    );
+    await fs.writeFile(dotenvPath, 'TOKEN=secret');
+    await fs.mkdir(path.dirname(gitConfigPath));
+    await fs.writeFile(gitConfigPath, 'url=https://token@example.invalid/repo');
+    const realArtifactDir = await fs.realpath(artifactDir);
+    const realArtifactPath = await fs.realpath(artifactPath);
+    const realMarkdownPath = await fs.realpath(markdownPath);
+    const realPdfPath = await fs.realpath(pdfPath);
+    const realImagePath = await fs.realpath(imagePath);
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) return {};
+        if (method === Method.SkillsList) {
+          return {
+            data: [{
+              cwd: '/repo',
+              skills: [{
+                name: 'unsafe-review',
+                description: 'must not load',
+                path: '/home/test/.codex/plugins/cache/personal/unsafe-plugin/1.0.0/skills/review/SKILL.md',
+                scope: 'user',
+                enabled: true,
+              }],
+              errors: [],
+            }],
+          };
+        }
+        if (method === Method.ConfigRead) {
+          return {
+            config: {
+              mcp_servers: { local_docs: { enabled: true } },
+              plugins: {
+                'configured@personal': {
+                  mcp_servers: { configured_server: { enabled: true } },
+                },
+              },
+            },
+          };
+        }
+        if (method === Method.McpServerStatusList) {
+          return { data: [{ name: 'runtime-mcp', tools: {} }], nextCursor: null };
+        }
+        if (method === Method.TurnStart) return { turn: { id: 'turn-review' } };
+        return undefined;
+      },
+      {
+        buildSessionMcpConfig: () => ({ 'mcp_servers.should_not_exist': { command: 'write' } }),
+        userAgent: 'mock-codex/0.145.0',
+      },
+    );
+
+    const handle = await agent.startSession({
+      sessionId: 'session-review',
+      model: 'gpt-5.5',
+      workingDir: artifactDir,
+      permissionMode: 'bypassPermissions',
+      planMode: true,
+      makerMemoryEnabled: true,
+      userPrompt: 'PRIVATE USER PROMPT',
+      reviewMode: true,
+      reviewReadPaths: [artifactPath, artifactDir],
+    });
+
+    expect(host.getHost).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      expect.objectContaining({
+        hostPurpose: 'review',
+        keyOverride: 'local-review:session-review',
+      }),
+    );
+    expect(host.request).toHaveBeenCalledWith(Method.ExperimentalFeatureEnablementSet, {
+      enablement: { memories: false },
+    });
+
+    const threadStart = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as Record<string, unknown>;
+    expect(threadStart).toMatchObject({
+      approvalPolicy: 'never',
+      permissions: 'cindy-review-readonly',
+      config: {
+        web_search: 'disabled',
+        'features.apps': false,
+        'features.goals': false,
+        'features.hooks': false,
+        'features.multi_agent': false,
+        'features.remote_plugin': false,
+        'mcp_servers.local_docs.enabled': false,
+        'mcp_servers.runtime-mcp.enabled': false,
+        'plugins."unsafe-plugin@personal".enabled': false,
+        'plugins."configured@personal".enabled': false,
+        'plugins."configured@personal".mcp_servers.configured_server.enabled': false,
+        'permissions.cindy-review-readonly': {
+          filesystem: {
+            ':root': 'deny',
+            ':minimal': 'read',
+            ':tmpdir': 'deny',
+            ':slash_tmp': 'deny',
+            ':workspace_roots': {
+              '.': 'read',
+              '**/.git': 'deny',
+              '**/.git/**': 'deny',
+            },
+            [realArtifactPath]: 'read',
+            [realArtifactDir]: {
+              '.': 'read',
+              '**/.env': 'deny',
+              '**/credentials.json': 'deny',
+            },
+          },
+          network: { enabled: false },
+        },
+      },
+    });
+    expect(threadStart).not.toHaveProperty('sandbox');
+    expect(threadStart).not.toHaveProperty('dynamicTools');
+    expect((threadStart.config as Record<string, unknown>)['skills.config']).toEqual([
+      {
+        path: '/home/test/.codex/plugins/cache/personal/unsafe-plugin/1.0.0/skills/review/SKILL.md',
+        enabled: false,
+      },
+    ]);
+    expect(threadStart.config).not.toHaveProperty('mcp_servers.should_not_exist');
+    expect(handle.getPlanMode?.()).toBe(false);
+
+    await expect(
+      handle.send({
+        type: 'user',
+        content: [{ type: 'image', path: dotenvPath, mimeType: 'image/png' }],
+      }),
+    ).rejects.toThrow(/refused/i);
+    await expect(
+      handle.send({
+        type: 'user',
+        content: [{ type: 'file', path: gitConfigPath, mimeType: 'text/plain' }],
+      }),
+    ).rejects.toThrow(/refused/i);
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+
+    await handle.send({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'Review this Markdown, PDF, and image in one turn.' },
+        { type: 'file', path: markdownPath, mimeType: 'text/markdown' },
+        { type: 'file', path: pdfPath, mimeType: 'application/pdf' },
+        { type: 'image', path: imagePath, mimeType: 'image/png' },
+      ],
+    });
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as Record<string, unknown>;
+    expect(turnStart).toMatchObject({
+      approvalPolicy: 'never',
+    });
+    expect(turnStart).not.toHaveProperty('sandboxPolicy');
+    const reviewText = (turnStart.input as Array<{ type?: string; text?: string }>).find(
+      (item) => item.type === 'text',
+    )?.text;
+    expect(reviewText).toContain(realMarkdownPath);
+    expect(reviewText).toContain(realPdfPath);
+    expect(turnStart.input).toEqual(
+      expect.arrayContaining([{ type: 'localImage', path: realImagePath }]),
+    );
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected Review thread handlers');
+    await expect(
+      handlers.commandExecutionApproval?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-review',
+        itemId: 'cmd-1',
+        command: 'touch forbidden',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    await expect(
+      handlers.fileChangeApproval?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-review',
+        itemId: 'file-1',
+        changes: [],
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+
+    if (!handle.setPermissionMode) throw new Error('expected permission control');
+    await handle.setPermissionMode('bypassPermissions');
+    await handle.setPlanMode?.(true);
+    expect(handle.getPlanMode?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('refuses to start Review when Codex native memory cannot be disabled', async () => {
+    const reviewDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-memory-'));
+    tempRoots.push(reviewDir);
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) {
+          throw new Error('memory control unavailable');
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    await expect(
+      agent.startSession({
+        sessionId: 'session-review-memory-failure',
+        model: 'gpt-5.5',
+        workingDir: reviewDir,
+        reviewMode: true,
+      }),
+    ).rejects.toThrow('review was not started');
   });
 
   it('makes policy turns host-observable and only prompts for forced Auto actions', async () => {
@@ -17196,7 +17435,16 @@ describe('CodexAgent turn lifecycle', () => {
     expect(reconstructedTaskUpdate).toMatchObject({
       type: 'agent_task_update',
       turnScope: 'background',
-      data: { taskId: 'collab-completed-only', status: 'completed' },
+      data: {
+        taskId: 'collab-completed-only',
+        status: 'completed',
+        subagentObservation: {
+          kind: 'spawn',
+          logicalSubagentId: 'collab-completed-only',
+          parentToolUseId: 'collab-completed-only',
+          providerRunIds: ['child-thread'],
+        },
+      },
     });
     expect([
       reconstructedFullResult.backgroundTurnStartedAt,

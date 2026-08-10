@@ -31,6 +31,88 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  it('marks only the Cindy subagent tool as a durable lifecycle', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({ type: 'tool_execution_end', toolCallId: 'sa-1', result: 'done', isError: false }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read', args: {} }),
+      queue,
+      ctx,
+    );
+
+    const updates = events.filter((event) => event.type === 'agent_task_update');
+    expect(updates.map((event) => event.data)).toEqual([
+      expect.objectContaining({
+        taskId: 'sa-1',
+        status: 'running',
+        subagentObservation: expect.objectContaining({ kind: 'spawn' }),
+      }),
+      expect.objectContaining({
+        taskId: 'sa-1',
+        status: 'completed',
+        subagentObservation: expect.objectContaining({ kind: 'terminal' }),
+      }),
+    ]);
+  });
+
+  it.each([
+    ['failed', false, 'failed'],
+    ['stopped', false, 'stopped'],
+    ['stopped', true, 'stopped'],
+    ['completed', true, 'completed'],
+    ['running', true, 'failed'],
+  ] as const)(
+    'preserves a reported %s Subagent status when the wrapper ends (isError=%s)',
+    (reportedStatus, isError, expectedStatus) => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+
+      translatePiEvent(
+        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(
+        ev({
+          type: 'tool_execution_update',
+          toolCallId: 'sa-1',
+          partialResult: {
+            details: {
+              __cindySubagent: 1,
+              taskId: 'sa-1',
+              status: reportedStatus,
+            },
+          },
+        }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(
+        ev({ type: 'tool_execution_end', toolCallId: 'sa-1', result: 'done', isError }),
+        queue,
+        ctx,
+      );
+
+      const updates = events.filter((event) => event.type === 'agent_task_update');
+      expect(updates.at(-1)?.data).toMatchObject({
+        taskId: 'sa-1',
+        status: expectedStatus,
+        subagentObservation: expect.objectContaining({ kind: 'terminal' }),
+      });
+    },
+  );
+
   it('emits live assistant deltas before the authoritative final text', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

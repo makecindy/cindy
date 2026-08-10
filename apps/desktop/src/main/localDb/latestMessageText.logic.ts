@@ -87,6 +87,7 @@ function isInternalTitleAssistant(meta: Record<string, unknown> | null): boolean
   return (
     meta.goalCompletion !== undefined ||
     meta.goalNotice !== undefined ||
+    meta.reviewRun !== undefined ||
     meta.scheduleSkip !== undefined
   );
 }

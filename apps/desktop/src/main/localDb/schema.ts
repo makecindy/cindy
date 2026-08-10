@@ -32,6 +32,7 @@ const SESSION_SOURCES = [
   'wecom',
   'scheduler',
   'learn',
+  'review',
   'shared',
   'plugin',
 ] as const satisfies readonly SessionSource[];
@@ -390,6 +391,110 @@ export const messages = sqliteTable(
     // 游标分页先用 createdAt 过滤；同毫秒次序在 IPC 层用 SQLite rowid 保持写入顺序。
     idxCreatedAtId: index('idx_messages_created_at').on(t.createdAt, t.id),
     idxRewindAt: index('idx_messages_rewind_at').on(t.rewindAt),
+  }),
+);
+
+/**
+ * Cindy-owned durable Subagent records.
+ *
+ * This table is intentionally harness-neutral. `logical_agent_id` is the
+ * user-visible child identity inside the parent task; native PI session ids,
+ * Codex thread ids and future Claude handles live in the opaque JSON arrays.
+ * The renderer never receives filesystem-backed provider session references.
+ *
+ * `activity` is a bounded projection of lifecycle/progress observations. Full
+ * native transcripts are a separate capability and may be supplied by later
+ * harness adapters without changing this record shape.
+ * Rows live for the parent task's lifetime and cascade with the session; list
+ * IPC is cursor-paginated, while activity/text fields are bounded per row.
+ */
+export const subagentRuns = sqliteTable(
+  'subagent_runs',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    logicalAgentId: text('logical_agent_id').notNull(),
+    parentToolUseId: text('parent_tool_use_id'),
+    /** JSON string[] containing task/tool aliases observed for this logical child. */
+    aliases: text('aliases').notNull().default('[]'),
+    /** JSON string[] containing opaque harness-native child run/thread ids. */
+    providerRunIds: text('provider_run_ids').notNull().default('[]'),
+    status: text('status', {
+      enum: ['running', 'completed', 'failed', 'stopped'],
+    })
+      .notNull()
+      .default('running'),
+    title: text('title'),
+    description: text('description'),
+    summary: text('summary'),
+    model: text('model'),
+    reasoningEffort: text('reasoning_effort'),
+    totalTokens: integer('total_tokens'),
+    toolUses: integer('tool_uses'),
+    durationMs: integer('duration_ms'),
+    /** JSON SubagentCapabilities; optional fields are fail-closed by readers. */
+    capabilities: text('capabilities').notNull().default('{}'),
+    /** JSON SubagentActivityEntry[]; writer enforces count/text bounds. */
+    activity: text('activity').notNull().default('[]'),
+    startedAt: integer('started_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    endedAt: integer('ended_at'),
+    /** Future/repair visibility markers; normal reads fail closed when set. */
+    rewindAt: integer('rewind_at'),
+    deletedAt: integer('deleted_at'),
+  },
+  (t) => ({
+    // Logical/native ids may legally be reused after a task clear or rewind.
+    // Lookup uniqueness lives in the visible generation, not across all audit rows.
+    byLogicalAgent: index('subagent_runs_logical_idx').on(
+      t.sessionId,
+      t.provider,
+      t.logicalAgentId,
+    ),
+    bySession: index('subagent_runs_session_idx').on(
+      t.sessionId,
+      t.rewindAt,
+      t.deletedAt,
+      t.startedAt,
+    ),
+    byParentToolUse: index('subagent_runs_parent_tool_use_idx').on(t.sessionId, t.parentToolUseId),
+  }),
+);
+
+/**
+ * Indexed identity projection for Subagent observations.
+ *
+ * A harness may report the same logical child first by task id and later by
+ * parent tool id or native thread id. Keeping the bounded alias array on the
+ * run makes the record self-contained; this table makes matching O(log n)
+ * instead of parsing every historical run on each progress event. Alias reuse
+ * across clear/rewind generations is intentional, hence runId is part of the
+ * primary key and readers select the newest visible run.
+ */
+export const subagentRunAliases = sqliteTable(
+  'subagent_run_aliases',
+  {
+    sessionId: text('session_id')
+      .notNull()
+      .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    alias: text('alias').notNull(),
+    runId: text('run_id')
+      .notNull()
+      .references((): AnySQLiteColumn => subagentRuns.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.runId, t.alias] }),
+    byAlias: index('subagent_run_aliases_lookup_idx').on(
+      t.sessionId,
+      t.provider,
+      t.alias,
+      t.createdAt,
+    ),
   }),
 );
 
@@ -1073,10 +1178,10 @@ export const dailySpend = sqliteTable(
     costUsd: real('cost_usd').notNull().default(0),
     costAmount: real('cost_amount').notNull().default(0),
     /** 该行金额的币种。历史 NULL 行在迁移时按其 USD 口径填为 'USD'。 */
-    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }).notNull().default('USD'),
-    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] })
       .notNull()
-      .default(false),
+      .default('USD'),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /** 最后一次更新的 unix ms。 */
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1116,10 +1221,10 @@ export const dailyModelUsage = sqliteTable(
     costUsd: real('cost_usd').notNull().default(0),
     costAmount: real('cost_amount').notNull().default(0),
     /** 该行金额的币种。无金额的纯 token 行与历史 NULL 行迁移时填为 'USD'。 */
-    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }).notNull().default('USD'),
-    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] })
       .notNull()
-      .default(false),
+      .default('USD'),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     inputTokens: integer('input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),
     cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
@@ -1325,6 +1430,11 @@ export const rightSidebarTabs = sqliteTable(
   },
   (t) => ({
     bySession: index('right_sidebar_tabs_session_idx').on(t.sessionId, t.position),
+    // Other tab kinds may have multiple instances. Subagents is one durable
+    // workspace per parent task and must remain singleton across two renderers.
+    uniqSubagents: uniqueIndex('right_sidebar_tabs_subagents_singleton_idx')
+      .on(t.sessionId)
+      .where(sql`${t.kind} = 'subagents'`),
   }),
 );
 

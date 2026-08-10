@@ -10,6 +10,7 @@
  */
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
 
 export type AgentEventType =
@@ -94,6 +95,8 @@ export interface AgentTaskUpdateEventData {
   model?: string | null;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
+  /** Explicit durable-workspace identity; control/task-card-only updates omit it. */
+  subagentObservation?: SubagentObservation;
   /**
    * workflow 逐 agent 进度树(taskType=local_workflow 时 task_progress 事件携带,
    * 经 `@cindy/maker-shared/agent-task` 的 normalizeWorkflowProgressEntries 收窄截断)。

@@ -11,6 +11,7 @@
 
 import {
   Activity,
+  Bot,
   ChevronRight,
   FileDiff,
   FolderOpen,
@@ -27,6 +28,7 @@ interface EmptyStateProps {
   onAddBrowserTab: () => void;
   onAddTerminalTab: () => void;
   onAddReviewTab: () => void;
+  onAddSubagentsTab: () => void;
   onAddBackgroundTasksTab: () => void;
   onAddResourceUsageTab: () => void;
 }
@@ -36,6 +38,7 @@ export function EmptyState({
   onAddBrowserTab,
   onAddTerminalTab,
   onAddReviewTab,
+  onAddSubagentsTab,
   onAddBackgroundTasksTab,
   onAddResourceUsageTab,
 }: EmptyStateProps) {
@@ -71,6 +74,12 @@ export function EmptyState({
         />
         {/* 后台任务:顺序与 + dropdown 一致(review order=15 → background-tasks
             order=17 → browser order=20)。 */}
+        <ActionRow
+          icon={Bot}
+          label={t('rightSidebar.tabs.empty.openSubagents')}
+          sub={t('rightSidebar.tabs.empty.subagentsSub')}
+          onClick={onAddSubagentsTab}
+        />
         <ActionRow
           icon={ListTodo}
           label={t('rightSidebar.tabs.empty.openBackgroundTasks')}

@@ -5,6 +5,8 @@
  * (主窗镜像 store + 子窗口根组件)。只放纯类型,不放运行时代码。
  */
 
+import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
+
 import type { ConversationSearchJump } from './conversationSearchJump.js';
 
 /** 子窗口全局状态:detached 是持久化偏好,lastOpen 是重启恢复用的状态,open 是运行时窗口开闭。 */
@@ -48,6 +50,17 @@ export type RsbWindowCommand =
       type: 'open-background-tasks-tab';
       sessionId: string;
       focusTaskId?: string | null;
+    }
+  /** 打开/聚焦 Cindy 持久化的 Subagent 工作区(每个父任务单例)。 */
+  | {
+      type: 'open-subagents-tab';
+      sessionId: string;
+      focusRunId?: string | null;
+      focusProvider?: SubagentProvider | null;
+      /** False adds the singleton without replacing the user's active tab. */
+      focusTab?: boolean;
+      /** False persists the tab without expanding the sidebar. */
+      revealSidebar?: boolean;
     }
   | {
       type: 'open-turn-review';
