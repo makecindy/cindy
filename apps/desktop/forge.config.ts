@@ -22,6 +22,7 @@ import {
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 
 const _require = createRequire(__filename);
+const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
 
 // ── 构建期身份(2026-07-17 Cindy 渠道分叉) ─────────────────────────────────────
 // 区域默认 global;中国大陆包由发布脚本显式注入 CINDY_AUTH_REGION=cn。appId 随区域
@@ -680,6 +681,54 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+const IOS_SIMULATOR_HELPER_BUNDLE = 'Cindy iOS Simulator Helper.app';
+const IOS_SIMULATOR_HELPER_EXECUTABLE = 'ios-simulator-sidecar';
+
+/**
+ * Forge first copies the Host-owned helper through extraResource, then this
+ * postPackage step moves it into the canonical nested-code location. Raw dev
+ * binaries and the temporary helper staging directory must not remain in the
+ * final application bundle.
+ */
+function stageMacIOSSimulatorHelper(buildPath: string, platform: string): void {
+  if (platform !== 'darwin' && platform !== 'mas') return;
+  const apps = fs.readdirSync(buildPath).filter((name) => name.endsWith('.app'));
+  if (apps.length !== 1) {
+    throw new Error(
+      `[forge:postPackage] expected one macOS app while staging iOS Simulator helper, found ${apps.length}`,
+    );
+  }
+
+  const appContents = path.join(buildPath, apps[0], 'Contents');
+  const resourceRoot = path.join(appContents, 'Resources', 'ios-simulator');
+  const sourceBundle = path.join(resourceRoot, 'helper', IOS_SIMULATOR_HELPER_BUNDLE);
+  const destinationBundle = path.join(appContents, 'Helpers', IOS_SIMULATOR_HELPER_BUNDLE);
+  const sourceExecutable = path.join(
+    sourceBundle,
+    'Contents',
+    'MacOS',
+    IOS_SIMULATOR_HELPER_EXECUTABLE,
+  );
+  if (!fs.existsSync(sourceExecutable)) {
+    throw new Error(
+      `[forge:postPackage] staged iOS Simulator helper executable missing at ${sourceExecutable}`,
+    );
+  }
+
+  fs.mkdirSync(path.dirname(destinationBundle), { recursive: true });
+  fs.rmSync(destinationBundle, { recursive: true, force: true });
+  fs.renameSync(sourceBundle, destinationBundle);
+  fs.rmSync(path.join(resourceRoot, 'helper'), { recursive: true, force: true });
+  fs.rmSync(path.join(resourceRoot, 'native'), { recursive: true, force: true });
+  fs.chmodSync(
+    path.join(destinationBundle, 'Contents', 'MacOS', IOS_SIMULATOR_HELPER_EXECUTABLE),
+    0o755,
+  );
+  console.log(
+    `[forge:postPackage] staged ${IOS_SIMULATOR_HELPER_BUNDLE} in ${apps[0]}/Contents/Helpers`,
+  );
+}
+
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
   return `${targetPlatform}-${targetArch}`;
 }
@@ -758,6 +807,13 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
 
   if (targetPlatform === 'win32') {
     base.unshift(`resources/${UPDATER_EXE}`);
+  }
+
+  if (targetPlatform === 'darwin' || targetPlatform === 'mas') {
+    // WDA archive/manifest are runtime resources. The Host-owned Helper is
+    // temporarily copied here and moved to Contents/Helpers by postPackage so
+    // the signing pipeline can treat it as nested code.
+    base.push('resources/ios-simulator');
   }
 
   // macOS 「帮助 → 安装到命令行」symlink 的目标脚本(<App>/Contents/Resources/cli/cindy)。
@@ -851,6 +907,31 @@ function isMacForgePlatform(platform: ForgePlatform): boolean {
   return platform === 'darwin' || platform === 'mas';
 }
 
+function ensureMacIOSSimulatorWdaArchive(platform: ForgePlatform): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const script = path.join(__dirname, 'scripts', 'ensure-wda-source-archive.mjs');
+  console.log(`[forge:prePackage] preparing pinned iOS Simulator WDA archive via ${script}...`);
+  const result = spawnSync(process.execPath, [script], {
+    cwd: __dirname,
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw new Error(
+      `[forge] iOS Simulator WDA archive preparation failed: ${result.error.message}`,
+    );
+  }
+  if (result.signal) {
+    throw new Error(
+      `[forge] iOS Simulator WDA archive preparation terminated by signal ${result.signal}`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[forge] iOS Simulator WDA archive preparation failed with exit code ${result.status}`,
+    );
+  }
+}
+
 const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
@@ -879,6 +960,52 @@ function swiftArchLabel(arch: ForgeArch, deploymentTarget: string): string {
   return swiftTargetTriplesForForgeArch(arch, deploymentTarget)
     .map((target) => target.split('-')[0])
     .join('+');
+}
+
+function iosSimulatorSidecarArch(arch: ForgeArch): 'arm64' | 'x86_64' | 'universal' {
+  switch (arch) {
+    case 'arm64':
+      return 'arm64';
+    case 'x64':
+      return 'x86_64';
+    case 'universal':
+      return 'universal';
+    default:
+      throw new Error(`[forge] unsupported iOS Simulator helper arch: ${arch}`);
+  }
+}
+
+function buildMacIOSSimulatorHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const script = path.join(
+    __dirname,
+    '..',
+    '..',
+    'packages',
+    'ios-simulator-runtime',
+    'scripts',
+    'build-native-sidecar.mjs',
+  );
+  const helperArch = iosSimulatorSidecarArch(arch);
+  const result = spawnSync(process.execPath, [script], {
+    cwd: path.join(__dirname, '..', '..'),
+    env: {
+      ...process.env,
+      CINDY_IOS_SIDECAR_ARCH: helperArch,
+      CINDY_IOS_SIDECAR_OUTPUT_MODE: 'helper',
+      CINDY_IOS_SIDECAR_BUNDLE_ID: `${CINDY_APP_ID}.ios-simulator-helper`,
+      CINDY_IOS_SIDECAR_VERSION: process.env.APP_VERSION ?? DESKTOP_PACKAGE_VERSION,
+    },
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw new Error(`[forge] iOS Simulator helper build failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[forge] iOS Simulator helper build failed for ${helperArch} with exit code ${result.status}`,
+    );
+  }
 }
 
 function runSwiftcForTarget(src: string, dest: string, target: string, extraArgs: string[], label: string): void {
@@ -1295,11 +1422,13 @@ const config: ForgeConfig = {
     prePackage: async (_forgeConfig, platform, arch) => {
       const targetPlatform = requestedTargetPlatform();
       const targetArch = requestedTargetArch();
+      ensureMacIOSSimulatorWdaArchive(platform);
       if (targetPlatform === 'win32') {
         buildCindyUpdater();
       }
       stageRipgrep(targetPlatform, targetArch);
       stageAndroidPlatformTools(targetPlatform, targetArch);
+      buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
@@ -1313,6 +1442,7 @@ const config: ForgeConfig = {
         const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
         console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
         signPackagedExes(buildPath);
+        stageMacIOSSimulatorHelper(buildPath, opts.platform);
         applyMacPackagedDisplayName(buildPath, opts.platform);
       }
     },

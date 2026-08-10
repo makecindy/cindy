@@ -29,6 +29,7 @@
     "@cindy/maker-core": "workspace:*",
     "@cindy/maker-scheduler": "workspace:*",
     "@cindy/maker-shared": "workspace:*",
+    "@cindy/ios-simulator-runtime": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "eventsource-parser": "^3.0.6",
     "google-auth-library": "^10.6.2",

@@ -141,6 +141,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     /** 本会话「已注册」的桥接 MCP server 名(经 preparePiExtraSpawnConfig 下发)。 */
     serverNames?: string[];
     policy?: AgentDeps['getMcpToolApprovalPolicy'];
+    presentation?: AgentDeps['getMcpToolApprovalPresentation'];
   }
 
   function buildDeps(
@@ -150,6 +151,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   ): AgentDeps {
     return {
       ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
+      ...(mcp?.presentation
+        ? { getMcpToolApprovalPresentation: mcp.presentation }
+        : {}),
       ...(mcp?.serverNames
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
@@ -964,6 +968,37 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(review).not.toHaveBeenCalled();
     expect(resolverCalls).toBe(1);
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r21', confirmed: true });
+  });
+
+  it('uses the host security disclosure for progressive MCP approvals', async () => {
+    const disclosure = {
+      title: 'Allow Xcode to build this project?',
+      description:
+        'Build scripts may access files outside the project, and output is returned to the Agent.',
+    };
+    const handle = await start('auto', undefined, false, {
+      serverNames: ['cindy_ios_simulator'],
+      policy: () => 'prompt-each-time',
+      presentation: () => disclosure,
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest('r-build', 'mcp__cindy_ios_simulator__call_tool', {
+      name: 'build_app',
+      args: {},
+    });
+
+    expect(await waitForResponse('r-build')).toEqual({
+      type: 'extension_ui_response',
+      id: 'r-build',
+      confirmed: false,
+    });
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'permission',
+      title: disclosure.title,
+      description: disclosure.description,
+    }));
   });
 
   /**

@@ -132,6 +132,24 @@ import type {
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
+import type {
+  IOSSimulatorAccessRequest,
+  IOSSimulatorAccessRequestResult,
+  IOSSimulatorSessionStatus,
+  IOSSimulatorAgentControlRequest,
+  IOSSimulatorFocusRequest,
+  IOSSimulatorH264FramePush,
+  IOSSimulatorRouteStatusPush,
+  IOSSimulatorLiveTouchRequest,
+  IOSSimulatorMutationControlRequest,
+  IOSSimulatorStatusRequest,
+  IOSSimulatorToolRequest,
+  IOSSimulatorToolResponse,
+  IOSSimulatorViewerRouteRequest,
+  IOSSimulatorViewerVisibilityRequest,
+  IOSSimulatorStreamProfileRequest,
+} from '../shared/iosSimulatorIpc';
+import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../shared/iosSimulatorIpc';
 import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
 import {
   REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS,
@@ -586,6 +604,9 @@ const fanOutMakerSessionCredentialSwitchApplied = createIpcFanOut(
   'maker:session-credential-switch-applied',
 );
 const fanOutMakerClaudeSessionRouteChanged = createIpcFanOut('maker:claude-session-route-changed');
+const fanOutIOSSimulatorFocusRequest = createIpcFanOut('maker:ios-simulator:focus-request');
+const fanOutIOSSimulatorH264Frame = createIpcFanOut('maker:ios-simulator:h264-frame');
+const fanOutIOSSimulatorRouteStatus = createIpcFanOut(IOS_SIMULATOR_ROUTE_STATUS_CHANNEL);
 // 会话后台活动翻转广播(payload = { sessionId, active }):turn 已结束但 CC 子进程仍在调模型。
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
@@ -6284,6 +6305,42 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:android:set-adb-path', { adbPathOverride }),
       prepareAdb: (): Promise<AndroidAdbPreparationState> =>
         ipcRenderer.invoke('maker:android:prepare-adb'),
+    },
+    iosSimulator: {
+      requestAccess: (
+        request: IOSSimulatorAccessRequest,
+      ): Promise<IOSSimulatorAccessRequestResult> =>
+        ipcRenderer.invoke('maker:ios-simulator:request-access', request),
+      status: (request: IOSSimulatorStatusRequest): Promise<IOSSimulatorSessionStatus> =>
+        ipcRenderer.invoke('maker:ios-simulator:status', request),
+      call: (request: IOSSimulatorToolRequest): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:call', request),
+      setAgentControl: (
+        request: IOSSimulatorAgentControlRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:set-agent-control', request),
+      setMutationControl: (
+        request: IOSSimulatorMutationControlRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:set-mutation-control', request),
+      setViewerVisibility: (
+        request: IOSSimulatorViewerVisibilityRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
+      latestFrame: (request: IOSSimulatorViewerRouteRequest): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
+      setStreamProfile: (
+        request: IOSSimulatorStreamProfileRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:set-stream-profile', request),
+      liveTouch: (request: IOSSimulatorLiveTouchRequest): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:live-touch', request),
+      onH264Frame: (callback: (payload: IOSSimulatorH264FramePush) => void) =>
+        fanOutIOSSimulatorH264Frame((payload) => callback(payload as IOSSimulatorH264FramePush)),
+      onRouteStatus: (callback: (payload: IOSSimulatorRouteStatusPush) => void) =>
+        fanOutIOSSimulatorRouteStatus((payload) => callback(payload as IOSSimulatorRouteStatusPush)),
+      onFocusRequest: (callback: (request: IOSSimulatorFocusRequest) => void) =>
+        fanOutIOSSimulatorFocusRequest((request) => callback(request as IOSSimulatorFocusRequest)),
     },
     computer: {
       status: (options?: ComputerDriverStatusOptions): Promise<ComputerDriverStatus> =>

@@ -67,6 +67,10 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return orcaRemoveWorker(db, txArgs);
     case 'orca.cancelStaleTeams':
       return orcaCancelStaleTeams(db, txArgs);
+    case 'orca.archiveWorkersByTeam':
+      return orcaArchiveWorkersByTeam(db, txArgs);
+    case 'orca.reconcileInactiveTeamWorkersForLead':
+      return orcaReconcileInactiveTeamWorkersForLead(db, txArgs);
     case 'sessions.renameTitles':
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
@@ -507,7 +511,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     throw invalidArgs(`invalid status: ${status}`);
   }
   const selectSession = db.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
     'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
@@ -525,6 +529,11 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       const existing = selectSession.get(sessionId);
       if (!existing) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
+      }
+      if ((existing as { status?: unknown }).status === 'deleted') {
+        throw Object.assign(new Error(`已删除的任务不能恢复或归档: ${sessionId}`), {
+          code: 'PRECONDITION_FAILED',
+        });
       }
       const updated = updateSession.get(status, now, sessionId) as
         | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null }
@@ -1487,13 +1496,13 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   const now = expectNumber(payload.now, 'now');
   const selectWorker = db.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
-  const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ?");
+  const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   const transaction = db.transaction(() => {
     const row = selectWorker.get(workerId) as { sessionId: string } | undefined;
     if (!row) return null;
     deleteWorker.run(workerId);
-    archiveSession.run(now, row.sessionId);
-    return row.sessionId;
+    const archived = archiveSession.run(now, row.sessionId);
+    return archived.changes > 0 ? row.sessionId : null;
   });
   return transaction() as string | null;
 }
@@ -1507,6 +1516,71 @@ function orcaCancelStaleTeams(db: Database.Database, args: unknown): void {
   db.transaction(() => {
     cancel.run(now, now, leadSessionId, keepTeamId);
   })();
+}
+
+function orcaArchiveWorkersByTeam(db: Database.Database, args: unknown): string[] {
+  const payload = asRecord(args, 'orca.archiveWorkersByTeam args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const now = expectNumber(payload.now, 'now');
+  const selectCandidates = db.prepare(
+    `SELECT sessions.id
+       FROM orca_workers
+       INNER JOIN sessions ON orca_workers.session_id = sessions.id
+      WHERE orca_workers.team_id = ? AND sessions.status = 'active'
+      ORDER BY sessions.id`,
+  );
+  const archiveSession = db.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+  );
+  const transaction = db.transaction(() => {
+    const candidates = selectCandidates.all(teamId) as Array<{ id: string }>;
+    const updatedIds: string[] = [];
+    for (const { id } of candidates) {
+      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
+  });
+  return transaction() as string[];
+}
+
+function orcaReconcileInactiveTeamWorkersForLead(
+  db: Database.Database,
+  args: unknown,
+): string[] {
+  const payload = asRecord(args, 'orca.reconcileInactiveTeamWorkersForLead args');
+  const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
+  const now = expectNumber(payload.now, 'now');
+  const selectCandidates = db.prepare(
+    `SELECT sessions.id
+       FROM orca_workers
+       INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id
+       INNER JOIN sessions ON orca_workers.session_id = sessions.id
+      WHERE orca_teams.lead_session_id = ?
+        AND orca_teams.status != 'active'
+        AND sessions.status = 'active'
+      ORDER BY sessions.id`,
+  );
+  const finishWorkers = db.prepare(
+    `UPDATE orca_workers
+        SET status = 'done', updated_at = ?
+      WHERE team_id IN (
+        SELECT id FROM orca_teams
+         WHERE lead_session_id = ? AND status != 'active'
+      )`,
+  );
+  const archiveSession = db.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+  );
+  const transaction = db.transaction(() => {
+    const candidates = selectCandidates.all(leadSessionId) as Array<{ id: string }>;
+    finishWorkers.run(now, leadSessionId);
+    const updatedIds: string[] = [];
+    for (const { id } of candidates) {
+      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
+  });
+  return transaction() as string[];
 }
 
 function orcaUpsertWorker(db: Database.Database, args: unknown): void {

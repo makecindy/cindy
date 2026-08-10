@@ -102,6 +102,18 @@ export class DesktopSessionStorage implements SessionStorage {
     return rows[0] ? rowToMeta(rows[0]) : null;
   }
 
+  /** Read the product lifecycle status without widening maker-core SessionMeta. */
+  async getStatus(id: string): Promise<'active' | 'archived' | 'deleted' | null> {
+    const db = getDbClient().drizzle;
+    const rows = await db
+      .select({ status: sessions.status })
+      .from(sessions)
+      .where(eq(sessions.id, id))
+      .limit(1);
+    const status = rows[0]?.status;
+    return status === 'active' || status === 'archived' || status === 'deleted' ? status : null;
+  }
+
   async list(): Promise<SessionMeta[]> {
     const db = getDbClient().drizzle;
     const rows = await db

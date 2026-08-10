@@ -36,24 +36,28 @@ export interface GhostPluginListItem {
   canUse: boolean;
   /** 声明了插件页内独占面板(panel.position:'tab'),主动作为「使用」(打开面板)。 */
   tabPanel: boolean;
+  /** 声明了由 Host 承载、但可从插件 UI 主动进入的能力。 */
+  hostCapability: 'ios-simulator' | null;
   trust?: GhostTrustInfo;
   iconDataUrl?: string;
 }
 
 /**
- * 卡片主动作的三分法(与设计稿一致):
+ * 卡片主动作的四分法:
  * - `panel`:有页签面板 → 「使用」直接打开面板;
  * - `command`:只有 $指令 → 「对话」把指令插进输入框起话题;
+ * - `capability`:Host 承载的能力 → 「对话」进入该能力的工作流;
  * - `manage`:纯工具型(Agent 对话中自动调用)→ 无主按钮,点卡片进管理页。
  * 停靠形态(left/right)的面板由布局树承载,不算 panel 主动作。
  */
-export type GhostPrimaryAction = 'panel' | 'command' | 'manage';
+export type GhostPrimaryAction = 'panel' | 'command' | 'capability' | 'manage';
 
 export function ghostPrimaryAction(
-  item: Pick<GhostPluginListItem, 'tabPanel' | 'canUse'>,
+  item: Pick<GhostPluginListItem, 'tabPanel' | 'canUse' | 'hostCapability'>,
 ): GhostPrimaryAction {
   if (item.tabPanel) return 'panel';
   if (item.canUse) return 'command';
+  if (item.hostCapability) return 'capability';
   return 'manage';
 }
 export interface GhostPluginDetail extends GhostPluginListItem {
@@ -152,9 +156,7 @@ export function filterGhostPluginItems<T extends GhostPluginListItem>(
 ): T[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   return items.filter((item) =>
-    `${item.name} ${item.description} ${item.id}`
-      .toLocaleLowerCase()
-      .includes(normalizedQuery),
+    `${item.name} ${item.description} ${item.id}`.toLocaleLowerCase().includes(normalizedQuery),
   );
 }
 
@@ -262,6 +264,7 @@ export function toGhostPluginListItem(
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
     tabPanel: manifest.panel?.position === 'tab',
+    hostCapability: manifest.slots.includes('ios-simulator') ? 'ios-simulator' : null,
     trust: ghost.trust ?? {
       level: 'unverified',
       publisherSigned: false,
@@ -285,7 +288,7 @@ export function toGhostPluginDetail(
   return {
     ...listItem,
     trust: listItem.trust!,
-    author: presentation ? presentation.author : manifest.author ?? null,
+    author: presentation ? presentation.author : (manifest.author ?? null),
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],

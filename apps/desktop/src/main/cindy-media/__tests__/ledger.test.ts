@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { eq, sql } from 'drizzle-orm';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { LedgerDb } from '../ledger';
@@ -19,7 +20,9 @@ vi.mock('electron', () => ({
 
 const schema = await import('../../localDb/schema');
 const ledger = await import('../ledger');
+const sessionCleanup = await import('../sessionCleanup');
 
+const MIGRATION_0000 = path.resolve(__dirname, '../../../../drizzle/0000_init.sql');
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
 // 0071 的加列在配套脚本里(SQL 是占位),与生产同源经 CommonJS require 加载。
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -33,10 +36,12 @@ const HASH_B = 'b'.repeat(64);
 function freshDb(): LedgerDb {
   const raw = new Database(':memory:');
   raw.pragma('foreign_keys = ON');
-  const sqlText = fs.readFileSync(MIGRATION_0070, 'utf8');
-  for (const stmt of sqlText.split('--> statement-breakpoint')) {
-    const trimmed = stmt.trim();
-    if (trimmed) raw.exec(trimmed);
+  for (const migrationPath of [MIGRATION_0000, MIGRATION_0070]) {
+    const sqlText = fs.readFileSync(migrationPath, 'utf8');
+    for (const stmt of sqlText.split('--> statement-breakpoint')) {
+      const trimmed = stmt.trim();
+      if (trimmed) raw.exec(trimmed);
+    }
   }
   migration0071.run(raw);
   return drizzle(raw, { schema }) as unknown as LedgerDb;
@@ -50,6 +55,13 @@ beforeEach(() => {
 
 async function seedBlob(hash: string, isCache = false): Promise<void> {
   await ledger.recordBlob({ hash, ext: '.png', mimeType: 'image/png', bytes: 8, isCache }, db);
+}
+
+async function seedSession(id: string, status: 'active' | 'archived' | 'deleted'): Promise<void> {
+  await db.run(sql`
+    insert into sessions (id, status, created_at, updated_at)
+    values (${id}, ${status}, 1, 1)
+  `);
 }
 
 describe('recordBlob(幂等入账)', () => {
@@ -66,13 +78,37 @@ describe('recordBlob(幂等入账)', () => {
 describe('addRef / removeRefs(引用增删)', () => {
   it('未入账的指纹加引用被 FK 拒绝(先记 blob 后记 ref 的顺序由类型层保证)', async () => {
     await expect(
-      ledger.addRef({ hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' }, db),
+      ledger.addRef(
+        { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' },
+        db,
+      ),
     ).rejects.toThrow();
+  });
+
+  it('允许 staged writer 预留稳定 id 以便提交回执丢失后精确补偿', async () => {
+    await seedBlob(HASH_A);
+    await expect(
+      ledger.addRef(
+        {
+          id: 'staged-ref-id',
+          hash: HASH_A,
+          refKind: 'session-attachment',
+          refId: 'session-a',
+        },
+        db,
+      ),
+    ).resolves.toBe('staged-ref-id');
+    expect(db.select().from(schema.mediaRefs).all()).toEqual([
+      expect.objectContaining({ id: 'staged-ref-id', refId: 'session-a' }),
+    ]);
   });
 
   it('removeRefs 只删指定引用方名下的行,返回删除数', async () => {
     await seedBlob(HASH_A);
-    await ledger.addRef({ hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' }, db);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' },
+      db,
+    );
     await ledger.addRef({ hash: HASH_A, refKind: 'ghost-gallery', refId: 'art' }, db);
     await expect(ledger.removeRefs({ refKind: 'message', refId: 'msg-1' }, db)).resolves.toBe(1);
     const left = db.select().from(schema.mediaRefs).all();
@@ -89,7 +125,10 @@ describe('addRef / removeRefs(引用增删)', () => {
 
   it('删除 blob 行时引用级联清空(回收器删文件后账面自洽)', async () => {
     await seedBlob(HASH_A);
-    await ledger.addRef({ hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' }, db);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' },
+      db,
+    );
     db.delete(schema.mediaBlobs).run();
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
   });
@@ -105,20 +144,26 @@ describe('addRef / removeRefs(引用增删)', () => {
       ledger.hasRef({ hash: HASH_A, refKind: 'ghost-grant', refId: 'art' }, db),
     ).resolves.toBe(true);
     await expect(
-      ledger.hasRef({
-        hash: HASH_A,
-        refKind: 'ghost-grant',
-        refId: 'art',
-        originKind: 'user',
-      }, db),
+      ledger.hasRef(
+        {
+          hash: HASH_A,
+          refKind: 'ghost-grant',
+          refId: 'art',
+          originKind: 'user',
+        },
+        db,
+      ),
     ).resolves.toBe(false);
     await expect(
-      ledger.hasRef({
-        hash: HASH_A,
-        refKind: 'ghost-grant',
-        refId: 'art',
-        originKind: 'tool',
-      }, db),
+      ledger.hasRef(
+        {
+          hash: HASH_A,
+          refKind: 'ghost-grant',
+          refId: 'art',
+          originKind: 'tool',
+        },
+        db,
+      ),
     ).resolves.toBe(true);
 
     await ledger.addRef(
@@ -126,45 +171,48 @@ describe('addRef / removeRefs(引用增删)', () => {
       db,
     );
     await expect(
-      ledger.hasRef({
-        hash: HASH_A,
-        refKind: 'ghost-grant',
-        refId: 'art',
-        originKind: 'user',
-      }, db),
+      ledger.hasRef(
+        {
+          hash: HASH_A,
+          refKind: 'ghost-grant',
+          refId: 'art',
+          originKind: 'user',
+        },
+        db,
+      ),
     ).resolves.toBe(true);
   });
 
   it('hasGhostToolGrant 兼容旧 ghost-grant/tool，但不把 user provenance 当工具交接', async () => {
     await seedBlob(HASH_A);
-    await expect(
-      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
-    ).resolves.toBe(false);
+    await expect(ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(
+      false,
+    );
 
     await ledger.addRef(
       { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'user' },
       db,
     );
-    await expect(
-      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
-    ).resolves.toBe(false);
+    await expect(ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(
+      false,
+    );
 
     await ledger.addRef(
       { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'tool' },
       db,
     );
-    await expect(
-      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
-    ).resolves.toBe(true);
+    await expect(ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(
+      true,
+    );
 
     await seedBlob(HASH_B);
     await ledger.addRef(
       { hash: HASH_B, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' },
       db,
     );
-    await expect(
-      ledger.hasGhostToolGrant({ hash: HASH_B, ghostId: 'art' }, db),
-    ).resolves.toBe(true);
+    await expect(ledger.hasGhostToolGrant({ hash: HASH_B, ghostId: 'art' }, db)).resolves.toBe(
+      true,
+    );
   });
 
   it('新版工具交接可取件，但旧版 ghost-grant shortcut 看不到它(回退 fail closed)', async () => {
@@ -192,14 +240,26 @@ describe('removeRefsExceptHash(替换型引用清理:个人头像换图)', () =>
     await seedBlob(HASH_A);
     await seedBlob(HASH_B);
     // user-1 换头像:旧图 HASH_A、新图 HASH_B 均已挂 profile-avatar 引用
-    await ledger.addRef({ hash: HASH_A, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' }, db);
-    await ledger.addRef({ hash: HASH_B, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' }, db);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' },
+      db,
+    );
+    await ledger.addRef(
+      { hash: HASH_B, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' },
+      db,
+    );
     // 同指纹的其它业务引用与别的用户头像都必须幸存
     await ledger.addRef({ hash: HASH_A, refKind: 'ghost-gallery', refId: 'art' }, db);
-    await ledger.addRef({ hash: HASH_A, refKind: 'profile-avatar', refId: 'user-2', originKind: 'user' }, db);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'profile-avatar', refId: 'user-2', originKind: 'user' },
+      db,
+    );
 
     await expect(
-      ledger.removeRefsExceptHash({ refKind: 'profile-avatar', refId: 'user-1', keepHash: HASH_B }, db),
+      ledger.removeRefsExceptHash(
+        { refKind: 'profile-avatar', refId: 'user-1', keepHash: HASH_B },
+        db,
+      ),
     ).resolves.toBe(1);
 
     const left = db.select().from(schema.mediaRefs).all();
@@ -211,10 +271,19 @@ describe('removeRefsExceptHash(替换型引用清理:个人头像换图)', () =>
 
   it('同指纹重复保存(去重命中)时不删 keepHash 的任何行', async () => {
     await seedBlob(HASH_A);
-    await ledger.addRef({ hash: HASH_A, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' }, db);
-    await ledger.addRef({ hash: HASH_A, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' }, db);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' },
+      db,
+    );
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'profile-avatar', refId: 'user-1', originKind: 'user' },
+      db,
+    );
     await expect(
-      ledger.removeRefsExceptHash({ refKind: 'profile-avatar', refId: 'user-1', keepHash: HASH_A }, db),
+      ledger.removeRefsExceptHash(
+        { refKind: 'profile-avatar', refId: 'user-1', keepHash: HASH_A },
+        db,
+      ),
     ).resolves.toBe(0);
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(2);
   });
@@ -226,9 +295,24 @@ describe('removeSessionRefs(会话删除钩子)', () => {
     await seedBlob(HASH_B);
     // 会话 sess-1 名下:附件 ref + 导入 ref + 出生消息 ref
     await ledger.addRef({ hash: HASH_A, refKind: 'session-attachment', refId: 'sess-1' }, db);
+    await ledger.addRef(
+      {
+        hash: HASH_A,
+        refKind: 'session-attachment',
+        refId: 'ios-simulator:legacy-capture',
+        originSessionId: 'sess-1',
+      },
+      db,
+    );
     await ledger.addRef({ hash: HASH_A, refKind: 'import', refId: 'sess-1' }, db);
     await ledger.addRef(
-      { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1', originKind: 'tool' },
+      {
+        hash: HASH_A,
+        refKind: 'message',
+        refId: 'msg-1',
+        originSessionId: 'sess-1',
+        originKind: 'tool',
+      },
       db,
     );
     // 免死引用:同一指纹挂了画廊 + 引渡(跨会话持久,删会话不动)。
@@ -239,7 +323,13 @@ describe('removeSessionRefs(会话删除钩子)', () => {
       db,
     );
     await ledger.addRef(
-      { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'user', originSessionId: 'sess-1' },
+      {
+        hash: HASH_A,
+        refKind: 'ghost-grant',
+        refId: 'art',
+        originKind: 'user',
+        originSessionId: 'sess-1',
+      },
       db,
     );
     // 无关会话 sess-2 的引用
@@ -249,7 +339,7 @@ describe('removeSessionRefs(会话删除钩子)', () => {
       db,
     );
 
-    await expect(ledger.removeSessionRefs('sess-1', db)).resolves.toBe(3);
+    await expect(ledger.removeSessionRefs('sess-1', db)).resolves.toBe(4);
 
     const left = db.select().from(schema.mediaRefs).all();
     expect(left.map((r) => r.refKind).sort()).toEqual([
@@ -266,6 +356,156 @@ describe('removeSessionRefs(会话删除钩子)', () => {
 
   it('无引用可删时返回 0,不炸', async () => {
     await expect(ledger.removeSessionRefs('nobody', db)).resolves.toBe(0);
+  });
+});
+
+describe('removeSessionRefsIfDeleted(软删墓碑原子门禁)', () => {
+  it('只在任务仍为 deleted 时删除会话引用并保留持久引用', async () => {
+    await seedSession('sess-1', 'deleted');
+    await seedBlob(HASH_A);
+    await ledger.addRef({ hash: HASH_A, refKind: 'session-attachment', refId: 'sess-1' }, db);
+    await ledger.addRef(
+      {
+        hash: HASH_A,
+        refKind: 'session-attachment',
+        refId: 'ios-simulator:legacy-recording',
+        originSessionId: 'sess-1',
+      },
+      db,
+    );
+    await ledger.addRef({ hash: HASH_A, refKind: 'import', refId: 'sess-1' }, db);
+    await ledger.addRef(
+      {
+        hash: HASH_A,
+        refKind: 'message',
+        refId: 'msg-1',
+        originSessionId: 'sess-1',
+      },
+      db,
+    );
+    await ledger.addRef(
+      {
+        hash: HASH_A,
+        refKind: 'ghost-gallery',
+        refId: 'art-1',
+        originSessionId: 'sess-1',
+      },
+      db,
+    );
+
+    await expect(ledger.removeSessionRefsIfDeleted('sess-1', db)).resolves.toBe(4);
+    expect(db.select().from(schema.mediaRefs).all()).toMatchObject([
+      { refKind: 'ghost-gallery', refId: 'art-1' },
+    ]);
+  });
+
+  it.each(['active', 'archived', 'missing'] as const)(
+    'does not delete refs when the final task state is %s',
+    async (status) => {
+      if (status !== 'missing') {
+        await seedSession('sess-1', status);
+      }
+      await seedBlob(HASH_A);
+      await ledger.addRef({ hash: HASH_A, refKind: 'session-attachment', refId: 'sess-1' }, db);
+
+      await expect(ledger.removeSessionRefsIfDeleted('sess-1', db)).resolves.toBe(0);
+      expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
+    },
+  );
+});
+
+describe('reconcileSessionMediaRefsForDeletedSessions(持久重试)', () => {
+  it('only retries deleted tasks and remains idempotent', async () => {
+    await seedSession('deleted-1', 'deleted');
+    await seedSession('archived-1', 'archived');
+    await seedBlob(HASH_A);
+    await ledger.addRef({ hash: HASH_A, refKind: 'session-attachment', refId: 'deleted-1' }, db);
+    await ledger.addRef({ hash: HASH_A, refKind: 'session-attachment', refId: 'archived-1' }, db);
+    const quiesceSession = vi.fn(async () => undefined);
+
+    await expect(
+      sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
+        db,
+        isOwnerCurrent: () => true,
+        withSessionLock: async (_sessionId, task) => task(),
+        quiesceSession,
+      }),
+    ).resolves.toMatchObject({ scanned: 1, removed: 1, failed: 0 });
+    expect(quiesceSession).toHaveBeenCalledWith('deleted-1');
+    quiesceSession.mockClear();
+    await expect(
+      sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
+        db,
+        isOwnerCurrent: () => true,
+        withSessionLock: async (_sessionId, task) => task(),
+        quiesceSession,
+      }),
+    ).resolves.toMatchObject({ scanned: 1, removed: 0, failed: 0 });
+    expect(quiesceSession).toHaveBeenCalledTimes(1);
+    expect(db.select().from(schema.mediaRefs).all()).toMatchObject([{ refId: 'archived-1' }]);
+  });
+
+  it('continues after one task fails and stops when the captured owner changes', async () => {
+    await seedSession('deleted-a', 'deleted');
+    await seedSession('deleted-b', 'deleted');
+    const removeRefsIfDeleted = vi.fn(async (sessionId: string) => {
+      if (sessionId === 'deleted-a') throw new Error('busy');
+      return 2;
+    });
+
+    await expect(
+      sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
+        db,
+        isOwnerCurrent: () => true,
+        withSessionLock: async (_sessionId, task) => task(),
+        quiesceSession: async () => undefined,
+        removeRefsIfDeleted,
+      }),
+    ).resolves.toMatchObject({ scanned: 2, removed: 2, failed: 1, ownerChanged: false });
+
+    let ownerChecks = 0;
+    await expect(
+      sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
+        db,
+        isOwnerCurrent: () => ++ownerChecks === 1,
+        withSessionLock: async (_sessionId, task) => task(),
+        quiesceSession: async () => undefined,
+        removeRefsIfDeleted,
+      }),
+    ).resolves.toMatchObject({ scanned: 0, removed: 0, ownerChanged: true });
+  });
+
+  it('rechecks a deleted tombstone under the task lock before cancelling runtime', async () => {
+    await seedSession('restored-before-lock', 'deleted');
+    await seedBlob(HASH_A);
+    await ledger.addRef(
+      {
+        hash: HASH_A,
+        refKind: 'session-attachment',
+        refId: 'restored-before-lock',
+      },
+      db,
+    );
+    const quiesceSession = vi.fn(async () => undefined);
+
+    await expect(
+      sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
+        db,
+        isOwnerCurrent: () => true,
+        withSessionLock: async (sessionId, task) => {
+          await db
+            .update(schema.sessions)
+            .set({ status: 'active' })
+            .where(eq(schema.sessions.id, sessionId))
+            .run();
+          return task();
+        },
+        quiesceSession,
+      }),
+    ).resolves.toMatchObject({ scanned: 1, removed: 0, failed: 0 });
+
+    expect(quiesceSession).not.toHaveBeenCalled();
+    expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
   });
 });
 
@@ -311,12 +551,15 @@ describe('ghostCanRead(供图归属校验)', () => {
     await expect(ledger.ghostCanRead(HASH_A, 'art', db)).resolves.toBe(true);
     await expect(ledger.ghostCanRead(HASH_A, 'other-ghost', db)).resolves.toBe(false);
     await expect(
-      ledger.hasRef({
-        hash: HASH_A,
-        refKind: 'ghost-grant',
-        refId: 'art',
-        originKind: 'user',
-      }, db),
+      ledger.hasRef(
+        {
+          hash: HASH_A,
+          refKind: 'ghost-grant',
+          refId: 'art',
+          originKind: 'user',
+        },
+        db,
+      ),
     ).resolves.toBe(false);
   });
 
@@ -334,7 +577,14 @@ describe('ghostCanRead(供图归属校验)', () => {
   it('别的意识 / 未知指纹一律拒(不区分不存在与不属于你)', async () => {
     await seedBlob(HASH_A);
     await ledger.addRef(
-      { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1', originKind: 'ghost', originId: 'art' },
+      {
+        hash: HASH_A,
+        refKind: 'message',
+        refId: 'msg-1',
+        originSessionId: 'sess-1',
+        originKind: 'ghost',
+        originId: 'art',
+      },
       db,
     );
     await expect(ledger.ghostCanRead(HASH_A, 'other-ghost', db)).resolves.toBe(false);
@@ -345,7 +595,14 @@ describe('ghostCanRead(供图归属校验)', () => {
     await seedBlob(HASH_A);
     // originKind 不是 ghost:即使 originId 恰好等于某意识 id 也不算它的出生。
     await ledger.addRef(
-      { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1', originKind: 'tool', originId: 'art' },
+      {
+        hash: HASH_A,
+        refKind: 'message',
+        refId: 'msg-1',
+        originSessionId: 'sess-1',
+        originKind: 'tool',
+        originId: 'art',
+      },
       db,
     );
     await expect(ledger.ghostCanRead(HASH_A, 'art', db)).resolves.toBe(false);
@@ -396,7 +653,14 @@ describe('listGhostGallery(画廊清单:重启回放数据源)', () => {
     await seedBlob(HASH_B);
     await ledger.addRef({ hash: HASH_A, refKind: 'ghost-gallery', refId: 'other-ghost' }, db);
     await ledger.addRef(
-      { hash: HASH_B, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1', originKind: 'ghost', originId: 'art' },
+      {
+        hash: HASH_B,
+        refKind: 'message',
+        refId: 'msg-1',
+        originSessionId: 'sess-1',
+        originKind: 'ghost',
+        originId: 'art',
+      },
       db,
     );
     await expect(ledger.listGhostGallery('art', db)).resolves.toEqual([]);
@@ -449,11 +713,17 @@ describe('寄存计量与释放(ghostDepositUsageBytes / removeGhostDepositRef,#
       db,
     );
 
-    await expect(ledger.removeGhostDepositRef({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(true);
+    await expect(ledger.removeGhostDepositRef({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(
+      true,
+    );
     await expect(ledger.ghostDepositUsageBytes('art', db)).resolves.toBe(0);
     // 别人的寄存、自己的画廊、聊天消息都还在(字节不会被连带清掉)。
     await expect(ledger.ghostDepositUsageBytes('other-ghost', db)).resolves.toBe(100);
-    const kinds = db.select().from(schema.mediaRefs).all().map((r) => `${r.refKind}:${r.refId}`);
+    const kinds = db
+      .select()
+      .from(schema.mediaRefs)
+      .all()
+      .map((r) => `${r.refKind}:${r.refId}`);
     expect(kinds.sort()).toEqual([
       'ghost-deposit:other-ghost',
       'ghost-gallery:art',
@@ -465,7 +735,9 @@ describe('寄存计量与释放(ghostDepositUsageBytes / removeGhostDepositRef,#
 
   it('撤回不存在的寄存引用 → false(幂等,不报错)', async () => {
     await seedBlob(HASH_A);
-    await expect(ledger.removeGhostDepositRef({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(false);
+    await expect(ledger.removeGhostDepositRef({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(
+      false,
+    );
   });
 
   it('卸载意识时按 refKind 清空自己的寄存物(removeRefs 口)', async () => {
@@ -504,7 +776,11 @@ describe('touchBlob(惰性刷新,读路径永不被拖垮)', () => {
   });
 
   it('账本抛错时静默(不影响媒体读取)', async () => {
-    const broken = { update: () => { throw new Error('db down'); } } as unknown as LedgerDb;
+    const broken = {
+      update: () => {
+        throw new Error('db down');
+      },
+    } as unknown as LedgerDb;
     await expect(ledger.touchBlob(HASH_A, broken)).resolves.toBeUndefined();
   });
 });
