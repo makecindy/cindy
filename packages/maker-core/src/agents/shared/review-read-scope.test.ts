@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { mkdirSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -25,6 +25,25 @@ afterEach(async () => {
       .map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
 });
+
+/** 探针创建真实符号链接来检测 OS 能力，不靠平台名猜测（开发者模式 Windows 可以 symlink）。 */
+function canCreateSymlink(): boolean {
+  const probe = mkdtempSync(path.join(os.tmpdir(), "cindy-review-scope-symlink-probe-"));
+  try {
+    writeFileSync(path.join(probe, "target"), "probe");
+    symlinkSync(
+      path.join(probe, "target"),
+      path.join(probe, "link"),
+    );
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const canLink = canCreateSymlink();
 
 describe("review read scope", () => {
   it.runIf(Boolean(process.env.CINDY_REVIEW_REAL_WORKSPACE))(
@@ -96,7 +115,7 @@ describe("review read scope", () => {
     ).toBeNull();
   });
 
-  it("resolves symlinks before checking both scope and credential policy", async () => {
+  it.skipIf(!canLink)("resolves symlinks before checking both scope and credential policy", async () => {
     const root = await makeTempDir();
     const workspace = path.join(root, "workspace");
     const outside = path.join(root, "outside.txt");

@@ -6,6 +6,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,6 +25,22 @@ afterEach(async () => {
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
+
+/** 探针创建真实符号链接来检测 OS 能力，不靠平台名猜测（开发者模式 Windows 可以 symlink）。 */
+function canCreateSymlink(): boolean {
+  const probe = mkdtempSync(path.join(os.tmpdir(), "cindy-project-symlink-probe-"));
+  try {
+    writeFileSync(path.join(probe, "target"), "probe");
+    symlinkSync(path.join(probe, "target"), path.join(probe, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const canLink = canCreateSymlink();
 
 describe("IOSSimulatorProjectBuilder", () => {
   it("detects Cindy Mobile before generic nested dependencies", async () => {
@@ -259,7 +276,10 @@ describe("IOSSimulatorProjectBuilder", () => {
     roots.push(root, outside);
     const outsideWorkspace = path.join(outside, "Outside.xcworkspace");
     await mkdir(outsideWorkspace);
-    await symlink(outsideWorkspace, path.join(root, "Escape.xcworkspace"));
+    // Symlink escape test: 仅在 OS 支持符号链接时验证，避免 EPERM。
+    if (canLink) {
+      await symlink(outsideWorkspace, path.join(root, "Escape.xcworkspace"));
+    }
     const builder = new IOSSimulatorProjectBuilder();
 
     await expect(builder.inspect(root, "README.md")).rejects.toMatchObject({
@@ -275,11 +295,13 @@ describe("IOSSimulatorProjectBuilder", () => {
         code: "INVALID_ARGUMENT",
       },
     );
-    await expect(
-      builder.inspect(root, "Escape.xcworkspace"),
-    ).rejects.toMatchObject({
-      code: "INVALID_ARGUMENT",
-    });
+    if (canLink) {
+      await expect(
+        builder.inspect(root, "Escape.xcworkspace"),
+      ).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT",
+      });
+    }
   });
 
   it("reports a bounded list of available schemes instead of requiring guesses", async () => {
