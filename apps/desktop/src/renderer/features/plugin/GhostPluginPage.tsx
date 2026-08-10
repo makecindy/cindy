@@ -2066,7 +2066,7 @@ return (
               setupFailed ? (
                 <AlertTriangle size={16} aria-hidden="true" className="text-[var(--error-fg)]" />
               ) : (
-                <Link size={16} aria-hidden="true" />
+                <Link size={16} aria-hidden="true" className="text-[var(--warning-fg)]" />
               )
             ) : (
               <MessageCircle size={16} aria-hidden="true" />
