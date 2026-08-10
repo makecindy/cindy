@@ -7,6 +7,7 @@ import type {
   SessionSendResult,
 } from '@cindy/maker-core';
 import type { Scheduler } from '@cindy/maker-scheduler';
+import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type {
   FireContext,
   Logger,
@@ -61,15 +62,20 @@ type SendImpl = (
 
 interface FakeSessionHarness {
   session: Session;
+  vendorOptions: Record<string, unknown>;
   emit(event: AgentEvent): void;
 }
 
 function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
+  const vendorOptions: Record<string, unknown> = {};
   const session = {
     id: 'scheduler-session',
     agentKind: 'codex',
     send: vi.fn<SendImpl>(sendImpl),
+    setVendorOptions: vi.fn(async (patch: Record<string, unknown>) => {
+      Object.assign(vendorOptions, patch);
+    }),
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
       return vi.fn(() => {
@@ -82,6 +88,7 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
 
   return {
     session,
+    vendorOptions,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -193,6 +200,21 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     await fireToCompletion(runner, h);
 
     expect(notifier.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('scheduler turn 绑定 host-owned runId,收尾后清理', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: false });
+
+    await fireToCompletion(runner, h);
+
+    expect(h.session.setVendorOptions).toHaveBeenNthCalledWith(1, {
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-1',
+    });
+    expect(h.session.setVendorOptions).toHaveBeenLastCalledWith({
+      [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
+    });
+    expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
   });
 
   it('silentWhenIdle=true → 发送隐藏主动上报协议,落库仍保留原始 prompt', async () => {

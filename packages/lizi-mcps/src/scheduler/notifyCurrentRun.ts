@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 
 import { withScheduler } from './_shared.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
@@ -32,9 +33,13 @@ export function registerScheduleNotifyCurrentRunTool(
     },
     handler: async ({ runId }) =>
       withScheduler(deps, async (scheduler) => {
-        const sessionId = getSessionContext?.().sessionId;
+        const sessionContext = getSessionContext?.();
+        const sessionId = sessionContext?.sessionId;
+        const hostOwnedRunId = sessionContext?.vendorOptions?.[SCHEDULER_RUN_ID_VENDOR_OPTION];
         let targetRunId: string | undefined;
-        if (sessionId) {
+        if (typeof hostOwnedRunId === 'string' && hostOwnedRunId.length > 0) {
+          targetRunId = hostOwnedRunId;
+        } else if (sessionId) {
           targetRunId = scheduler.resolveInflightRunForSession(sessionId);
           if (!targetRunId) {
             throw new Error(

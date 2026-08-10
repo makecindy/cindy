@@ -42,6 +42,7 @@ import type {
   TurnContinuationState,
 } from '@cindy/maker-core';
 import { clampEffortToSupported } from '@cindy/model-providers';
+import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type {
   Schedule,
   ScheduleRun,
@@ -325,6 +326,42 @@ export class MakerScheduleRunner implements ScheduleRunner {
   }
 
   /**
+   * Keep the scheduler's authoritative run id in the host-owned session
+   * context for the lifetime of the actual turn, including auto-resume
+   * continuations. The normal session→run mapping remains the primary path;
+   * this is the in-process fallback when that mapping is gone.
+   */
+  private async bindSchedulerRunContext(
+    session: Pick<Session, 'setVendorOptions'>,
+    runId: string,
+    holder: EphemeralSessionHolder,
+  ): Promise<void> {
+    if (typeof session.setVendorOptions !== 'function') return;
+    try {
+      await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: runId });
+      holder.schedulerRunContextSession = session;
+    } catch (err) {
+      this.deps.logger.warn?.('[runner] scheduler run context bind failed (non-fatal)', {
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async clearSchedulerRunContext(holder: EphemeralSessionHolder): Promise<void> {
+    const session = holder.schedulerRunContextSession;
+    holder.schedulerRunContextSession = undefined;
+    if (!session || typeof session.setVendorOptions !== 'function') return;
+    try {
+      await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined });
+    } catch (err) {
+      this.deps.logger.warn?.('[runner] scheduler run context clear failed (non-fatal)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * 顺延本轮:返回 deferred FireResult(engine 据此撤销预插 run、不通知、把
    * nextFireAt 短延 RETRY_DELAY_MS 后重试)。reason 仅用于日志。
    */
@@ -406,6 +443,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     } finally {
       holder.releaseAgentSwitchLock?.();
       holder.releaseAgentSwitchLock = undefined;
+      await this.clearSchedulerRunContext(holder);
       holder.headlessGhostSetupTurn?.close();
       if (
         holder.sessionId &&
@@ -622,7 +660,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
-          return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, {
+          return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, {
             model: meta?.model,
             effort: meta?.effort,
             fastMode: meta?.fastMode,
@@ -1118,6 +1156,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         schedule,
         ctx,
         session.id,
+        holder,
         {
           model: session.model ?? model,
           effort: runtimeReconciledEffort,
@@ -1264,6 +1303,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           setSessionProvider(session.id, verdict.providerId);
         }
       }
+      await this.bindSchedulerRunContext(session, ctx.runId, holder);
       const sendResult = await session.send(outgoingMessage as never, {
         origin,
         planMode: false,
@@ -1481,6 +1521,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     schedule: Schedule,
     ctx: FireContext,
     sessionId: string,
+    holder: EphemeralSessionHolder,
     /** 绑定会话的当前路由基线(meta.model / meta.effort / sessions.provider_id)。 */
     routingBaseline: {
       model?: string;
@@ -1499,6 +1540,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         schedule,
         ctx,
         sessionId,
+        holder,
         routingBaseline,
         () => {
           // A cancelled queue item may still report a late accept after the
@@ -1520,6 +1562,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     schedule: Schedule,
     ctx: FireContext,
     sessionId: string,
+    holder: EphemeralSessionHolder,
     routingBaseline: {
       model?: string;
       effort?: string;
@@ -1713,6 +1756,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
           blockAcceptedDispatch(undefined, 'session unavailable for queued route sync');
           return;
         }
+        // Only bind at the accepted→vendor-dispatch boundary. Binding while
+        // the item is merely queued would let an unrelated interactive turn
+        // observe this scheduler run id.
+        await this.bindSchedulerRunContext(live, ctx.runId, holder);
         // 任务编辑器里选的 model/effort/来源在排队派发时刻热同步到会话(此回调
         // 运行于 vendor dispatch 之前,setModel 对本 turn 生效)—— 对齐直发路径
         // 的 4.4.1/4.4.2 语义,不让"任务改了模型且每轮都撞忙"的用户被静默忽略
@@ -2514,6 +2561,8 @@ interface EphemeralSessionHolder {
   keepAlive?: boolean;
   /** heartbeat direct-send route lock; released immediately after Session.send settles. */
   releaseAgentSwitchLock?: () => void;
+  /** session context carrying the current scheduler run id until fire settles. */
+  schedulerRunContextSession?: Pick<Session, 'setVendorOptions'>;
 }
 
 interface HeadlessGhostSetupTurnGuard {
