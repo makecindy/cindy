@@ -282,6 +282,18 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
+function createLoggerSpy(): { logger: Logger; warn: ReturnType<typeof vi.fn> } {
+  const warn = vi.fn();
+  const logger: Logger = {
+    ...createNoopLogger(),
+    warn,
+    child() {
+      return logger;
+    },
+  };
+  return { logger, warn };
+}
+
 function createDeps(
   runtimeConfig: AgentDeps['runtimeConfig'] = {},
   overrides: Partial<AgentDeps> = {},
@@ -11130,6 +11142,60 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('uses the host security disclosure for progressive MCP approvals', async () => {
+    const disclosure = {
+      title: 'Allow Xcode to build this project?',
+      description:
+        'Build scripts may access files outside the project, and output is returned to the Agent.',
+    };
+    const presentation = vi.fn(() => disclosure);
+    const agent = new CodexAgent(createDeps({}, {
+      getMcpToolApprovalPolicy: () => 'prompt-each-time',
+      getMcpToolApprovalPresentation: presentation,
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ios-build-disclosure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+    const resolver = vi.fn(async () => ({
+      kind: 'permission' as const,
+      behavior: 'deny' as const,
+    }));
+    handle.setInteractionResolver(resolver);
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('expected mcpServerElicitation handler');
+    const result = await handlers.mcpServerElicitation({
+      threadId: 'start-thread-id',
+      turnId: 'turn-ios-build',
+      serverName: 'cindy_ios_simulator',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        persist: ['session'],
+        tool_params: { name: 'build_app', args: {} },
+      },
+      message: 'Generic MCP approval',
+      requestedSchema: {},
+    });
+
+    expect(result).toEqual({ action: 'decline', content: null, _meta: null });
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'permission',
+      title: disclosure.title,
+      description: disclosure.description,
+      suggestions: undefined,
+    }));
+    expect(presentation).toHaveBeenCalledWith({
+      serverName: 'cindy_ios_simulator',
+      toolParams: { name: 'build_app', args: {} },
+    });
+    await handle.close();
+  });
+
   it('still prompts for prompt-each-time inner MCP calls in Full access mode', async () => {
     // 回归:宽松档曾无条件 accept, 让高风险 inner tool(contacts_delete 等)
     // 绕过逐次确认；Full access 也必须保留 forcePrompt 护栏。
@@ -12386,6 +12452,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const startParams = startHost.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       dynamicTools?: Array<{
+        type?: string;
         namespace?: string;
         name?: string;
         description?: string;
@@ -12398,8 +12465,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     };
     expect(startParams.dynamicTools).toEqual([
       expect.objectContaining({
-        namespace: 'cindy',
-        name: 'ask_user_question',
+        type: 'function',
+        name: 'cindy__ask_user_question',
       }),
     ]);
     expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
@@ -12419,12 +12486,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
     const openAiParams = openAiHost.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
-      dynamicTools?: Array<{ namespace?: string; name?: string }>;
+      dynamicTools?: Array<{ type?: string; namespace?: string; name?: string }>;
     };
     expect(openAiParams.dynamicTools).toEqual([
       expect.objectContaining({
-        namespace: 'cindy',
-        name: 'ask_user_question',
+        type: 'function',
+        name: 'cindy__ask_user_question',
       }),
     ]);
 
@@ -12437,12 +12504,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
     const xdParams = xdHost.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
-      dynamicTools?: Array<{ namespace?: string; name?: string }>;
+      dynamicTools?: Array<{ type?: string; namespace?: string; name?: string }>;
     };
     expect(xdParams.dynamicTools).toEqual([
       expect.objectContaining({
-        namespace: 'cindy',
-        name: 'ask_user_question',
+        type: 'function',
+        name: 'cindy__ask_user_question',
       }),
     ]);
 
@@ -12463,6 +12530,239 @@ describe('CodexAgent MCP thread context hooks', () => {
     await openAiHandle.close();
     await xdHandle.close();
     await resumeHandle.close();
+  });
+
+  it('registers eager host dynamic tools and restores their handler on resume', async () => {
+    const callTool = vi.fn(async () => ({
+      contentItems: [{ type: 'inputText' as const, text: '{"ok":true}' }],
+      success: true,
+    }));
+    const provider: NonNullable<AgentDeps['codexHostDynamicToolProvider']> = {
+      listTools: vi.fn(() => [
+        {
+          type: 'function' as const,
+          name: 'cindy_ios_simulator__list_tools',
+          description: 'Discover embedded simulator tools.',
+          inputSchema: { type: 'object' },
+          deferLoading: false,
+        },
+        {
+          type: 'function' as const,
+          name: 'cindy_ios_simulator__call_tool',
+          description: 'Call an embedded simulator tool.',
+          inputSchema: { type: 'object' },
+          deferLoading: false,
+        },
+      ]),
+      callTool,
+    };
+    const approvalPolicy = vi.fn(() => 'auto-approve' as const);
+
+    const startAgent = new CodexAgent(createDeps({}, {
+      codexHostDynamicToolProvider: provider,
+      getMcpToolApprovalPolicy: approvalPolicy,
+    }));
+    const startHost = installFakeHost(startAgent);
+    const startHandle = await startAgent.startSession({
+      sessionId: 'session-ios-dynamic-start',
+      model: 'qwen/qwen3.8-max-preview',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const startParams = startHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as {
+      dynamicTools?: Array<{
+        type?: string;
+        namespace?: string;
+        name?: string;
+        deferLoading?: boolean;
+      }>;
+    };
+    expect(startParams.dynamicTools).toEqual([
+      expect.objectContaining({
+        type: 'function',
+        name: 'cindy__ask_user_question',
+      }),
+      expect.objectContaining({
+        type: 'function',
+        name: 'cindy_ios_simulator__list_tools',
+        deferLoading: false,
+      }),
+      expect.objectContaining({
+        type: 'function',
+        name: 'cindy_ios_simulator__call_tool',
+        deferLoading: false,
+      }),
+    ]);
+
+    const resumeAgent = new CodexAgent(createDeps({}, {
+      codexHostDynamicToolProvider: provider,
+      getMcpToolApprovalPolicy: approvalPolicy,
+    }));
+    const resumeHost = installFakeHost(resumeAgent);
+    const resumeHandle = await resumeAgent.startSession({
+      sessionId: 'session-ios-dynamic-resume',
+      model: 'qwen/qwen3.8-max-preview',
+      providerId: 'xd',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+    const resumeParams = resumeHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    )?.[1] as { dynamicTools?: unknown };
+    expect(resumeParams.dynamicTools).toBeUndefined();
+
+    const handlers = resumeHost.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+    const result = await handlers.dynamicToolCall(
+      {
+        threadId: 'resume-thread-id',
+        turnId: 'turn-ios',
+        callId: 'call-ios',
+        namespace: null,
+        tool: 'cindy_ios_simulator__list_tools',
+        arguments: {},
+      },
+      { requestId: 'request-ios' },
+    );
+    expect(result).toEqual({
+      contentItems: [{ type: 'inputText', text: '{"ok":true}' }],
+      success: true,
+    });
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: null,
+        tool: 'cindy_ios_simulator__list_tools',
+      }),
+      expect.objectContaining({
+        sessionId: 'session-ios-dynamic-resume',
+        workingDir: '/repo',
+      }),
+    );
+    expect(approvalPolicy).toHaveBeenCalledWith({
+      serverName: 'cindy_ios_simulator',
+      toolName: 'list_tools',
+      toolParams: {},
+    });
+
+    await startHandle.close();
+    await resumeHandle.close();
+  });
+
+  it('does not expose or execute host dynamic tools omitted by the host policy', async () => {
+    const callTool = vi.fn();
+    const agent = new CodexAgent(createDeps({}, {
+      codexHostDynamicToolProvider: {
+        listTools: () => [],
+        callTool,
+      },
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ios-dynamic-disabled',
+      model: 'qwen/qwen3.8-max-preview',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const startParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as {
+      dynamicTools?: Array<{ type?: string; namespace?: string; name?: string }>;
+    };
+    expect(startParams.dynamicTools).toEqual([
+      expect.objectContaining({
+        type: 'function',
+        name: 'cindy__ask_user_question',
+      }),
+    ]);
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+    const result = await handlers.dynamicToolCall(
+      {
+        threadId: 'start-thread-id',
+        turnId: 'turn-ios',
+        callId: 'call-ios',
+        namespace: null,
+        tool: 'cindy_ios_simulator__list_tools',
+        arguments: {},
+      },
+      { requestId: 'request-ios' },
+    );
+    expect(result.success).toBe(false);
+    expect(callTool).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('keeps host dynamic tool calls behind the existing MCP approval policy', async () => {
+    const disclosure = {
+      title: 'Allow the Agent to connect to and control this simulator?',
+      description:
+        'The Agent may control the simulator for this task without another device-control prompt.',
+    };
+    const presentation = vi.fn(() => disclosure);
+    const callTool = vi.fn(async () => ({
+      contentItems: [{ type: 'inputText' as const, text: '{"ok":true}' }],
+      success: true,
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      codexHostDynamicToolProvider: {
+        listTools: () => [{
+          type: 'function',
+          name: 'cindy_ios_simulator__call_tool',
+          description: 'Call an embedded simulator tool.',
+          inputSchema: { type: 'object' },
+          deferLoading: false,
+        }],
+        callTool,
+      },
+      getMcpToolApprovalPolicy: () => 'prompt-each-time',
+      getMcpToolApprovalPresentation: presentation,
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ios-dynamic-approval',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    handle.setInteractionResolver(async (request) => {
+      expect(request).toMatchObject({
+        kind: 'permission',
+        toolName: 'dynamic:cindy_ios_simulator:call_tool',
+        title: disclosure.title,
+        description: disclosure.description,
+      });
+      if (request.kind !== 'permission') throw new Error('expected permission request');
+      expect(request.suggestions).toBeUndefined();
+      return { kind: 'permission', behavior: 'deny' };
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+    const result = await handlers.dynamicToolCall(
+      {
+        threadId: 'start-thread-id',
+        turnId: 'turn-ios',
+        callId: 'call-ios',
+        namespace: null,
+        tool: 'cindy_ios_simulator__call_tool',
+        arguments: { name: 'attach_device', args: { udid: 'SIM-1' } },
+      },
+      { requestId: 'request-ios' },
+    );
+    expect(result).toEqual({
+      contentItems: [{ type: 'inputText', text: 'The user declined this tool call.' }],
+      success: false,
+    });
+    expect(presentation).toHaveBeenCalledWith({
+      serverName: 'cindy_ios_simulator',
+      toolName: 'call_tool',
+      toolParams: { name: 'attach_device', args: { udid: 'SIM-1' } },
+    });
+    expect(callTool).not.toHaveBeenCalled();
+    await handle.close();
   });
 
   it('does not register ask_user_question dynamic fallback for xAI Codex providers', async () => {
@@ -12681,6 +12981,144 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     expect(result).toEqual({ decision: 'accept' });
+    await handle.close();
+  });
+
+  it('applies a host shell-command denial before Full access auto-approval', async () => {
+    const { logger, warn } = createLoggerSpy();
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-host-policy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const resolver = vi.fn(async (): Promise<InteractionDecision> => ({
+      kind: 'permission',
+      behavior: 'allow',
+    }));
+    handle.setInteractionResolver(resolver);
+
+    const command = 'API_TOKEN=super-secret open -a Simulator';
+    const result = await handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'cmd-1',
+      command,
+      cwd: '/repo',
+    });
+
+    expect(policy).toHaveBeenCalledWith({
+      agentKind: 'codex',
+      command,
+      cwd: '/repo',
+    });
+    expect(resolver).not.toHaveBeenCalled();
+    expect(result).toEqual({ decision: 'decline' });
+    expect(warn).toHaveBeenCalledWith('command execution denied by host policy', {
+      requestId: 'cmd-1',
+      reason: 'use the embedded iOS Simulator',
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('super-secret');
+    await handle.close();
+  });
+
+  it('interrupts an already-started absolute-path shell bypass as a fail-safe', async () => {
+    const { logger, warn } = createLoggerSpy();
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
+    const host = installFakeHost(agent, (method) =>
+      method === Method.TurnInterrupt ? {} : undefined,
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-command-item-host-policy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted) throw new Error('expected itemStarted handler');
+
+    const command = 'API_TOKEN=super-secret /usr/bin/open -a Simulator';
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-absolute',
+        type: 'commandExecution',
+        command,
+        cwd: '/repo',
+      },
+    });
+
+    expect(policy).toHaveBeenCalledWith({
+      agentKind: 'codex',
+      command,
+      cwd: undefined,
+    });
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+    });
+    expect(warn).toHaveBeenCalledWith('command execution interrupted by host policy', {
+      turnId: 'turn-1',
+      reason: 'use the embedded iOS Simulator',
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('super-secret');
+    await handle.close();
+  });
+
+  it('interrupts a raw function_call exec_command shell bypass as a fail-safe', async () => {
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent, (method) =>
+      method === Method.TurnInterrupt ? {} : undefined,
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-function-call-shell-policy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted) throw new Error('expected itemStarted handler');
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-raw-function-call',
+      item: {
+        id: 'fc-raw-shell',
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: JSON.stringify({
+          cmd: 'xcrun simctl boot DEVICE',
+          workdir: '/repo',
+        }),
+      },
+    });
+
+    expect(policy).toHaveBeenCalledWith({
+      agentKind: 'codex',
+      command: 'xcrun simctl boot DEVICE',
+      cwd: '/repo',
+    });
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-raw-function-call',
+    });
     await handle.close();
   });
 
@@ -12989,8 +13427,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       callId: 'dynamic-call-1',
-      namespace: 'cindy',
-      tool: 'ask_user_question',
+      namespace: null,
+      tool: 'cindy__ask_user_question',
       arguments: {
         questions: [{
           header: 'Direction',

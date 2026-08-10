@@ -95,6 +95,16 @@ describe('GhostPermissionList(装入全量清单)', () => {
     expect(container.innerHTML).toBe('');
   });
 
+  it('ios-simulator 槽如实披露 Host-owned 控制边界', () => {
+    const simulator: GhostManifest = {
+      ...chip(),
+      slots: [...chip().slots, 'ios-simulator'],
+    };
+    render(<GhostPermissionList items={ghostPermissionItems(simulator)} />);
+    expect(screen.getByText('settings.ghosts.perm.iosSimulator')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.iosSimulatorDetail')).toBeTruthy();
+  });
+
   it('network 槽:域名/凭证逐条渲染,code 沙箱说明切分档版', () => {
     const net: GhostManifest = {
       ...chip(),
@@ -264,7 +274,9 @@ describe('GhostUpdateReview(更新确认内容区,两个入口共用)', () => {
   });
 
   it('不自套限高滚动区(高度归共享 ConfirmDialog)', () => {
-    const { container } = render(<GhostUpdateReview diff={diffGhostPermissionItems(chip(), next())} />);
+    const { container } = render(
+      <GhostUpdateReview diff={diffGhostPermissionItems(chip(), next())} />,
+    );
     const scrollers = container.querySelectorAll('.overflow-y-auto');
     expect(scrollers.length).toBe(0);
   });

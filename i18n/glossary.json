@@ -1323,6 +1323,17 @@
       "note": "设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。"
     },
     {
+      "id": "ios-simulator",
+      "status": "proposed",
+      "en": "iOS Simulator",
+      "translations": {
+        "zh-CN": "iOS 模拟器",
+        "ja": "iOS シミュレータ",
+        "ko": "iOS 시뮬레이터"
+      },
+      "note": "Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。"
+    },
+    {
       "id": "worker",
       "status": "decided",
       "en": "Worker",

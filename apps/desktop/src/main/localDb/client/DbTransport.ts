@@ -9,6 +9,31 @@ export interface DbTransport {
   close(): Promise<void>;
 }
 
+export const DB_TRANSPORT_NOT_SENT = 'DB_TRANSPORT_NOT_SENT' as const;
+export const DB_TRANSPORT_OUTCOME_UNKNOWN = 'DB_TRANSPORT_OUTCOME_UNKNOWN' as const;
+
+export type DbTransportErrorCode =
+  typeof DB_TRANSPORT_NOT_SENT | typeof DB_TRANSPORT_OUTCOME_UNKNOWN;
+
+export function createDbTransportError(
+  code: DbTransportErrorCode,
+  message: string,
+  cause?: unknown,
+): Error & { code: DbTransportErrorCode; cause?: unknown } {
+  return Object.assign(new Error(message), {
+    code,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function isDbTransportOutcomeUnknown(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === DB_TRANSPORT_OUTCOME_UNKNOWN
+  );
+}
+
 export interface DbTransportTerminationInfo {
   code: number | null;
   signal: string | null;
@@ -26,8 +51,7 @@ export type RpcResponse =
   | { id: number; ok: false; error: { code: string; message: string; stack?: string } };
 
 export type WorkerEvent =
-  | { event: 'log'; payload: LogEvent }
-  | { event: 'vec-status'; payload: VecStatusEvent };
+  { event: 'log'; payload: LogEvent } | { event: 'vec-status'; payload: VecStatusEvent };
 
 export type WorkerMessage = RpcResponse | WorkerEvent;
 
