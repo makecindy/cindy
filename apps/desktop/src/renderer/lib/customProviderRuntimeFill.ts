@@ -281,13 +281,25 @@ export function cloneRuntimeFillDraft(draft: RuntimeFillDraft): RuntimeFillDraft
 export function mergeHydratedRuntimeKeys<T extends RuntimeFillDraft>(
   drafts: Record<RuntimeFillAgent, T>,
   fetched: Partial<Record<RuntimeFillAgent, string>>,
+  savedTargets: Partial<
+    Record<RuntimeFillAgent, Pick<RuntimeFillDraft, 'baseUrl' | 'modelsUrl'>>
+  >,
   revisionAtStart: Record<RuntimeFillAgent, number>,
   currentRevision: Record<RuntimeFillAgent, number>,
 ): Record<RuntimeFillAgent, T> {
   const next = { ...drafts };
   for (const agent of RUNTIME_FILL_AGENTS) {
     const apiKey = fetched[agent];
-    if (apiKey == null || currentRevision[agent] !== revisionAtStart[agent]) continue;
+    const savedTarget = savedTargets[agent];
+    if (
+      apiKey == null ||
+      !savedTarget ||
+      currentRevision[agent] !== revisionAtStart[agent] ||
+      drafts[agent].baseUrl.trim() !== savedTarget.baseUrl.trim() ||
+      drafts[agent].modelsUrl.trim() !== savedTarget.modelsUrl.trim()
+    ) {
+      continue;
+    }
     next[agent] = { ...drafts[agent], apiKey };
   }
   return next;

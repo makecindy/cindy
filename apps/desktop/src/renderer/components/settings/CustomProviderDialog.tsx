@@ -666,6 +666,14 @@ export function CustomProviderDialog({
         mergeHydratedRuntimeKeys(
           prev,
           fetched,
+          Object.fromEntries(
+            AGENTS.flatMap((agent) => {
+              const baseline = savedBaselineFor(agent);
+              return baseline
+                ? [[agent, { baseUrl: baseline.baseUrl, modelsUrl: baseline.modelsUrl }] as const]
+                : [];
+            }),
+          ),
           revisionAtStart,
           keyEditRevisionRef.current,
         ),
@@ -676,7 +684,7 @@ export function CustomProviderDialog({
     return () => {
       cancelled = true;
     };
-  }, [editing, initial]);
+  }, [editing, initial, savedBaselineFor]);
 
   const patch = useCallback(
     (agent: DialogAgentKind, fn: (f: RuntimeFields) => RuntimeFields) => {

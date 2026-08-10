@@ -621,6 +621,11 @@ describe('custom provider runtime fill', () => {
     const merged = mergeHydratedRuntimeKeys(
       drafts,
       { 'claude-code': 'stored-claude', codex: 'stale-codex', pi: 'stored-pi' },
+      {
+        'claude-code': { baseUrl: '', modelsUrl: '' },
+        codex: { baseUrl: '', modelsUrl: '' },
+        pi: { baseUrl: '', modelsUrl: '' },
+      },
       revisionAtStart,
       currentRevision,
     );
@@ -628,6 +633,25 @@ describe('custom provider runtime fill', () => {
     expect(merged['claude-code'].apiKey).toBe('stored-claude');
     expect(merged.codex.apiKey).toBe('newly-copied-codex');
     expect(merged.pi.apiKey).toBe('stored-pi');
+  });
+
+  it('does not hydrate a saved key after the credential endpoint changed', () => {
+    const drafts = {
+      'claude-code': draft(),
+      codex: draft({ baseUrl: 'https://new.example/v1' }),
+      pi: draft(),
+    };
+    const revisions = { 'claude-code': 0, codex: 0, pi: 0 };
+
+    const merged = mergeHydratedRuntimeKeys(
+      drafts,
+      { codex: 'stored-codex' },
+      { codex: { baseUrl: 'https://saved.example/v1', modelsUrl: '' } },
+      revisions,
+      revisions,
+    );
+
+    expect(merged.codex.apiKey).toBe('');
   });
 
   it('requires a new confirmation if a selected target becomes occupied after review', () => {
