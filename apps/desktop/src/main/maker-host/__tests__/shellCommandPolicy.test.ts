@@ -165,6 +165,19 @@ describeMac('embedded iOS Simulator shell policy', () => {
 import os
 os.system("xcrun simctl shutdown DEVICE")
 PY`,
+    `bash <<'SH'
+xcrun simctl shutdown DEVICE
+SH`,
+    `cat <<EOF
+$(xcrun simctl shutdown DEVICE)
+EOF`,
+    `python3 <<'PY'
+import os
+os.system("$(xcrun simctl shutdown DEVICE)")
+PY`,
+    `sh -c 'eval "$(cat)"' <<'SH'
+xcrun simctl shutdown DEVICE
+SH`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
     `python3 -c 'import subprocess; subprocess.run(["/usr/bin/open","-a","Simulator"])'`,
@@ -203,6 +216,43 @@ PY`,
     `python3 -c 'print("ordinary project build")'`,
     `python3 -c 'print("Simulator")'`,
     `node -e 'console.log("ordinary project build")'`,
+    `python3 - <<'PY'
+import json
+__import__("json")
+print(json.dumps({"ok": True}))
+PY`,
+    `python3 - <<'PY'
+from xml.etree import ElementTree as ET
+ET.fromstring("<a/>")
+PY`,
+    `node - <<'JS'
+const data = JSON.parse('{"a":1}');
+console.log(data);
+JS`,
+    `node - <<'JS'
+(async () => {})().catch((err) => { console.error(err); });
+JS`,
+    `swift - <<'SW'
+let x = { (a: Int) -> Int in a * 2 }(21)
+print(x)
+SW`,
+    `perl - <<'PL'
+my $x = join(",", (1..5));
+print $x;
+PL`,
+    `cat <<'EOF'
+{"data": [1, 2, 3]}
+EOF`,
+    `cat <<EOF
+{"data": [1, 2, 3]}
+EOF`,
+    `python3 -c 'import sys; print(sys.stdin.read())' <<'PY'
+{"data": [1, 2, 3]}
+PY`,
+    `echo "$(python3 - <<'PY'
+print("ok")
+PY
+)"`,
     'swift test --filter IOSSimulatorTests',
     'swift build --product IOSSimulatorRuntime',
     'find . -maxdepth 1 -name simctl',

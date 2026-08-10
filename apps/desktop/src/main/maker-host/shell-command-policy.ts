@@ -1096,6 +1096,48 @@ function containsInterpreterHeredocBypass(command: string): boolean {
   return false;
 }
 
+/** Executable of the command segment that receives a heredoc, or null. */
+function heredocConsumerExecutable(prefix: string): string | null {
+  // A heredoc binds to the last command of its pipeline, so search backwards.
+  const segments = shellSegments(prefix);
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const unwrapped = unwrapCommand(tokenizeShellSegment(segments[index] ?? ''));
+    if (unwrapped.nestedShell !== null || unwrapped.unresolvedWrapper) continue;
+    if (unwrapped.tokens.length === 0) continue;
+    return executableName(unwrapped.tokens[0]);
+  }
+  return null;
+}
+
+/**
+ * Heredoc bodies consumed by a non-shell program (a code interpreter such as
+ * python/node, or a data tool such as cat/grep) are not shell program text.
+ * Re-parsing those lines as shell segments trips the fail-closed
+ * dynamic-expansion check on ordinary interpreter source (for example
+ * `__import__("json")` contains `(`/`)` in command position), denying harmless
+ * commands. Blank such bodies before the shell scans below; literal Simulator
+ * executors inside bodies are still classified by containsShellConsumedLiteralBypass
+ * over the original text, and bodies of shell-consumed heredocs (`bash <<EOF`)
+ * stay intact because they are real shell code.
+ */
+function redactNonShellHeredocBodies(command: string): string {
+  const lines = command.split('\n');
+  const redacted = [...lines];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const marker = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line);
+    if (!marker) continue;
+    const consumer = heredocConsumerExecutable(line.slice(0, marker.index));
+    if (consumer === null || SHELL_EXECUTABLES.has(consumer)) continue;
+    const delimiter = marker[2]!;
+    for (index += 1; index < lines.length; index += 1) {
+      if ((lines[index] ?? '').replace(/^\t+/, '').trim() === delimiter) break;
+      redacted[index] = '';
+    }
+  }
+  return redacted.join('\n');
+}
+
 /** A here-string is executable stdin just like a heredoc or producer pipeline. */
 function containsInterpreterHereStringBypass(command: string): boolean {
   for (const clause of shellClauses(command)) {
@@ -1258,17 +1300,23 @@ function containsSimulatorAliasDefinition(tokens: string[], depth: number): bool
 
 function containsSimulatorBypass(command: string, depth = 0): boolean {
   if (depth > 8) return /\b(?:simctl|Simulator(?:\.app)?)\b/i.test(command);
+  // Heredoc bodies of non-shell consumers are not shell program text; scan
+  // them only for literal Simulator executors (below, over the original text)
+  // so ordinary interpreter source such as `__import__("json")` cannot trip
+  // the fail-closed shell checks. Nested subcommands keep the original text:
+  // their recursive scan re-classifies heredoc bodies in their own context.
+  const scannable = redactNonShellHeredocBodies(command);
   if (
-    containsTaintedVariableExecution(command) ||
+    containsTaintedVariableExecution(scannable) ||
     containsShellConsumedLiteralBypass(command) ||
-    containsSimulatorFunctionBody(command, depth)
+    containsSimulatorFunctionBody(scannable, depth)
   ) {
     return true;
   }
   for (const nested of shellSubcommands(command)) {
     if (containsSimulatorBypass(nested, depth + 1)) return true;
   }
-  for (const segment of shellSegments(command)) {
+  for (const segment of shellSegments(scannable)) {
     // Function bodies were classified recursively above. The leading
     // `name(){` token is not an execution wrapper in its own right.
     if (SHELL_FUNCTION_DEFINITION_PREFIX.test(segment)) {
