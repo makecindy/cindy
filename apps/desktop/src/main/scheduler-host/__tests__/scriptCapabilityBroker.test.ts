@@ -657,6 +657,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
           })();
           return true;
         },
+        recordUsage: async () => undefined,
         timeoutMs: 5_000,
       });
       callGhostToolMock.mockImplementation((request: unknown) =>

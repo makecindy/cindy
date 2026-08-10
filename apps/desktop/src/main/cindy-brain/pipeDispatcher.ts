@@ -38,6 +38,8 @@ export interface PipeDispatcherDeps {
   spawn(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** 把下行消息发到该意识的电子脑逻辑页;false = 逻辑页不在线。 */
   sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
+  /** 记录一次已受理的顶层调用；失败只能记日志，不能影响派发。 */
+  recordUsage(ghostId: string): Promise<void>;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
   timeoutMs?: number;
   setTimeoutFn?: typeof setTimeout;
@@ -175,6 +177,23 @@ export class GhostPipeDispatcher {
     }
 
     // ── 派发 + 配对等待 ────────────────────────────────────────────────
+    // 此时资格审与按需拉起均已通过，顶层调用已被主进程接受。计数不等插件
+    // 交卷，因此成功、插件失败、派发瞬时失败和超时都各记一次。
+    try {
+      void this.deps.recordUsage(ghostId).catch((error: unknown) => {
+        this.deps.log?.warn('failed to record ghost usage', {
+          ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    } catch (error) {
+      // 依赖实现即使同步抛错也不能改变原有插件调用结果。
+      this.deps.log?.warn('failed to record ghost usage', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
     const payload: GhostPipeToolCall = { type: 'tool-call', callId, tool, args };
 

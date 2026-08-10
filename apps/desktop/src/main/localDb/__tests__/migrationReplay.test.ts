@@ -134,6 +134,14 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'wechat_inbox')).toBe(true);
       expect(tableExists(db, 'wechat_outbox')).toBe(true);
       expect(tableExists(db, 'wechat_file_attachments')).toBe(true);
+      expect(tableExists(db, 'ghost_usage_daily')).toBe(true);
+      expect(indexExists(db, 'ghost_usage_daily_day_idx')).toBe(true);
+      expect(columnNames(db, 'ghost_usage_daily')).toEqual([
+        'ghost_id',
+        'local_day',
+        'call_count',
+        'updated_at',
+      ]);
     } finally {
       cleanup();
     }
