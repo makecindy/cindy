@@ -1093,9 +1093,79 @@ interface HeredocRegion {
 }
 
 /**
+ * Mask quoted, commented, and command/process-substituted regions of a line
+ * so heredoc markers inside them are not mistaken for real openers. A `#`
+ * starts a comment only at a word boundary; `$'...'` is treated as a plain
+ * single-quoted region. Substitutions (`$(...)`, `<(...)`, `>(...)`,
+ * backticks) are re-scanned recursively by the caller, so masking their
+ * markers here is safe.
+ */
+function maskQuotedAndCommentRegions(line: string): string {
+  const masked = line.split('');
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  let comment = false;
+  let parenDepth = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!;
+    if (comment || escaped) {
+      masked[index] = ' ';
+      if (escaped) escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== "'" && parenDepth === 0) {
+      masked[index] = ' ';
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      masked[index] = ' ';
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (parenDepth > 0) {
+      masked[index] = ' ';
+      if (char === '(') parenDepth += 1;
+      else if (char === ')') parenDepth -= 1;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      masked[index] = ' ';
+      quote = char;
+      continue;
+    }
+    if ((char === '$' || char === '<' || char === '>') && line[index + 1] === '(') {
+      masked[index] = ' ';
+      masked[index + 1] = ' ';
+      parenDepth = 1;
+      index += 1;
+      continue;
+    }
+    // A real heredoc marker keeps its delimiter word and quoting unmasked:
+    // the quotes in `<<'END'` are syntax, not text.
+    if (char === '<' && line[index + 1] === '<' && line[index + 2] !== '<') {
+      const marker = /^<<(-?)\s*(['"]?)([A-Za-z0-9_.-]+)\2/.exec(line.slice(index));
+      if (marker) {
+        index += marker[0].length - 1;
+        continue;
+      }
+    }
+    if (char === '#' && (index === 0 || /\s/.test(line[index - 1] ?? ''))) {
+      comment = true;
+      masked[index] = ' ';
+      continue;
+    }
+  }
+  return masked.join('');
+}
+
+/**
  * Locate every heredoc region. Heredocs are matched FIFO: with several
  * openings on one line (`cmd <<A <<B`) each opener receives the body lines
- * between its predecessor's delimiter and its own.
+ * between its predecessor's delimiter and its own. Markers inside quotes,
+ * comments, or substitutions do not open a heredoc, and lines inside an
+ * open heredoc body are data, not commands, so they are not scanned for
+ * markers either.
  */
 function parseHeredocRegions(command: string): HeredocRegion[] {
   const lines = command.split(/\r?\n/);
@@ -1104,13 +1174,15 @@ function parseHeredocRegions(command: string): HeredocRegion[] {
     [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? '';
-    for (const match of line.matchAll(HEREDOC_MARKER)) {
-      pending.push({
-        lineIndex: index,
-        markerIndex: match.index ?? 0,
-        delimiter: match[3] ?? '',
-        tabStripped: match[1] === '-',
-      });
+    if (pending.length === 0) {
+      for (const match of maskQuotedAndCommentRegions(line).matchAll(HEREDOC_MARKER)) {
+        pending.push({
+          lineIndex: index,
+          markerIndex: match.index ?? 0,
+          delimiter: match[3] ?? '',
+          tabStripped: match[1] === '-',
+        });
+      }
     }
     const head = pending[0];
     if (!head) continue;
