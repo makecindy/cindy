@@ -24,11 +24,13 @@ import {
 import {
   SESSION_TITLE_TEMPLATE_MAX_CODE_POINTS,
   validateSessionTitleTemplate,
-  type CreateScheduleInput,
-  type Schedule,
-  type ScheduleTemplate,
-  type ScheduleWorkspaceKind,
-} from '@cindy/maker-scheduler';
+} from '@cindy/maker-scheduler/session-title-template';
+import type {
+  CreateScheduleInput,
+  Schedule,
+  ScheduleTemplate,
+  ScheduleWorkspaceKind,
+} from '@cindy/maker-scheduler/types';
 import type { ScheduleFormState, RunMode, RememberedBinding } from '../lib/scheduleFormLogic';
 
 // 类型与 effort 白名单已迁入 lib/scheduleFormLogic(纯函数层,node 环境可测);

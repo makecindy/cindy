@@ -22,12 +22,14 @@ import {
   renderSessionTitleTemplate,
   SESSION_TITLE_TEMPLATE_TOKENS,
   validateSessionTitleTemplate,
-  type Schedule,
-  type CreateScheduleInput,
-  type ScheduleTemplate,
-  type UpdateScheduleInput,
-} from '@cindy/maker-scheduler';
+} from '@cindy/maker-scheduler/session-title-template';
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
+import type {
+  Schedule,
+  CreateScheduleInput,
+  ScheduleTemplate,
+  UpdateScheduleInput,
+} from '@cindy/maker-scheduler/types';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 
 import {
