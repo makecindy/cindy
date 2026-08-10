@@ -168,6 +168,20 @@ describe('modelFetchCanReuseSavedCredentials', () => {
       ),
     ).toBe(false);
   });
+
+  it('keeps saved credentials when only the inference request path changes', () => {
+    expect(
+      modelFetchCanReuseSavedCredentials(
+        {
+          baseUrl: headerAuthBaseline.baseUrl,
+          requestPath: '/tenant/acme/models',
+          modelsUrl: headerAuthBaseline.modelsUrl,
+        },
+        headerAuthBaseline,
+        'none',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('canSendHydratedApiKey', () => {
