@@ -1289,20 +1289,47 @@ describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () =
     expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: p.id });
   });
 
-  it('rolls back the ephemeral transition and throws when deleting the converted row fails (round 27l Xz_39)', async () => {
+  it('persists activation AFTER the row upsert when an active preview becomes ordinary (round 27l X1gEa)', async () => {
+    // setActive must NOT run before the converted row exists — main clears all
+    // active markers then throws NOT_FOUND (swallowed), and the later upsert
+    // creates the row with isActive:false → hydrate restores no active tab.
+    const a = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    const p = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    await store.setActiveTab('s1', p.id);
+    ipc.setActive.mockClear();
+    ipc.upsert.mockClear();
+    let upsertDone = false;
+    ipc.upsert.mockImplementationOnce(async () => {
+      upsertDone = true;
+      return { ok: true };
+    });
+    await store.patchTabState('s1', p.id, (s) => ({ ...(s as object), url: 'https://p.example/' }));
+    expect(ipc.upsert).toHaveBeenCalled();
+    expect(upsertDone).toBe(true); // row created before setActive
+    expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: p.id });
+  });
+
+  it('rolls back the ephemeral transition and throws when deleting the converted row fails (round 27l Xz_39/X1gEf)', async () => {
     // normal → preview conversion whose orphan-row delete exhausts retries:
     // must NOT mark the tab ephemeral and report success — the stale ordinary
     // row would survive hydrate's preview filter and resurrect on migration.
+    // The cache URL must ALSO roll back to the ordinary URL so a later
+    // title/favicon patch does not write the dead preview token back into the
+    // still-live DB row (X1gEf).
     const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
     ipc.close.mockRejectedValue(new Error('db down')); // delete keeps failing through retries
     await expect(
       store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL })),
     ).rejects.toThrow('db down');
-    // identity rolled back → tab is still persisted as an ordinary tab
+    // identity rolled back AND cache URL rolled back to the ordinary URL
     const bucket = store.getBucket('s1');
-    expect(bucket.tabs[0].state).toMatchObject({ url: PREVIEW_URL });
+    expect(bucket.tabs[0].state).toMatchObject({ url: 'https://a.example/' });
+    // later patches persist the ordinary (rolled-back) URL, NOT the preview token
+    ipc.upsert.mockClear();
     await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'still here' }));
-    expect(ipc.upsert).toHaveBeenCalled(); // still persisted
+    expect(ipc.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: tab.id, state: expect.objectContaining({ url: 'https://a.example/' }) }),
+    );
   });
 
   it('skips the stale write when a URL-boundary transition is superseded by a newer one (round 27l Xz_34)', async () => {
