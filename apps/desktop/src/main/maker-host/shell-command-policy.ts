@@ -1269,17 +1269,20 @@ function parseHeredocRegions(command: string): HeredocRegion[] {
   return regions;
 }
 
-function containsInterpreterHeredocBypass(command: string): boolean {
+/**
+ * Any non-shell consumer's heredoc body can reach execution: interpreters run
+ * it as a program, and data tools (cat, tee, `>` redirection) can write it to
+ * a script file that a later `sh file` executes. The body text is visible in
+ * the command, so scan every body whose consumer is not a shell for literal
+ * and assembled Simulator executors; bodies of shell-consumed heredocs stay
+ * classified by the shell scans instead.
+ */
+function containsNonShellHeredocBypass(command: string): boolean {
   const lines = command.split(/\r?\n/);
   for (const region of parseHeredocRegions(command)) {
     const line = lines[region.lineIndex] ?? '';
-    if (
-      !shellSegments(line.slice(0, region.markerIndex)).some((segment) =>
-        consumesStdinAsProgram(tokenizeShellSegment(segment)),
-      )
-    ) {
-      continue;
-    }
+    const consumer = heredocConsumerExecutable(line.slice(0, region.markerIndex));
+    if (consumer === null || SHELL_EXECUTABLES.has(consumer)) continue;
     const body = lines.slice(region.bodyStart, region.bodyEnd).join('\n');
     if (containsAssembledSimulatorExecutor(body)) return true;
   }
@@ -1588,7 +1591,7 @@ function containsInterpreterHereStringBypass(command: string): boolean {
 
 /** A literal command piped to a code-reading interpreter becomes executable input. */
 function containsShellConsumedLiteralBypass(command: string): boolean {
-  if (containsInterpreterHeredocBypass(command) || containsInterpreterHereStringBypass(command)) {
+  if (containsNonShellHeredocBypass(command) || containsInterpreterHereStringBypass(command)) {
     return true;
   }
   for (const clause of shellClauses(command)) {
