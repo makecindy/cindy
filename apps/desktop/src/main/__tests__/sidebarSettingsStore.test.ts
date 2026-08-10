@@ -135,6 +135,7 @@ async function hiddenHandler(payload: unknown): Promise<boolean> {
 function loadSnapshot(): {
   dataOwnerId: string | null;
   ownerGeneration: number;
+  pinnedOrderIsAuthoritative: boolean;
   pinnedOrder: string[];
   hiddenProjectKeys: string[];
 } {
@@ -346,6 +347,117 @@ describe('sidebarSettingsStore', () => {
     expect(loadSnapshot().pinnedOrder).toEqual(['new-session']);
   });
 
+  it('persists an empty legacy migration as an authoritative scoped snapshot', async () => {
+    expect(loadSnapshot()).toMatchObject({
+      pinnedOrderIsAuthoritative: false,
+      pinnedOrder: [],
+    });
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: [] } })),
+    ).resolves.toEqual([]);
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8'))).toEqual({ pinnedOrder: [] });
+    expect(loadSnapshot()).toMatchObject({
+      pinnedOrderIsAuthoritative: true,
+      pinnedOrder: [],
+    });
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ['stale-session'] } })),
+    ).resolves.toEqual([]);
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8')).pinnedOrder).toEqual([]);
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
+  });
+
+  it('keeps a historical stored empty order authoritative over stale Renderer data', async () => {
+    fs.mkdirSync(path.dirname(ownerFile()), { recursive: true });
+    fs.writeFileSync(
+      ownerFile(),
+      JSON.stringify({ pinnedOrder: [], hiddenProjectKeys: [] }),
+      'utf-8',
+    );
+
+    expect(loadSnapshot()).toMatchObject({
+      pinnedOrderIsAuthoritative: true,
+      pinnedOrder: [],
+    });
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ['stale-session'] } })),
+    ).resolves.toEqual([]);
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8')).pinnedOrder).toEqual([]);
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
+  });
+
+  it('rechecks migration authority after waiting for another writer', async () => {
+    const file = ownerFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      `${file}.lock`,
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
+      'utf-8',
+    );
+
+    const migrating = pinnedHandler(
+      request({ mutation: { kind: 'migrate-legacy', order: ['stale-session'] } }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fs.writeFileSync(file, JSON.stringify({ pinnedOrder: [], hiddenProjectKeys: [] }), 'utf-8');
+    fs.unlinkSync(`${file}.lock`);
+
+    await expect(migrating).resolves.toEqual([]);
+    expect(JSON.parse(fs.readFileSync(file, 'utf-8')).pinnedOrder).toEqual([]);
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
+  });
+
+  it('rejects migration when scoped access becomes blocked inside the file lock', async () => {
+    const file = ownerFile();
+    const backup = `${file}.bak`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      `${file}.lock`,
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
+      'utf-8',
+    );
+
+    const migrating = pinnedHandler(
+      request({ mutation: { kind: 'migrate-legacy', order: ['legacy-session'] } }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fs.writeFileSync(backup, '{"pinnedOrder":["backup-session"]}', 'utf-8');
+    fs.unlinkSync(`${file}.lock`);
+
+    await expect(migrating).rejects.toThrow(
+      '[PRECONDITION_FAILED] sidebar settings migration is pending',
+    );
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readFileSync(backup, 'utf-8')).toBe('{"pinnedOrder":["backup-session"]}');
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
+  });
+
+  it('keeps pinned migration pending for a hidden-only scoped snapshot', async () => {
+    await expect(
+      hiddenHandler(request({ projectKey: 'local:/workspace/hidden', hidden: true })),
+    ).resolves.toBe(true);
+    expect(loadSnapshot()).toMatchObject({
+      pinnedOrderIsAuthoritative: false,
+      pinnedOrder: [],
+      hiddenProjectKeys: ['local:/workspace/hidden'],
+    });
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ['legacy-session'] } })),
+    ).resolves.toEqual(['legacy-session']);
+    expect(loadSnapshot()).toMatchObject({
+      pinnedOrderIsAuthoritative: true,
+      pinnedOrder: ['legacy-session'],
+      hiddenProjectKeys: ['local:/workspace/hidden'],
+    });
+  });
+
   it('rebases a stale drag without losing a pin from another window', async () => {
     await pinnedHandler(
       request({ mutation: { kind: 'migrate-legacy', order: ['session-a', 'session-b'] } }),
@@ -444,7 +556,11 @@ describe('sidebarSettingsStore', () => {
     fs.writeFileSync(legacy, JSON.stringify(legacySettings), 'utf-8');
     harness.legacyClaimReady = false;
 
-    expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+    expect(loadSnapshot()).toMatchObject({
+      pinnedOrderIsAuthoritative: false,
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+    });
     expect(fs.existsSync(ownerFile())).toBe(false);
     await expect(
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
@@ -767,7 +883,11 @@ describe('sidebarSettingsStore', () => {
     const readFileSync = vi.spyOn(fs, 'readFileSync');
 
     try {
-      expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+      expect(loadSnapshot()).toMatchObject({
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+      });
       expect(readFileSync).not.toHaveBeenCalled();
       expect(fs.statSync(ownerFile()).size).toBe(sidebarTesting.MAX_SETTINGS_BYTES + 1);
       expect(fs.readFileSync(legacy, 'utf-8')).toBe(legacyContents);
@@ -792,7 +912,11 @@ describe('sidebarSettingsStore', () => {
       fs.writeFileSync(legacy, legacyContents, 'utf-8');
       fs.mkdirSync(ownerFile(), { recursive: true });
 
-      expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+      expect(loadSnapshot()).toMatchObject({
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+      });
       await expect(
         pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
       ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings migration is pending');
@@ -815,7 +939,11 @@ describe('sidebarSettingsStore', () => {
     });
 
     try {
-      expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+      expect(loadSnapshot()).toMatchObject({
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+      });
       await expect(
         pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
       ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings migration is pending');
@@ -840,7 +968,11 @@ describe('sidebarSettingsStore', () => {
       harness.legacyClaimReady = false;
       harness.legacyClaimedByOtherOwner = true;
 
-      expect(loadSnapshot()).toMatchObject({ pinnedOrder: [], hiddenProjectKeys: [] });
+      expect(loadSnapshot()).toMatchObject({
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+      });
       await expect(
         pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } })),
       ).rejects.toThrow('[PRECONDITION_FAILED] sidebar settings migration is pending');

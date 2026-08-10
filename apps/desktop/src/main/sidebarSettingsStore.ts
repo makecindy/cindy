@@ -156,20 +156,40 @@ function requireSidebarStoreAccess(options: { rejectSnapshotChange?: boolean } =
   }
 }
 
-function readCurrentSettings(): SidebarSettingsShape {
-  if (sidebarStoreAccessResult() === 'blocked') return { ...DEFAULTS };
+function hasAuthoritativePinnedOrder(customizedKeys: readonly string[]): boolean {
+  // Historical electron-store files may contain an auto-written empty default
+  // that is indistinguishable from an explicit clear. Product policy prefers
+  // preserving the durable empty state over reviving stale Renderer storage.
+  return customizedKeys.includes('pinnedOrder');
+}
+
+function readCurrentSettings(): {
+  settings: SidebarSettingsShape;
+  pinnedOrderIsAuthoritative: boolean;
+} {
+  const accessResult = sidebarStoreAccessResult();
+  if (accessResult === 'blocked') {
+    return { settings: { ...DEFAULTS }, pinnedOrderIsAuthoritative: false };
+  }
   const store = currentStore();
   store.invalidateIfChanged();
-  return store.read();
+  const current = store.readState();
+  return {
+    settings: current.value,
+    pinnedOrderIsAuthoritative: hasAuthoritativePinnedOrder(current.customizedKeys),
+  };
 }
 
 export function loadSidebarSettingsSnapshot(): SidebarSettingsSnapshot {
   const stamp = getActiveDataOwnerPushStamp();
-  const settings = stamp.dataOwnerId ? readCurrentSettings() : DEFAULTS;
+  const current = stamp.dataOwnerId
+    ? readCurrentSettings()
+    : { settings: DEFAULTS, pinnedOrderIsAuthoritative: false };
   return {
     ...stamp,
-    pinnedOrder: Array.from(settings.pinnedOrder),
-    hiddenProjectKeys: Array.from(settings.hiddenProjectKeys),
+    pinnedOrderIsAuthoritative: current.pinnedOrderIsAuthoritative,
+    pinnedOrder: Array.from(current.settings.pinnedOrder),
+    hiddenProjectKeys: Array.from(current.settings.hiddenProjectKeys),
   };
 }
 
@@ -251,6 +271,7 @@ function rebasePinnedReorder(
 function applyPinnedMutation(
   current: readonly string[],
   mutation: SidebarPinnedOrderMutation,
+  pinnedOrderIsAuthoritative: boolean,
 ): string[] {
   switch (mutation.kind) {
     case 'promote':
@@ -260,7 +281,7 @@ function applyPinnedMutation(
     case 'remove':
       return current.filter((entry) => entry !== mutation.entryId);
     case 'migrate-legacy':
-      return current.length === 0 ? Array.from(mutation.order) : Array.from(current);
+      return pinnedOrderIsAuthoritative ? Array.from(current) : Array.from(mutation.order);
     case 'reorder':
       return rebasePinnedReorder(current, mutation.baseOrder, mutation.order);
   }
@@ -365,7 +386,11 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
     nextSettings = await enqueueWrite(scopeKey, () =>
       store.updateAtomic((current) => {
         requireSidebarStoreAccess({ rejectSnapshotChange: true });
-        const nextOrder = applyPinnedMutation(current.value.pinnedOrder, mutation);
+        const nextOrder = applyPinnedMutation(
+          current.value.pinnedOrder,
+          mutation,
+          hasAuthoritativePinnedOrder(current.customizedKeys),
+        );
         changed = !sameStringArray(current.value.pinnedOrder, nextOrder);
         return { pinnedOrder: nextOrder };
       }, SIDEBAR_WRITE_OPTIONS),

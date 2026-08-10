@@ -44,10 +44,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
-import {
-  getDataOwnerGeneration,
-  isDataOwnerPushStampCurrent,
-} from '@/contexts/dataOwnerGeneration';
+import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
 import type {
   SidebarPinnedOrderMutation,
@@ -175,9 +172,15 @@ function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function currentOwnerStamp(): DataOwnerPushStamp {
-  const owner = getDataOwnerGeneration();
-  return { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
+function isExactOwnerStampCurrent(
+  actual: DataOwnerPushStamp,
+  expected: DataOwnerPushStamp,
+): boolean {
+  return (
+    actual.dataOwnerId === expected.dataOwnerId &&
+    actual.ownerGeneration === expected.ownerGeneration &&
+    isDataOwnerPushStampCurrent(actual)
+  );
 }
 
 export function useSidebarFilter(
@@ -185,6 +188,13 @@ export function useSidebarFilter(
   initialSnapshot: SidebarSettingsSnapshot,
 ): UseSidebarFilterReturn {
   const ownerId = initialSnapshot.dataOwnerId;
+  const ownerStamp = useMemo<DataOwnerPushStamp>(
+    () => ({
+      dataOwnerId: initialSnapshot.dataOwnerId,
+      ownerGeneration: initialSnapshot.ownerGeneration,
+    }),
+    [initialSnapshot.dataOwnerId, initialSnapshot.ownerGeneration],
+  );
   const [loadedPinned] = useState(() => loadManualPinnedOrder(initialSnapshot));
   const [status, setStatusState] = useState<FilterStatus>(() => loadStatus());
   const [projects, setProjectsState] = useState<FilterProjects>(() => loadProjects(ownerId));
@@ -214,27 +224,34 @@ export function useSidebarFilter(
   const legacyMigrationPendingRef = useRef(loadedPinned.needsLegacyMigration);
 
   const reconcilePinnedSnapshot = useCallback(
-    (next: readonly string[], ownerStamp: DataOwnerPushStamp) => {
-      if (!isDataOwnerPushStampCurrent(ownerStamp)) return;
+    (
+      next: readonly string[],
+      nextOwnerStamp: DataOwnerPushStamp,
+      pinnedOrderIsAuthoritative: boolean,
+    ): void => {
+      if (!isExactOwnerStampCurrent(nextOwnerStamp, ownerStamp)) return;
       const snapshot = Array.from(next);
-      if (legacyMigrationPendingRef.current) {
-        if (snapshot.length === 0) return;
+      if (pinnedOrderIsAuthoritative) {
         finishManualPinnedOrderLegacyMigration(ownerId);
         legacyMigrationPendingRef.current = false;
+        durablePinnedOrderRef.current = snapshot;
+      } else if (legacyMigrationPendingRef.current) {
+        return;
+      } else {
+        durablePinnedOrderRef.current = snapshot;
       }
-      durablePinnedOrderRef.current = snapshot;
       if (pendingPinnedWritesRef.current > 0) return;
       latestPinnedOrderRef.current = snapshot;
       setManualPinnedOrderState((prev) => (sameStringArray(prev, snapshot) ? prev : snapshot));
     },
-    [ownerId],
+    [ownerId, ownerStamp],
   );
 
   const enqueuePinnedPersist = useCallback(
     (
       mutation: SidebarPinnedOrderMutation,
       desiredOrder: readonly string[],
-      ownerStamp = currentOwnerStamp(),
+      mutationOwnerStamp = ownerStamp,
     ): Promise<void> => {
       const desired = Array.from(desiredOrder);
       pendingPinnedWritesRef.current += 1;
@@ -243,27 +260,28 @@ export function useSidebarFilter(
         try {
           if (mutation.kind !== 'migrate-legacy' && legacyMigrationPendingRef.current) {
             const migrated = await persistManualPinnedOrder(
-              { kind: 'migrate-legacy', order: durablePinnedOrderRef.current },
-              ownerStamp,
+              {
+                kind: 'migrate-legacy',
+                order: durablePinnedOrderRef.current,
+              },
+              mutationOwnerStamp,
             );
-            if (isDataOwnerPushStampCurrent(ownerStamp)) {
+            if (isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)) {
               durablePinnedOrderRef.current = Array.from(migrated);
               finishManualPinnedOrderLegacyMigration(ownerId);
               legacyMigrationPendingRef.current = false;
             }
           }
-          const persisted = await persistManualPinnedOrder(mutation, ownerStamp);
-          if (isDataOwnerPushStampCurrent(ownerStamp)) {
+          const persisted = await persistManualPinnedOrder(mutation, mutationOwnerStamp);
+          if (isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)) {
             durablePinnedOrderRef.current = Array.from(persisted);
-            if (legacyMigrationPendingRef.current) {
-              finishManualPinnedOrderLegacyMigration(ownerId);
-              legacyMigrationPendingRef.current = false;
-            }
+            finishManualPinnedOrderLegacyMigration(ownerId);
+            legacyMigrationPendingRef.current = false;
           }
           succeeded = true;
         } catch (err) {
           if (
-            isDataOwnerPushStampCurrent(ownerStamp) &&
+            isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp) &&
             sameStringArray(latestPinnedOrderRef.current, desired)
           ) {
             const rollback = Array.from(durablePinnedOrderRef.current);
@@ -276,7 +294,7 @@ export function useSidebarFilter(
           if (
             succeeded &&
             pendingPinnedWritesRef.current === 0 &&
-            isDataOwnerPushStampCurrent(ownerStamp)
+            isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)
           ) {
             const persisted = Array.from(durablePinnedOrderRef.current);
             latestPinnedOrderRef.current = persisted;
@@ -289,7 +307,7 @@ export function useSidebarFilter(
       pinnedWriteQueueRef.current = task.catch(() => undefined);
       return task;
     },
-    [ownerId],
+    [ownerId, ownerStamp],
   );
 
   const updatePinnedOrder = useCallback(
@@ -323,30 +341,31 @@ export function useSidebarFilter(
   }, [hiddenProjectKeys, ownerId]);
 
   useEffect(() => {
-    const unsubscribe =
-      window.electronAPI.sidebarSettings.onPinnedOrderChanged(reconcilePinnedSnapshot);
+    const unsubscribe = window.electronAPI.sidebarSettings.onPinnedOrderChanged(
+      (order, ownerStamp) => {
+        reconcilePinnedSnapshot(order, ownerStamp, true);
+      },
+    );
     const latest = window.electronAPI.sidebarSettings.loadSnapshot();
-    reconcilePinnedSnapshot(latest.pinnedOrder, latest);
-    return unsubscribe;
-  }, [reconcilePinnedSnapshot]);
-
-  useEffect(() => {
+    reconcilePinnedSnapshot(latest.pinnedOrder, latest, latest.pinnedOrderIsAuthoritative);
     if (
-      legacyMigrationStartedRef.current ||
-      !loadedPinned.needsLegacyMigration ||
-      !legacyMigrationPendingRef.current
+      isExactOwnerStampCurrent(latest, ownerStamp) &&
+      !latest.pinnedOrderIsAuthoritative &&
+      legacyMigrationPendingRef.current &&
+      !legacyMigrationStartedRef.current
     ) {
-      return;
+      legacyMigrationStartedRef.current = true;
+      const legacyOrder = Array.from(durablePinnedOrderRef.current);
+      void enqueuePinnedPersist(
+        { kind: 'migrate-legacy', order: legacyOrder },
+        legacyOrder,
+        ownerStamp,
+      ).catch((err) => {
+        log.warn('legacy pinned order migration failed; keeping the legacy copy', err);
+      });
     }
-    legacyMigrationStartedRef.current = true;
-    void enqueuePinnedPersist(
-      { kind: 'migrate-legacy', order: loadedPinned.order },
-      loadedPinned.order,
-      initialSnapshot,
-    ).catch((err) => {
-      log.warn('legacy pinned order migration failed; keeping the legacy copy', err);
-    });
-  }, [enqueuePinnedPersist, initialSnapshot, loadedPinned, ownerId]);
+    return unsubscribe;
+  }, [enqueuePinnedPersist, ownerStamp, reconcilePinnedSnapshot]);
 
   const setStatus = useCallback((s: FilterStatus) => {
     setStatusState(s);

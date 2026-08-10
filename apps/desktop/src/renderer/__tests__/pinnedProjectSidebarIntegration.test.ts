@@ -45,7 +45,8 @@ describe('pinned project sidebar integration', () => {
 
   it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
     expect(filterHookSource).toContain('window.electronAPI.sidebarSettings.onPinnedOrderChanged(');
-    expect(filterHookSource).toContain('isDataOwnerPushStampCurrent(ownerStamp)');
+    expect(filterHookSource).toContain('isExactOwnerStampCurrent(nextOwnerStamp, ownerStamp)');
+    expect(filterHookSource).toContain('isDataOwnerPushStampCurrent(actual)');
     expect(filterHookSource).toContain('durablePinnedOrderRef.current = snapshot;');
   });
 

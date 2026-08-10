@@ -4392,10 +4392,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ? {
             dataOwnerId: value.dataOwnerId,
             ownerGeneration: value.ownerGeneration,
+            pinnedOrderIsAuthoritative: value.pinnedOrderIsAuthoritative,
             pinnedOrder: Array.from(value.pinnedOrder),
             hiddenProjectKeys: Array.from(value.hiddenProjectKeys),
           }
-        : { dataOwnerId: null, ownerGeneration: 0, pinnedOrder: [], hiddenProjectKeys: [] };
+        : {
+            dataOwnerId: null,
+            ownerGeneration: 0,
+            pinnedOrderIsAuthoritative: false,
+            pinnedOrder: [],
+            hiddenProjectKeys: [],
+          };
     },
     mutatePinnedOrder: async (
       mutation: SidebarPinnedOrderMutation,

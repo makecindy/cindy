@@ -4,6 +4,8 @@ export const SIDEBAR_PINNED_ORDER_MAX_ENTRIES = 10_000;
 export const SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH = 4_096;
 
 export interface SidebarSettingsSnapshot extends DataOwnerPushStamp {
+  /** True when Main has a durable pinnedOrder override, including an explicit empty array. */
+  readonly pinnedOrderIsAuthoritative: boolean;
   readonly pinnedOrder: string[];
   readonly hiddenProjectKeys: string[];
 }
@@ -52,7 +54,12 @@ export function normalizeSidebarPinnedOrder(value: unknown): string[] {
 export function isSidebarSettingsSnapshot(value: unknown): value is SidebarSettingsSnapshot {
   if (!isDataOwnerPushStamp(value)) return false;
   const candidate = value as Partial<SidebarSettingsSnapshot>;
-  return isStringArray(candidate.pinnedOrder) && isStringArray(candidate.hiddenProjectKeys);
+  return (
+    typeof candidate.pinnedOrderIsAuthoritative === 'boolean' &&
+    isStringArray(candidate.pinnedOrder) &&
+    isStringArray(candidate.hiddenProjectKeys) &&
+    (candidate.pinnedOrderIsAuthoritative || candidate.pinnedOrder.length === 0)
+  );
 }
 
 function isStringArray(value: unknown): value is string[] {

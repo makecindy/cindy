@@ -19,6 +19,7 @@ const OWNER_PROJECTS_KEY = sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a');
 let hiddenProjectsListeners: HiddenProjectsListener[] = [];
 let initialHiddenProjectKeys: string[] = [];
 let hiddenProjectKeysBeforeListenerRegistration: string[] | null = null;
+let setProjectHidden: ReturnType<typeof vi.fn>;
 
 function useSyncedSidebarFilter() {
   const { hiddenProjectKeys, initialSnapshot } = useHiddenProjects();
@@ -29,6 +30,7 @@ beforeEach(() => {
   hiddenProjectsListeners = [];
   initialHiddenProjectKeys = [];
   hiddenProjectKeysBeforeListenerRegistration = null;
+  setProjectHidden = vi.fn().mockResolvedValue(true);
   window.localStorage.clear();
   setDataOwnerGeneration('owner-a', 1);
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -36,6 +38,7 @@ beforeEach(() => {
     sidebarSettings: {
       loadSnapshot: () => ({
         ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
         pinnedOrder: [],
         hiddenProjectKeys: initialHiddenProjectKeys,
       }),
@@ -48,7 +51,7 @@ beforeEach(() => {
           hiddenProjectsListeners = hiddenProjectsListeners.filter((entry) => entry !== listener);
         };
       },
-      setProjectHidden: vi.fn(),
+      setProjectHidden,
       onPinnedOrderChanged: () => () => {},
       mutatePinnedOrder: vi.fn().mockResolvedValue([]),
     },
@@ -141,10 +144,29 @@ describe('hidden-project filter synchronization', () => {
     expect([...view.result.current.hiddenProjectKeys]).toEqual([]);
   });
 
+  it('keeps a mounted hidden-project hook bound to its initial owner', async () => {
+    const view = renderHook(() => useHiddenProjects());
+
+    act(() => {
+      setDataOwnerGeneration('owner-b', 2);
+      hiddenProjectsListeners[0]?.([PROJECT_A], {
+        dataOwnerId: 'owner-b',
+        ownerGeneration: 2,
+      });
+    });
+    expect([...view.result.current.hiddenProjectKeys]).toEqual([]);
+
+    await act(async () => {
+      await view.result.current.setProjectHidden(PROJECT_A, true);
+    });
+    expect(setProjectHidden).toHaveBeenCalledWith(PROJECT_A, true, OWNER_STAMP);
+  });
+
   it('fails closed when the synchronous snapshot belongs to another owner', () => {
     window.electronAPI.sidebarSettings.loadSnapshot = () => ({
       dataOwnerId: 'owner-b',
       ownerGeneration: 2,
+      pinnedOrderIsAuthoritative: true,
       pinnedOrder: ['owner-b-session'],
       hiddenProjectKeys: [PROJECT_A],
     });
@@ -154,6 +176,7 @@ describe('hidden-project filter synchronization', () => {
     expect([...view.result.current.hiddenProjectKeys]).toEqual([]);
     expect(view.result.current.initialSnapshot).toEqual({
       ...OWNER_STAMP,
+      pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
     });

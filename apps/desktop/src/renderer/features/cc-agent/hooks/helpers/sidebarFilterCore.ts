@@ -421,8 +421,8 @@ export function moveManualProjectOrder(
 /**
  * 数据落在 main 进程 owner namespace，通过 IPC 同步读 / 异步写。
  *
- * 一次性 migration:老版本数据在 renderer 的 localStorage 里,首次 load 发现新存储为空
- * 时把 localStorage 内容搬过去；main 确认落盘之后才清掉老 key。
+ * 一次性 migration:老版本数据在 renderer 的 localStorage 里；Main 明确报告 scoped
+ * 状态尚未初始化时才搬过去，并在确认落盘之后清掉老 key。
  */
 export interface LoadedManualPinnedOrder {
   order: string[];
@@ -430,21 +430,42 @@ export interface LoadedManualPinnedOrder {
 }
 
 export function loadManualPinnedOrder(snapshot: SidebarSettingsSnapshot): LoadedManualPinnedOrder {
-  if (snapshot.pinnedOrder.length > 0) {
-    // The main-process snapshot is authoritative. Leaving a claimed legacy
-    // copy behind would resurrect stale pins after the user later clears all.
+  if (snapshot.pinnedOrderIsAuthoritative) {
+    // Main authority includes an explicit empty snapshot. Leaving a claimed
+    // legacy copy behind would resurrect stale pins after the user clears all.
     clearClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, snapshot.dataOwnerId);
-    return { order: Array.from(snapshot.pinnedOrder), needsLegacyMigration: false };
+    return {
+      order: Array.from(snapshot.pinnedOrder),
+      needsLegacyMigration: false,
+    };
   }
+  // Claim the unscoped key before attempting migration so another account
+  // cannot consume this owner's legacy order while Main is temporarily blocked.
   const raw = readClaimedLegacySidebarStorage(MANUAL_PINNED_ORDER_KEY, snapshot.dataOwnerId);
-  if (!raw) return { order: [], needsLegacyMigration: false };
+  if (raw === null) {
+    return {
+      order: Array.from(snapshot.pinnedOrder),
+      needsLegacyMigration: false,
+    };
+  }
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return { order: [], needsLegacyMigration: false };
+    if (!Array.isArray(parsed)) {
+      return {
+        order: Array.from(snapshot.pinnedOrder),
+        needsLegacyMigration: false,
+      };
+    }
     const legacy = normalizeSidebarPinnedOrder(parsed);
-    return { order: legacy, needsLegacyMigration: legacy.length > 0 };
+    return {
+      order: Array.from(legacy),
+      needsLegacyMigration: true,
+    };
   } catch {
-    return { order: [], needsLegacyMigration: false };
+    return {
+      order: Array.from(snapshot.pinnedOrder),
+      needsLegacyMigration: false,
+    };
   }
 }
 

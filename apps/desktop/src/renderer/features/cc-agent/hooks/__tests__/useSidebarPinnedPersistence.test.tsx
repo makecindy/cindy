@@ -7,6 +7,7 @@ import {
   setDataOwnerGeneration,
   __testing as dataOwnerTesting,
 } from '@/contexts/dataOwnerGeneration';
+import { __testing as sidebarOwnerTesting } from '@/lib/sidebarOwnerStorage';
 import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter } from '../useSidebarFilter';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
 import {
@@ -17,6 +18,7 @@ import {
 const OWNER_STAMP: DataOwnerPushStamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 const SNAPSHOT = {
   ...OWNER_STAMP,
+  pinnedOrderIsAuthoritative: false,
   pinnedOrder: [] as string[],
   hiddenProjectKeys: [] as string[],
 };
@@ -36,6 +38,7 @@ function deferred<T>() {
 let pinnedListeners: PinnedListener[];
 let mutatePinnedOrder: ReturnType<typeof vi.fn>;
 let durablePinnedOrder: string[];
+let pinnedOrderIsAuthoritative: boolean;
 
 beforeEach(() => {
   dataOwnerTesting.reset();
@@ -43,6 +46,7 @@ beforeEach(() => {
   window.localStorage.clear();
   pinnedListeners = [];
   durablePinnedOrder = [];
+  pinnedOrderIsAuthoritative = false;
   mutatePinnedOrder = vi.fn().mockImplementation(async (mutation: SidebarPinnedOrderMutation) => {
     if (
       mutation.kind === 'migrate-legacy' &&
@@ -67,12 +71,17 @@ beforeEach(() => {
         if (durablePinnedOrder.length === 0) durablePinnedOrder = Array.from(mutation.order);
         break;
     }
+    pinnedOrderIsAuthoritative = true;
     return Array.from(durablePinnedOrder);
   });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     platform: 'linux',
     sidebarSettings: {
-      loadSnapshot: () => ({ ...SNAPSHOT, pinnedOrder: Array.from(durablePinnedOrder) }),
+      loadSnapshot: () => ({
+        ...SNAPSHOT,
+        pinnedOrderIsAuthoritative,
+        pinnedOrder: Array.from(durablePinnedOrder),
+      }),
       mutatePinnedOrder: (...args: unknown[]) => mutatePinnedOrder(...args),
       onPinnedOrderChanged: (listener: PinnedListener) => {
         pinnedListeners.push(listener);
@@ -143,7 +152,7 @@ describe('pinned sidebar persistence', () => {
     expect(view.result.current.manualPinnedOrder).toEqual([]);
   });
 
-  it('accepts only broadcasts for the current owner generation', () => {
+  it('keeps a mounted hook bound to its initial owner when the global owner advances', async () => {
     const view = renderFilter();
 
     act(() => {
@@ -152,18 +161,32 @@ describe('pinned sidebar persistence', () => {
     expect(view.result.current.manualPinnedOrder).toEqual(['owner-a-session']);
 
     act(() => {
+      setDataOwnerGeneration('owner-b', 2);
       pinnedListeners[0]?.(['owner-b-session'], {
         dataOwnerId: 'owner-b',
         ownerGeneration: 2,
       });
     });
     expect(view.result.current.manualPinnedOrder).toEqual(['owner-a-session']);
+
+    let write!: Promise<void>;
+    act(() => {
+      write = view.result.current.promotePin('owner-a-new-session');
+    });
+    await act(async () => {
+      await write;
+    });
+    expect(mutatePinnedOrder).toHaveBeenLastCalledWith(
+      { kind: 'promote', entryId: 'owner-a-new-session' },
+      OWNER_STAMP,
+    );
   });
 
   it('uses the drag snapshot as the reorder base when a newer pin broadcast arrives', async () => {
     durablePinnedOrder = ['session-a', 'session-b'];
     const initialSnapshot = {
       ...SNAPSHOT,
+      pinnedOrderIsAuthoritative: true,
       pinnedOrder: Array.from(durablePinnedOrder),
     };
     const view = renderHook(() => useSidebarFilter(new Set(), initialSnapshot));
@@ -209,6 +232,27 @@ describe('pinned sidebar persistence', () => {
     await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(view.result.current.manualPinnedOrder).toEqual(['legacy-session']));
     expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBe('["legacy-session"]');
+  });
+
+  it('retries legacy migration after a hidden-only scoped snapshot is created', async () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["legacy-session"]');
+    mutatePinnedOrder.mockRejectedValueOnce(new Error('temporary failure'));
+    const first = renderFilter();
+    await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBe('["legacy-session"]');
+    first.unmount();
+
+    pinnedOrderIsAuthoritative = false;
+    mutatePinnedOrder.mockClear();
+    const reopened = renderFilter();
+
+    await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
+    expect(mutatePinnedOrder).toHaveBeenCalledWith(
+      { kind: 'migrate-legacy', order: ['legacy-session'] },
+      OWNER_STAMP,
+    );
+    expect(reopened.result.current.manualPinnedOrder).toEqual(['legacy-session']);
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBeNull();
   });
 
   it('retries legacy migration before applying an action after the first migration fails', async () => {
@@ -295,6 +339,7 @@ describe('pinned sidebar persistence', () => {
     window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["legacy-session"]');
     window.electronAPI.sidebarSettings.loadSnapshot = () => ({
       ...SNAPSHOT,
+      pinnedOrderIsAuthoritative: true,
       pinnedOrder: ['new-session'],
     });
 
@@ -308,7 +353,12 @@ describe('pinned sidebar persistence', () => {
   it('clears a stale legacy copy when main is authoritative so cleared pins do not revive', async () => {
     window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["stale-session"]');
     durablePinnedOrder = ['new-session'];
-    const authoritativeSnapshot = { ...SNAPSHOT, pinnedOrder: ['new-session'] };
+    pinnedOrderIsAuthoritative = true;
+    const authoritativeSnapshot = {
+      ...SNAPSHOT,
+      pinnedOrderIsAuthoritative: true,
+      pinnedOrder: ['new-session'],
+    };
     const view = renderHook(() => useSidebarFilter(new Set(), authoritativeSnapshot));
 
     expect(view.result.current.manualPinnedOrder).toEqual(['new-session']);
@@ -323,5 +373,108 @@ describe('pinned sidebar persistence', () => {
     const reopened = renderFilter();
     expect(reopened.result.current.manualPinnedOrder).toEqual([]);
     expect(mutatePinnedOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an explicitly empty main snapshot authoritative over stale legacy pins', () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["stale-session"]');
+    pinnedOrderIsAuthoritative = true;
+    const authoritativeSnapshot = {
+      ...SNAPSHOT,
+      pinnedOrderIsAuthoritative: true,
+    };
+
+    const view = renderHook(() => useSidebarFilter(new Set(), authoritativeSnapshot));
+
+    expect(view.result.current.manualPinnedOrder).toEqual([]);
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBeNull();
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+  });
+
+  it('cancels legacy migration when the post-subscription snapshot is explicitly empty', () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["stale-session"]');
+    pinnedOrderIsAuthoritative = true;
+
+    const view = renderFilter();
+
+    expect(view.result.current.manualPinnedOrder).toEqual([]);
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBeNull();
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+  });
+
+  it('does not migrate an old hook legacy copy into a newly current owner', () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["owner-a-session"]');
+    window.electronAPI.sidebarSettings.onPinnedOrderChanged = (listener: PinnedListener) => {
+      pinnedListeners.push(listener);
+      setDataOwnerGeneration('owner-b', 2);
+      return () => {
+        pinnedListeners = pinnedListeners.filter((entry) => entry !== listener);
+      };
+    };
+    window.electronAPI.sidebarSettings.loadSnapshot = () => ({
+      dataOwnerId: 'owner-b',
+      ownerGeneration: 2,
+      pinnedOrderIsAuthoritative: false,
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+    });
+
+    const view = renderFilter();
+
+    expect(view.result.current.manualPinnedOrder).toEqual(['owner-a-session']);
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBe('["owner-a-session"]');
+  });
+
+  it('migrates a valid empty legacy array to preserve the cleared state', async () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '[]');
+    const view = renderFilter();
+
+    expect(view.result.current.manualPinnedOrder).toEqual([]);
+    await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
+    expect(mutatePinnedOrder).toHaveBeenCalledWith(
+      { kind: 'migrate-legacy', order: [] },
+      expect.objectContaining(OWNER_STAMP),
+    );
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBeNull();
+  });
+
+  it('clears invalid legacy bytes when the fresh Main snapshot is authoritative', () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '{broken');
+    pinnedOrderIsAuthoritative = true;
+
+    const view = renderFilter();
+
+    expect(view.result.current.manualPinnedOrder).toEqual([]);
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBeNull();
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+  });
+
+  it('does not let a later account claim legacy pins while Main persistence is blocked', async () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["owner-a-session"]');
+    mutatePinnedOrder.mockRejectedValueOnce(new Error('migration blocked'));
+    const ownerAView = renderFilter();
+    await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
+    expect(
+      JSON.parse(window.localStorage.getItem(sidebarOwnerTesting.OWNER_CLAIM_KEY) ?? 'null'),
+    ).toEqual({ version: 1, ownerId: 'owner-a' });
+    ownerAView.unmount();
+
+    dataOwnerTesting.reset();
+    setDataOwnerGeneration('owner-b', 2);
+    const ownerBSnapshot = {
+      dataOwnerId: 'owner-b',
+      ownerGeneration: 2,
+      pinnedOrderIsAuthoritative: false,
+      pinnedOrder: [],
+      hiddenProjectKeys: [],
+    };
+    window.electronAPI.sidebarSettings.loadSnapshot = () => ownerBSnapshot;
+    mutatePinnedOrder.mockClear();
+
+    const ownerBView = renderHook(() => useSidebarFilter(new Set(), ownerBSnapshot));
+
+    expect(ownerBView.result.current.manualPinnedOrder).toEqual([]);
+    expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBe('["owner-a-session"]');
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
   });
 });

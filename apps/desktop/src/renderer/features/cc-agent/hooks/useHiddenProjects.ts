@@ -36,6 +36,7 @@ export function useHiddenProjects(): UseHiddenProjectsReturn {
     return {
       dataOwnerId: owner.dataOwnerId,
       ownerGeneration: owner.generation,
+      pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
     };
@@ -43,10 +44,25 @@ export function useHiddenProjects(): UseHiddenProjectsReturn {
   const [hiddenProjectKeys, setHiddenProjectKeys] = useState<Set<string>>(() =>
     normalizeHiddenProjectKeys(initialSnapshot.hiddenProjectKeys),
   );
+  const ownerStamp = useMemo<DataOwnerPushStamp>(
+    () => ({
+      dataOwnerId: initialSnapshot.dataOwnerId,
+      ownerGeneration: initialSnapshot.ownerGeneration,
+    }),
+    [initialSnapshot.dataOwnerId, initialSnapshot.ownerGeneration],
+  );
+
+  const isBoundOwnerStampCurrent = useCallback(
+    (nextOwnerStamp: DataOwnerPushStamp) =>
+      nextOwnerStamp.dataOwnerId === ownerStamp.dataOwnerId &&
+      nextOwnerStamp.ownerGeneration === ownerStamp.ownerGeneration &&
+      isDataOwnerPushStampCurrent(nextOwnerStamp),
+    [ownerStamp],
+  );
 
   useLayoutEffect(() => {
-    const reconcile = (projectKeys: readonly string[], ownerStamp: DataOwnerPushStamp) => {
-      if (!isDataOwnerPushStampCurrent(ownerStamp)) return;
+    const reconcile = (projectKeys: readonly string[], nextOwnerStamp: DataOwnerPushStamp) => {
+      if (!isBoundOwnerStampCurrent(nextOwnerStamp)) return;
       const next = normalizeHiddenProjectKeys(projectKeys);
       setHiddenProjectKeys((current) => {
         if (current.size !== next.size) return next;
@@ -62,15 +78,13 @@ export function useHiddenProjects(): UseHiddenProjectsReturn {
     const latest = window.electronAPI.sidebarSettings.loadSnapshot();
     reconcile(latest.hiddenProjectKeys, latest);
     return unsubscribe;
-  }, []);
+  }, [isBoundOwnerStampCurrent]);
 
-  const setProjectHidden = useCallback((projectKey: string, hidden: boolean) => {
-    const owner = getDataOwnerGeneration();
-    return window.electronAPI.sidebarSettings.setProjectHidden(projectKey, hidden, {
-      dataOwnerId: owner.dataOwnerId,
-      ownerGeneration: owner.generation,
-    });
-  }, []);
+  const setProjectHidden = useCallback(
+    (projectKey: string, hidden: boolean) =>
+      window.electronAPI.sidebarSettings.setProjectHidden(projectKey, hidden, ownerStamp),
+    [ownerStamp],
+  );
 
   return useMemo(
     () => ({ hiddenProjectKeys, initialSnapshot, setProjectHidden }),
