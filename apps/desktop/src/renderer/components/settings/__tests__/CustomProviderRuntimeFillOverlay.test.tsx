@@ -193,7 +193,7 @@ describe('CustomProviderRuntimeFillOverlay', () => {
         targets: [
           {
             agent: 'pi',
-            draft: draft({ headersConfigured: true }),
+            draft: draft({ headersState: 'configured' }),
             diffs: [{ field: 'headers', targetState: 'conflict', implicitClear: true }],
           },
         ],
@@ -204,10 +204,34 @@ describe('CustomProviderRuntimeFillOverlay', () => {
     expect(screen.getByText('settings.providers.custom.runtimeFill.values.secretSet')).not.toBeNull();
   });
 
+  it('does not present unreadable target headers as empty', () => {
+    renderOverlay(
+      state({
+        sourceDraft: draft({ headersState: 'unknown' }),
+        targets: [
+          {
+            agent: 'pi',
+            draft: draft(),
+            diffs: [
+              {
+                field: 'headers',
+                targetState: 'incompatible',
+                incompatibilityReason: 'headers',
+              },
+            ],
+          },
+        ],
+        selected: {},
+      }),
+    );
+
+    expect(screen.getByText('settings.providers.custom.runtimeFill.values.secretSet')).not.toBeNull();
+  });
+
   it('explains that main-only source headers cannot be copied', () => {
     renderOverlay(
       state({
-        sourceDraft: draft({ headersConfigured: true }),
+        sourceDraft: draft({ headersState: 'configured' }),
         targets: [
           {
             agent: 'pi',

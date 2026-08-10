@@ -97,6 +97,7 @@ function toRouting(
   baseUrl: string,
   requestPath: string | undefined,
   headers: Record<string, string> | undefined,
+  headersState: 'configured' | 'unknown' | undefined,
   strategy: 'api-key-header' | 'oauth-token' | 'none',
   modelsUrl?: string,
   wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
@@ -114,7 +115,9 @@ function toRouting(
   };
   if (headers && Object.keys(headers).length > 0) {
     r.headerOverride = { ...headers };
-    r.headerOverridePresent = true;
+    r.headerOverrideState = 'configured';
+  } else if (headersState === 'unknown') {
+    r.headerOverrideState = 'unknown';
   }
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
@@ -144,6 +147,7 @@ export function buildUserProvider(config: CustomProviderConfig): Provider {
       rt.baseUrl,
       rt.requestPath,
       rt.headers,
+      rt.headersState,
       strategy,
       rt.modelsUrl,
       rt.wireProtocol,

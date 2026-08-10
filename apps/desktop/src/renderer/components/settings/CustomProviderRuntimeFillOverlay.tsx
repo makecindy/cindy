@@ -169,7 +169,7 @@ export function CustomProviderRuntimeFillOverlay({
         const count = runtimeFillHeaderCount(draft);
         return count > 0
           ? t('settings.providers.custom.runtimeFill.values.headers', { count })
-          : draft.headersConfigured === true
+          : draft.headersState != null
             ? t('settings.providers.custom.runtimeFill.values.secretSet')
           : t('settings.providers.custom.runtimeFill.values.empty');
       }

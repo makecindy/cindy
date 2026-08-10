@@ -270,7 +270,7 @@ describe('providerViewToCustomProviderConfig', () => {
         codex: {
           upstream: 'https://api.example/v1',
           authStrategy: 'api-key-header',
-          headerOverridePresent: true,
+          headerOverrideState: 'configured',
         },
       },
       models: {
@@ -286,7 +286,7 @@ describe('providerViewToCustomProviderConfig', () => {
     } satisfies ProviderView;
 
     expect(providerViewToCustomProviderConfig(provider).runtimes.codex).toMatchObject({
-      headersConfigured: true,
+      headersState: 'configured',
     });
   });
 });

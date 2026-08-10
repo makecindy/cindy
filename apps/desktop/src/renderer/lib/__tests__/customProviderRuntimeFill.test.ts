@@ -268,7 +268,7 @@ describe('custom provider runtime fill', () => {
     });
     const target = draft({
       baseUrl: 'https://target.example/v1',
-      headersConfigured: true,
+      headersState: 'configured',
     });
     const diffs = buildRuntimeFillDiffs(source, target, {
       includeApiKey: true,
@@ -284,7 +284,7 @@ describe('custom provider runtime fill', () => {
       }),
     ).toMatchObject({
       headers: source.headers,
-      headersConfigured: false,
+      headersState: undefined,
     });
   });
 
@@ -292,7 +292,7 @@ describe('custom provider runtime fill', () => {
     const source = draft({ baseUrl: 'https://source.example/v1' });
     const target = draft({
       baseUrl: 'https://target.example/v1',
-      headersConfigured: true,
+      headersState: 'configured',
     });
     const diffs = buildRuntimeFillDiffs(source, target, {
       includeApiKey: true,
@@ -325,7 +325,7 @@ describe('custom provider runtime fill', () => {
     ).toMatchObject({
       baseUrl: source.baseUrl,
       headers: [],
-      headersConfigured: false,
+      headersState: undefined,
     });
   });
 
@@ -337,7 +337,7 @@ describe('custom provider runtime fill', () => {
     const target = draft({
       baseUrl: 'https://target.example/v1',
       modelsUrl: 'https://target.example/models',
-      headersConfigured: true,
+      headersState: 'configured',
       apiKey: 'target-key',
     });
     const diffs = buildRuntimeFillDiffs(source, target, {
@@ -366,7 +366,7 @@ describe('custom provider runtime fill', () => {
     ).toMatchObject({
       baseUrl: source.baseUrl,
       modelsUrl: source.modelsUrl,
-      headersConfigured: false,
+      headersState: undefined,
       headers: [],
     });
   });
@@ -445,7 +445,7 @@ describe('custom provider runtime fill', () => {
     const source = draft({
       baseUrl: 'https://source.example/v1',
       modelsUrl: 'https://source.example/v1/models',
-      headersConfigured: true,
+      headersState: 'configured',
     });
     const target = draft({ baseUrl: 'https://target.example/v1' });
     const diffs = buildRuntimeFillDiffs(source, target, {
@@ -471,12 +471,39 @@ describe('custom provider runtime fill', () => {
     ).toMatchObject(target);
   });
 
+  it('blocks endpoint-bound fields when target header storage is unreadable', () => {
+    const source = draft({
+      baseUrl: 'https://source.example/v1',
+      models: [{ id: 'model', name: 'Model' }],
+    });
+    const target = draft({
+      baseUrl: 'https://target.example/v1',
+      headersState: 'unknown',
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'codex',
+    });
+    expect(diffs.find((diff) => diff.field === 'baseUrl')).toMatchObject({
+      targetState: 'incompatible',
+      incompatibilityReason: 'headers',
+    });
+    expect(diffs.find((diff) => diff.field === 'models')?.targetState).toBe('empty');
+    expect(
+      applyRuntimeFillFields(target, source, ['baseUrl', 'headers', 'modelsUrl'], {
+        sourceAgent: 'codex',
+        targetAgent: 'codex',
+      }),
+    ).toMatchObject(target);
+  });
+
   it('does not copy an endpoint-bound API key when source headers hide the endpoint transfer', () => {
     const source = draft({
       baseUrl: 'https://source.example/v1',
       modelsUrl: 'https://source.example/v1/models',
       apiKey: 'source-key',
-      headersConfigured: true,
+      headersState: 'configured',
     });
     const target = draft({
       baseUrl: 'https://target.example/v1',
