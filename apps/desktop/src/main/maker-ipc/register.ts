@@ -7065,11 +7065,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               }
             }
           }
-          // Every harness grants read access to the source working directory.
-          // Git identity/diff fingerprints do not cover ignored build output,
-          // caches or nested-submodule contents, so the reusable result must
-          // also bind the complete non-sensitive readable workspace content.
-          const artifactPaths = [...reviewReadPaths, sourceWorkingDir];
+          // Fingerprint only the files the review actually targets (diff,
+          // explicit artifacts, attachments). The reviewer still has read
+          // access to the full workspace via workingDir, but unrelated file
+          // changes should not invalidate a completed review.
+          const artifactPaths = [...reviewReadPaths];
           const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
           let artifactFingerprint: string;
           try {

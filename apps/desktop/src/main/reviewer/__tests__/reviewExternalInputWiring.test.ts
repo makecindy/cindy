@@ -47,8 +47,9 @@ describe('Review external input wiring', () => {
     expect(reviewStartSource).not.toContain('MAKER_INVOKE.INPUT_ENQUEUE');
   });
 
-  it('binds Git reviews to readable workspace content outside the Git snapshot', () => {
-    expect(registerSource).toContain(
+  it('fingerprints only evidence files, not the full workspace', () => {
+    expect(registerSource).toContain('const artifactPaths = [...reviewReadPaths];');
+    expect(registerSource).not.toContain(
       'const artifactPaths = [...reviewReadPaths, sourceWorkingDir];',
     );
     expect(registerSource).toContain(
@@ -62,9 +63,6 @@ describe('Review external input wiring', () => {
     expect(
       registerSource.indexOf('if (!(await completeArtifactFingerprintIsCurrent()))'),
     ).toBeLessThan(registerSource.indexOf('verifyBeforePublish: async'));
-    expect(registerSource).not.toContain(
-      '...(evidence.workspaceFingerprint ? [] : [sourceWorkingDir])',
-    );
   });
 
   it('rechecks the exact active source identity before both launch and publish', () => {
