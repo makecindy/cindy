@@ -52,6 +52,7 @@ import type { TabKindHostContext } from '../../types';
 
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
+import { setWebBrowserLoading } from './browserLoadingStore';
 import { useBrowserComment } from './useBrowserComment';
 import { useLocalHtmlAutoReload } from './useLocalHtmlAutoReload';
 import type { WebBrowserState } from './index';
@@ -124,6 +125,13 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   stateUrlRef.current = state.url;
   browserUrlRef.current = browser.url;
   navigateRef.current = browser.navigate;
+
+  // 页签 loading 是纯运行时视图状态，不进入持久化 state；内嵌 webview 与
+  // 原生 popup surface 都从这里把同一份 isLoading 投影到 tab favicon 位置。
+  useEffect(() => {
+    setWebBrowserLoading(tabId, browser.isLoading);
+  }, [browser.isLoading, tabId]);
+  useEffect(() => () => setWebBrowserLoading(tabId, false), [tabId]);
 
   // 当前会话一轮结束后，如果该轮产物修改了正在预览的本地 HTML，则刷新一次。
   // 不监听磁盘；非激活 tab 与 SSH 远程会话不参与。

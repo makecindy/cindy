@@ -223,9 +223,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
         tooltip={t('rightSidebar.browser.goForward')}
       />
       <ChromeIconButton
-        icon={RotateCw}
-        reducedMotionIcon={isLoading ? XIcon : undefined}
-        spinning={isLoading}
+        icon={isLoading ? XIcon : RotateCw}
         onClick={isLoading ? onStop : onReload}
         tooltip={
           isLoading
@@ -334,29 +332,19 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
  */
 function ChromeIconButton({
   icon: Icon,
-  reducedMotionIcon: ReducedMotionIcon,
   size = 14,
   inlinePill = false,
   disabled = false,
   active = false,
-  spinning = false,
   onClick,
   tooltip,
 }: {
   icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
-  /** reduced-motion 下用静态动作图标表达 loading 状态，避免刷新/空闲态无法区分。 */
-  reducedMotionIcon?: React.ComponentType<{
-    size?: number;
-    strokeWidth?: number;
-    className?: string;
-  }>;
   size?: number;
   inlinePill?: boolean;
   disabled?: boolean;
   /** 常亮 active 态(如评论模式进行中):反色底,提示当前处于该工具的模式里。 */
   active?: boolean;
-  /** 加载态旋转放在 HTML wrapper 上,避免 SVG 常驻动画触发主线程重绘。 */
-  spinning?: boolean;
   onClick: () => void;
   tooltip: string;
 }) {
@@ -367,7 +355,6 @@ function ChromeIconButton({
       onClick={onClick}
       title={tooltip}
       aria-label={tooltip}
-      aria-busy={spinning || undefined}
       className={cn(
         'flex shrink-0 items-center justify-center rounded-md transition-colors',
         inlinePill ? 'size-[18px]' : 'size-6',
@@ -378,25 +365,9 @@ function ChromeIconButton({
             : 'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
       )}
     >
-      {spinning && ReducedMotionIcon ? (
-        <>
-          <span className="inline-flex animate-spinner motion-reduce:hidden">
-            <Icon size={size} strokeWidth={2} />
-          </span>
-          <span className="hidden motion-reduce:inline-flex">
-            <ReducedMotionIcon size={size} strokeWidth={2} />
-          </span>
-        </>
-      ) : (
-        <span
-          className={cn(
-            'inline-flex',
-            spinning && 'animate-spinner motion-reduce:animate-none',
-          )}
-        >
-          <Icon size={size} strokeWidth={2} />
-        </span>
-      )}
+      <span className="inline-flex">
+        <Icon size={size} strokeWidth={2} />
+      </span>
     </button>
   );
 }

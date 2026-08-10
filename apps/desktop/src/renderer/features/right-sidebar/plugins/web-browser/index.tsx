@@ -15,7 +15,7 @@
  * 注册:模块顶层 import-side-effect,plugins/index.ts 把它 import 进来。
  */
 
-import { Globe, Volume2 } from 'lucide-react';
+import { Globe, LoaderCircle, Volume2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useState } from 'react';
 
@@ -24,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
 import { BrowserTabBody } from './BrowserTabBody';
+import { useWebBrowserLoading } from './browserLoadingStore';
 
 /** plugin state shape —— 反序列化口径:JSON identity 即可恢复。 */
 export interface WebBrowserState {
@@ -71,8 +72,23 @@ function WebBrowserTabPillTitle({
  * tab pill 行为一致 —— 用户能从图标一眼看出哪个 tab 在发声)。
  * favicon onError(404 / 取不到)→ 也走 fallback,不让破图占位。
  */
-export function WebBrowserTabPillIcon({ state }: { state: WebBrowserState }) {
-  const base = state.favicon ? (
+export function WebBrowserTabPillIcon({
+  state,
+  tabId,
+}: {
+  state: WebBrowserState;
+  tabId?: string;
+}) {
+  const isLoading = useWebBrowserLoading(tabId);
+  const base = isLoading ? (
+    <span
+      data-testid="web-browser-tab-loading"
+      className="inline-flex animate-spinner motion-reduce:animate-none"
+      aria-hidden="true"
+    >
+      <LoaderCircle size={13} />
+    </span>
+  ) : state.favicon ? (
     <FaviconImage
       key={state.favicon}
       src={state.favicon}

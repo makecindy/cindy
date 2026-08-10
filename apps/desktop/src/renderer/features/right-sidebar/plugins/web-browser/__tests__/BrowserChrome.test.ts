@@ -17,8 +17,8 @@ vi.mock('react-i18next', () => ({
 // 沿用仓库既定测试模式:mock 成始终展开的直通组件,Item 渲染成普通 <button>,
 // 把 Radix 的 onSelect 映射到 onClick、透传 disabled —— 这样能直接断言菜单项的
 // 可用性与回调,不依赖真实菜单开合。
-vi.mock('@/components/ui/dropdown-menu', () => {
-  const react = require('react') as typeof import('react');
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const react = await import('react');
   return {
     DropdownMenu: ({ children }: { children: React.ReactNode }) =>
       react.createElement(react.Fragment, null, children),
@@ -114,7 +114,7 @@ describe('BrowserChrome', () => {
     ).toBeNull();
   });
 
-  it('shows a compositor-friendly refresh animation while loading and stops on click', () => {
+  it('shows a static stop icon while loading and stops on click', () => {
     const onReload = vi.fn();
     const onStop = vi.fn();
     renderChrome('https://www.taptap.cn/', {
@@ -124,17 +124,9 @@ describe('BrowserChrome', () => {
     });
 
     const button = screen.getByRole('button', { name: 'rightSidebar.browser.stop' });
-    const spinner = button.querySelector('span');
-    expect(button.getAttribute('aria-busy')).toBe('true');
-    expect(spinner?.classList.contains('animate-spinner')).toBe(true);
-    expect(spinner?.classList.contains('animate-spin')).toBe(false);
-    expect(spinner?.classList.contains('motion-reduce:hidden')).toBe(true);
-    expect(button.querySelector('.lucide-rotate-cw')).toBeTruthy();
-    expect(
-      button.querySelector('.lucide-x')?.parentElement?.classList.contains(
-        'motion-reduce:inline-flex',
-      ),
-    ).toBe(true);
+    expect(button.hasAttribute('aria-busy')).toBe(false);
+    expect(button.querySelector('.lucide-x')).toBeTruthy();
+    expect(button.querySelector('.lucide-rotate-cw')).toBeNull();
 
     fireEvent.click(button);
     expect(onStop).toHaveBeenCalledOnce();
@@ -155,7 +147,7 @@ describe('BrowserChrome', () => {
     expect(onStop).not.toHaveBeenCalled();
   });
 
-  it('routes the refresh spinner through the approved semantic cycle token', () => {
+  it('keeps the approved semantic spinner token available for tab loading feedback', () => {
     const animation = (
       tailwindConfig.theme?.extend?.animation as Record<string, string> | undefined
     )?.spinner;
@@ -200,9 +192,7 @@ describe('BrowserChrome', () => {
   });
 
   it('disables system-browser opening when the host has no safe opener for the URL', () => {
-    const { onOpenInSystemBrowser, onCopyLink } = renderChrome('file:///tmp/notes.md', {
-      canOpenInSystemBrowser: false,
-    });
+    renderChrome('file:///tmp/notes.md', { canOpenInSystemBrowser: false });
 
     const openItem = screen.getByRole('button', {
       name: 'rightSidebar.browser.openInSystemBrowser',
