@@ -35,6 +35,7 @@ import {
   drainStashedNewSessionDraft,
   getNewSessionCreationTask,
   prepareNewSessionCreationForEdit,
+  retryNewSessionLegacyPlanRestore,
   retryNewSessionCreation,
   shouldBlockSessionSync,
   stashNewSessionDraftForEdit,
@@ -161,6 +162,10 @@ describe('newSessionCreation pipeline', () => {
       's21',
       's22',
       's23',
+      's24',
+      's25',
+      's26',
+      's27',
     ]) dismissNewSessionCreation(id);
   });
 
@@ -178,6 +183,41 @@ describe('newSessionCreation pipeline', () => {
     expect(projection.pendingQueue[0]?.text).toBe('hello world');
     expect(projection.pendingQueue[0]?.clientId).toBe(getNewSessionCreationTask('s1')?.firstMessageClientId);
     expect(shouldBlockSessionSync('s1')).toBe(true);
+  });
+
+  it('旧协议首条保留 plan 快照，但创建期间的会话镜像立即恢复供后续消息使用', async () => {
+    const planDraft = { ...DRAFT, permissionMode: 'plan' };
+    const maker = makeMaker({
+      getSession: vi.fn(async () => sessionFromCreateResult({ sessionId: 's24' }, planDraft)),
+      // 锁定「权威会话已回流、首条 enqueue 尚未落定」窗口。
+      input: {
+        enqueue: vi.fn(() => new Promise(() => undefined)),
+      } as MakerMock['input'],
+    });
+    startNewSessionCreation(makeParams('s24', maker, {
+      draft: planDraft,
+      legacyPlanRestore: 'auto',
+    }));
+
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's24')?.permissionMode)
+      .toBe('auto');
+    expect(remoteSessionStore.getInputProjection('s24').pendingQueue[0]).toMatchObject({
+      permissionMode: 'plan',
+      createOpts: expect.objectContaining({ permissionMode: 'plan' }),
+    });
+
+    await flushPipeline();
+
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's24')?.permissionMode)
+      .toBe('auto');
+    expect(maker.input.enqueue).toHaveBeenCalledWith(
+      's24',
+      expect.objectContaining({
+        permissionMode: 'plan',
+        createOpts: expect.objectContaining({ permissionMode: 'plan' }),
+      }),
+      expect.anything(),
+    );
   });
 
   it('成功链路:createSession 收到预生成 id、enqueue 用同 clientId,task 移除、守卫解除、禁发标清除', async () => {
@@ -518,6 +558,72 @@ describe('newSessionCreation pipeline', () => {
     // 禁发标同步清除:用户要用 composer 重发回填草稿,不能被 pendingLocalCreation
     // 卡到 load 成功才解禁(codex P2)。
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's5')?.pendingLocalCreation).toBe(false);
+  });
+
+  it('旧协议首条 enqueue 未应用时重新武装本地 plan，和仍为 plan 的远端保持一致', async () => {
+    const maker = makeMaker();
+    maker.input.enqueue.mockRejectedValue(new Error('INVOKE_TIMEOUT'));
+    startNewSessionCreation(makeParams('s25', maker, {
+      draft: { ...DRAFT, permissionMode: 'plan' },
+      legacyPlanRestore: 'auto',
+    }));
+
+    await flushPipeline();
+
+    expect(getNewSessionCreationTask('s25')?.status).toBe('enqueue-failed');
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's25')).toMatchObject({
+      pendingLocalCreation: false,
+      permissionMode: 'plan',
+    });
+    expect(maker.setPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it('旧协议首条已入队但断线恢复失败时保留恢复屏障，成功后才放行 follow-up', async () => {
+    const maker = makeMaker({
+      setPermissionMode: vi.fn(async () => {
+        throw new Error('[DEVICE_OFFLINE] target offline');
+      }),
+    });
+    startNewSessionCreation(makeParams('s26', maker, {
+      draft: { ...DRAFT, permissionMode: 'plan' },
+      legacyPlanRestore: 'auto',
+    }));
+
+    await flushPipeline();
+
+    expect(getNewSessionCreationTask('s26')?.status).toBe('restoring-plan');
+    expect(shouldBlockSessionSync('s26')).toBe(true);
+    expect(maker.setPermissionMode).toHaveBeenCalledWith('s26', 'auto');
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's26')?.permissionMode)
+      .toBe('auto');
+
+    maker.setPermissionMode.mockResolvedValue(undefined);
+    retryNewSessionLegacyPlanRestore('s26');
+    await flushPipeline();
+
+    expect(getNewSessionCreationTask('s26')).toBeNull();
+    expect(shouldBlockSessionSync('s26')).toBe(false);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's26')?.pendingLocalCreation)
+      .toBe(false);
+  });
+
+  it('旧协议恢复遇到确定性拒绝时沿用 best-effort，不永久锁死已创建会话', async () => {
+    const maker = makeMaker({
+      setPermissionMode: vi.fn(async () => {
+        throw new Error('CHANNEL_NOT_ALLOWED');
+      }),
+    });
+    startNewSessionCreation(makeParams('s27', maker, {
+      draft: { ...DRAFT, permissionMode: 'plan' },
+      legacyPlanRestore: 'auto',
+    }));
+
+    await flushPipeline();
+
+    expect(getNewSessionCreationTask('s27')).toBeNull();
+    expect(shouldBlockSessionSync('s27')).toBe(false);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's27')?.pendingLocalCreation)
+      .toBe(false);
   });
 
   it('enqueue 回执丢失但队列里已有该 clientId → 按成功收敛,不打扰用户', async () => {

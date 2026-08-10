@@ -49,7 +49,16 @@ describe('mobile optimistic composer while session is not ready', () => {
     // UI error 可独立清理；transport hold 只在权威 sync 成功后解除，不再借共享 error
     // 充当 outbox 门禁。
     expect(source).toContain('const [outboxTransportHold, setOutboxTransportHold] = useState<');
-    expect(source).toContain('const activeOutboxTransportError = screenAutoRecoveringError ?? heldOutboxTransportError;');
+    expect(source).toContain(
+      'const activeOutboxTransportError = connectionError === null\n'
+      + '    ? heldOutboxTransportError\n'
+      + '    : screenAutoRecoveringError;',
+    );
+    expect(source).toContain('if (!deviceId || !connectionError) return;');
+    expect(source).toContain('if (!screenAutoRecoveringError) {');
+    expect(source).toContain(
+      'setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);',
+    );
     expect(source).toContain('autoRecoveringError: activeOutboxTransportError !== null,');
     expect(source).toContain('setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);');
     expect(source).not.toContain('autoRecoveringError: isAutoRecoveringRemoteError(connectionError),');
@@ -114,10 +123,48 @@ describe('mobile optimistic composer while session is not ready', () => {
 
     expect(source).toContain('const dispatchBlockedAtSend = outboxDispatchBlockedNow();');
     expect(source).toContain('sessionRefsAtSend.length > 0 || uploadsInFlight > 0');
-    expect(source).toContain('|| dispatchBlockedAtSend)) {');
+    expect(source).toContain('|| outboxPumpBusyRef.current || dispatchBlockedAtSend');
     // dialogue 会话的 workingDir 由被控端在创建时分配,合成行此刻为空 —— 校验推迟到
     // dispatch(那时会重读 store 拿权威值),否则新建对话发消息会被误判成缺工作目录。
     expect(source).toContain('if (!dispatchBlockedAtSend && !currentSession.workingDir) {');
+  });
+
+  it('restores legacy plan only after outbox enqueue acceptance and blocks FIFO while offline', () => {
+    const source = readSource(SCREEN);
+    const dispatchStart = source.indexOf('const dispatchOutboxItem = async');
+    const prepareStart = source.indexOf('queued = await prepareMobileQueuedSessionReferences(', dispatchStart);
+    const rearmStart = source.indexOf("maker.setPermissionMode(item.sessionId, 'plan')", dispatchStart);
+    const enqueueStart = source.indexOf('projection = await maker.input.enqueue', dispatchStart);
+    const acceptedBarrierStart = source.indexOf('const acceptedBarrier: MobileOutboxItem = {', enqueueStart);
+    const acceptedRestoreStart = source.indexOf(
+      'await restoreLegacyPlanAfterEnqueue(acceptedBarrier)',
+      acceptedBarrierStart,
+    );
+
+    expect(source).toContain(
+      'legacyPlanRestore,\n          legacyPlanArmEpochAtSend,\n          readyAttachments,',
+    );
+    expect(source).toContain('legacyPlanArmEpochAtSend,');
+    expect(prepareStart).toBeGreaterThan(dispatchStart);
+    expect(rearmStart).toBeGreaterThan(prepareStart);
+    expect(enqueueStart).toBeGreaterThan(rearmStart);
+    expect(acceptedBarrierStart).toBeGreaterThan(enqueueStart);
+    expect(acceptedRestoreStart).toBeGreaterThan(enqueueStart);
+    expect(source).toContain('if (item.restoreOnly) return restoreLegacyPlanAfterEnqueue(item);');
+    expect(source).toContain('restoreOnly: true,');
+    expect(source).toContain('outboxItems.filter((item) => !item.restoreOnly)');
+    expect(source).toContain('const unsentItems = items.filter((item) => !item.restoreOnly);');
+    expect(source).not.toContain("from '@/session/legacyPlanRecovery'");
+
+    const optimisticOutboxStart = source.indexOf('const legacyPlanRestore = legacyPlanRestoreAtDecision;');
+    const optimisticOutboxBuild = source.indexOf('updateOutbox((items) => [...items, buildOutboxItem({', optimisticOutboxStart);
+    const optimisticOutboxSetup = source.slice(optimisticOutboxStart, optimisticOutboxBuild);
+    expect(optimisticOutboxSetup).toContain('consumeLegacyPlanLocally(legacyPlanRestore);');
+    expect(optimisticOutboxSetup).not.toContain('maker.setPermissionMode');
+    expect(source).toContain("const legacyPlanRestoreAtDecision = permissionModeAtDecision === 'plan'");
+    expect(source).toContain('|| legacyPlanRestoreAtDecision !== null)) {');
+    expect(source).toContain('legacyPlanArmEpochBySessionRef.current.set(');
+    expect(source).toContain('items.some((entry) => entry.clientId === acceptedBarrier.clientId)');
   });
 
   it('defers disconnect races instead of turning them into failed or falsely delivered messages', () => {
@@ -126,8 +173,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     const recoveryHelperEnd = source.indexOf('\n}', recoveryHelperStart);
     const recoveryHelper = source.slice(recoveryHelperStart, recoveryHelperEnd);
 
-    expect(source).toContain('const waitForConnection = (error: unknown) => {');
-    expect(source).toContain('outboxItemWaitingForConnection(item)');
+    expect(source).toContain('const waitForConnection = (');
+    expect(source).toContain('waitingItem: MobileOutboxItem = item,');
+    expect(source).toContain('outboxItemWaitingForConnection(waitingItem)');
     expect(source).toContain("if (result === 'deferred' || result === 'stopped') return;");
     expect(source).toContain("return 'stopped' as const;");
     expect(source).toContain('isSafelyUnsentOutboxEnqueueError(err)');

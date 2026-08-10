@@ -124,6 +124,22 @@ export interface MobileOutboxItem {
    * store 拿到的已是恢复后的值,消息本身必须仍按发送时刻的档位派发。
    */
   permissionModeAtSend: string;
+  /**
+   * 老协议把一次性计划模式编码成 permissionMode='plan'。消息真正 enqueue 前必须
+   * 保持远端会话为 plan；确认 enqueue 后再恢复到此档位。null = 新协议或本条
+   * 不需要兼容恢复。
+   */
+  legacyPlanRestore: string | null;
+  /**
+   * 本条发送时最近一次手动武装旧协议 Plan 的本地代次。恢复阶段用它识别用户在
+   * 发送后重新武装的新意图，避免旧消息的收尾把新 Plan 误熄灭。
+   */
+  legacyPlanArmEpochAtSend: number;
+  /**
+   * true = 原消息已被接受或已由用户取消，只保留旧协议权限恢复动作。
+   * 恢复屏障不再 enqueue、显示成气泡或在页面离场时回填草稿。
+   */
+  restoreOnly: boolean;
   /** 附件槽位(按用户可见顺序);null = 对应上传任务尚未落定。 */
   attachmentSlots: ReadonlyArray<RemoteSerializedAttachment | null>;
   /**
@@ -201,6 +217,9 @@ export function buildOutboxItem(input: {
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
   permissionModeAtSend: string;
+  legacyPlanRestore?: string | null;
+  legacyPlanArmEpochAtSend?: number;
+  restoreOnly?: boolean;
   /** 发送时刻已就绪的附件(占前段槽位)。 */
   readyAttachments: readonly RemoteSerializedAttachment[];
   /** 就绪附件的本地预览 uri(与 readyAttachments 对齐;缺失传 null)。 */
@@ -241,6 +260,9 @@ export function buildOutboxItem(input: {
     pastedTextRanges: input.pastedTextRanges ?? [],
     slashCommandRanges: input.slashCommandRanges ?? [],
     permissionModeAtSend: input.permissionModeAtSend,
+    legacyPlanRestore: input.legacyPlanRestore ?? null,
+    legacyPlanArmEpochAtSend: input.legacyPlanArmEpochAtSend ?? 0,
+    restoreOnly: input.restoreOnly ?? false,
     attachmentSlots: slots,
     slotMeta,
     slotByLocalId,

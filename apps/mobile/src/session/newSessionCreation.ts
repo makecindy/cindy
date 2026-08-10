@@ -8,6 +8,7 @@
  * openLink / createSession / 首条消息 enqueue 全部在本模块后台串行完成。
  *
  * 状态机:running → done(task 移除)
+ *              → restoring-plan(首条已入队,等旧协议权限恢复后才放行后续 outbox)
  *              → create-failed(会话页横幅:重试[同 id 幂等安全] / 返回编辑[草稿回填])
  *              → enqueue-failed(会话已建成:乐观气泡摘除、草稿+附件回填 composer,
  *                                用户走正常 handleSend 重发)
@@ -30,7 +31,7 @@ import * as ExpoCrypto from 'expo-crypto';
 import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { formatRemoteError } from '@/device-link/remoteStatus';
+import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
 import {
@@ -58,7 +59,11 @@ import type {
   RemoteSession,
 } from '@/session/types';
 
-export type NewSessionCreationStatus = 'running' | 'create-failed' | 'enqueue-failed';
+export type NewSessionCreationStatus =
+  | 'running'
+  | 'restoring-plan'
+  | 'create-failed'
+  | 'enqueue-failed';
 
 export interface NewSessionCreationTransport {
   maker: MobileMakerTransport;
@@ -252,6 +257,19 @@ function synthesizeSession(params: NewSessionCreationParams, draftOverride?: New
 }
 
 /**
+ * 老协议首条消息仍以 permissionMode='plan' 快照入队，但手机镜像要立即显示恢复档，
+ * 这样创建管线未收口时用户继续发送的消息不会再次继承一次性 Plan。
+ */
+function sessionWhileFirstMessagePending(
+  session: RemoteSession,
+  legacyPlanRestore: string | null,
+): RemoteSession {
+  return legacyPlanRestore
+    ? { ...session, permissionMode: legacyPlanRestore }
+    : session;
+}
+
+/**
  * 启动乐观创建:同步完成 store 写入(合成会话行 + 乐观排队气泡),登记 task 并
  * 后台跑管线。调用方随后立即 router.replace 进会话页。
  */
@@ -263,7 +281,11 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
     remoteSessionStore.getSessionDeviceId,
   );
   const session = synthesizeSession(params);
-  remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, session);
+  remoteSessionStore.upsertDeviceSession(
+    params.deviceId,
+    params.deviceName,
+    sessionWhileFirstMessagePending(session, params.legacyPlanRestore),
+  );
   const queued = attachFirstMessageSessionReferences(buildQueuedTextMessage(
     session,
     params.draft.firstMessage,
@@ -307,7 +329,11 @@ export function retryNewSessionCreation(sessionId: string): void {
   task.error = null;
   // 重试前把乐观行 / 气泡恢复(返回编辑路径可能没走,行一般还在,upsert 幂等)。
   const session = synthesizeSession(task.params);
-  remoteSessionStore.upsertDeviceSession(task.deviceId, task.deviceName, session);
+  remoteSessionStore.upsertDeviceSession(
+    task.deviceId,
+    task.deviceName,
+    sessionWhileFirstMessagePending(session, task.params.legacyPlanRestore),
+  );
   const queued = attachFirstMessageSessionReferences(buildQueuedTextMessage(
     session,
     task.draft.firstMessage,
@@ -452,11 +478,12 @@ export function getNewSessionCreationTask(sessionId: string): NewSessionCreation
 /**
  * 会话页 syncSession 守卫:running(被控端可能还没有这个会话,getSession 会
  * NOT_FOUND 报错横幅)与 create-failed(确定不存在)都要跳过同步;
- * enqueue-failed / done 时会话已建成,照常同步。
+ * restoring-plan 仍要保护本地已消费的权限镜像，避免权威 plan 回灌后让 follow-up
+ * 错误快照；enqueue-failed / done 时会话已建成且无恢复屏障，照常同步。
  */
 export function shouldBlockSessionSync(sessionId: string): boolean {
   const status = tasks.get(sessionId)?.status;
-  return status === 'running' || status === 'create-failed';
+  return status === 'running' || status === 'restoring-plan' || status === 'create-failed';
 }
 
 function subscribeTasks(callback: () => void): () => void {
@@ -557,7 +584,13 @@ function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed'
     // 禁发标——弱网下 fresh getSession / 会话页 load 可能都还没成功,不清的话
     // 用户拿着回填草稿仍被禁发,只能干等 load(codex review P2)。
     remoteSessionStore.setInputProjection(task.sessionId, null);
-    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, { pendingLocalCreation: false });
+    remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, {
+      pendingLocalCreation: false,
+      // 旧协议首条并未确认入队，远端仍保持 plan；本地也重新武装，让回填草稿
+      // 的下一次发送继续承载用户原本的一次性 Plan 意图，而不是 UI 普通/远端
+      // Plan 的分叉状态。
+      ...(task.params.legacyPlanRestore ? { permissionMode: 'plan' } : {}),
+    });
   }
   emit();
 }
@@ -582,6 +615,56 @@ function finishTask(task: InternalTask): void {
   forgetPrecreatedRecoveryRecord(task);
   tasks.delete(task.sessionId);
   emit();
+}
+
+async function restoreLegacyPlanAfterFirstMessage(task: InternalTask): Promise<boolean> {
+  const restoreMode = task.params.legacyPlanRestore;
+  if (!restoreMode) return true;
+  try {
+    assertTaskOwnerCurrent(task);
+    await withTransientRemoteRetry(
+      () => task.params.transport.maker.setPermissionMode(task.sessionId, restoreMode),
+      task.params.sleep ? { sleep: task.params.sleep } : undefined,
+    );
+    assertTaskOwnerCurrent(task);
+    return true;
+  } catch (error) {
+    if (isStaleNewSessionOwnerError(error) || !isTaskOwnerCurrent(task)) {
+      cancelStaleOwnerTask(task);
+      return false;
+    }
+    // 旧实现本就是 best-effort：确定性拒绝不能把已创建、首条已接受的任务永久
+    // 锁死。只有系统能自行恢复的传输错误才保留既有 creation task 作为屏障。
+    if (!isAutoRecoveringRemoteError(error)) return true;
+    task.status = 'restoring-plan';
+    task.error = formatRemoteError(error);
+    emit();
+    return false;
+  }
+}
+
+function finishAfterLegacyPlanRestore(task: InternalTask): void {
+  if (tasks.get(task.sessionId) !== task || !isTaskOwnerCurrent(task)) return;
+  remoteSessionStore.applySessionPatch(task.deviceId, task.sessionId, {
+    pendingLocalCreation: false,
+  });
+  finishTask(task);
+}
+
+/** 重试已接受首条消息后的旧协议 Plan 恢复，不重跑创建或 enqueue。 */
+export function retryNewSessionLegacyPlanRestore(sessionId: string): void {
+  const task = tasks.get(sessionId);
+  if (!task || task.status !== 'restoring-plan') return;
+  if (!isTaskOwnerCurrent(task)) {
+    cancelStaleOwnerTask(task);
+    return;
+  }
+  task.status = 'running';
+  task.error = null;
+  emit();
+  void restoreLegacyPlanAfterFirstMessage(task).then((restored) => {
+    if (restored) finishAfterLegacyPlanRestore(task);
+  });
 }
 
 function exactSessionFromProbe(value: unknown, sessionId: string): RemoteSession | null {
@@ -940,10 +1023,14 @@ async function runPipeline(task: InternalTask): Promise<void> {
       // 排到首条前面,违背「首条消息发出后即可继续发送」语义(codex review P2)。
       // 解禁统一在 enqueue 落定后:成功路径 finishTask 前清标 / enqueue-failed 在
       // failTask 内清标。
-      remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, {
-        ...freshSession,
-        pendingLocalCreation: true,
-      });
+      remoteSessionStore.upsertDeviceSession(
+        params.deviceId,
+        params.deviceName,
+        sessionWhileFirstMessagePending({
+          ...freshSession,
+          pendingLocalCreation: true,
+        }, params.legacyPlanRestore),
+      );
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       freshSession = null;
@@ -980,7 +1067,11 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 已按 started 后目录修正)——任一发生都必须回写,否则 UI/后续发送仍用
     // 已删除来源。
     if (!freshSession && (draftPatch !== null || effectiveFinalDraft !== finalDraft)) {
-      remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, sessionForQueue);
+      remoteSessionStore.upsertDeviceSession(
+        params.deviceId,
+        params.deviceName,
+        sessionWhileFirstMessagePending(sessionForQueue, params.legacyPlanRestore),
+      );
     }
     const queuedDraft = attachFirstMessageSessionReferences(buildQueuedTextMessage(
       sessionForQueue,
@@ -1051,23 +1142,11 @@ async function runPipeline(task: InternalTask): Promise<void> {
       // 已应用:回执丢失,按成功收敛(权威 projection 由 push / 会话页同步补齐)。
     }
 
-    if (params.legacyPlanRestore) {
-      // 老协议 plan 一次性语义:入队后恢复底层权限档,best-effort(对齐原 create())。
-      assertTaskOwnerCurrent(task);
-      try {
-        await maker.setPermissionMode(sessionId, params.legacyPlanRestore);
-      } catch {
-        // best-effort
-      }
-      assertTaskOwnerCurrent(task);
-    }
+    if (!await restoreLegacyPlanAfterFirstMessage(task)) return;
 
-    // 收口前主动清合成行的 pendingLocalCreation 禁发标:正常情况下上面的 fresh
-    // getSession 已用权威行(无标)覆盖,但弱网下 getSession 可能失败,靠会话页
-    // load 兜底又可能再失败——首条消息已入队,禁发理由已消失,不能让标残留。
-    remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
-    // 完成:task 移除后会话页守卫解除,由会话页 effect 触发一轮完整 syncSession。
-    finishTask(task);
+    // 首条已入队且旧协议权限恢复完成：清合成行禁发标并移除 task，随后会话页
+    // effect 才会放行 follow-up outbox 与完整 syncSession。
+    finishAfterLegacyPlanRestore(task);
   } catch (err) {
     if (isStaleNewSessionOwnerError(err) || !isTaskOwnerCurrent(task)) {
       cancelStaleOwnerTask(task);

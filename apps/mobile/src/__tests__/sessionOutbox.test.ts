@@ -148,6 +148,24 @@ describe('buildOutboxItem', () => {
     const item = itemWith();
     expect(outboxItemReady(item)).toBe(true);
     expect(outboxItemAttachments(item)).toEqual([]);
+    expect(item.legacyPlanRestore).toBeNull();
+    expect(item.legacyPlanArmEpochAtSend).toBe(0);
+    expect(item.restoreOnly).toBe(false);
+  });
+
+  it('保留旧协议计划模式的恢复屏障字段直到真正恢复', () => {
+    const item = itemWith({
+      permissionModeAtSend: 'plan',
+      legacyPlanRestore: 'acceptEdits',
+      legacyPlanArmEpochAtSend: 3,
+      restoreOnly: true,
+    });
+    expect(item).toMatchObject({
+      permissionModeAtSend: 'plan',
+      legacyPlanRestore: 'acceptEdits',
+      legacyPlanArmEpochAtSend: 3,
+      restoreOnly: true,
+    });
   });
 
   it('keeps quote metadata until the outbox item is dispatched', () => {
@@ -362,10 +380,15 @@ describe('outboxItemRetrying / outboxItemWithEnqueueFailure', () => {
   });
 
   it('派发途中断线回到等待连接态，不变成需要用户重试的失败项', () => {
-    const dispatching = { ...itemWith(), phase: 'dispatching' as const };
+    const dispatching = {
+      ...itemWith({ legacyPlanRestore: 'ask', restoreOnly: true }),
+      phase: 'dispatching' as const,
+    };
     const waiting = outboxItemWaitingForConnection(dispatching);
     expect(waiting.phase).toBe('uploading');
     expect(waiting.enqueueError).toBeNull();
+    expect(waiting.legacyPlanRestore).toBe('ask');
+    expect(waiting.restoreOnly).toBe(true);
     expect(outboxItemReady(waiting)).toBe(true);
   });
 });
