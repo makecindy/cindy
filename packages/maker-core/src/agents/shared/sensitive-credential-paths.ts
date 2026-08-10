@@ -61,10 +61,14 @@ export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
     flags: "i",
   },
   {
-    source: String.raw`(?:^|[\\/])tools[\\/]pi[\\/]updates(?:[\\/]|$)`,
+    source: String.raw`(?:^|[\\/])tools[\\/][^\\/]+[\\/]updates(?:[\\/]|$)`,
     flags: "i",
   },
   { source: String.raw`(?:^|[\\/])\.vite(?:[\\/]|$)`, flags: "i" },
+  // Cindy-managed worktrees are internal infrastructure — duplicate checkouts
+  // with their own node_modules and pnpm hardlinks. Scanning them wastes the
+  // bounded content fingerprint budget on content that is never the review target.
+  { source: String.raw`(?:^|[\\/])\.cindy-worktrees(?:[\\/]|$)`, flags: "i" },
 ] as const;
 
 /**
@@ -85,8 +89,9 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/apps/codex-bin/**",
   "**/apps/pi-bin/**",
   "**/apps/ripgrep-bin/**",
-  "**/tools/pi/updates/**",
+  "**/tools/*/updates/**",
   "**/.vite/**",
+  "**/.cindy-worktrees/**",
   "**/.ssh/**",
   "**/.aws/**",
   "**/.gnupg/**",

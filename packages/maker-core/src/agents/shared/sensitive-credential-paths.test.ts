@@ -44,7 +44,12 @@ describe("Review credential path policy", () => {
       "/repo/apps/pi-bin/linux-x64/pi",
       "/repo/apps/ripgrep-bin/darwin-arm64/rg",
       "/repo/tools/pi/updates/0.83.0/darwin-arm64/pi",
+      "/repo/tools/codex/updates/0.144.6/darwin-arm64/codex",
+      "/repo/tools/claude/updates/2.1.215/darwin-arm64/claude",
+      "/repo/tools/ripgrep/updates/15.1.0/darwin-arm64/rg",
       "/repo/apps/desktop/.vite/build/main.js",
+      "/repo/.cindy-worktrees/bold-euclid/apps/mobile/src/file.ts",
+      ".cindy-worktrees/quirky-leakey/packages/foo/index.ts",
     ]) {
       expect(isReviewSensitiveCredentialPath(denied)).toBe(true);
     }
@@ -53,6 +58,9 @@ describe("Review credential path policy", () => {
     ).toBe(false);
     expect(
       isReviewSensitiveCredentialPath("/repo/packages/codex-bin/source.ts"),
+    ).toBe(false);
+    expect(
+      isReviewSensitiveCredentialPath("/repo/tools/codex/src/main.ts"),
     ).toBe(false);
   });
 
@@ -77,8 +85,9 @@ describe("Review credential path policy", () => {
         "**/.git/**",
         "**/node_modules/**",
         "**/apps/codex-bin/**",
-        "**/tools/pi/updates/**",
+        "**/tools/*/updates/**",
         "**/.vite/**",
+        "**/.cindy-worktrees/**",
         "**/credentials.json",
         "**/auth.json",
         "**/*.pem",
