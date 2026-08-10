@@ -56,6 +56,7 @@ import {
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
+  restoreHydratedApiKey,
   stripCredentialHeaders,
   type CustomProviderAuthMode,
   type SavedProviderProbeBaseline,
@@ -550,6 +551,24 @@ export function CustomProviderDialog({
     [editing, initial],
   );
 
+  // URL edits temporarily clear an untouched hydrated key so it cannot be
+  // sent to a new endpoint. If the user returns to the saved credential
+  // target before editing the key, restore the in-memory hydration instead of
+  // forcing an unnecessary re-entry (or sending apiKey: null to model fetch).
+  const restoreHydratedKey = useCallback(
+    (agent: DialogAgentKind, draft: RuntimeFields): RuntimeFields => {
+      const savedBaseline = savedBaselineFor(agent);
+      if (!savedBaseline) return draft;
+      return restoreHydratedApiKey(
+        draft,
+        { ...savedBaseline, apiKey: loadedKeyRef.current[agent] },
+        authModeRef.current,
+        keyEditRevisionRef.current[agent],
+      );
+    },
+    [savedBaselineFor],
+  );
+
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
@@ -663,7 +682,7 @@ export function CustomProviderDialog({
     (agent: DialogAgentKind, fn: (f: RuntimeFields) => RuntimeFields) => {
       setRtSynced((prev) => {
         const current = prev[agent];
-        const next = fn(current);
+        const next = restoreHydratedKey(agent, fn(current));
         const endpointChanged =
           current.baseUrl.trim() !== next.baseUrl.trim() ||
           current.modelsUrl.trim() !== next.modelsUrl.trim();
@@ -679,7 +698,7 @@ export function CustomProviderDialog({
       });
       setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
-    [setRtSynced],
+    [restoreHydratedKey, setRtSynced],
   );
 
   const openRuntimeFill = useCallback(() => {
@@ -811,12 +830,13 @@ export function CustomProviderDialog({
           { sourceAgent: runtimeFill.source, targetAgent: target.agent },
         );
         const endpointChanged = runtimeFillEndpointUrlsChanged(prev[target.agent], filled);
-        next[target.agent] =
+        const endpointSafeFilled =
           endpointChanged &&
           !selectedFields.includes('apiKey') &&
           keyEditRevisionRef.current[target.agent] === 0
             ? { ...filled, apiKey: '' }
             : filled;
+        next[target.agent] = restoreHydratedKey(target.agent, endpointSafeFilled);
       }
       return next;
     });
@@ -847,7 +867,7 @@ export function CustomProviderDialog({
       }),
     );
     setRuntimeFill(null);
-  }, [i18n.language, runtimeFill, setRtSynced, t]);
+  }, [i18n.language, restoreHydratedKey, runtimeFill, setRtSynced, t]);
 
   const continueRuntimeFill = useCallback(() => {
     if (!runtimeFill) return;

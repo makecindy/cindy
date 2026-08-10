@@ -7,6 +7,7 @@ import {
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
+  restoreHydratedApiKey,
   type SavedProviderProbeBaseline,
 } from '../providerModelFetch';
 
@@ -258,6 +259,42 @@ describe('canSendHydratedApiKey', () => {
         1,
       ),
     ).toBe(true);
+  });
+});
+
+describe('restoreHydratedApiKey', () => {
+  const baseline: SavedProviderProbeBaseline = {
+    ...headerAuthBaseline,
+    authMode: 'apiKey',
+    apiKey: 'saved-key',
+  };
+
+  it('restores a cleared hydrated key after returning to the saved endpoint', () => {
+    const reverted = {
+      baseUrl: baseline.baseUrl,
+      modelsUrl: baseline.modelsUrl,
+      apiKey: '',
+    };
+    expect(restoreHydratedApiKey(reverted, baseline, 'apiKey', 0).apiKey).toBe('saved-key');
+  });
+
+  it('does not overwrite an explicit key edit or a different endpoint', () => {
+    expect(
+      restoreHydratedApiKey(
+        { baseUrl: baseline.baseUrl, modelsUrl: baseline.modelsUrl, apiKey: '' },
+        baseline,
+        'apiKey',
+        1,
+      ).apiKey,
+    ).toBe('');
+    expect(
+      restoreHydratedApiKey(
+        { baseUrl: 'https://new.example/v1', modelsUrl: baseline.modelsUrl, apiKey: '' },
+        baseline,
+        'apiKey',
+        0,
+      ).apiKey,
+    ).toBe('');
   });
 });
 

@@ -240,7 +240,11 @@ describe('custom provider runtime fill', () => {
       targetAgent: 'pi',
     });
 
-    expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual(['baseUrl', 'wireProtocol']);
+    expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([
+      'baseUrl',
+      'wireProtocol',
+      'modelsUrl',
+    ]);
     expect(diffs.find((diff) => diff.field === 'modelsUrl')?.targetState).toBe('empty');
     expect(
       applyRuntimeFillFields(target, source, ['baseUrl', 'wireProtocol', 'modelsUrl'], {
@@ -320,6 +324,47 @@ describe('custom provider runtime fill', () => {
       baseUrl: source.baseUrl,
       headers: [],
       headersConfigured: false,
+    });
+  });
+
+  it('binds a changed models URL to the endpoint and credential-clear bundle', () => {
+    const source = draft({
+      baseUrl: 'https://source.example/v1',
+      modelsUrl: 'https://source.example/models',
+    });
+    const target = draft({
+      baseUrl: 'https://target.example/v1',
+      modelsUrl: 'https://target.example/models',
+      headersConfigured: true,
+      apiKey: 'target-key',
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'codex',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'modelsUrl')).toMatchObject({
+      targetState: 'conflict',
+      implicitClear: true,
+    });
+    expect(runtimeFillFieldsForToggle('modelsUrl', diffs)).toEqual([
+      'baseUrl',
+      'requestPath',
+      'wireProtocol',
+      'headers',
+      'modelsUrl',
+    ]);
+    expect(
+      applyRuntimeFillFields(target, source, ['modelsUrl'], {
+        sourceAgent: 'codex',
+        targetAgent: 'codex',
+      }),
+    ).toMatchObject({
+      baseUrl: source.baseUrl,
+      modelsUrl: source.modelsUrl,
+      headersConfigured: false,
+      headers: [],
     });
   });
 

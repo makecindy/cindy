@@ -313,6 +313,11 @@ export function buildRuntimeFillDiffs(
     source.baseUrl.trim().length > 0 &&
     source.modelsUrl.trim().length === 0 &&
     target.modelsUrl.trim().length > 0;
+  // A modelsUrl replacement is an endpoint move too. Keep it in the same
+  // inseparable selection as the inference endpoint whenever applying it can
+  // make Main discard endpoint-bound credentials/headers.
+  const modelsUrlEndpointChange =
+    source.modelsUrl.trim() !== target.modelsUrl.trim() && endpointChangesUrl;
 
   return RUNTIME_FILL_FIELD_ORDER.filter((field) => {
     if (!options.includeApiKey && field === 'apiKey') return false;
@@ -366,7 +371,7 @@ export function buildRuntimeFillDiffs(
       !sourceFieldHasValue('headers', source, options.sourceAgent);
     const shouldConfirmImplicitClear =
       (field === 'headers' && implicitHeaderClear) ||
-      (field === 'modelsUrl' && implicitModelsUrlClear);
+      (field === 'modelsUrl' && (implicitModelsUrlClear || modelsUrlEndpointChange));
     return {
       field,
       targetState: same && !hiddenTargetHeadersOnly
@@ -383,21 +388,32 @@ export function runtimeFillFieldsForToggle(
   field: RuntimeFillField,
   diffs: readonly RuntimeFillFieldDiff[],
 ): RuntimeFillField[] {
-  const bundleFields = RUNTIME_FILL_FIELD_ORDER.filter(
-    (candidate) =>
-      diffs.some(
-        (diff) =>
-          diff.field === candidate &&
-          diff.targetState !== 'incompatible' &&
-          ((RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(candidate) ||
-            diff.implicitClear === true),
-      ),
-  );
   const fieldDiff = diffs.find((diff) => diff.field === field);
-  return (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(field) ||
-    fieldDiff?.implicitClear === true
-    ? bundleFields
-    : [field];
+  const compatibleEndpointFields = RUNTIME_FILL_ENDPOINT_FIELDS.filter((candidate) =>
+    diffs.some(
+      (diff) => diff.field === candidate && diff.targetState !== 'incompatible',
+    ),
+  );
+  const compatibleImplicitFields = RUNTIME_FILL_FIELD_ORDER.filter((candidate) =>
+    diffs.some(
+      (diff) =>
+        diff.field === candidate &&
+        diff.targetState !== 'incompatible' &&
+        diff.implicitClear === true,
+    ),
+  );
+  const isEndpointField = (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).includes(
+    field,
+  );
+  if (isEndpointField && fieldDiff?.targetState === 'incompatible') return [];
+  if (isEndpointField || fieldDiff?.implicitClear === true) {
+    return RUNTIME_FILL_FIELD_ORDER.filter(
+      (candidate) =>
+        compatibleEndpointFields.includes(candidate as (typeof RUNTIME_FILL_ENDPOINT_FIELDS)[number]) ||
+        compatibleImplicitFields.includes(candidate),
+    );
+  }
+  return [field];
 }
 
 export function normalizeRuntimeFillSelection(
@@ -456,12 +472,25 @@ export function applyRuntimeFillFields(
   options: { sourceAgent: RuntimeFillAgent; targetAgent: RuntimeFillAgent },
 ): RuntimeFillDraft {
   const selected = new Set(fields);
-  const endpointSelected = (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).some(
-    (field) => selected.has(field),
-  );
   const sourceWire = effectiveWire(options.sourceAgent, source.wireProtocol);
   const sourceHasHiddenHeaders =
     source.headersConfigured === true && !sourceFieldHasValue('headers', source, options.sourceAgent);
+  // Keep direct callers safe as well as the overlay: changing modelsUrl moves
+  // the credential endpoint, so it must carry the endpoint bundle and any
+  // target headers that Main would clear with that move.
+  if (
+    selected.has('modelsUrl') &&
+    source.modelsUrl.trim() !== target.modelsUrl.trim() &&
+    endpointUrlChanged(source, target)
+  ) {
+    for (const field of RUNTIME_FILL_ENDPOINT_FIELDS) selected.add(field);
+    if (!sourceHasHiddenHeaders && targetFieldHasValue('headers', target, options.targetAgent)) {
+      selected.add('headers');
+    }
+  }
+  const endpointSelected = (RUNTIME_FILL_ENDPOINT_FIELDS as readonly RuntimeFillField[]).some(
+    (field) => selected.has(field),
+  );
   const endpointCompatible =
     protocolSupported(options.targetAgent, sourceWire) &&
     endpointBundleSupported(source, options.sourceAgent, options.targetAgent) &&
