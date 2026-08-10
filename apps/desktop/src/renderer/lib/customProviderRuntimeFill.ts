@@ -363,6 +363,18 @@ export function buildRuntimeFillDiffs(
     ) {
       return { field, targetState: 'incompatible', incompatibilityReason: 'endpoint' };
     }
+    // An API key is endpoint-bound. If the source endpoint cannot be transferred
+    // (for example, because its main-only headers are unavailable to renderer or
+    // because a Pi-incompatible request path makes the bundle unsafe), never let
+    // the key fall through as an independently copyable field to another host.
+    if (field === 'apiKey' && endpointChangesUrl &&
+      (sourceHasHiddenHeaders || !endpointSupported)) {
+      return {
+        field,
+        targetState: 'incompatible',
+        incompatibilityReason: sourceHasHiddenHeaders ? 'headers' : 'endpoint',
+      };
+    }
     if (!transferFieldSupported(source, options.sourceAgent, options.targetAgent, field, wire)) {
       return {
         field,
@@ -543,7 +555,9 @@ export function applyRuntimeFillFields(
   const copyBaseUrl = copyEndpoint && copyableEndpointFields.includes('baseUrl');
   const copyRequestPath = copyEndpoint && copyableEndpointFields.includes('requestPath');
   const copyWireProtocol = copyEndpoint && copyableEndpointFields.includes('wireProtocol');
-  const copyApiKey = selected.has('apiKey') && (!endpointSelected || copyEndpoint);
+  const copyApiKey = selected.has('apiKey') &&
+    (!endpointUrlChanged(source, target) || endpointCompatible) &&
+    (!endpointSelected || copyEndpoint);
   const clearTargetApiKeyWithEndpoint =
     copyEndpoint &&
     target.apiKey.trim().length > 0 &&

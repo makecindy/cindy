@@ -471,6 +471,37 @@ describe('custom provider runtime fill', () => {
     ).toMatchObject(target);
   });
 
+  it('does not copy an endpoint-bound API key when source headers hide the endpoint transfer', () => {
+    const source = draft({
+      baseUrl: 'https://source.example/v1',
+      modelsUrl: 'https://source.example/v1/models',
+      apiKey: 'source-key',
+      headersConfigured: true,
+    });
+    const target = draft({
+      baseUrl: 'https://target.example/v1',
+      modelsUrl: 'https://target.example/v1/models',
+      apiKey: '',
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'pi',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'apiKey')).toMatchObject({
+      targetState: 'incompatible',
+      incompatibilityReason: 'headers',
+    });
+    expect(normalizeRuntimeFillSelection(['apiKey'], diffs)).toEqual([]);
+    expect(
+      applyRuntimeFillFields(target, source, ['apiKey'], {
+        sourceAgent: 'codex',
+        targetAgent: 'pi',
+      }),
+    ).toMatchObject(target);
+  });
+
   it('clears a legacy target request path when filling from a path-free Pi source', () => {
     const source = draft({
       baseUrl: 'https://pi.example/v1',
