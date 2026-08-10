@@ -5096,13 +5096,20 @@ export function registerGhostIpc(): void {
           }
         },
         oauthStatus: (key) => {
-          const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
-          const accounts = oauthManager.listAccounts(ghostId, key);
-          return {
-            clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
-            connected: accounts.filter((a) => a.status === 'connected').length,
-            expired: accounts.filter((a) => a.status === 'expired').length,
-          };
+          try {
+            const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
+            const accounts = oauthManager.listAccounts(ghostId, key);
+            return {
+              clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+              connected: accounts.filter((a) => a.status === 'connected').length,
+              expired: accounts.filter((a) => a.status === 'expired').length,
+            };
+          } catch (err) {
+            // 单个插件 OAuth 账号探针异常不中止整批查询:JSON 损坏/解密失败时
+            // 退化为全零(视为未连接/未配置),不让一个插件的 OAuth 故障拖垮整批 IPC。
+            log.warn('[ghosts:setup-profiles] oauth probe failed', { ghostId, key, err });
+            return { clientConfigured: false, connected: 0, expired: 0 };
+          }
         },
         connectionCount: (key) => {
           try {
