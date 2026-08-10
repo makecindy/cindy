@@ -444,6 +444,18 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   //  - readFile 结果超帧限前被控端预判回结构化 oversize,不裸炸 FRAME_TOO_LARGE。
   //  - 老被控端无此 channel → CHANNEL_NOT_ALLOWED,控制端渲染"设备版本过旧"占位。
   'file-browser:remote-op',
+  // —— 远程 git 审查(右侧栏审查面板,只读)——
+  // 单聚合 channel:被控端专用 handler(见 apps/desktop/src/main/git-review/device-op.ts),
+  // 不复用本机 renderer 的 git-review:* handler。准入:
+  //  - 只读 git 数据(status / diff / commit 列表 / 文件 diff / 图片与 Markdown 预览),
+  //    **不放行任何写 op**(stage / discard / commit / push 不在被控端 handler 实现)。
+  //  - 入参只有 sessionId + 结构化查询字段,不接受任何客户端路径:workdir 一律由被控端
+  //    resolveReviewScope 从它自己的 session 记录解析,路径越界在 fsPathGuard 层拦。
+  //  - device-link 已是同账号 + remoteControlEnabled 显式 opt-in,控制端本就能在
+  //    workingDir 跑 agent(任意读/exec),只读 git 数据不扩大攻击面(fs:list-dir 同款论证)。
+  //  - 响应超帧限前被控端预判:先 gzip,仍超回结构化 OVERSIZE,不裸炸 FRAME_TOO_LARGE。
+  //  - 老被控端无此 channel → CHANNEL_NOT_ALLOWED,控制端渲染"设备版本过旧"占位。
+  'git-review:remote-op',
   // —— 窄口径文本预览(消息附件 / tool 文件引用只读查看)——
   // 不是裸文件读:handler 要求绝对路径,复用系统目录 blocklist,10MB 上限,
   // 并用 reason 明确 oversize / not_found / forbidden。见 bootstrap-electron text-file:read-preview。

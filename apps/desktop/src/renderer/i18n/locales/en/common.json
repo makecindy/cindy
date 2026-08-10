@@ -4825,7 +4825,14 @@
         "unmerged": "unmerged files",
         "in-progress": "git operation in progress",
         "agent-running": "agent is running",
-        "disabled": "review unavailable"
+        "disabled": "review unavailable",
+        "remote-device": "remote device sessions are view-only"
+      },
+      "remote": {
+        "deviceTooOldTitle": "Device version too old",
+        "deviceTooOldDesc": "The {{appName}} version on the other device is too old for remote review. Please upgrade the controlled device and try again.",
+        "oversizeTitle": "Changes too large",
+        "oversizeDesc": "The changes in this view exceed the device-link transfer limit. Please view them on the controlled device."
       },
       "unmodifiedLines_one": "{{count}} unmodified line",
       "unmodifiedLines_other": "{{count}} unmodified lines",
@@ -5026,7 +5033,7 @@
         },
         "no-session": {
           "title": "Session not found",
-          "desc": "The current session record could not be found."
+          "desc": "The session record could not be found on this device."
         },
         "no-workdir": {
           "title": "No workdir",

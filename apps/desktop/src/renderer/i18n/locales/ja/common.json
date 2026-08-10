@@ -4823,7 +4823,14 @@
         "unmerged": "未マージのファイルがあります",
         "in-progress": "git 操作が進行中です",
         "agent-running": "エージェントが実行中です",
-        "disabled": "レビューを利用できません"
+        "disabled": "レビューを利用できません",
+        "remote-device": "リモートデバイスのセッションは閲覧のみです"
+      },
+      "remote": {
+        "deviceTooOldTitle": "相手デバイスのバージョンが古すぎます",
+        "deviceTooOldDesc": "相手デバイスの {{appName}} のバージョンが古く、リモートレビューに対応していません。相手デバイスをアップグレードしてから再試行してください。",
+        "oversizeTitle": "変更データが大きすぎます",
+        "oversizeDesc": "このビューの変更はデバイス連携の転送上限を超えています。相手デバイス上でご確認ください。"
       },
       "unmodifiedLines_one": "{{count}} 行未変更",
       "unmodifiedLines_other": "{{count}} 行未変更",
@@ -5024,7 +5031,7 @@
         },
         "no-session": {
           "title": "セッションが見つかりません",
-          "desc": "現在のセッション記録が見つかりません。"
+          "desc": "このデバイスでは現在のセッション記録が見つかりません。"
         },
         "no-workdir": {
           "title": "作業ディレクトリがありません",

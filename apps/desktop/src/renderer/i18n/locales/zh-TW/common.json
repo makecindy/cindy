@@ -4822,7 +4822,14 @@
         "unmerged": "存在未合併檔案",
         "in-progress": "git 操作進行中",
         "agent-running": "Agent 正在執行",
-        "disabled": "審查不可用"
+        "disabled": "審查不可用",
+        "remote-device": "遠端設備任務僅支援檢視"
+      },
+      "remote": {
+        "deviceTooOldTitle": "對方設備版本過舊",
+        "deviceTooOldDesc": "對方設備的 {{appName}} 版本過舊，暫不支援遠端審查，請升級被控設備後重試。",
+        "oversizeTitle": "改動資料過大",
+        "oversizeDesc": "該視圖的改動超過裝置互聯單次傳輸上限，請在被控設備上檢視。"
       },
       "unmodifiedLines_one": "{{count}} 行未改動",
       "unmodifiedLines_other": "{{count}} 行未改動",
@@ -5023,7 +5030,7 @@
         },
         "no-session": {
           "title": "任務不存在",
-          "desc": "找不到當前任務記錄。"
+          "desc": "本裝置上找不到該任務記錄。"
         },
         "no-workdir": {
           "title": "沒有工作目錄",

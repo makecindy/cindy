@@ -4823,7 +4823,14 @@
         "unmerged": "병합되지 않은 파일 있음",
         "in-progress": "git 작업 진행 중",
         "agent-running": "에이전트 실행 중",
-        "disabled": "리뷰를 사용할 수 없음"
+        "disabled": "리뷰를 사용할 수 없음",
+        "remote-device": "원격 기기 세션은 보기 전용입니다"
+      },
+      "remote": {
+        "deviceTooOldTitle": "상대 기기 버전이 너무 오래되었습니다",
+        "deviceTooOldDesc": "상대 기기의 {{appName}} 버전이 오래되어 원격 리뷰를 지원하지 않습니다. 피제어 기기를 업그레이드한 후 다시 시도해 주세요.",
+        "oversizeTitle": "변경 데이터가 너무 큽니다",
+        "oversizeDesc": "이 보기의 변경 사항이 기기 연결 전송 한도를 초과합니다. 피제어 기기에서 확인해 주세요."
       },
       "unmodifiedLines_one": "{{count}}줄 변경 없음",
       "unmodifiedLines_other": "{{count}}줄 변경 없음",
@@ -5024,7 +5031,7 @@
         },
         "no-session": {
           "title": "세션을 찾을 수 없음",
-          "desc": "현재 세션 기록을 찾을 수 없습니다."
+          "desc": "이 기기에서 현재 세션 기록을 찾을 수 없습니다."
         },
         "no-workdir": {
           "title": "작업 디렉터리 없음",
