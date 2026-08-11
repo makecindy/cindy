@@ -269,8 +269,16 @@ export class MakerMemoryStore {
     this.assertScopeOk();
     await this.init();
     const all = await this.storage.list();
+    // list 是 await 窗口 — 逐项删除前必须逐次复核 (review #2388 Greptile 8th P1):
+    // 边界在 list 期间发生则删除不得继续作用于旧 owner 文件。
     for (const r of all) {
-      try { await this.storage.delete(r.filename); } catch { /* swallow */ }
+      try {
+        this.assertScopeOk();
+        await this.storage.delete(r.filename);
+      } catch (e) {
+        if (e instanceof MemoryError && e.code === 'not-ready') throw e;
+        /* swallow */
+      }
     }
     try { this.fts.rebuild([]); } catch { /* swallow */ }
     return { removedCount: all.length };

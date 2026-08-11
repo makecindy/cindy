@@ -572,6 +572,10 @@ export class MakerMemoryManager {
    * write/delete tool, 保留可观测性。manager 只是 "起一次审查 LLM 调用" 的入口。
    */
   async runReview(absWorkdir: string): Promise<{ suggestions: string }> {
+    // 竞态锚点 (review #2388 Codex 9th P1): 读记录与发 oneShot 之间有 await
+    // (isOneShotRouteDisabled / agent 派发), 边界窗口内不得把旧 owner 的
+    // memory dump 发给 review LLM — 构造/发送 prompt 前复核 scope。
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
     const store = await this.getStore(absWorkdir);
     const records = await store.list();
     if (records.length === 0) {
@@ -587,6 +591,8 @@ export class MakerMemoryManager {
         `runReview: one-shot route for '${reviewAgentKind}' is disabled in settings`,
       );
     }
+    // 发送前复核: 边界已切换则丢弃旧 owner 的 records, fail-closed。
+    this.assertScopeUnchanged(scopeAtEntry);
 
     const summary = records
       .map((r) => `### ${r.filename}\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`)
