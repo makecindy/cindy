@@ -564,7 +564,7 @@ function TurnChangeSetReviewBody({ state, ctx, setSource, setSelectedCommitOid }
           onViewModeChange={(diffViewMode) => ctx.patchState({ diffViewMode })}
           onRichMarkdownPreviewChange={(richMarkdownPreview) => ctx.patchState({ richMarkdownPreview })}
           wordWrap={state.wordWrap ?? false}
-          wordDiff={state.wordDiff ?? true}
+          wordDiff={state.wordDiff ?? false}
           fileTreeVisible={state.fileTreeVisible ?? false}
           jumpRequest={jumpRequest}
           loadImagePreview={unavailablePreview}
@@ -612,7 +612,7 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   const diffViewMode: DiffViewMode = state.diffViewMode ?? 'unified';
   const fileTreeVisible = state.fileTreeVisible ?? false;
   const wordWrap = state.wordWrap ?? false;
-  const wordDiff = state.wordDiff ?? true;
+  const wordDiff = state.wordDiff ?? false;
   const richMarkdownPreview = state.richMarkdownPreview ?? true;
   const collapsedSet = useMemo(() => new Set(state.collapsedPaths ?? []), [state.collapsedPaths]);
   const rawUnstaged = data?.diffs.unstaged ?? [];
