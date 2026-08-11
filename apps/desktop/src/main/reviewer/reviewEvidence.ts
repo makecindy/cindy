@@ -13,7 +13,6 @@ import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
 import { readReviewBranchDiff, readReviewData } from '../git-review/ipc.js';
 import { getTurnChangeSets, listTurnChangeSets } from '../turn-change-set/store.js';
-import type { ReviewBranchBaseCandidate } from '../../shared/gitReviewWire.js';
 import type { TurnChangeSetDetail } from '../../shared/turnChangeSet.js';
 import { readReviewRunFromAgentMeta } from '../../shared/reviewRun.js';
 import type {
@@ -108,24 +107,6 @@ function mapReviewWorkspace(
 }
 
 /**
- * Whether a candidate is a default branch — `main`, `origin/master`, …
- *
- * The remote prefix comes from the candidate's own `remote` field rather than
- * from splitting the string: `feature/main` and `origin/release/main` both end
- * in a default-looking segment while being ordinary branches, and accepting
- * them would reintroduce exactly the unrelated-sibling comparison this guard
- * exists to prevent.
- */
-function isDefaultBranchCandidate(candidate: ReviewBranchBaseCandidate): boolean {
-  // `shortName` mirrors `refName`, so strip the recorded remote rather than
-  // trusting either field to already be bare.
-  const prefix = candidate.remote ? `${candidate.remote}/` : '';
-  if (prefix && !candidate.refName.startsWith(prefix)) return false;
-  const bare = candidate.refName.slice(prefix.length);
-  return /^(?:main|master|develop|trunk)$/i.test(bare);
-}
-
-/**
  * The branch's own commits, read only when the tree is clean.
  *
  * With uncommitted work present that work is the review target. Once it is
@@ -153,14 +134,16 @@ async function loadReviewBranchEvidence(
   // work" is worse than presenting nothing.
   //
   // So require a base that identifies itself rather than one that merely sorted
-  // first: the remote's own default, the branch's upstream, or a ref actually
-  // named like a default. Anything else reports `ambiguous-base`.
+  // first: the repository's default branch, or the branch's own upstream. The
+  // default flag comes from the branch reader because `init.defaultBranch` can
+  // name anything — recognizing defaults by name here would reject a repository
+  // that calls its default `stable`.
   const chosen = data.candidates.find((candidate) => candidate.refName === data.baseRef);
   const baseIdentifiesItself =
     !chosen ||
+    chosen.isDefaultBranch === true ||
     chosen.kind === 'remote-default' ||
-    chosen.kind === 'upstream' ||
-    isDefaultBranchCandidate(chosen);
+    chosen.kind === 'upstream';
   if (!baseIdentifiesItself) {
     return { branch: null, unavailableReason: 'ambiguous-base' };
   }

@@ -938,6 +938,7 @@ describe('loadReviewEvidence attachment boundaries', () => {
           kind: 'remote',
           remote: 'origin',
           oid: 'b'.repeat(40),
+          isDefaultBranch: true,
         },
       ],
       diffs: [branchFileDiff('src/a.ts')],
@@ -957,6 +958,46 @@ describe('loadReviewEvidence attachment boundaries', () => {
     });
 
     expect(evidence.branch?.baseRef).toBe('origin/main');
+  });
+
+  it('accepts a configured default branch under any name', async () => {
+    // `init.defaultBranch` can name anything. Only the branch reader can read
+    // that config, so the flag it sets must be honoured rather than second-
+    // guessed by matching against main/master here.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/stable',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'origin/stable',
+          shortName: 'origin/stable',
+          kind: 'remote',
+          remote: 'origin',
+          oid: 'b'.repeat(40),
+          isDefaultBranch: true,
+        },
+      ],
+      diffs: [branchFileDiff('src/a.ts')],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch?.baseRef).toBe('origin/stable');
   });
 
   it('refuses a branch whose last segment merely looks like a default', async () => {
@@ -1053,6 +1094,7 @@ describe('loadReviewEvidence attachment boundaries', () => {
           kind: 'local',
           remote: null,
           oid: 'b'.repeat(40),
+          isDefaultBranch: true,
         },
       ],
       diffs: [branchFileDiff('src/a.ts')],
