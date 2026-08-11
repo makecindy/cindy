@@ -1098,6 +1098,9 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
     options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
   const pendingCreateEvidence = options.pendingCreateEvidence ?? null;
   let ownershipReconciledScopeKey: string | null = null;
+  // Persisted `viewerState` can only be stale on the first sweep of an owner
+  // generation; after that a detached value would be this process's own truth.
+  let viewerStateNormalizedScopeKey: string | null = null;
   let ownershipReconcilePromise: { scopeKey: string; promise: Promise<void> } | null = null;
   let pendingCreateReconcileController: AbortController | null = null;
   let pendingCreateReconcilePromise: Promise<unknown> | null = null;
@@ -2362,6 +2365,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
   async function reconcilePersistedInstance(
     snapshot: IOSSimulatorInstance,
     devices: ReadonlyMap<string, IOSSimulatorEnvironmentReport['devices'][number]>,
+    normalizeViewerState: boolean,
   ): Promise<boolean> {
     const instance = actor
       .list(snapshot.sessionId)
@@ -2412,6 +2416,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         device ? (deviceState === 'booted' ? 'ready' : 'stopped') : 'error',
         'degraded',
         session.remoteHostId ? 'UNSUPPORTED_SESSION_KIND' : 'ORPHANED_DEVICE',
+        { normalizeViewerState },
       );
       return complete;
     }
@@ -2451,7 +2456,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           ? 'healthy'
           : 'recovering',
       driverRuntimeRecovered ? null : 'WDA_UNAVAILABLE',
-      { preserveDetachGrace: shouldResumeDetachGrace },
+      { preserveDetachGrace: shouldResumeDetachGrace, normalizeViewerState },
     );
     if (shouldResumeDetachGrace && driverRuntimeRecovered && complete) {
       await actor.resumeDetachGrace(reconciled.instanceId, reconciled.sessionId, () =>
@@ -2562,9 +2567,10 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       const devices = new Map(
         environment.devices.map((device) => [device.udid.toUpperCase(), device]),
       );
+      const normalizeViewerState = viewerStateNormalizedScopeKey !== scopeKey;
       for (const snapshot of actor.listAll()) {
         const instanceComplete = await withSessionLock(snapshot.sessionId, () =>
-          reconcilePersistedInstance(snapshot, devices),
+          reconcilePersistedInstance(snapshot, devices, normalizeViewerState),
         );
         if (!instanceComplete) complete = false;
       }
@@ -2573,6 +2579,10 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       // suppress the new owner's required cleanup and scheduler reconciliation.
       if (!isOwnerBoundaryPending() && getOwnerScopeKey() === scopeKey) {
         ownershipReconciledScopeKey = complete ? scopeKey : null;
+        // Inherited viewer state is corrected even when the pass was incomplete:
+        // this sweep already observed every binding, and a retry must not kick a
+        // viewer that attached in the meantime.
+        viewerStateNormalizedScopeKey = scopeKey;
       }
     })().finally(() => {
       if (ownershipReconcilePromise?.promise === reconciliation) {

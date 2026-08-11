@@ -1252,6 +1252,67 @@ describe('iOS Simulator host', () => {
     expect(driverManager.stop).not.toHaveBeenCalled();
   });
 
+  it('keeps a routable binding usable while another binding cannot be reconciled', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    const routable = actor.attach({
+      sessionId: 'routable-session',
+      worktreeRoot: '/tmp/routable-session',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+    });
+    actor.attach({
+      sessionId: 'unreadable-session',
+      worktreeRoot: '/tmp/unreadable-session',
+      sourceFingerprint: 'fingerprint-b',
+      device: { ...READY_REPORT.devices[0]!, udid: 'E4DED148-43B9-4193-9D80-399976A43E08' },
+    });
+    const inspect = vi.fn(async () => READY_REPORT);
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect },
+      getSession: vi.fn(async (id: string) => {
+        if (id === 'unreadable-session') throw new Error('session row is unreadable');
+        return localSession(id);
+      }),
+    });
+
+    try {
+      await host.reconcileOwnership();
+      const afterFirstSweep = actor.getOwned('routable-session', routable.instanceId);
+
+      // A binding whose session row cannot be read keeps the pass incomplete, so
+      // the sweep runs again on the next dispatch. It must not invalidate the
+      // route of a binding it observed as unchanged, or no caller could ever use
+      // a generation/lease pair it just read.
+      await host.reconcileOwnership();
+      expect(inspect).toHaveBeenCalledTimes(2);
+      const afterSecondSweep = actor.getOwned('routable-session', routable.instanceId);
+      expect(afterSecondSweep.generation).toBe(afterFirstSweep.generation);
+      expect(afterSecondSweep.lease.id).toBe(afterFirstSweep.lease.id);
+      expect(() =>
+        actor.assertRoute({
+          sessionId: afterFirstSweep.sessionId,
+          instanceId: afterFirstSweep.instanceId,
+          generation: afterFirstSweep.generation,
+          leaseId: afterFirstSweep.lease.id,
+        }),
+      ).not.toThrow();
+    } finally {
+      await host.dispose();
+    }
+  });
+
   it.each(['Booted', 'Booting'] as const)(
     'restores scheduler occupancy for a persisted %s device',
     async (deviceState) => {
