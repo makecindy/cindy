@@ -117,12 +117,14 @@ const StreamingBody = memo(function StreamingBody({
   localFileRefs,
   currentSessionId,
   currentSessionTitle,
+  streamFadeKey,
 }: {
   workingDir: string;
   content: string;
   localFileRefs?: readonly KnownLocalFileRef[];
   currentSessionId?: string;
   currentSessionTitle?: string | null;
+  streamFadeKey?: string;
 }) {
   const { committedText, pendingLine } = useMemo(
     () => splitAtLastNewline(content),
@@ -135,6 +137,7 @@ const StreamingBody = memo(function StreamingBody({
           workingDir={workingDir}
           content={committedText}
           isStreaming
+          streamFadeKey={streamFadeKey}
           localFileRefs={localFileRefs}
           currentSessionId={currentSessionId}
           currentSessionTitle={currentSessionTitle}
@@ -286,6 +289,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   // /goal:隐藏助手输出末尾由 goal 协议要求模型吐出的裁决 JSON 块(仅显示层剥离,
   // 原文仍保留在 DB / transcript)。pattern:末尾的 ```json {...goal_status...} ``` 围栏块。
   const displayContent = stripGoalVerdictBlock(content);
+  const streamFadeKey = messageClientId
+    ? `${currentSessionId ?? ''}\u0000${messageClientId}`
+    : undefined;
 
   return (
     <div
@@ -324,6 +330,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             localFileRefs={localFileRefs}
             currentSessionId={currentSessionId}
             currentSessionTitle={currentSessionTitle}
+            streamFadeKey={streamFadeKey}
           />
         ) : (
           // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
@@ -333,6 +340,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             workingDir={workingDir}
             content={displayContent}
             isStreaming={isStreaming}
+            streamFadeKey={streamFadeKey}
             localFileRefs={localFileRefs}
             currentSessionId={currentSessionId}
             currentSessionTitle={currentSessionTitle}

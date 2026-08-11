@@ -33,8 +33,9 @@ import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
 import {
-  createWordFadeState,
+  getOrCreateWordFadeState,
   markSettledFromAnimationEnd,
+  releaseWordFadeState,
   rehypeStreamWordFade,
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
@@ -317,6 +318,11 @@ interface MarkdownRendererProps {
    *  message never misses its last token. Default false (static content
    *  paths like TextLightbox bypass the throttle entirely). */
   isStreaming?: boolean;
+  /**
+   * Stable identity of the streaming message. Keeps the word-fade timeline
+   * across task-view remounts so already-rendered text cannot replay.
+   */
+  streamFadeKey?: string;
   /** Files uploaded in the session. Used to resolve model-authored links like
    *  `[doc.docx](doc.docx)` back to the original attachment path. */
   localFileRefs?: readonly KnownLocalFileRef[];
@@ -1620,6 +1626,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   workingDir,
   content,
   isStreaming = false,
+  streamFadeKey,
   localFileRefs,
   currentSessionId,
   currentSessionTitle,
@@ -1644,12 +1651,15 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   const streamFade = isStreaming && !reducedMotion && streamFadeEnabled;
   const wordFade = useMemo(() => {
     if (!streamFade) return null;
-    const state = createWordFadeState();
+    const state = getOrCreateWordFadeState(streamFadeKey);
     return {
       state,
       plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, state]] as PluggableList,
     };
-  }, [streamFade]);
+  }, [streamFade, streamFadeKey]);
+  useEffect(() => {
+    if (!isStreaming) releaseWordFadeState(streamFadeKey);
+  }, [isStreaming, streamFadeKey]);
   const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
   const handleWordFadeAnimationEnd = useMemo(() => {
     if (!wordFade) return undefined;
