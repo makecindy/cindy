@@ -122,6 +122,9 @@ export class MakerMemoryStore {
     // 文件数不变, sanityCheck 的 count 检查永不触发 — open 时全量重建保证
     // memory_search 不返回 stale 结果。
     const all = await this.storage.list();
+    // list await 后、rebuild 前复核 (review #2388 Codex 25th P1): 边界/resetAll
+    // 在 list 在途时开始 — 不得重写旧 owner 的 fts.db 或碰被删的 db。
+    this.assertScopeOk();
     this.fts.rebuild(all);
     // sanityCheck/list 内部多次 await 后复核。
     this.assertScopeOk();
