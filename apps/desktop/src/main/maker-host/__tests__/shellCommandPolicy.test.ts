@@ -366,6 +366,12 @@ EOF`,
 $(printf '%s' xcr) $(printf '%s' un) $(printf '%s' sim) $(printf '%s' ctl) shutdown DEVICE
 EOF`,
     `cat <<'EOF' | sh
+$(/bin/echo xcr) $(/usr/bin/echo un) $(/bin/echo sim) $(/usr/bin/echo ctl) shutdown DEVICE
+EOF`,
+    `cat <<'EOF' | sh
+$(/usr/bin/printf '%s' xcr) $(/bin/printf '%s' un) shutdown DEVICE
+EOF`,
+    `cat <<'EOF' | sh
 $(printf '%s %s' xcr un) $(printf '%s %s' sim ctl) shutdown DEVICE
 EOF`,
     `cat <<'EOF' | sh
@@ -380,6 +386,7 @@ sh /tmp/x.sh`,
     `python3 <<< 'print("a|b"); os.system("xcrun simctl shutdown DEVICE")'`,
     `python3 <<< 'print("a|b"); os.system("xcr" + "un" + " sim" + "ctl shutdown DEVICE")'`,
     `python3 <<< 'x = "|"; os.system("xcrun simctl shutdown DEVICE")'`,
+    `python3 <<< 'print(1)' <<< 'xcrun simctl shutdown DEVICE'`,
     `cat <<< 'x' | python3 <<< '"xcr" "un" " sim" "ctl shutdown DEVICE"'`,
     `cat <<< 'x' | python3 <<< 'xcrun simctl shutdown DEVICE'`,
     `cat <<< 'x' | bash <<< 'xcrun simctl shutdown DEVICE'`,
@@ -591,6 +598,8 @@ EOF`,
     `python3 <<< 'print(1)' | cat <<< 'xcrun simctl shutdown DEVICE'`,
     `python3 <<< 'print(1)' | grep x <<< 'xcrun simctl shutdown DEVICE'`,
     `python3 <<< 'print("a|b")' | cat`,
+    `python3 <<< 'xcrun simctl shutdown DEVICE' <<< 'print(1)'`,
+    `python3 <<< 'print(1)' | cat <<< 'simctl'`,
     `echo 'echo hello' | sh`,
     `cat <<'EOF' | sh
 printf '%s' "$var"

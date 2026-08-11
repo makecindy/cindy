@@ -609,7 +609,12 @@ function containsLiteralSimulatorExecutor(value: string): boolean {
  */
 function containsInterpreterSimulatorPayload(tokens: string[]): boolean {
   const interpreter = executableName(tokens[0]);
-  const payload = tokens.slice(1).join('\n');
+  // A here-string redirection (`<<< payload`) feeds stdin, not argv; drop the
+  // operator and its payload so it is not mistaken for interpreter code.
+  const args = tokens.slice(1);
+  const payload = args
+    .filter((token, index) => token !== '<<<' && args[index - 1] !== '<<<')
+    .join('\n');
   if (PROGRAMMABLE_INTERPRETER.test(interpreter)) {
     return containsAssembledSimulatorExecutor(payload);
   }
@@ -1096,7 +1101,16 @@ function consumesStdinAsProgram(tokens: string[]): boolean {
   } else {
     return false;
   }
-  const positional = args.find((arg) => !arg.startsWith('-'));
+  // Redirection operators (`<<< payload`, `> file`) are not program
+  // arguments; skip the operator and its target when looking for the
+  // program string.
+  const redirectionOperator = /^(?:\d+)?(?:<<<|<<-?|<>|<|>>?|>&|<&|>\|)$/;
+  const positional = args.find(
+    (arg, index) =>
+      !arg.startsWith('-') &&
+      !redirectionOperator.test(arg) &&
+      !(index > 0 && redirectionOperator.test(args[index - 1] ?? '')),
+  );
   return positional === undefined || positional === '-';
 }
 
@@ -1569,9 +1583,10 @@ function decodedCharCodePieces(value: string): string[] {
     const numbers = body.split(',').map((part) => part.trim());
     for (const number of numbers) pushConstant(number);
   }
-  // Command substitutions emitting a literal (`$(printf xcr)`, `$(echo un)`)
-  // assemble an executor their output is invisible to; decode the literal.
-  for (const match of value.matchAll(/\$\(\s*echo\s+([^)]+)\)/g)) {
+  // Command substitutions emitting a literal (`$(printf xcr)`, `$(echo un)`,
+  // also with a command path like `$(/bin/echo xcr)`) assemble an executor
+  // their output is invisible to; decode the literal.
+  for (const match of value.matchAll(/\$\(\s*(?:[A-Za-z0-9_./-]+\/)*echo\s+([^)]+)\)/g)) {
     const arg = (match[1] ?? '').trim();
     if (/[$`]/.test(arg)) continue; // expanding
     const literal = arg.replace(/^['"]|['"]$/g, '').replace(/\s+/g, '');
@@ -1581,7 +1596,7 @@ function decodedCharCodePieces(value: string): string[] {
   }
   // `$(printf <fmt> <literal args...>)`: expand `%s` placeholders when every
   // argument is a literal; other directives or runtime values stay skipped.
-  for (const match of value.matchAll(/\$\(\s*printf\s+([^)]+)\)/g)) {
+  for (const match of value.matchAll(/\$\(\s*(?:[A-Za-z0-9_./-]+\/)*printf\s+([^)]+)\)/g)) {
     const parts = cmdsubTokens(match[1] ?? '');
     if (parts.length === 0) continue;
     const fmt = parts[0]!.replace(/^['"]|['"]$/g, '');
@@ -1689,38 +1704,24 @@ function redactNonShellHeredocBodies(command: string): string {
   return redacted.join('\n');
 }
 
-/** Index of the first `|` outside quotes, or -1. */
-function unquotedPipeIndex(text: string): number {
-  let quote: "'" | '"' | '`' | null = null;
-  let escaped = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!;
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === '\\' && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) quote = null;
-      continue;
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      quote = char;
-      continue;
-    }
-    if (char === '|') return index;
-  }
-  return -1;
-}
-
 /** A here-string is executable stdin just like a heredoc or producer pipeline. */
 function containsInterpreterHereStringBypass(command: string): boolean {
   for (const clause of shellClauses(command)) {
-    let quote: "'" | '"' | null = null;
+    // Collect here-strings with quote awareness. A pipeline segment may
+    // carry several here-strings; the shell uses the last one as stdin, so
+    // earlier ones in the same segment are covered and must not be scanned.
+    const hereStrings: Array<{
+      index: number;
+      end: number;
+      covered: boolean;
+      consumerStart: number;
+    }> = [];
+    let quote: "'" | '"' | '`' | null = null;
     let escaped = false;
+    let segment = 0;
+    let lastPipe = -1;
+    let pending: { index: number; segment: number; end: number; consumerStart: number } | null =
+      null;
     for (let index = 0; index < clause.length - 2; index += 1) {
       const char = clause[index]!;
       if (escaped) {
@@ -1731,19 +1732,48 @@ function containsInterpreterHereStringBypass(command: string): boolean {
         escaped = true;
         continue;
       }
-      if (char === "'" || char === '"') {
-        if (quote === char) quote = null;
-        else if (quote === null) quote = char;
+      if (quote) {
+        if (char === quote) quote = null;
         continue;
       }
-      if (quote || clause.slice(index, index + 3) !== '<<<') continue;
-      const consumer = clause.slice(0, index).trim();
-      // The payload ends at the next unquoted pipeline boundary: a later
-      // here-string belongs to a different consumer (`python3 <<< code |
-      // cat <<< data`), while a `|` inside quotes is payload text.
-      const rest = clause.slice(index + 3);
-      const pipeIndex = unquotedPipeIndex(rest);
-      const payload = pipeIndex === -1 ? rest : rest.slice(0, pipeIndex);
+      if (char === "'" || char === '"' || char === '`') {
+        quote = char;
+        continue;
+      }
+      if (char === '|') {
+        if (pending) pending.end = index;
+        lastPipe = index;
+        segment += 1;
+        continue;
+      }
+      if (clause.slice(index, index + 3) === '<<<') {
+        if (pending) {
+          hereStrings.push({
+            index: pending.index,
+            end: pending.end,
+            covered: pending.segment === segment,
+            consumerStart: pending.consumerStart,
+          });
+        }
+        pending = { index, segment, end: clause.length, consumerStart: lastPipe + 1 };
+        index += 2;
+        continue;
+      }
+    }
+    if (pending) {
+      hereStrings.push({
+        index: pending.index,
+        end: pending.end,
+        covered: false,
+        consumerStart: pending.consumerStart,
+      });
+    }
+    for (const hereString of hereStrings) {
+      if (hereString.covered) continue;
+      // The consumer is the command segment after the last pipe, not an
+      // earlier pipeline stage (`python3 <<< code | cat <<< data`).
+      const consumer = clause.slice(hereString.consumerStart, hereString.index).trim();
+      const payload = clause.slice(hereString.index + 3, hereString.end);
       if (
         shellSegments(consumer).some((segment) =>
           consumesStdinAsProgram(tokenizeShellSegment(segment)),
@@ -1752,8 +1782,6 @@ function containsInterpreterHereStringBypass(command: string): boolean {
       ) {
         return true;
       }
-      // A pipeline may carry several here-strings with different consumers
-      // (`cat <<< a | python3 <<< b`); keep scanning for the next one.
     }
   }
   return false;
@@ -1769,7 +1797,12 @@ function containsShellConsumedLiteralBypass(command: string): boolean {
     const segments = shellSegments(clause);
     if (
       segments.some((segment) => consumesStdinAsProgram(tokenizeShellSegment(segment))) &&
-      containsAssembledSimulatorExecutor(clause)
+      // A here-string payload binds to its own redirection and never flows
+      // through the pipe; exclude it so data on the consumer side (`cat <<<
+      // data | python3 <<< code`) is not mistaken for piped program text.
+      containsAssembledSimulatorExecutor(
+        clause.replace(/<<<\s*(?:"[^"]*"|'[^']*'|\S+)/g, ''),
+      )
     ) {
       return true;
     }
