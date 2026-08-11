@@ -1618,6 +1618,22 @@ export async function claimLegacyOwnerNamespace(
     return { status: 'claimed-by-other-owner', moved: 0, conflicts: 0 };
   }
   if (existingMarker?.complete) {
+    // The claim marker only covers the main owner-tree move. Provider secrets,
+    // IM files, and retired integration accounts still pass through the
+    // synchronous legacy-import gate immediately after this async call. Warm
+    // the exact PID-reuse provenance proof here so those consumers can make a
+    // safe decision on their first check; otherwise their one async refresh
+    // would finish after the check and the import would wait until a later
+    // login or restart.
+    try {
+      await findConcurrentLiveInstancePids(deps, userDataDir);
+    } catch (error) {
+      // Provenance errors remain fail-closed in the synchronous guards. The
+      // completed claim itself is still a valid idempotent result.
+      log.debug('completed owner namespace claim provenance warmup failed closed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return { status: 'migrated', moved: 0, conflicts: 0 };
   }
 

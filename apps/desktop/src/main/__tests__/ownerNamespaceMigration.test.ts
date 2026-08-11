@@ -195,6 +195,32 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(result).toMatchObject({ status: 'migrated' });
   });
 
+  it('warms stale-pid provenance before side-channel importers inspect a completed claim', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
+    );
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(result).toEqual({ status: 'migrated', moved: 0, conflicts: 0 });
+    // Omit the synchronous identity reader: this assertion must consume the
+    // proof produced by claimLegacyOwnerNamespace's async warm-up.
+    expect(hasLegacyOwnerNamespaceClaim('cloud-a', root, (pid) => pid === 4242)).toBe(true);
+  });
+
   it('keeps deferring when a reused pid now belongs to another Cindy process', async () => {
     const root = await tempRoot();
     const startedAtMs = 1_000_000;
