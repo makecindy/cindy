@@ -63,6 +63,28 @@ describe('resolveAutoReviewBudget', () => {
     expect(budget.maxTokens).toBeGreaterThan(384);
     expect(budget.reasoningEffort).toBeUndefined();
   });
+
+  it('sends minimal — not low — when that is the lowest tier the model declares', () => {
+    // 回归 PR #2474 review P1:目录里 z-ai/glm-5.2 是 ['minimal','high','max'],
+    // 固定发 low 会被上游拒绝或悄悄提到更高档,反而烧掉 384 token 的正文空间。
+    const budget = resolveAutoReviewBudget(model({ efforts: ['minimal', 'high', 'max'] }));
+    expect(budget.maxTokens).toBe(384);
+    expect(budget.reasoningEffort).toBe('minimal');
+  });
+
+  it('omits the effort field entirely for models with no effort tiers', () => {
+    // efforts: [] 的模型目录里有 10 个(Haiku 4.5 / Kimi K2.6 / grok 系 / qwen3.7-max
+    // 等)。它们不强制长思考,所以照常走紧凑额度,但带一个不认的字段是白冒 400 的险。
+    const budget = resolveAutoReviewBudget(model({ efforts: [] }));
+    expect(budget.maxTokens).toBe(384);
+    expect(budget.timeoutMs).toBe(12_000);
+    expect(budget.reasoningEffort).toBeUndefined();
+  });
+
+  it('prefers low over minimal when the model declares both', () => {
+    const budget = resolveAutoReviewBudget(model({ efforts: ['minimal', 'low', 'high'] }));
+    expect(budget.reasoningEffort).toBe('low');
+  });
 });
 
 describe('findCatalogModel', () => {

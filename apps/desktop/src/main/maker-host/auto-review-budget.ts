@@ -38,7 +38,7 @@ export interface AutoReviewBudget {
   maxTokens: number;
   timeoutMs: number;
   /** `undefined` = 不传该字段,让模型走自己的默认档。 */
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 }
 
 /**
@@ -59,6 +59,22 @@ export function modelCanSuppressReasoning(model: CatalogModel | undefined): bool
 }
 
 /**
+ * 紧凑档实际该发的 effort:该模型**自己声明过**的最低档,没有声明就不发。
+ *
+ * 只在 `modelCanSuppressReasoning` 为真时调用,所以这里只需区分 low / minimal /
+ * 空数组三种;`undefined`(目录查不到)走的是宽裕分支,压根到不了这里。
+ */
+function lowestDeclaredEffort(
+  model: CatalogModel | undefined,
+): 'minimal' | 'low' | undefined {
+  const efforts = model?.efforts;
+  if (!efforts || efforts.length === 0) return undefined;
+  if (efforts.includes('low')) return 'low';
+  if (efforts.includes('minimal')) return 'minimal';
+  return undefined;
+}
+
+/**
  * 按模型能力选额度。
  *
  * `model` 传 `undefined` 表示目录里查不到 —— 走保守分支(宽裕额度)。
@@ -68,7 +84,15 @@ export function resolveAutoReviewBudget(model: CatalogModel | undefined): AutoRe
     return {
       maxTokens: COMPACT_MAX_TOKENS,
       timeoutMs: COMPACT_TIMEOUT_MS,
-      reasoningEffort: 'low',
+      // 只发该模型真正声明的最低档 —— 紧凑分支覆盖三种模型,不能一律发 low:
+      //   - 声明了 low        → low
+      //   - 只声明 minimal    → minimal(如 z-ai/glm-5.2;发 low 会被上游拒绝或
+      //                        悄悄提到更高档,反而烧掉 384 token 的正文空间)
+      //   - efforts: []       → 省略(如 Haiku 4.5 / Kimi K2.6 / grok 系共 10 个;
+      //                        它们根本没有档位概念,带一个不认的字段是白白冒 400 的险)
+      // 发错档会让审阅请求连续失败 → 重试耗尽 → 每个灰区操作降级成用户确认,
+      // 正好绕回本 PR 要修的故障(PR #2474 review P1)。
+      reasoningEffort: lowestDeclaredEffort(model),
     };
   }
   return {
