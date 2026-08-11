@@ -434,6 +434,10 @@ export class MakerMemoryManager {
     // 异步初始化期间的竞态锚点 (review #2388 P1): 整个流程用入口捕获的 scope +
     // root, 不再跨 await re-read 动态根; 完成后复核 scope 未变才提交入池。
     const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
+    // 池世代锚点 (review #2388 Codex 20th P1): init 等待期间并发 resetAll 可能
+    // 开始**并完成** (resetInFlight 已回 0) — 用 generation 对比识别「重置前
+    // 打开、closeAllStores 从未见过的 stale store」。
+    const generationAtEntry = this.poolGeneration;
     const rootAtEntry = this.resolvedBasePath!;
 
     // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
@@ -502,6 +506,21 @@ export class MakerMemoryManager {
       throw new MemoryError(
         'not-ready',
         'memory reset started during store init; retry against current state',
+      );
+    }
+    // 跨 await 复核: init 等待期间 resetAll 已**完成** (review #2388 Codex 20th
+    // P1) — resetInFlight 已回 0, 用 generation 对比识别: 本 store 是重置前
+    // 打开的旧世代 (closeAllStores 从未关闭其 db, Windows 上阻塞目录删除 /
+    // POSIX 返回指向已删目录的实例), 不得入池。
+    if (this.poolGeneration !== generationAtEntry) {
+      try {
+        db.close();
+      } catch {
+        /* swallow */
+      }
+      throw new MemoryError(
+        'not-ready',
+        'memory reset completed during store init; retry against current state',
       );
     }
     // 并发去重: 同 workdir 的并发 getStore 可能已把 store 提交入池, 复用池内实例。
