@@ -1114,7 +1114,7 @@
         "reasonListSep": " · ",
         "reasonListClose": "）",
         "reasonListSource": "Claude：",
-        "reasonInternal": "内部 Agent",
+        "reasonInternal": "内部 Agent 会话",
         "reasonNoEvents": "无有效内容",
         "reasonWindowLimit": "超出扫描窗口",
         "reasonInvalidId": "ID 格式无效",
