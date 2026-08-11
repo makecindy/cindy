@@ -89,6 +89,30 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 按「Host 最终会拿到的那个值」读取 payload。
+ *
+ * `call_tool` 的 `args` 走 `jsonObjectArg`（见 lizi-mcps/json-object-arg.ts）：Claude Code
+ * 的 in-process bridge 会把嵌套 payload 先 `JSON.stringify`（issue #350），入参校验前
+ * 会再 parse 回对象。审批若只看原始字符串，判定的就不是 Host 实际执行的那个值。
+ */
+function readJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * 取 iOS Simulator progressive 调用的内层动作。
  *
  * 内层名一律过 canonical 化：改名后旧名仍是可调用的隐藏别名，别名必须命中与新名
@@ -104,10 +128,7 @@ function readIOSSimulatorInnerCall(
   if (context.toolName !== 'call_tool' && context.toolName !== undefined) {
     return undefined;
   }
-  const params =
-    context.toolParams && typeof context.toolParams === 'object'
-      ? (context.toolParams as { name?: unknown; args?: unknown })
-      : undefined;
+  const params = readJsonObject(context.toolParams);
   const rawName = typeof params?.name === 'string' ? params.name.trim() : '';
   return {
     name: rawName ? canonicalIOSSimulatorToolName(rawName) : undefined,
@@ -116,17 +137,10 @@ function readIOSSimulatorInnerCall(
 }
 
 /**
- * 设备级动作必须自带它要操作的那条 owned instance 路由。没有路由的调用到不了任何
- * 设备（Host 在路由校验就拒），此时弹「授权这台设备」纯属噪音 —— 无关任务把
- * 「打开一个网址」误路由到模拟器时正是这个形状。
+ * 设备级动作必须自带它要操作的那条 owned instance 路由。
  */
-function hasIOSSimulatorInstanceRoute(args: unknown): boolean {
-  if (!args || typeof args !== 'object') return false;
-  const { instanceId, generation, leaseId } = args as {
-    instanceId?: unknown;
-    generation?: unknown;
-    leaseId?: unknown;
-  };
+function hasIOSSimulatorInstanceRoute(args: Record<string, unknown>): boolean {
+  const { instanceId, generation, leaseId } = args;
   return (
     typeof instanceId === 'string' &&
     instanceId.trim() !== '' &&
@@ -136,6 +150,20 @@ function hasIOSSimulatorInstanceRoute(args: unknown): boolean {
     typeof leaseId === 'string' &&
     leaseId.trim() !== ''
   );
+}
+
+/**
+ * 只有「能确凿读出、且确实没有 owned 路由」的调用才免掉设备授权卡：那种调用到不了
+ * 任何设备（registry 的严格参数校验先拒，Host 收不到），弹窗纯属噪音 —— 无关任务把
+ * 「打开一个网址」误路由到模拟器时正是这个形状。
+ *
+ * 读不出形状时一律 fail closed 照旧弹窗：判定不能依赖「传输层此刻恰好也会拒」这种
+ * 外部前提，否则哪天入口多加一层 coercion，读不懂就会变成静默放行。
+ */
+function skipsRoutelessDeviceApproval(args: unknown): boolean {
+  const parsed = readJsonObject(args);
+  if (!parsed) return false;
+  return !hasIOSSimulatorInstanceRoute(parsed);
 }
 
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
@@ -177,9 +205,9 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     if (innerName === 'build_app' || innerName === 'open_simulator_url') {
-      return hasIOSSimulatorInstanceRoute(iosSimulatorCall.args)
-        ? 'prompt-each-time'
-        : 'auto-approve';
+      return skipsRoutelessDeviceApproval(iosSimulatorCall.args)
+        ? 'auto-approve'
+        : 'prompt-each-time';
     }
     return 'auto-approve';
   }

@@ -191,6 +191,48 @@ describe('desktop MCP approval policy', () => {
     ).toBe('auto-approve');
   });
 
+  it('judges a stringified simulator payload the way the Host will receive it', () => {
+    const route = { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' };
+    // Claude Code's in-process bridge stringifies nested payloads (issue #350) and
+    // jsonObjectArg parses them back before dispatch, so a policy that judged the
+    // raw string would let a routed device action run unapproved.
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: { name: 'build_app', args: JSON.stringify(route) },
+      }),
+    ).toBe('prompt-each-time');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: JSON.stringify({ name: 'build_app', args: route }),
+      }),
+    ).toBe('prompt-each-time');
+    // The noise case still resolves through the same representation.
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator',
+        toolName: 'call_tool',
+        toolParams: {
+          name: 'open_simulator_url',
+          args: JSON.stringify({ url: 'https://example.com' }),
+        },
+      }),
+    ).toBe('auto-approve');
+    // Anything whose arguments cannot be read fails closed and keeps asking.
+    for (const args of [undefined, 'not json', 42, [route]]) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_ios_simulator',
+          toolName: 'call_tool',
+          toolParams: { name: 'open_simulator_url', args },
+        }),
+      ).toBe('prompt-each-time');
+    }
+  });
+
   it('discloses host file access before an agent starts an Xcode build', () => {
     setMainLocale('en');
     expect(
