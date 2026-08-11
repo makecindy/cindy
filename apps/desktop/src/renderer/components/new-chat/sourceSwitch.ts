@@ -57,6 +57,9 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   grok: 'newChat.modelSelector.category.grok',
   google: 'newChat.modelSelector.category.google',
   china: 'newChat.modelSelector.category.china',
+  // `other` = 认不出厂商的对话模型(「其它」);`non-chat` = 不能对话的其它端点
+  // (「其它端点」)。两者标签必须区分得开:前者可选、默认展开,后者是能力组、默认收起。
+  other: 'newChat.modelSelector.category.other',
   image: 'newChat.modelSelector.category.image',
   video: 'newChat.modelSelector.category.video',
   tts: 'newChat.modelSelector.category.tts',
@@ -64,7 +67,7 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   realtime: 'newChat.modelSelector.category.realtime',
   embedding: 'newChat.modelSelector.category.embedding',
   compression: 'newChat.modelSelector.category.compression',
-  other: 'newChat.modelSelector.category.other',
+  'non-chat': 'newChat.modelSelector.category.nonChat',
 };
 
 /**

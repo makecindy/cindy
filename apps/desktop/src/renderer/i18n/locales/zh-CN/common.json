@@ -5520,7 +5520,8 @@
         "realtime": "实时语音",
         "embedding": "向量",
         "compression": "压缩",
-        "other": "其它"
+        "other": "其它",
+        "nonChat": "其它端点"
       },
       "search": {
         "placeholder": "搜索 {{source}} 的模型…",

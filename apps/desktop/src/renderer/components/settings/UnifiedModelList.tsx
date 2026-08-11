@@ -63,13 +63,15 @@ const AGENT_LABEL: Record<AgentKind, string> = {
 
 /**
  * 分组折叠态(仅 UI 展示,按设备记忆)。非对话类型组(图像/视频/语音合成/语音转写/
- * 实时音频/向量/压缩/其它)默认折叠——它们是网关多出的、不能当 agent 用的模型,默认
- * 收起让列表清爽;对话厂商组默认展开;底部「已停用」分区(key = '__disabled')默认
- * **展开**——区里有东西说明是用户主动停的,找回路径要一眼可见。只存用户显式改过的组
- * (与 modelVisibilityPrefs 同哲学:未改的跟随默认),搜索时强制全展开。
+ * 实时音频/向量/压缩/其它端点)默认折叠——它们是网关多出的、不能当 agent 用的模型,默认
+ * 收起让列表清爽;对话厂商组(含认不出厂商的「其它」)默认展开;底部「已停用」分区
+ * (key = '__disabled')默认**展开**——区里有东西说明是用户主动停的,找回路径要一眼可见。
+ * 只存用户显式改过的组(与 modelVisibilityPrefs 同哲学:未改的跟随默认),搜索时强制全展开。
  * CAPABILITY_CATEGORIES 同时就是「能力模型组」的判定(成员 = classification 的非 agent 分组)。
  */
-const COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v1';
+const COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v2';
+/** v1 的 'other' 指「不能对话的其它端点」(现已改名 'non-chat'),迁移时按新名搬过去。 */
+const LEGACY_COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v1';
 const DISABLED_GROUP_KEY = '__disabled';
 const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'image',
@@ -79,15 +81,29 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'realtime',
   'embedding',
   'compression',
-  'other',
+  // 'other'(认不出厂商的对话模型)**不在**这里:它有显示轴、可被选中,是对话厂商组。
+  'non-chat',
 ]);
 const DEFAULT_COLLAPSED_CATEGORIES = CAPABILITY_CATEGORIES;
 
-function loadCollapsedMap(): Record<string, boolean> {
+function readCollapsedMap(key: string): Record<string, boolean> | null {
+  const raw = window.localStorage.getItem(key);
+  const parsed: unknown = raw ? JSON.parse(raw) : null;
+  return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : null;
+}
+
+/** 导出仅供单测:v1 → v2 的一次性搬迁只跑在升级后的首次挂载上,值得有回归锁。 */
+export function loadCollapsedMap(): Record<string, boolean> {
   try {
-    const raw = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
+    const current = readCollapsedMap(COLLAPSE_STORAGE_KEY);
+    if (current) return current;
+    // v1 → v2:分类名 'other' 的语义已经让给「认不出厂商的对话模型」,旧值搬到
+    // 'non-chat' 才是用户当初的意思(他收起/展开的是那组不能对话的端点)。不搬会让
+    // 旧的 collapsed=true 落到新的「其它」对话组上,凭空收起一组可选模型。
+    const legacy = readCollapsedMap(LEGACY_COLLAPSE_STORAGE_KEY);
+    if (!legacy) return {};
+    const { other: legacyNonChat, ...rest } = legacy;
+    return legacyNonChat === undefined ? rest : { ...rest, 'non-chat': legacyNonChat };
   } catch {
     return {};
   }

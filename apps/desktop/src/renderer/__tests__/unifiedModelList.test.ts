@@ -13,6 +13,7 @@ import {
   isCapabilityRow,
   isRowDisabled,
   isRowDiverged,
+  loadCollapsedMap,
 } from '@/components/settings/UnifiedModelList';
 import { __resetForTest, setModelVisibility } from '@/state/modelVisibilityPrefs';
 
@@ -255,5 +256,35 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     const rows = buildUnionRows(withImage);
     expect(isCapabilityRow(rows.find((r) => r.id === 'gpt-image-2')!, false)).toBe(true);
     expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
+  });
+});
+
+describe('折叠态 v1 → v2 迁移(分类 other 的语义已让给「认不出厂商的对话模型」)', () => {
+  const V1 = 'xdt:modelListCollapsedGroups:v1';
+  const V2 = 'xdt:modelListCollapsedGroups:v2';
+
+  afterEach(() => {
+    window.localStorage.removeItem(V1);
+    window.localStorage.removeItem(V2);
+  });
+
+  it('v1 的 other 搬到 non-chat,其余分组原样保留 —— 不让旧的「收起」落到新的对话组上', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true, image: false, china: true }));
+    expect(loadCollapsedMap()).toEqual({ 'non-chat': true, image: false, china: true });
+  });
+
+  it('v1 没记过 other 时不凭空造键', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ embedding: false }));
+    expect(loadCollapsedMap()).toEqual({ embedding: false });
+  });
+
+  it('v2 已存在时直接用它,不再回读 v1', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V2, JSON.stringify({ image: true }));
+    expect(loadCollapsedMap()).toEqual({ image: true });
+  });
+
+  it('两代都没有 → 空表(全部跟随默认)', () => {
+    expect(loadCollapsedMap()).toEqual({});
   });
 });

@@ -48,7 +48,8 @@ describe('categorize', () => {
     expect(categorize('gpt-5.4')).toBe('gpt');
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('gemini-3-pro')).toBe('google');
-    expect(categorize('moonshotai/kimi-k2')).toBe('china');
+    // 认不出厂商 → 中性兜底组(「国内」只由目录 group 产生,见下方专门用例)
+    expect(categorize('moonshotai/kimi-k2')).toBe('other');
   });
 
   it('非对话类型先于厂商前缀判定(网关杂项模型按类型归组,不误入 gpt/google)', () => {
@@ -138,7 +139,7 @@ describe('categorize', () => {
 
   it('大小写混用的 id(自定义 OAuth 极简发现常见,如 Qwen/Qwen3-Embedding-8B)兜底判定不区分大小写(2026-07 review 第 20 轮)', () => {
     expect(categorize('Qwen/Qwen3-Embedding-8B')).toBe('embedding');
-    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('other');
+    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('non-chat');
     expect(categorize('DALL-E-3')).toBe('image');
     expect(isChatEligible({ id: 'Qwen/Qwen3-Embedding-8B' })).toBe(false);
     expect(isChatEligible({ id: 'Qwen/Qwen3-Reranker-8B' })).toBe(false);
@@ -171,7 +172,7 @@ describe('categorize', () => {
   it('realtime 与遗留 Completions 家族同样要兼容命名空间前缀(如 openai/gpt-realtime-preview、openai/babbage-002,2026-07 review 第 21 轮)', () => {
     expect(categorize('openai/gpt-realtime-preview')).toBe('realtime');
     expect(categorize('openai/gpt-4o-realtime-preview')).toBe('realtime');
-    expect(categorize('openai/babbage-002')).toBe('other');
+    expect(categorize('openai/babbage-002')).toBe('non-chat');
     expect(isChatEligible({ id: 'openai/gpt-realtime-preview' })).toBe(false);
     expect(isChatEligible({ id: 'openai/babbage-002' })).toBe(false);
   });
@@ -186,36 +187,98 @@ describe('categorize', () => {
     expect(categorize('gateway/openai/sora-2')).toBe('video');
     expect(categorize('org/cohere/embed-english-v3.0')).toBe('embedding');
     expect(categorize('gateway/openai/gpt-4o-realtime-preview')).toBe('realtime');
-    expect(categorize('gateway/openai/babbage-002')).toBe('other');
+    expect(categorize('gateway/openai/babbage-002')).toBe('non-chat');
     expect(isChatEligible({ id: 'gateway/openai/dall-e-3' })).toBe(false);
     expect(isChatEligible({ id: 'org/cohere/embed-english-v3.0' })).toBe(false);
   });
 
-  it('moderation 模型不落进厂商兜底组、不被判定为可聊天(2026-07 review:fresh evidence,不是issue 列出的语义类型之一,落 other 保留)', () => {
-    expect(categorize('omni-moderation-latest')).toBe('other');
-    expect(categorize('text-moderation-latest')).toBe('other');
+  it('moderation 模型不落进厂商兜底组、不被判定为可聊天(2026-07 review:fresh evidence,不是issue 列出的语义类型之一,落 non-chat 保留)', () => {
+    expect(categorize('omni-moderation-latest')).toBe('non-chat');
+    expect(categorize('text-moderation-latest')).toBe('non-chat');
     expect(isChatEligible({ id: 'omni-moderation-latest' })).toBe(false);
     expect(isChatEligible({ id: 'text-moderation-latest' })).toBe(false);
   });
 
   it('遗留 Completions 端点与 Rerank 端点不落进厂商兜底组、不被判定为可聊天(2026-07 review 第 15 轮)', () => {
-    expect(categorize('babbage-002')).toBe('other');
-    expect(categorize('davinci-002')).toBe('other');
-    expect(categorize('gpt-3.5-turbo-instruct')).toBe('other');
-    expect(categorize('text-davinci-003')).toBe('other');
-    expect(categorize('code-davinci-002')).toBe('other');
-    expect(categorize('rerank-v3.5')).toBe('other');
-    expect(categorize('rerank-english-v3.0')).toBe('other');
+    expect(categorize('babbage-002')).toBe('non-chat');
+    expect(categorize('davinci-002')).toBe('non-chat');
+    expect(categorize('gpt-3.5-turbo-instruct')).toBe('non-chat');
+    expect(categorize('text-davinci-003')).toBe('non-chat');
+    expect(categorize('code-davinci-002')).toBe('non-chat');
+    expect(categorize('rerank-v3.5')).toBe('non-chat');
+    expect(categorize('rerank-english-v3.0')).toBe('non-chat');
     expect(isChatEligible({ id: 'babbage-002' })).toBe(false);
     expect(isChatEligible({ id: 'davinci-002' })).toBe(false);
     expect(isChatEligible({ id: 'rerank-v3.5' })).toBe(false);
   });
 
   it('"-instruct" 结尾的正常聊天模型不受遗留 Completions 排除规则误杀(2026-07 review 第 15 轮:避免宽泛后缀误伤开源 instruct 模型)', () => {
-    expect(categorize('qwen2.5-72b-instruct')).not.toBe('other');
-    expect(categorize('llama-3-70b-instruct')).not.toBe('other');
+    expect(categorize('qwen2.5-72b-instruct')).not.toBe('non-chat');
+    expect(categorize('llama-3-70b-instruct')).not.toBe('non-chat');
     expect(isChatEligible({ id: 'qwen2.5-72b-instruct' })).toBe(true);
     expect(isChatEligible({ id: 'llama-3-70b-instruct' })).toBe(true);
+  });
+
+  it('认不出厂商的对话模型落中性兜底组 other,不再被标成「国内」(2026-08)', () => {
+    // 兜底改中性前,这批全部落 china —— 分组名是用户直接看见的断言,认不出产地就不该断言。
+    expect(categorize('mistral-large-latest')).toBe('other');
+    expect(categorize('llama-3-70b-instruct')).toBe('other');
+    expect(categorize('command-r-plus')).toBe('other');
+    expect(categorize('gemma-3-27b')).toBe('other'); // Google 出品但不是 gemini- 前缀
+    expect(categorize('sonar-pro')).toBe('other');
+    expect(categorize('nova-pro')).toBe('other');
+    // o 系列与 chatgpt-4o-latest 语义上属 OpenAI,但现有前缀规则(gpt- / chatgpt/)认不出,
+    // 落中性组是**当前**行为;要归 gpt 需要单独补前缀规则,这里先把现状锁住,避免回归成 china。
+    expect(categorize('o3')).toBe('other');
+    expect(categorize('o4-mini')).toBe('other');
+    expect(categorize('chatgpt-4o-latest')).toBe('other');
+    expect(categorize('openai/o3')).toBe('other');
+  });
+
+  it('兜底组仍是对话厂商组:认不出厂商 ≠ 不能对话,不得从 availableModels 消失(2026-08 回归锁)', () => {
+    expect(isChatEligible({ id: 'mistral-large-latest' })).toBe(true);
+    expect(isChatEligible({ id: 'o3' })).toBe(true);
+    expect(isChatEligible({ id: 'some-brand-new-vendor-model' })).toBe(true);
+    // 反向:group 显式声明非对话端点时照旧硬拒(方向不对称,见 isChatEligible 注释)。
+    expect(isChatEligible({ id: 'some-brand-new-vendor-model', group: 'non-chat' })).toBe(false);
+  });
+
+  it('「国内」只认目录下发的 group,客户端不猜产地(2026-08 定案)', () => {
+    // 目录标了就进国内(这是「国内」组唯一的来源)。
+    expect(classifyModel({ id: 'qwen/qwen3.7-max', group: 'china' })).toBe('china');
+    expect(classifyModel({ id: 'z-ai/glm-5.1', group: 'china', mode: 'chat' })).toBe('china');
+    // 同一批 id 在**没有** group 时不再被猜成国内 —— 产地不是 id 能可靠推断的属性,
+    // 猜错等于把别家模型挂到「国内」下面;落中性组由服务端补 group 归位。
+    expect(categorize('qwen/qwen3.7-max')).toBe('other');
+    expect(categorize('z-ai/glm-5.1')).toBe('other');
+    expect(categorize('deepseek/deepseek-v4-pro')).toBe('other');
+    expect(categorize('moonshotai/kimi-k2.6')).toBe('other');
+    expect(categorize('doubao-1.8-pro')).toBe('other');
+    // 未标 group 也照旧可选,不会从 availableModels 消失。
+    expect(isChatEligible({ id: 'qwen/qwen3.7-max' })).toBe(true);
+  });
+
+  it('主厂商前缀认命名空间形态:目录 id 本来就带命名空间,缺 group 时不该整批掉进兜底组', () => {
+    // catalog/model-registry.json 里的 id 形态就是这样(2026-08 实测 45 条全部带命名空间)。
+    expect(categorize('anthropic/claude-opus-5')).toBe('anthropic');
+    expect(categorize('openai/gpt-5.5')).toBe('gpt');
+    expect(categorize('openai/gpt-5.4-mini')).toBe('gpt');
+    expect(categorize('google/gemini-3.5-flash')).toBe('google');
+    expect(categorize('gateway/anthropic/claude-sonnet-5')).toBe('anthropic'); // 多层同样取尾段
+    // 折扣路由不能被"认尾段"的 gpt 规则抢走:codex/gpt-5.4 的尾段就是 gpt-5.4。
+    expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
+    expect(categorize('codex/gpt-5.6-sol')).toBe('gpt-budget');
+    // xd/codex-gpt-* 的尾段是 codex-gpt-*,不以 gpt- 开头,同样不落 gpt 组。
+    expect(categorize('xd/codex-gpt-5.5')).not.toBe('gpt');
+    expect(groupOf({ id: 'xd/codex-gpt-5.5', group: 'gpt-budget' })).toBe('gpt-budget');
+  });
+
+  it('非对话类型判定优先于兜底:qwen 家族的语音/向量/重排端点各归其类,不落对话兜底组', () => {
+    expect(categorize('qwen-tts')).toBe('tts');
+    expect(categorize('qwen3-asr-flash-realtime')).toBe('stt');
+    expect(categorize('Qwen/Qwen3-Embedding-8B')).toBe('embedding');
+    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('non-chat');
+    expect(isChatEligible({ id: 'qwen-tts' })).toBe(false);
   });
 });
 
@@ -274,9 +337,9 @@ describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', ()
     },
   );
 
-  it('未识别的 mode 值不静默丢弃,落 other(issue #882 第 5 点:无损保留新类型)', () => {
-    expect(classifyModel({ id: 'ai-gateway-doc', mode: 'doc_rerank' })).toBe('other');
-    expect(classifyModel({ id: 'some-future-model', mode: 'brand-new-capability' })).toBe('other');
+  it('未识别的 mode 值不静默丢弃,落 non-chat(issue #882 第 5 点:无损保留新类型)', () => {
+    expect(classifyModel({ id: 'ai-gateway-doc', mode: 'doc_rerank' })).toBe('non-chat');
+    expect(classifyModel({ id: 'some-future-model', mode: 'brand-new-capability' })).toBe('non-chat');
   });
 
   it('mode 缺省时回退 groupOf/categorize(旧缓存兜底,同 issue 点名的具体 bug 修复)', () => {
