@@ -43,11 +43,11 @@ export function isSubscriptionDirectModel(model: string | null | undefined): boo
 // `ungrouped` = **认不出厂商的对话模型**(categorize 的兜底)。它属于对话厂商组
 // (CHAT_VENDOR_CATEGORIES),照常可选 —— 兜底放行的理由见 isChatEligible。
 // 2026-08 前这个兜底是 `china`,于是 o3 / mistral-* / llama-* / command-r-* / gemma-* 这些
-// 认不出的模型一律被标成「国内」;分组名是用户直接看见的断言,认不出就不该替它断言产地。
+// 认不出的模型一律被标成「中国」;分组名是用户直接看见的断言,认不出就不该替它断言产地。
 //
-// 相应地,`china` 从此**只由目录数据产生** —— 服务端下发 `group:'china'` 才进「国内」
+// 相应地,`china` 从此**只由目录数据产生** —— 服务端下发 `group:'china'` 才进「中国」
 // (catalog/model-registry.json 里国产条目全部已标)。客户端不做国产厂商的 id 猜测:
-// 产地不是 id 能可靠推断的属性,猜错的代价是把别家模型挂到「国内」下面。服务端漏标的
+// 产地不是 id 能可靠推断的属性,猜错的代价是把别家模型挂到「中国」下面。服务端漏标的
 // 后果是它落进「未分组」——可自愈,补 group 即归位。
 //
 // `other` = **不能当对话模型用的其它端点**(moderation / rerank / 遗留 Completions /
@@ -153,8 +153,8 @@ function stripNamespace(id: string): string {
 
 // 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 骨折GPT (gateway 低价路由),
 // gemini-* → Google, 认不出厂商的 → `ungrouped`(「未分组」)。
-// **`china` 不在这里**:「国内」只认目录显式下发的 `group:'china'`(见 groupOf)。这里不做
-// 国产厂商的 id 猜测 —— 产地是 id 猜不出来的属性,猜错就是把别家模型标成「国内」;宁可落
+// **`china` 不在这里**:「中国」只认目录显式下发的 `group:'china'`(见 groupOf)。这里不做
+// 国产厂商的 id 猜测 —— 产地是 id 猜不出来的属性,猜错就是把别家模型标成「中国」;宁可落
 // 中性的「未分组」,由服务端补 group 归位。
 // 这是**没有 mode 时**的兜底(旧缓存 / mode 尚未覆盖到的来源);mode 存在时一律用
 // classifyModel,不再猜 id。

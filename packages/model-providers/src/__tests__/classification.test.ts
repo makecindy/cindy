@@ -49,7 +49,7 @@ describe('categorize', () => {
     expect(categorize('gpt-5.4')).toBe('gpt');
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('gemini-3-pro')).toBe('google');
-    // 认不出厂商 → 中性兜底组(「国内」只由目录 group 产生,见下方专门用例)
+    // 认不出厂商 → 中性兜底组(「中国」只由目录 group 产生,见下方专门用例)
     expect(categorize('moonshotai/kimi-k2')).toBe('ungrouped');
   });
 
@@ -220,7 +220,7 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'llama-3-70b-instruct' })).toBe(true);
   });
 
-  it('认不出厂商的对话模型落中性兜底组 ungrouped,不再被标成「国内」(2026-08)', () => {
+  it('认不出厂商的对话模型落中性兜底组 ungrouped,不再被标成「中国」(2026-08)', () => {
     // 兜底改中性前,这批全部落 china —— 分组名是用户直接看见的断言,认不出产地就不该断言。
     expect(categorize('mistral-large-latest')).toBe('ungrouped');
     expect(categorize('llama-3-70b-instruct')).toBe('ungrouped');
@@ -257,12 +257,12 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'some-brand-new-vendor-model', group: 'other' })).toBe(false);
   });
 
-  it('「国内」只认目录下发的 group,客户端不猜产地(2026-08 定案)', () => {
-    // 目录标了就进国内(这是「国内」组唯一的来源)。
+  it('「中国」只认目录下发的 group,客户端不猜产地(2026-08 定案)', () => {
+    // 目录标了就进中国(这是「中国」组唯一的来源)。
     expect(classifyModel({ id: 'qwen/qwen3.7-max', group: 'china' })).toBe('china');
     expect(classifyModel({ id: 'z-ai/glm-5.1', group: 'china', mode: 'chat' })).toBe('china');
-    // 同一批 id 在**没有** group 时不再被猜成国内 —— 产地不是 id 能可靠推断的属性,
-    // 猜错等于把别家模型挂到「国内」下面;落中性组由服务端补 group 归位。
+    // 同一批 id 在**没有** group 时不再被猜成中国来源 —— 产地不是 id 能可靠推断的属性,
+    // 猜错等于把别家模型挂到「中国」下面;落中性组由服务端补 group 归位。
     expect(categorize('qwen/qwen3.7-max')).toBe('ungrouped');
     expect(categorize('z-ai/glm-5.1')).toBe('ungrouped');
     expect(categorize('deepseek/deepseek-v4-pro')).toBe('ungrouped');

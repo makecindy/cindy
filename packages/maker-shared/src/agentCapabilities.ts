@@ -47,7 +47,7 @@ export interface MobileRuntimeDraft {
 }
 
 /**
- * 手机端的粗分类取值。**没有 `china`**:「国内」只由目录的 `group:'china'` 产生,而手机端
+ * 手机端的粗分类取值。**没有 `china`**:「中国」只由目录的 `group:'china'` 产生,而手机端
  * 这条链上只有 model id(descriptor 不透传 group,见桌面 providerModels.toDescriptor),
  * 拿不到该信号,所以国产模型在这里归入 `ungrouped`。这只影响跨厂商切换提示里显示的分类名,
  * 不影响可选性与分组展示(手机端不按厂商分组)。

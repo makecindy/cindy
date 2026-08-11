@@ -51,7 +51,7 @@ describe('categorize', () => {
     expect(categorize('gpt-5.4')).toBe('gpt');
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('gemini-3-pro')).toBe('google');
-    // 认不出厂商 → 中性兜底组;「国内」只由目录 group 产生(见 model-providers 的
+    // 认不出厂商 → 中性兜底组;「中国」只由目录 group 产生(见 model-providers 的
     // classification.test.ts「只认目录下发的 group」用例)。
     expect(categorize('moonshotai/kimi-k2')).toBe('ungrouped');
   });
