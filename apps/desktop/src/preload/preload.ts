@@ -29,6 +29,13 @@ import {
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
 import {
+  WORKLOUDER_CODEX_GET_STATE_CHANNEL,
+  WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderCodexSettingsPatch,
+  type WorkLouderCodexState,
+} from '../shared/workLouderCodex';
+import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
@@ -1530,6 +1537,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     notifyWindowsCloseBehaviorPromptShown: (): void =>
       ipcRenderer.send(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL),
+  },
+
+  workLouderCodex: {
+    getState: (): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_GET_STATE_CHANNEL),
+    setSettings: (patch: WorkLouderCodexSettingsPatch): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, patch),
+    onStateChanged: (callback: (state: WorkLouderCodexState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WorkLouderCodexState): void => {
+        callback(state);
+      };
+      ipcRenderer.on(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+    },
   },
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────

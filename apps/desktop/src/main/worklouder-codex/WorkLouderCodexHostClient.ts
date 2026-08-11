@@ -4,6 +4,7 @@ import {
   type WorkLouderCodexHostRequest,
   type WorkLouderCodexLightingFrame,
 } from './protocol.js';
+import type { WorkLouderCodexConnectionStatus } from '../../shared/workLouderCodex.js';
 import type { WorkLouderCodexLightingSink } from './WorkLouderCodexLightingController.js';
 
 export interface WorkLouderCodexChildLike {
@@ -52,6 +53,10 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private finishDispose: (() => void) | null = null;
   private disposeTimer: ReturnType<typeof setTimeout> | null = null;
   private agentKeyPressHandler: ((slot: number) => void) | null = null;
+  private deviceActivityHandler: (() => void) | null = null;
+  private connectionStatusHandler: ((status: WorkLouderCodexConnectionStatus) => void) | null =
+    null;
+  private connectionStatus: WorkLouderCodexConnectionStatus = 'connecting';
   private wantsHidInput = false;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
@@ -60,6 +65,17 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.agentKeyPressHandler = handler;
     this.wantsHidInput = handler !== null;
     if (this.wantsHidInput) this.requestHidListening();
+  }
+
+  setDeviceActivityHandler(handler: (() => void) | null): void {
+    this.deviceActivityHandler = handler;
+  }
+
+  setConnectionStatusHandler(
+    handler: ((status: WorkLouderCodexConnectionStatus) => void) | null,
+  ): void {
+    this.connectionStatusHandler = handler;
+    handler?.(this.connectionStatus);
   }
 
   update(frame: WorkLouderCodexLightingFrame): void {
@@ -119,6 +135,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
     if (!sdk) {
+      this.updateConnectionStatus('unavailable');
       if (!this.unavailableLogged) {
         this.unavailableLogged = true;
         this.deps.log.info('Codex Micro lighting unavailable: official Work Louder SDK not found');
@@ -127,6 +144,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     let child: WorkLouderCodexChildLike | null = null;
     try {
+      this.updateConnectionStatus('connecting');
       const startedChild = this.deps.fork(sdk.entry);
       child = startedChild;
       this.child = startedChild;
@@ -153,6 +171,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deps.log.warn('failed to start Codex Micro lighting host', {
         error: error instanceof Error ? error.message : String(error),
       });
+      this.updateConnectionStatus('error');
       this.scheduleRestart();
       return null;
     }
@@ -193,8 +212,13 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.agentKeyPressHandler?.(message.slot);
       return;
     }
+    if (message.kind === 'activity') {
+      this.deviceActivityHandler?.();
+      return;
+    }
     if (message.status === this.lastStatus) return;
     this.lastStatus = message.status;
+    this.updateConnectionStatus(message.status);
     if (message.status === 'connected') {
       this.consecutiveCrashes = 0;
       this.deps.log.info('Codex Micro lighting connected');
@@ -214,6 +238,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       return;
     }
     this.deps.log.warn('Codex Micro lighting host exited', { code });
+    this.updateConnectionStatus('error');
     this.scheduleRestart();
   }
 
@@ -259,5 +284,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     const finish = this.finishDispose;
     this.finishDispose = null;
     finish?.();
+  }
+
+  private updateConnectionStatus(status: WorkLouderCodexConnectionStatus): void {
+    if (status === this.connectionStatus) return;
+    this.connectionStatus = status;
+    this.connectionStatusHandler?.(status);
   }
 }

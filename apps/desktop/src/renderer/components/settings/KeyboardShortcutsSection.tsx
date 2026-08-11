@@ -45,6 +45,7 @@ import {
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { WorkLouderCodexEntryContainer, WorkLouderCodexSettings } from './WorkLouderCodexSettings';
 
 const log = createLogger('settings:keyboard-shortcuts');
 
@@ -65,6 +66,7 @@ export function KeyboardShortcutsSection() {
     Record<AppShortcutId, AppShortcutCombo | null>
   >;
   const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
+  const [workLouderSettingsOpen, setWorkLouderSettingsOpen] = useState(false);
   const [error, setError] = useState<RecordingError | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const mutationRequestIdRef = useRef(0);
@@ -236,6 +238,10 @@ export function KeyboardShortcutsSection() {
   const iconButtonClass =
     'inline-flex h-[26px] w-[26px] items-center justify-center rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors';
 
+  if (workLouderSettingsOpen) {
+    return <WorkLouderCodexSettings onBack={() => setWorkLouderSettingsOpen(false)} />;
+  }
+
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="flex items-center justify-between gap-3">
@@ -253,6 +259,8 @@ export function KeyboardShortcutsSection() {
         )}
       </div>
       {globalError && <span className="text-12 text-[var(--error-fg)]">{globalError}</span>}
+
+      <WorkLouderCodexEntryContainer onOpen={() => setWorkLouderSettingsOpen(true)} />
 
       <div
         className={cn(

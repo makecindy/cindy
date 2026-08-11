@@ -3235,6 +3235,71 @@
       "reset": "恢復預設",
       "recording": "按下新快捷鍵…",
       "editAria": "修改 {{name}} 的快捷鍵",
+      "workLouderCodex": {
+        "title": "Work Louder Codex Micro",
+        "entryDescription": "用 6 個 Agent 鍵開啟 Cindy 最近的任務，並用燈光顯示任務狀態。",
+        "openAria": "開啟 Work Louder Codex Micro 設定",
+        "back": "返回鍵盤快捷鍵",
+        "retry": "重試",
+        "errors": {
+          "load": "讀取 Codex Micro 設定失敗",
+          "save": "儲存 Codex Micro 設定失敗"
+        },
+        "connection": {
+          "label": "連線",
+          "status": {
+            "connecting": "正在連線",
+            "connected": "已連線",
+            "not-detected": "未偵測到",
+            "error": "連線異常",
+            "unavailable": "SDK 無法使用"
+          },
+          "descriptions": {
+            "connecting": "Cindy 正在啟動 Work Louder 裝置服務。",
+            "connected": "USB 已連線，Cindy 正在監聽按鍵並同步任務燈效。",
+            "not-detected": "請用支援資料傳輸的 USB 線連接鍵盤；如果 ChatGPT 正在占用裝置，請先關閉。",
+            "error": "Cindy 暫時無法與鍵盤通訊，正在自動重試。",
+            "unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。"
+          }
+        },
+        "lighting": {
+          "title": "燈光",
+          "brightness": {
+            "label": "亮度",
+            "description": "調整鍵帽燈、任務燈和環形燈的整體亮度。",
+            "aria": "調整 Codex Micro 燈光亮度"
+          },
+          "autoDim": {
+            "label": "自動熄燈",
+            "description": "閒置後關閉燈光；使用鍵盤或任務狀態變更時自動恢復。",
+            "aria": "選擇 Codex Micro 自動熄燈時間",
+            "options": {
+              "off": "關閉",
+              "30-seconds": "30 秒",
+              "1-minute": "1 分鐘",
+              "3-minutes": "3 分鐘",
+              "10-minutes": "10 分鐘",
+              "30-minutes": "30 分鐘",
+              "1-hour": "1 小時"
+            }
+          }
+        },
+        "agentKeys": {
+          "title": "Agent 鍵",
+          "source": {
+            "label": "任務順序",
+            "description": "AG00～AG05 依最近 6 個活躍任務排列，置頂不會改變順序。",
+            "value": "最近 6 個"
+          },
+          "singleTap": {
+            "label": "按一下啟用 Cindy",
+            "description": "按一下就開啟對應任務並啟用 Cindy；關閉後需要連按兩下。",
+            "aria": "按一下 Agent 鍵啟用 Cindy"
+          },
+          "slot": "最近第 {{position}} 個",
+          "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務"
+        }
+      },
       "errors": {
         "saveFailed": "儲存快捷鍵設定失敗",
         "notBindable": "該組合鍵不可用",

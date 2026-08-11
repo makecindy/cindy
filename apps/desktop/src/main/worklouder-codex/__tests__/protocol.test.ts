@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentIslandSessionActivity } from '../../../shared/agentIsland.js';
 import {
+  applyWorkLouderCodexLightingBrightness,
+  createWorkLouderCodexOffFrame,
   createWorkLouderCodexLightingFrame,
   isWorkLouderCodexHostMessage,
   isWorkLouderCodexLightingFrameOff,
@@ -90,5 +92,30 @@ describe('Work Louder Agent key protocol', () => {
     expect(isWorkLouderCodexHostMessage({ kind: 'agent-key', slot: 5 })).toBe(true);
     expect(isWorkLouderCodexHostMessage({ kind: 'agent-key', slot: 6 })).toBe(false);
     expect(isWorkLouderCodexHostMessage({ kind: 'agent-key', slot: 1.5 })).toBe(false);
+  });
+
+  it('accepts the activity notification and rejects malformed variants', () => {
+    expect(isWorkLouderCodexHostMessage({ kind: 'activity' })).toBe(true);
+    expect(isWorkLouderCodexHostMessage({ kind: 'device-activity' })).toBe(false);
+    expect(isWorkLouderCodexHostMessage(null)).toBe(false);
+  });
+});
+
+describe('Work Louder lighting settings', () => {
+  it('scales every zone without mutating the semantic frame', () => {
+    const frame = createWorkLouderCodexLightingFrame([activity('one', 'running')]);
+    const scaled = applyWorkLouderCodexLightingBrightness(frame, 50);
+
+    expect(scaled.ambient.brightness).toBe(frame.ambient.brightness * 0.5);
+    expect(scaled.keys.brightness).toBe(frame.keys.brightness * 0.5);
+    expect(scaled.threads[0]?.brightness).toBe(frame.threads[0]?.brightness * 0.5);
+    expect(frame.ambient.brightness).toBe(0.7);
+  });
+
+  it('creates a complete six-slot off frame', () => {
+    const frame = createWorkLouderCodexOffFrame();
+
+    expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(true);
+    expect(frame.threads.map((thread) => thread.id)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 });

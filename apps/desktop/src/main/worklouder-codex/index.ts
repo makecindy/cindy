@@ -1,15 +1,27 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { utilityProcess } from 'electron';
+import { BrowserWindow, ipcMain, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { focusMainWindow, openMainWindowSession } from '../deepLink.js';
+import {
+  WORKLOUDER_CODEX_GET_STATE_CHANNEL,
+  WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderCodexState,
+} from '../../shared/workLouderCodex.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from '../security/trustedAppRenderer.js';
 import {
   WorkLouderCodexHostClient,
   type WorkLouderSdkLocation,
 } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
+import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
+import { readWorkLouderCodexSettings, writeWorkLouderCodexSettingsPatch } from './settingsStore.js';
 import { listWorkLouderCodexTaskSlots } from './taskSlots.js';
 
 const log = createLogger('worklouder-codex');
@@ -64,3 +76,35 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
   },
   listWorkLouderCodexTaskSlots,
 );
+
+let settingsIpcRegistered = false;
+
+/** Registers the local-desktop-only device settings bridge after Electron is ready. */
+export function registerWorkLouderCodexSettingsIpc(): void {
+  if (settingsIpcRegistered) return;
+  settingsIpcRegistered = true;
+
+  workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
+  const handlers = createWorkLouderCodexSettingsIpc({
+    assertTrustedSender: (event) => assertTrustedAppRendererEvent(event as never),
+    getState: () => workLouderCodexLightingController.getState(),
+    writeSettings: writeWorkLouderCodexSettingsPatch,
+    applySettings: (settings) => workLouderCodexLightingController.applySettings(settings),
+  });
+
+  ipcMain.handle(WORKLOUDER_CODEX_GET_STATE_CHANNEL, (event) => handlers.get(event));
+  ipcMain.handle(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, (event, patch: unknown) =>
+    handlers.set(event, patch),
+  );
+
+  workLouderCodexLightingController.subscribeState((state) => {
+    broadcastState(state);
+  });
+}
+
+function broadcastState(state: WorkLouderCodexState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppRendererWindow(window)) continue;
+    window.webContents.send(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, state);
+  }
+}

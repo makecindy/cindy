@@ -3235,6 +3235,71 @@
       "reset": "기본값으로 재설정",
       "recording": "새 단축키를 누르세요…",
       "editAria": "{{name}} 단축키 변경",
+      "workLouderCodex": {
+        "title": "Work Louder Codex Micro",
+        "entryDescription": "6개의 Agent 키로 Cindy의 최근 작업을 열고 조명으로 상태를 표시합니다.",
+        "openAria": "Work Louder Codex Micro 설정 열기",
+        "back": "키보드 단축키로 돌아가기",
+        "retry": "다시 시도",
+        "errors": {
+          "load": "Codex Micro 설정을 불러오지 못했습니다",
+          "save": "Codex Micro 설정을 저장하지 못했습니다"
+        },
+        "connection": {
+          "label": "연결",
+          "status": {
+            "connecting": "연결 중",
+            "connected": "연결됨",
+            "not-detected": "감지되지 않음",
+            "error": "연결 문제",
+            "unavailable": "SDK 사용 불가"
+          },
+          "descriptions": {
+            "connecting": "Cindy가 Work Louder 장치 서비스를 시작하고 있습니다.",
+            "connected": "USB가 연결되었습니다. Cindy가 키 입력을 수신하고 작업 조명을 동기화합니다.",
+            "not-detected": "데이터 전송을 지원하는 USB 케이블로 연결하세요. ChatGPT가 장치를 사용 중이면 종료하세요.",
+            "error": "Cindy가 키보드와 통신하지 못해 자동으로 다시 시도하고 있습니다.",
+            "unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요."
+          }
+        },
+        "lighting": {
+          "title": "조명",
+          "brightness": {
+            "label": "밝기",
+            "description": "키, 작업, 주변 조명의 전체 밝기를 조절합니다.",
+            "aria": "Codex Micro 조명 밝기 조절"
+          },
+          "autoDim": {
+            "label": "자동 끄기",
+            "description": "사용하지 않으면 조명을 끄고 키보드 사용 또는 작업 상태 변경 시 다시 켭니다.",
+            "aria": "Codex Micro 자동 끄기 시간 선택",
+            "options": {
+              "off": "끄기",
+              "30-seconds": "30초",
+              "1-minute": "1분",
+              "3-minutes": "3분",
+              "10-minutes": "10분",
+              "30-minutes": "30분",
+              "1-hour": "1시간"
+            }
+          }
+        },
+        "agentKeys": {
+          "title": "Agent 키",
+          "source": {
+            "label": "작업 순서",
+            "description": "AG00~AG05는 최근 활성 작업 6개 순서이며 고정 순서는 사용하지 않습니다.",
+            "value": "최근 6개"
+          },
+          "singleTap": {
+            "label": "한 번 눌러 Cindy 활성화",
+            "description": "한 번 누르면 해당 작업을 열고 Cindy를 활성화합니다. 끄면 두 번 눌러야 합니다.",
+            "aria": "Agent 키를 한 번 눌러 Cindy 활성화"
+          },
+          "slot": "최근 {{position}}번째",
+          "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기"
+        }
+      },
       "errors": {
         "saveFailed": "단축키 설정 저장에 실패했습니다",
         "notBindable": "이 키 조합은 사용할 수 없습니다",

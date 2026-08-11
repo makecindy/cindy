@@ -7,6 +7,7 @@
 import { createRequire } from 'node:module';
 
 import {
+  createWorkLouderCodexOffFrame,
   isWorkLouderCodexLightingFrameOff,
   parseWorkLouderCodexAgentKeyPress,
   type WorkLouderCodexHostMessage,
@@ -70,6 +71,7 @@ let applyTask: Promise<void> | null = null;
 let stopping = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastLoggedError: string | null = null;
+let lastActivityPostedAt = 0;
 
 if (parentPort) {
   parentPort.on('message', (event) => {
@@ -243,6 +245,11 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   const nextApi = new loaded.RPCApiOAI(nextComm, sdkLogger);
   if (typeof nextApi.onHidReceived === 'function') {
     const unsubscribe = nextApi.onHidReceived((event) => {
+      const now = Date.now();
+      if (now - lastActivityPostedAt >= 250) {
+        lastActivityPostedAt = now;
+        post({ kind: 'activity' });
+      }
       const slot = parseWorkLouderCodexAgentKeyPress(event);
       if (slot !== null) post({ kind: 'agent-key', slot });
     });
@@ -311,7 +318,7 @@ async function stop(): Promise<void> {
   }
   const currentApi = api;
   if (currentApi) {
-    const off = offFrame();
+    const off = createWorkLouderCodexOffFrame();
     await Promise.allSettled([
       currentApi.sendLightingConfig({ ambient: off.ambient, keys: off.keys }),
       currentApi.sendThreadsLighting(off.threads),
@@ -319,21 +326,4 @@ async function stop(): Promise<void> {
   }
   await disconnect();
   post({ kind: 'stopped' });
-}
-
-function offFrame(): WorkLouderCodexLightingFrame {
-  const offSide = { effect: 0, brightness: 0, speed: 0, magic: 0, color: 0 };
-  return {
-    ambient: offSide,
-    keys: offSide,
-    threads: Array.from({ length: 6 }, (_, id) => ({
-      id,
-      color: 0,
-      brightness: 0,
-      effect: 0,
-      speed: 0,
-      syncKeysLighting: false,
-      syncAmbientLighting: false,
-    })),
-  };
 }

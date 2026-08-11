@@ -3235,6 +3235,71 @@
       "reset": "恢复默认",
       "recording": "按下新快捷键…",
       "editAria": "修改 {{name}} 的快捷键",
+      "workLouderCodex": {
+        "title": "Work Louder Codex Micro",
+        "entryDescription": "用 6 个 Agent 键打开 Cindy 最近的任务，并用灯光显示任务状态。",
+        "openAria": "打开 Work Louder Codex Micro 设置",
+        "back": "返回键盘快捷键",
+        "retry": "重试",
+        "errors": {
+          "load": "读取 Codex Micro 设置失败",
+          "save": "保存 Codex Micro 设置失败"
+        },
+        "connection": {
+          "label": "连接",
+          "status": {
+            "connecting": "正在连接",
+            "connected": "已连接",
+            "not-detected": "未检测到",
+            "error": "连接异常",
+            "unavailable": "SDK 不可用"
+          },
+          "descriptions": {
+            "connecting": "Cindy 正在启动 Work Louder 设备服务。",
+            "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+            "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
+            "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
+            "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。"
+          }
+        },
+        "lighting": {
+          "title": "灯光",
+          "brightness": {
+            "label": "亮度",
+            "description": "调整键帽灯、任务灯和环形灯的整体亮度。",
+            "aria": "调整 Codex Micro 灯光亮度"
+          },
+          "autoDim": {
+            "label": "自动熄灯",
+            "description": "闲置后关闭灯光；使用键盘或任务状态变化时自动恢复。",
+            "aria": "选择 Codex Micro 自动熄灯时间",
+            "options": {
+              "off": "关闭",
+              "30-seconds": "30 秒",
+              "1-minute": "1 分钟",
+              "3-minutes": "3 分钟",
+              "10-minutes": "10 分钟",
+              "30-minutes": "30 分钟",
+              "1-hour": "1 小时"
+            }
+          }
+        },
+        "agentKeys": {
+          "title": "Agent 键",
+          "source": {
+            "label": "任务顺序",
+            "description": "AG00～AG05 按最近 6 个活跃任务排列，置顶不会改变顺序。",
+            "value": "最近 6 个"
+          },
+          "singleTap": {
+            "label": "按一下激活 Cindy",
+            "description": "按一下就打开对应任务并激活 Cindy；关闭后需要连按两下。",
+            "aria": "按一下 Agent 键激活 Cindy"
+          },
+          "slot": "最近第 {{position}} 个",
+          "slotAria": "AG{{slot}} 打开最近第 {{position}} 个任务"
+        }
+      },
       "errors": {
         "saveFailed": "保存快捷键设置失败",
         "notBindable": "该组合键不可用",

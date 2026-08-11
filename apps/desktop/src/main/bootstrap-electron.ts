@@ -350,7 +350,10 @@ import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
-import { workLouderCodexLightingController } from './worklouder-codex/index.js';
+import {
+  registerWorkLouderCodexSettingsIpc,
+  workLouderCodexLightingController,
+} from './worklouder-codex/index.js';
 import {
   isAppContentWindow,
   isFocusedAppContentWindow,
@@ -6869,6 +6872,7 @@ app.on('ready', async () => {
   });
 
   registerIpcHandlers();
+  registerWorkLouderCodexSettingsIpc();
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
   // 无 DB / 无登录依赖,随其它顶层 handler 一起注册即可。
   registerFsBrowseIpc();

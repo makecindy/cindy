@@ -47,6 +47,16 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     vi.restoreAllMocks();
   });
 
+  it('opens the Work Louder device settings from the keyboard-shortcuts page', () => {
+    mocks.getOverrides.mockReturnValue({});
+    mocks.getCombos.mockReturnValue([]);
+
+    render(<KeyboardShortcutsSection />);
+    fireEvent.click(screen.getByLabelText('settings.shortcuts.workLouderCodex.openAria'));
+
+    expect(screen.getByLabelText('settings.shortcuts.workLouderCodex.back')).toBeTruthy();
+  });
+
   it('ignores an older mutation failure after a newer mutation succeeds', async () => {
     let rejectOlder!: (reason: unknown) => void;
     const olderRequest = new Promise<{ overrides: Record<string, unknown> }>((_resolve, reject) => {

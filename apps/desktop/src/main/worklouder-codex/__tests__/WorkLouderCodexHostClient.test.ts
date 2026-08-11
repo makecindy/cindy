@@ -125,6 +125,46 @@ describe('WorkLouderCodexHostClient', () => {
     expect(onAgentKeyPress).toHaveBeenCalledWith(4);
   });
 
+  it('forwards device activity and connection status changes', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    const onActivity = vi.fn();
+    const onStatus = vi.fn();
+    client.setDeviceActivityHandler(onActivity);
+    client.setConnectionStatusHandler(onStatus);
+    client.setAgentKeyPressHandler(vi.fn());
+
+    child.emit('message', { kind: 'activity' });
+    child.emit('message', { kind: 'state', status: 'connected' });
+    child.emit('message', { kind: 'state', status: 'connected' });
+    child.emit('message', { kind: 'state', status: 'not-detected' });
+
+    expect(onActivity).toHaveBeenCalledOnce();
+    expect(onStatus.mock.calls.map(([status]) => status)).toEqual([
+      'connecting',
+      'connected',
+      'not-detected',
+    ]);
+  });
+
+  it('reports unavailable when the official SDK cannot be resolved', () => {
+    const resolveSdk = vi.fn(() => null);
+    const fork = vi.fn();
+    const client = new WorkLouderCodexHostClient({ resolveSdk, fork, log: logger() });
+    const onStatus = vi.fn();
+    client.setConnectionStatusHandler(onStatus);
+
+    client.setAgentKeyPressHandler(vi.fn());
+
+    expect(resolveSdk).toHaveBeenCalledOnce();
+    expect(fork).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith('unavailable');
+  });
+
   it('restarts the isolated host after a native-process crash', async () => {
     vi.useFakeTimers();
     try {

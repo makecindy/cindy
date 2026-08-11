@@ -71,6 +71,9 @@ type PendingRemotePrecreatedWorktreeTarget =
 type RemotePrecreatedWorktreeLedgerSnapshot =
   import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
 type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawReleaseNotes;
+type WorkLouderCodexSettingsPatch =
+  import('../shared/workLouderCodex').WorkLouderCodexSettingsPatch;
+type WorkLouderCodexState = import('../shared/workLouderCodex').WorkLouderCodexState;
 
 interface NewMakerWorktreeBranchPreferenceSnapshot {
   baseRepo: string;
@@ -1807,6 +1810,12 @@ interface ElectronAPI {
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
     onWindowsCloseBehaviorRequested: (callback: () => void) => () => void;
     notifyWindowsCloseBehaviorPromptShown: () => void;
+  };
+
+  workLouderCodex: {
+    getState: () => Promise<WorkLouderCodexState>;
+    setSettings: (patch: WorkLouderCodexSettingsPatch) => Promise<WorkLouderCodexState>;
+    onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
   };
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────

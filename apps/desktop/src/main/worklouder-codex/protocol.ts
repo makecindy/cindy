@@ -1,4 +1,7 @@
 import type { AgentIslandSessionActivity } from '../../shared/agentIsland.js';
+import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
+
+export { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
 
 export const enum WorkLouderLightingEffect {
   Off = 0,
@@ -34,8 +37,6 @@ export interface WorkLouderCodexLightingFrame {
   threads: WorkLouderThreadLighting[];
 }
 
-export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 6;
-
 export type WorkLouderCodexHostRequest =
   | { kind: 'init'; sdkEntry: string }
   | { kind: 'listen' }
@@ -45,6 +46,7 @@ export type WorkLouderCodexHostRequest =
 export type WorkLouderCodexHostMessage =
   | { kind: 'state'; status: 'connected' | 'not-detected' | 'error' }
   | { kind: 'agent-key'; slot: number }
+  | { kind: 'activity' }
   | { kind: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; message: string }
   | { kind: 'stopped' };
 
@@ -134,10 +136,43 @@ export function isWorkLouderCodexLightingFrameOff(frame: WorkLouderCodexLighting
   );
 }
 
+/** Applies the user-facing overall brightness without mutating the semantic frame. */
+export function applyWorkLouderCodexLightingBrightness(
+  frame: WorkLouderCodexLightingFrame,
+  brightnessPercent: number,
+): WorkLouderCodexLightingFrame {
+  const factor = Math.max(0, Math.min(100, brightnessPercent)) / 100;
+  return {
+    ambient: { ...frame.ambient, brightness: frame.ambient.brightness * factor },
+    keys: { ...frame.keys, brightness: frame.keys.brightness * factor },
+    threads: frame.threads.map((thread) => ({
+      ...thread,
+      brightness: thread.brightness * factor,
+    })),
+  };
+}
+
+export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
+  return {
+    ambient: { ...OFF_SIDE },
+    keys: { ...OFF_SIDE },
+    threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
+      id,
+      color: 0,
+      brightness: 0,
+      effect: WorkLouderLightingEffect.Off,
+      speed: 0,
+      syncKeysLighting: false,
+      syncAmbientLighting: false,
+    })),
+  };
+}
+
 export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLouderCodexHostMessage {
   if (!value || typeof value !== 'object') return false;
   const message = value as { kind?: unknown; status?: unknown; level?: unknown; message?: unknown };
   if (message.kind === 'stopped') return true;
+  if (message.kind === 'activity') return true;
   if (message.kind === 'agent-key') {
     const slot = (message as { slot?: unknown }).slot;
     return (
