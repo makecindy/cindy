@@ -291,6 +291,9 @@ describe('iOS Simulator host', () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-lazy-reconcile-'));
       const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
       const registryPath = path.join(root, 'ios-simulator', 'ownership-registry.json');
+      const evidencePath = path.join(root, 'ios-simulator', 'pending-create-evidence.json');
+      await mkdir(path.dirname(evidencePath), { recursive: true });
+      await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
       const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
       let finishRecovery: (value: readonly string[]) => void = () => undefined;
       const recoverPendingCreatesAtStartup = vi.fn(
@@ -318,6 +321,9 @@ describe('iOS Simulator host', () => {
         finishRecovery([]);
         await expect(recovering).resolves.toBeUndefined();
         expect(competingRegistry.acquireWriterSync()).toBe(true);
+        // A completed sweep retires the breadcrumb, so the next startup has no
+        // reason to touch CoreSimulator at all.
+        await expect(stat(evidencePath)).rejects.toMatchObject({ code: 'ENOENT' });
       } finally {
         competingRegistry.releaseWriterSync();
         getPath.mockRestore();
@@ -325,6 +331,66 @@ describe('iOS Simulator host', () => {
       }
     },
   );
+
+  itMac(
+    'performs no simulator probe at startup when the profile never created a device',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-quiet-startup-'));
+      const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
+      const registryPath = path.join(root, 'ios-simulator', 'ownership-registry.json');
+      const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
+      const createLifecycle = vi.fn();
+      try {
+        await expect(
+          reconcilePersistedIOSSimulatorOwnership({ createLifecycle }),
+        ).resolves.toBeUndefined();
+
+        // No lifecycle means no xcrun/xcodebuild child process, so macOS never
+        // raises an Xcode consent prompt detached from a user action.
+        expect(createLifecycle).not.toHaveBeenCalled();
+        expect(competingRegistry.acquireWriterSync()).toBe(true);
+      } finally {
+        competingRegistry.releaseWriterSync();
+        getPath.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  itMac('retries an interrupted-create sweep that failed on the next startup', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-failed-sweep-'));
+    const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
+    const evidencePath = path.join(root, 'ios-simulator', 'pending-create-evidence.json');
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
+    const competingRegistry = new IOSSimulatorOwnershipRegistryFile(
+      path.join(root, 'ios-simulator', 'ownership-registry.json'),
+    );
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      recoverPendingCreatesAtStartup: vi.fn(async () => {
+        throw new Error('simctl list failed');
+      }),
+      deleteExact: vi.fn(),
+    };
+    try {
+      await expect(
+        reconcilePersistedIOSSimulatorOwnership({ createLifecycle: () => lifecycle }),
+      ).resolves.toBeUndefined();
+
+      // Keeping the breadcrumb is what makes the retry happen; dropping it here
+      // would leak the hidden marker device.
+      await expect(stat(evidencePath)).resolves.toMatchObject({});
+      expect(competingRegistry.acquireWriterSync()).toBe(true);
+    } finally {
+      competingRegistry.releaseWriterSync();
+      getPath.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   itMac(
     'does not inspect or delete pending markers when the ownership registry is invalid',
@@ -367,16 +433,24 @@ describe('iOS Simulator host', () => {
       deleteExact: vi.fn(),
     };
     const inspect = vi.fn(async () => READY_REPORT);
+    const pendingCreateEvidence = {
+      arm: vi.fn(),
+      isArmed: vi.fn(() => true),
+      generation: vi.fn(() => 7),
+      clearIfUnchanged: vi.fn(),
+    };
     const host = createIOSSimulatorHost({
       lifecycle,
       runtime: { inspect },
       getSession: vi.fn(async (id) => localSession(id)),
+      pendingCreateEvidence,
     });
 
     const firstCall = host.callTool('list_devices', {}, { sessionId: 'session-a' });
     await vi.waitFor(() => expect(recoverPendingCreatesAtStartup).toHaveBeenCalledOnce());
     expect(recoverPendingCreatesAtStartup).toHaveBeenCalledWith([], expect.any(AbortSignal));
     expect(inspect).not.toHaveBeenCalled();
+    expect(pendingCreateEvidence.clearIfUnchanged).not.toHaveBeenCalled();
 
     finishRecovery([]);
     await expect(firstCall).resolves.toMatchObject({ ok: true });
@@ -384,6 +458,9 @@ describe('iOS Simulator host', () => {
       host.callTool('list_devices', {}, { sessionId: 'session-a' }),
     ).resolves.toMatchObject({ ok: true });
     expect(recoverPendingCreatesAtStartup).toHaveBeenCalledOnce();
+    // The in-process sweep retires the same breadcrumb the create path arms, so
+    // a profile that stops owning devices returns to quiet startups.
+    expect(pendingCreateEvidence.clearIfUnchanged).toHaveBeenCalledWith(7);
   });
 
   it('retries startup pending-create recovery after the ownership gate becomes available', async () => {

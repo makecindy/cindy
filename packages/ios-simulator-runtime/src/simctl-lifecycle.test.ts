@@ -969,4 +969,39 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
     });
     expect(run).not.toHaveBeenCalled();
   });
+
+  it("arms interrupted-create evidence before issuing simctl create", async () => {
+    const events: string[] = [];
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        events.push(`run:${args[1]}`);
+        if (args[1] === "create") {
+          return { stdout: "", stderr: "interrupted", exitCode: 1 };
+        }
+        return { stdout: devicesJson([]), stderr: "", exitCode: 0 };
+      },
+    );
+    const arm = vi.fn(() => {
+      events.push("arm");
+    });
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: { arm },
+    });
+
+    // A create that fails once CoreSimulator may already have committed the
+    // device must still leave startup-recovery evidence behind.
+    await expect(
+      lifecycle.createExact({
+        name: "Cindy iPhone",
+        deviceTypeIdentifier: DEVICE_TYPE,
+        runtimeIdentifier: RUNTIME,
+      }),
+    ).rejects.toMatchObject({ code: "SIMULATOR_CREATE_FAILED" });
+
+    expect(arm).toHaveBeenCalledOnce();
+    expect(events[0]).toBe("arm");
+    expect(events).toContain("run:create");
+  });
 });

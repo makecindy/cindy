@@ -21,6 +21,7 @@ import {
   IOSSimulatorInstanceError,
   IOSSimulatorOwnershipStore,
   IOSSimulatorOwnershipRegistryFile,
+  IOSSimulatorPendingCreateEvidenceFile,
   IOSSimulatorProjectBuildError,
   IOSSimulatorProjectBuilder,
   IOSSimulatorResourceScheduler,
@@ -49,6 +50,8 @@ import {
   type IOSSimulatorMutationRoute,
   type IOSSimulatorNativeSidecarDriver,
   type IOSSimulatorLatestH264Frame,
+  type IOSSimulatorPendingCreateEvidence,
+  type IOSSimulatorPendingCreateEvidenceStore,
   type IOSSimulatorProjectBuildResult,
   type IOSSimulatorRuntime,
   type IOSSimulatorSimctlLifecycle,
@@ -200,6 +203,12 @@ export interface IOSSimulatorHostOptions {
   resourceScheduler?: IOSSimulatorResourceScheduler;
   /** Fail-closed gate supplied by the persisted registry owner. */
   canReconcilePendingCreates?: () => boolean;
+  /**
+   * Profile-scoped interrupted-create breadcrumb shared with the injected
+   * lifecycle. A completed sweep retires it so later startups can skip the
+   * CoreSimulator probe entirely.
+   */
+  pendingCreateEvidence?: IOSSimulatorPendingCreateEvidenceStore;
   /** Main-owned account generation used to scope persisted ownership reconciliation. */
   getOwnerScopeKey?: () => string;
   /** Fail closed while the active account runtime is being replaced. */
@@ -444,14 +453,34 @@ export function createRegistryBackedIOSSimulatorDeviceGrantStore(
   });
 }
 
+/**
+ * Interrupted-create evidence lives beside the ownership registry, inside the
+ * active Cindy profile. Its presence is the only reason a profile without
+ * persisted ownership still needs a CoreSimulator sweep, so keeping it accurate
+ * is what keeps Xcode consent prompts tied to real simulator use.
+ */
+function createDefaultPendingCreateEvidence(
+  registry: IOSSimulatorOwnershipRegistryFile,
+): IOSSimulatorPendingCreateEvidenceStore {
+  const filePath = path.join(path.dirname(registry.filePath), 'pending-create-evidence.json');
+  return new IOSSimulatorPendingCreateEvidenceFile(filePath, {
+    onError: (error) =>
+      logger.warn('iOS Simulator interrupted-create evidence could not be updated', {
+        filePath: redact(filePath),
+        error: error instanceof Error ? error.message : String(error),
+      }),
+  });
+}
+
 function createProfileScopedIOSSimulatorLifecycle(
   registry: IOSSimulatorOwnershipRegistryFile,
+  pendingCreateEvidence: IOSSimulatorPendingCreateEvidence,
 ): IOSSimulatorSimctlLifecycle {
   const createMarkerNamespace = createHash('sha256')
     .update(path.resolve(registry.filePath))
     .digest('hex')
     .slice(0, 16);
-  return createIOSSimulatorSimctlLifecycle({ createMarkerNamespace });
+  return createIOSSimulatorSimctlLifecycle({ createMarkerNamespace, pendingCreateEvidence });
 }
 
 const STARTUP_PENDING_CREATE_RECOVERY_TIMEOUT_MS = 6_000;
@@ -459,9 +488,15 @@ const STARTUP_PENDING_CREATE_RECOVERY_TIMEOUT_MS = 6_000;
 async function recoverProfilePendingCreatesAtStartup(
   lifecycle: IOSSimulatorSimctlLifecycle,
   persistedInstances: readonly IOSSimulatorInstance[],
-  signal?: AbortSignal,
+  options: {
+    signal?: AbortSignal;
+    /** Retired only after a completed sweep proves no marker is left. */
+    evidence?: IOSSimulatorPendingCreateEvidenceStore | null;
+  } = {},
 ): Promise<void> {
   if (!lifecycle.recoverPendingCreatesAtStartup) return;
+  const { signal, evidence } = options;
+  const evidenceGeneration = evidence?.generation() ?? 0;
   const controller = new AbortController();
   const abortFromParent = (): void => controller.abort(signal?.reason);
   if (signal?.aborted) abortFromParent();
@@ -479,6 +514,10 @@ async function recoverProfilePendingCreatesAtStartup(
       })),
       controller.signal,
     );
+    // A completed sweep proves this profile holds no leftover create marker.
+    // Retire the breadcrumb so the next startup stays off xcrun — unless
+    // another create armed it while this sweep was still running.
+    evidence?.clearIfUnchanged(evidenceGeneration);
   } catch (error) {
     // A marker remains hidden and profile-scoped, so an optional Simulator
     // cleanup failure must not block Cindy startup. Keeping it intact lets the
@@ -1057,6 +1096,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
   const getOwnerScopeKey = options.getOwnerScopeKey ?? activeOwnerScopeKey;
   const isOwnerBoundaryPending =
     options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
+  const pendingCreateEvidence = options.pendingCreateEvidence ?? null;
   let ownershipReconciledScopeKey: string | null = null;
   let ownershipReconcilePromise: { scopeKey: string; promise: Promise<void> } | null = null;
   let pendingCreateReconcileController: AbortController | null = null;
@@ -2464,11 +2504,10 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         } else {
           startupPendingCreateRecoveryAttempted = true;
           const controller = new AbortController();
-          const recovery = recoverProfilePendingCreatesAtStartup(
-            lifecycle,
-            actor.listAll(),
-            controller.signal,
-          );
+          const recovery = recoverProfilePendingCreatesAtStartup(lifecycle, actor.listAll(), {
+            signal: controller.signal,
+            evidence: pendingCreateEvidence,
+          });
           pendingCreateReconcileController = controller;
           pendingCreateReconcilePromise = recovery;
           try {
@@ -6348,6 +6387,7 @@ function installDefaultIOSSimulatorHost(
   lifecycle: IOSSimulatorSimctlLifecycle,
   persistedActor: ReturnType<typeof createDefaultActor>,
   registry: IOSSimulatorOwnershipRegistryFile,
+  pendingCreateEvidence: IOSSimulatorPendingCreateEvidenceStore,
 ): IOSSimulatorHost {
   if (defaultIOSSimulatorRuntime) {
     persistedActor.release();
@@ -6365,6 +6405,7 @@ function installDefaultIOSSimulatorHost(
       actor: persistedActor.actor,
       grantStore: createRegistryBackedIOSSimulatorDeviceGrantStore(registry),
       canReconcilePendingCreates: persistedActor.canReconcilePendingCreates,
+      pendingCreateEvidence,
       driverManager: createDefaultDriverManager(),
     });
     configureIOSSimulatorRendererAccessRevocationObserver((grants) => {
@@ -6403,9 +6444,15 @@ export function initializeIOSSimulatorHost(): IOSSimulatorHost {
   }
 
   const registry = createDefaultOwnershipRegistry();
-  const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry);
+  const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
+  const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
   const persistedActor = createDefaultActor(lifecycle, registry);
-  return installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry);
+  return installDefaultIOSSimulatorHost(
+    lifecycle,
+    persistedActor,
+    registry,
+    pendingCreateEvidence,
+  );
 }
 
 function currentIOSSimulatorHost(): IOSSimulatorHost | null {
@@ -6515,9 +6562,15 @@ export function reconcileIOSSimulatorOwnership(): Promise<void> {
 
 /**
  * Startup recovery performs one bounded, profile-scoped pending-create sweep
- * even when ownership is empty, then releases the writer lease without
+ * when this profile can still hold a create marker — persisted ownership, or an
+ * armed interrupted-create breadcrumb — then releases the writer lease without
  * installing the Host. Persisted bindings still install the Host so they are
  * reconciled even if the feature is not opened again after a crash.
+ *
+ * A profile with neither is provably clean, so startup performs no `xcrun` /
+ * CoreSimulator access at all. That keeps macOS Xcode consent prompts attached
+ * to the moment the user actually opens the simulator, in the same spirit as
+ * the safeStorage probe rule in `docs/dev-rules/credentials-and-local-storage.md`.
  */
 export interface IOSSimulatorPersistedOwnershipRecoveryOptions {
   /** Test seam; production always derives a profile-scoped lifecycle. */
@@ -6542,15 +6595,32 @@ export async function reconcilePersistedIOSSimulatorOwnership(
       );
     }
     const persistedInstances = registry.loadSync();
+    const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
+    if (persistedInstances.length === 0 && !pendingCreateEvidence.isArmed()) {
+      // Nothing owned and no interrupted create: sweeping here would spawn
+      // xcrun on a profile that never used the simulator, which is exactly the
+      // startup-time Xcode permission prompt users report.
+      logger.debug('Skipped iOS Simulator startup recovery for a profile with no simulator state');
+      registry.releaseWriterSync();
+      return;
+    }
     const lifecycle =
-      options.createLifecycle?.(registry) ?? createProfileScopedIOSSimulatorLifecycle(registry);
+      options.createLifecycle?.(registry) ??
+      createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
     if (persistedInstances.length === 0) {
-      await recoverProfilePendingCreatesAtStartup(lifecycle, persistedInstances);
+      await recoverProfilePendingCreatesAtStartup(lifecycle, persistedInstances, {
+        evidence: pendingCreateEvidence,
+      });
       registry.releaseWriterSync();
       return;
     }
     const persistedActor = createDefaultActor(lifecycle, registry);
-    const host = installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry);
+    const host = installDefaultIOSSimulatorHost(
+      lifecycle,
+      persistedActor,
+      registry,
+      pendingCreateEvidence,
+    );
     registryTransferred = true;
     await host.reconcileOwnership();
   } catch (error) {
@@ -6612,9 +6682,15 @@ export function cleanupIOSSimulatorRemovedSession(sessionId: string): Promise<vo
     // Keep the same writer lease from the authoritative read through Host
     // installation. Releasing and reacquiring here would reopen the race with
     // another Cindy process attaching this task while it is being removed.
-    const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry);
+    const pendingCreateEvidence = createDefaultPendingCreateEvidence(registry);
+    const lifecycle = createProfileScopedIOSSimulatorLifecycle(registry, pendingCreateEvidence);
     const persistedActor = createDefaultActor(lifecycle, registry);
-    const host = installDefaultIOSSimulatorHost(lifecycle, persistedActor, registry);
+    const host = installDefaultIOSSimulatorHost(
+      lifecycle,
+      persistedActor,
+      registry,
+      pendingCreateEvidence,
+    );
     registryTransferred = true;
     return host.cleanupRemovedSession(normalizedSessionId);
   } catch (error) {

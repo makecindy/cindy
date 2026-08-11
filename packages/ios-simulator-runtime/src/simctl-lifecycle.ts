@@ -6,6 +6,7 @@ import path from "node:path";
 import { createNodeIOSSimulatorCommandRunner } from "./command-runner.js";
 import { IOSSimulatorInstanceError } from "./instance-errors.js";
 import type { IOSSimulatorCreatedDevice } from "./instance-types.js";
+import type { IOSSimulatorPendingCreateEvidence } from "./pending-create-evidence-file.js";
 import { parseSimctlListJson } from "./simctl-parser.js";
 import type {
   IOSSimulatorCommandResult,
@@ -42,6 +43,12 @@ export interface IOSSimulatorSimctlLifecycleOptions {
   pollIntervalMs?: number;
   /** Stable, non-secret profile identity used to recover interrupted creates. */
   createMarkerNamespace?: string;
+  /**
+   * Host-owned breadcrumb armed before every `simctl create`. It is what lets
+   * recovery stay off the CoreSimulator path until this profile has actually
+   * created a device.
+   */
+  pendingCreateEvidence?: IOSSimulatorPendingCreateEvidence;
 }
 
 /**
@@ -502,6 +509,7 @@ export function createIOSSimulatorSimctlLifecycle(
     options.createMarkerNamespace ?? randomUUID().replaceAll("-", ""),
   );
   const createMarkerPrefix = `${CREATE_MARKER_PREFIX}${createMarkerNamespace}__`;
+  const pendingCreateEvidence = options.pendingCreateEvidence ?? null;
   if (bootTimeoutMs <= 0 || pollIntervalMs <= 0) {
     throw new IOSSimulatorInstanceError(
       "INVALID_ARGUMENT",
@@ -745,6 +753,10 @@ export function createIOSSimulatorSimctlLifecycle(
       );
       const markerName = `${createMarkerPrefix}${randomUUID()}`;
       throwIfAborted(signal);
+      // Arm before CoreSimulator can commit the device: everything after this
+      // point may leave a hidden marker behind if the process dies, and the
+      // breadcrumb is the only thing that survives to prove it.
+      pendingCreateEvidence?.arm();
       let result: IOSSimulatorCommandResult | null = null;
       let commandError: unknown = null;
       try {
