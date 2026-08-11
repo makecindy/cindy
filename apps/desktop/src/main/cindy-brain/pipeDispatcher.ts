@@ -6,7 +6,7 @@
  * 把结果/结构化失败原样交回总机。
  *
  * 职责边界:
- *   - 资格审(装没装 / 醒没醒 / 有没有这个工具 / 熔断没)→ 结构化错误码;
+ *   - 资格审(装没装 / 醒没醒 / 有没有这个工具 / 用户禁没禁 / 熔断没)→ 结构化错误码;
  *   - 按需拉起沙箱(spawn 幂等);
  *   - callId 配对 + 超时掐断(过期卷子作废丢弃);
  *   - 长任务续命:主机代办在途 hold(cindySlot 接线)与插件 tool-progress
@@ -25,6 +25,7 @@ import type {
   GhostToolCallResult,
   GhostToolDecl,
   InstalledGhost,
+  ToolApprovalMode,
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
 import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
@@ -38,6 +39,15 @@ export interface PipeDispatcherDeps {
   spawn(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** 把下行消息发到该意识的电子脑逻辑页;false = 逻辑页不在线。 */
   sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
+  /**
+   * 该插件该工具当前的用户授权档位(插件详情页设定,现读现查支持热切)。
+   *
+   * 放在派发器而不是 MCP 门面层:agent 的 ghost_call 只是**其中一个**调用方,
+   * 还有 `ghosts:*` IPC 的 call action、定时任务脚本通道(script-capability-broker)
+   * 与 github-issue 内部提交器都直接打这里。禁用是安全开关,只有唯一收口才拦得住。
+   * 缺省(未注入)= 不做授权拦截,保持老 deps 的调用方零改动。
+   */
+  resolveToolApprovalMode?(ghostId: string, tool: string): ToolApprovalMode;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
   timeoutMs?: number;
   setTimeoutFn?: typeof setTimeout;
@@ -161,6 +171,30 @@ export class GhostPipeDispatcher {
     const declared = ghost.manifest.tools?.some((t) => t.name === tool);
     if (!declared) {
       return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools) };
+    }
+    // 用户把该工具设成「已阻止」时硬拒,且必须在拉起沙箱之前——被禁用的工具
+    // 不该造成任何可观察副作用(进程拉起、OAuth 卡、ledger 落账)。
+    // 读配置抛错按放行处理:授权文件损坏不该让所有插件调用一起瘫,拦截语义由
+    // store 层的 normalize 兜底(读不出来 = 回到默认 needs-approval)。
+    let approvalMode: ToolApprovalMode | undefined;
+    try {
+      approvalMode = this.deps.resolveToolApprovalMode?.(ghostId, tool);
+    } catch (error) {
+      this.deps.log?.warn('ghost tool approval lookup failed; continuing', {
+        ghostId,
+        tool,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (approvalMode === 'blocked') {
+      this.deps.log?.info('ghost tool call denied by user policy', { ghostId, tool });
+      return {
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+        message:
+          `用户已在插件设置里禁用 ${ghostId} 的工具 ${tool};不要重试、也不要换别的工具绕过,` +
+          `如确实需要请让用户自己到「插件」详情页把该工具改回「每次询问」或「总是允许」。`,
+      };
     }
     if (this.deps.runtimeStateOf(ghostId) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };

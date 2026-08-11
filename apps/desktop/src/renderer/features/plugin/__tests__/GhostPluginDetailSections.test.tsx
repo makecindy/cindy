@@ -20,8 +20,15 @@ vi.mock('react-i18next', () => ({
       const labels: Record<string, string> = {
         'settings.ghosts.detail.openTool': `Open ${String(options?.name ?? '')}`,
         'settings.ghosts.detail.toolsTitle': 'Tools',
-        'settings.ghosts.detail.viewAllTools': 'See All',
-        'settings.ghosts.detail.collapseTools': 'Show Less',
+        'settings.ghosts.detail.alwaysAllow': 'Always allow',
+        'settings.ghosts.detail.needsApproval': 'Needs approval',
+        'settings.ghosts.detail.blocked': 'Blocked',
+        'settings.ghosts.detail.custom': 'Custom',
+        'settings.ghosts.detail.chooseToolPermission':
+          'Choose when the Agent is allowed to use these tools',
+        'settings.ghosts.detail.toolPermissionGroup': `Permission for Tool ${String(options?.name ?? '')}`,
+        'settings.ghosts.detail.toolPermissionSaveFailed':
+          "Couldn't save the tool permission. Please try again.",
         'settings.ghosts.detail.noToolDescription': 'No description',
         'settings.ghosts.detail.permissionsTitle': 'Permissions',
         'settings.ghosts.detail.viewAllPermissions': 'See All',
@@ -823,21 +830,95 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.queryByText('JSON Schema')).toBeNull();
   });
 
-  it('renders Tools title with count and tool permission controls', () => {
-    render(
-      <ToolsSection
-        ghostId="demo-ghost"
-        tools={Array.from({ length: 7 }, (_, index) => ({
-          name: `tool_${index}`,
-          description: `Tool ${index}`,
-        }))}
-      />,
-    );
+  function stubToolPermissionApi(overrides?: {
+    config?: Record<string, unknown>;
+    setToolPermissions?: (id: string, config: unknown) => Promise<unknown>;
+  }) {
+    const setToolPermissions =
+      overrides?.setToolPermissions ?? vi.fn(async () => ({ config: {} }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          toolPermissionsSync: () => ({ config: overrides?.config ?? {} }),
+          setToolPermissions,
+        },
+      },
+    });
+    return setToolPermissions;
+  }
 
-    const heading = screen.getByRole('heading', { name: /Tools \(7\)/ });
+  const sevenTools = Array.from({ length: 7 }, (_, index) => ({
+    name: `tool_${index}`,
+    description: `Tool ${index}`,
+  }));
+
+  it('keeps the Tools title count-free and puts the count in its own badge', () => {
+    stubToolPermissionApi();
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const heading = screen.getByRole('heading', { name: 'Tools' });
     expect(heading).toBeTruthy();
     expect(heading.closest('section')?.className).not.toContain('border-t');
+    // 计数是独立 badge,不写进标题文本。
+    expect(screen.queryByRole('heading', { name: /Tools.*7/ })).toBeNull();
+    expect(screen.getByText('7')).toBeTruthy();
     expect(screen.getByText('tool_0')).toBeTruthy();
+  });
+
+  // 回归锚点:档位值是 `always-allow` / `needs-approval`,locale 键名是 camelCase。
+  // 按档位值拼 i18n key 会把原始 key 字符串显示给用户。
+  it('labels the global policy with translated copy, never a raw i18n key', () => {
+    stubToolPermissionApi();
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    expect(screen.getByText('Needs approval')).toBeTruthy();
+    expect(screen.queryByText(/settings\.ghosts\.detail\./)).toBeNull();
+  });
+
+  it('exposes the selected permission through aria-pressed, not colour alone', () => {
+    stubToolPermissionApi({ config: { tools: { tool_0: 'blocked' } } });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstRowGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const pressed = within(firstRowGroup)
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0].getAttribute('aria-label')).toBe('Blocked');
+  });
+
+  it('collapses the tool list without losing the global policy control', () => {
+    stubToolPermissionApi();
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const toggle = screen.getByRole('button', { expanded: true });
+    fireEvent.click(toggle);
+
+    expect(screen.queryByText('tool_0')).toBeNull();
+    expect(screen.getByText('Needs approval')).toBeTruthy();
+  });
+
+  it('rolls the switch back and warns when the permission fails to persist', async () => {
+    // 安全设置写盘失败却把 UI 留在新档位 = 告诉用户"已阻止"而实际没拦。
+    const setToolPermissions = vi.fn(async () => {
+      throw new Error('ipc denied');
+    });
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstRowGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const blockedButton = within(firstRowGroup).getByRole('button', { name: 'Blocked' });
+    fireEvent.click(blockedButton);
+
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalled());
+    expect(setToolPermissions).toHaveBeenCalledWith(
+      'demo-ghost',
+      expect.objectContaining({ tools: expect.objectContaining({ tool_0: 'blocked' }) }),
+    );
+    await waitFor(() =>
+      expect(blockedButton.getAttribute('aria-pressed')).toBe('false'),
+    );
   });
 
   it('shows every host permission except Tools and opens the same complete details', async () => {

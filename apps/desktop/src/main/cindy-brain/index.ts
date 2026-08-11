@@ -200,7 +200,11 @@ import {
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
-import { readGhostToolPermissions, writeGhostToolPermissions } from './ghostToolPermissionsStore.js';
+import {
+  readGhostToolPermissions,
+  resolveToolApprovalMode,
+  writeGhostToolPermissions,
+} from './ghostToolPermissionsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { recordGhostPickedDir } from './pickGrantsStore.js';
@@ -1126,6 +1130,7 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
       },
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
+      resolveToolApprovalMode,
       log,
     });
   }

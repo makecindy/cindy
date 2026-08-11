@@ -70,7 +70,10 @@ import {
 } from '../cindy-brain/index.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
-import { resolveToolApprovalMode } from '../cindy-brain/ghostToolPermissionsStore.js';
+import {
+  ghostToolBlockVerdict,
+  resolveToolApprovalMode,
+} from '../cindy-brain/ghostToolPermissionsStore.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
@@ -971,16 +974,21 @@ export function getCindyGhostsMcpDeps(
           message: toolNotFoundMessage(ghostId, tool, target.manifest.tools),
         };
       }
-      if (!grantOnly) {
-        const approvalMode = resolveToolApprovalMode(ghostId, tool);
-        if (approvalMode === 'blocked') {
-          return {
-            ok: false,
-            errorCode: 'PERMISSION_DENIED',
-            message: `Tool '${tool}' in plugin '${ghostId}' is blocked by user security policy`,
-          };
-        }
-      }
+      // 用户禁用判定。普通调用的真正收口在派发器的资格审(pipeDispatcher.callGhostTool,
+      // 所有调用方共用),这里只是提前到 setupCoordinator.ensureReady 之前,免得一个注定
+      // 被拒的调用先把配置卡/OAuth 卡弹到用户脸上。
+      //
+      // grant_only 是例外:它只过户不派发,永远走不到派发器,**这里就是它唯一的收口**。
+      // 它按协议忽略 tool 字段,所以判据落在插件层——目标插件的工具被用户全禁时,不存在
+      // 任何合法的后续调用,预授权只剩"绕过禁用把文件交出去"这一个用途;显式点名了某个
+      // 已声明且被禁的工具时同样拒。
+      const blockedVerdict = ghostToolBlockVerdict(
+        ghostId,
+        tool,
+        target.manifest.tools,
+        grantOnly === true,
+      );
+      if (blockedVerdict) return blockedVerdict;
       if (grantOnly && (!attachments || attachments.length === 0)) {
         return {
           ok: false,
@@ -1090,6 +1098,15 @@ export function getCindyGhostsMcpDeps(
           ghostVisibilityDeps,
         );
         if (!postGrantVisibility.ok) return postGrantVisibility;
+        // grantAttachmentUrls 中间夹着用户确认卡,期间用户可能刚把工具改成「已阻止」。
+        // 现读现判:这条路走不到派发器,重判只能在这里做。
+        const postGrantBlock = ghostToolBlockVerdict(
+          ghostId,
+          tool,
+          postGrantVisibility.ghost.manifest.tools,
+          true,
+        );
+        if (postGrantBlock) return postGrantBlock;
         let postGrantAssessment: GhostSetupAssessment;
         try {
           postGrantAssessment = getGhostSetupAssessment(ghostId);

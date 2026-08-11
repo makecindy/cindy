@@ -13,8 +13,9 @@
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
- *   4. 其余                —— 逐次弹窗（第三方 server、cindy_ssh、插件 ghost_call…）
+ *   3. cindy::ghost_call  —— 按用户在插件详情页为**该插件的该工具**选的授权档位判定
+ *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
+ *   5. 其余                —— 逐次弹窗（第三方 server、cindy_ssh…）
  */
 
 import type {
@@ -24,6 +25,7 @@ import type {
 } from '@cindy/maker-core';
 import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
 
+import { resolveToolApprovalMode } from '../cindy-brain/ghostToolPermissionsStore.js';
 import { t } from '../i18n.js';
 
 /**
@@ -88,6 +90,47 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   'cindy_lsp',
 ]);
 
+/**
+ * `cindy::ghost_call` 的免审批判定 —— 唯一依据是用户在插件详情页亲手选的档位。
+ *
+ * 这是对本文件既有边界的一次**用户可控**放宽：`cindy` 仍然不进
+ * TRUSTED_MCP_SERVERS（`ghost_call` 转发到第三方插件沙箱，server 级静默始终
+ * 不可接受），但用户对具体某个插件的某个工具选了「总是允许」时，宿主必须照办，
+ * 否则设置项就是空转的假承诺。
+ *
+ * 免掉的只有「要不要让 Agent 调用这个工具」这一张权限卡。工作目录外的文件/目录
+ * 交接是**另一条独立闸门**（mcp-integrations/ghost.ts 的 requestGrantConfirm），
+ * 不受本档位影响——该边界曾被误接进 always-allow，已在 2026-08 撤销，不要再接。
+ *
+ * 三条 fail-closed：
+ *   - 拿不到 ghost_id / tool 坐标（Codex 的 elicitation 会省略参数，见下方
+ *     getDesktopMcpToolApprovalPolicy 注释）→ 不放行；
+ *   - grant_only 调用做的是真实过户与 ledger 落账，不吃 always-allow；
+ *   - 读配置抛错 → 不放行。
+ *
+ * `blocked` 在这里只当作「不免审批」。审批策略枚举没有 deny 档，返回
+ * prompt-each-time 等于允许用户点同意、把禁用变成可绕过——硬拦截由派发层
+ * (cindy-brain/pipeDispatcher.ts 的资格审) 独占，那里是所有调用方的唯一收口。
+ */
+function ghostCallApprovalPolicy(toolParams: unknown): McpToolApprovalPolicy {
+  const params =
+    toolParams && typeof toolParams === 'object' && !Array.isArray(toolParams)
+      ? (toolParams as Record<string, unknown>)
+      : null;
+  if (!params) return 'prompt';
+  if (params.grant_only === true) return 'prompt';
+  const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
+  const innerTool = typeof params.tool === 'string' ? params.tool.trim() : '';
+  if (!ghostId || !innerTool) return 'prompt';
+  try {
+    return resolveToolApprovalMode(ghostId, innerTool) === 'always-allow'
+      ? 'auto-approve'
+      : 'prompt';
+  } catch {
+    return 'prompt';
+  }
+}
+
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
 function toClaudeToolName(key: string): string {
   const [serverName, toolName] = key.split('::');
@@ -117,6 +160,11 @@ export function getDesktopMcpToolApprovalPolicy(
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
       : 'prompt-each-time';
+  }
+  // 插件工具的用户自定档位。toolName 缺省（Codex 省略）时不进这条分支，自然
+  // 回落到下面的 server 级判定：`cindy` 不在 TRUSTED 表里 → prompt，fail closed。
+  if (serverName === 'cindy' && toolName === 'ghost_call') {
+    return ghostCallApprovalPolicy(toolParams);
   }
   if (serverName === 'cindy_ios_simulator') {
     // Some Codex app-server versions omit the outer tool name but retain the

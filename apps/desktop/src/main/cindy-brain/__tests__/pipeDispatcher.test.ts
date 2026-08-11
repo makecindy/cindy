@@ -47,6 +47,7 @@ function makeHarness(opts: {
   ghost?: InstalledGhost | null;
   state?: GhostRuntimeState;
   timeoutMs?: number;
+  resolveToolApprovalMode?: PipeDispatcherDeps['resolveToolApprovalMode'];
 } = {}): Harness {
   const sent: GhostPipeToolCall[] = [];
   const deps = {
@@ -64,6 +65,7 @@ function makeHarness(opts: {
   };
   const dispatcher = new GhostPipeDispatcher({
     ...deps,
+    ...(opts.resolveToolApprovalMode ? { resolveToolApprovalMode: opts.resolveToolApprovalMode } : {}),
     timeoutMs: opts.timeoutMs,
   } as unknown as PipeDispatcherDeps);
   return { dispatcher, deps, sent };
@@ -82,6 +84,42 @@ describe('资格审(结构化错误分类)', () => {
     const h = makeHarness({ ghost: fakeGhost({ enabled: false }) });
     const r = await h.dispatcher.callGhostTool(CALL);
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+  });
+
+  it('用户禁用该工具 → PERMISSION_DENIED,且不拉起沙箱、不派发', async () => {
+    // off 状态:如果拦截点放错在拉起之后,这条会看到 spawn 被调用。
+    const h = makeHarness({ state: 'off', resolveToolApprovalMode: () => 'blocked' });
+    const r = await h.dispatcher.callGhostTool(CALL);
+    expect(r).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    // 被禁用的工具不该造成任何可观察副作用。
+    expect(h.deps.spawn).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it('always-allow / needs-approval 都照常派发(免审批只影响弹不弹窗)', async () => {
+    for (const mode of ['always-allow', 'needs-approval'] as const) {
+      const h = makeHarness({ resolveToolApprovalMode: () => mode });
+      void h.dispatcher.callGhostTool(CALL);
+      await vi.waitFor(() => expect(h.sent, mode).toHaveLength(1));
+    }
+  });
+
+  it('档位查询抛错时不连坐:照常派发并留一条 warn', async () => {
+    const h = makeHarness({
+      resolveToolApprovalMode: () => {
+        throw new Error('settings file unreadable');
+      },
+    });
+    void h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.deps.log.warn).toHaveBeenCalled();
+  });
+
+  it('未注入档位查询时行为不变(老调用方零改动)', async () => {
+    const h = makeHarness();
+    void h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
   });
 
   it('工具未声明 → TOOL_NOT_FOUND', async () => {

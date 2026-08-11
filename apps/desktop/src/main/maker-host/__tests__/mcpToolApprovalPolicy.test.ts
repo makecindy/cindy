@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// 插件工具档位是用户配置(落 userData)。策略单测不碰真实文件,只验策略层怎么消费它。
+const resolveToolApprovalMode = vi.hoisted(() => vi.fn(() => 'needs-approval' as string));
+vi.mock('../../cindy-brain/ghostToolPermissionsStore.js', () => ({ resolveToolApprovalMode }));
 
 import {
   getDesktopClaudeReadOnlyAllowedTools,
@@ -6,6 +10,11 @@ import {
   getDesktopMcpToolApprovalPresentation,
 } from '../mcp-tool-approval-policy.js';
 import { setMainLocale } from '../../i18n.js';
+
+beforeEach(() => {
+  resolveToolApprovalMode.mockReset();
+  resolveToolApprovalMode.mockReturnValue('needs-approval');
+});
 
 describe('desktop Claude read-only allowlist', () => {
   it('allows only explicitly reviewed read-only tools', () => {
@@ -244,6 +253,80 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call' })).toBe(
       'prompt',
     );
+  });
+
+  describe('ghost_call 的用户自定档位', () => {
+    const ghostCall = (toolParams: unknown) =>
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call', toolParams });
+
+    it('用户选了「总是允许」时免弹窗直接放行', () => {
+      resolveToolApprovalMode.mockReturnValue('always-allow');
+      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing', args: {} })).toBe('auto-approve');
+      expect(resolveToolApprovalMode).toHaveBeenCalledWith('demo', 'do_thing');
+    });
+
+    it('needs-approval / blocked 都不免审批(blocked 的硬拦截在派发层,不在这里)', () => {
+      resolveToolApprovalMode.mockReturnValue('needs-approval');
+      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt');
+      resolveToolApprovalMode.mockReturnValue('blocked');
+      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt');
+    });
+
+    it('拿不到 ghost_id / tool 坐标时 fail closed,根本不查档位', () => {
+      resolveToolApprovalMode.mockReturnValue('always-allow');
+      expect(ghostCall(undefined)).toBe('prompt');
+      expect(ghostCall(null)).toBe('prompt');
+      expect(ghostCall([{ ghost_id: 'demo', tool: 'do_thing' }])).toBe('prompt');
+      expect(ghostCall({ tool: 'do_thing' })).toBe('prompt');
+      expect(ghostCall({ ghost_id: 'demo' })).toBe('prompt');
+      expect(ghostCall({ ghost_id: '   ', tool: 'do_thing' })).toBe('prompt');
+      expect(ghostCall({ ghost_id: 'demo', tool: 42 })).toBe('prompt');
+      expect(resolveToolApprovalMode).not.toHaveBeenCalled();
+    });
+
+    it('grant_only 做的是真实过户,不吃 always-allow', () => {
+      resolveToolApprovalMode.mockReturnValue('always-allow');
+      expect(
+        ghostCall({
+          ghost_id: 'demo',
+          tool: 'do_thing',
+          grant_only: true,
+          attachments: ['/tmp/a.png'],
+        }),
+      ).toBe('prompt');
+      expect(resolveToolApprovalMode).not.toHaveBeenCalled();
+    });
+
+    it('档位查询抛错时 fail closed', () => {
+      resolveToolApprovalMode.mockImplementation(() => {
+        throw new Error('settings file unreadable');
+      });
+      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt');
+    });
+
+    // Codex 的 elicitation 会省略 toolName。那时进不了 ghost_call 分支,回落到
+    // server 级判定——`cindy` 不在 TRUSTED 表里,所以仍然弹窗。
+    it('Codex 省略 toolName 时回落到 server 级判定并保持弹窗', () => {
+      resolveToolApprovalMode.mockReturnValue('always-allow');
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy',
+          toolParams: { ghost_id: 'demo', tool: 'do_thing' },
+        }),
+      ).toBe('prompt');
+    });
+
+    // cindy 是插件宿主,ghost_call 转发进第三方沙箱,永远不能整体静默。
+    it('ghost_call 的免审批只能来自逐工具配置,不来自 server 信任', () => {
+      resolveToolApprovalMode.mockReturnValue('always-allow');
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy',
+          toolName: 'some_other_tool',
+          toolParams: { ghost_id: 'demo', tool: 'do_thing' },
+        }),
+      ).toBe('prompt');
+    });
   });
 
   it('auto-approves the browser call_tool entry that Claude used to prompt for every time', () => {

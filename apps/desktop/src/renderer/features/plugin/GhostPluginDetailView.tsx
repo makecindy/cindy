@@ -478,7 +478,7 @@ export function GhostPluginDetailView({
         ) : null}
 
         {detail.tools.length > 0 ? (
-          <ToolsSection ghostId={detail.id} tools={detail.tools} />
+          <ToolsSection key={detail.id} ghostId={detail.id} tools={detail.tools} />
         ) : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
@@ -535,7 +535,7 @@ function MetadataDivider() {
   );
 }
 
-export function DetailSectionHeader({
+function DetailSectionHeader({
   id,
   title,
   action,
@@ -554,7 +554,7 @@ export function DetailSectionHeader({
   );
 }
 
-export function SectionTextAction({
+function SectionTextAction({
   expanded,
   onClick,
   children,
@@ -575,11 +575,55 @@ export function SectionTextAction({
   );
 }
 
+/**
+ * 授权档位 → i18n key。**不要**改回按档位值拼 key:档位值是带连字符的
+ * `always-allow` / `needs-approval`,locale 里的键名是 camelCase,直接拼会拼出
+ * 不存在的键、把原始 key 字符串显示给用户(2026-08 实测五语全中)。
+ */
+const TOOL_POLICY_LABEL_KEY: Record<GlobalToolPolicy, string> = {
+  'always-allow': 'settings.ghosts.detail.alwaysAllow',
+  'needs-approval': 'settings.ghosts.detail.needsApproval',
+  blocked: 'settings.ghosts.detail.blocked',
+  custom: 'settings.ghosts.detail.custom',
+};
+
+const TOOL_POLICY_ICON: Record<GlobalToolPolicy, LucideIcon> = {
+  'always-allow': Check,
+  'needs-approval': Hand,
+  blocked: Ban,
+  custom: SlidersHorizontal,
+};
+
+/** 用户可主动选择的档位(custom 是派生态,只显示不可选)。 */
+const SELECTABLE_TOOL_POLICIES: readonly ToolApprovalMode[] = [
+  'always-allow',
+  'needs-approval',
+  'blocked',
+];
+
 function PolicyStatusIcon({ policy }: { policy: GlobalToolPolicy }) {
-  if (policy === 'always-allow') return <Check size={14} className="text-[var(--text-primary)]" />;
-  if (policy === 'needs-approval') return <Hand size={14} className="text-[var(--text-primary)]" />;
-  if (policy === 'blocked') return <Ban size={14} className="text-[var(--warning-fg)]" />;
-  return <SlidersHorizontal size={14} className="text-[var(--text-tertiary)]" />;
+  const Icon = TOOL_POLICY_ICON[policy];
+  return (
+    <Icon
+      size={14}
+      className={
+        policy === 'blocked'
+          ? 'text-[var(--warning-fg)]'
+          : policy === 'custom'
+            ? 'text-[var(--text-tertiary)]'
+            : 'text-[var(--text-primary)]'
+      }
+      aria-hidden="true"
+    />
+  );
+}
+
+function readToolPermissions(ghostId: string): GhostToolPermissionConfig {
+  try {
+    return window.electronAPI.ghosts.toolPermissionsSync(ghostId)?.config ?? {};
+  } catch {
+    return {};
+  }
 }
 
 export function ToolsSection({
@@ -590,17 +634,39 @@ export function ToolsSection({
   tools: readonly GhostToolDecl[];
 }) {
   const { t } = useTranslation();
-  const [config, setConfig] = useState<GhostToolPermissionConfig>(() => {
-    try {
-      return window.electronAPI.ghosts.toolPermissionsSync(ghostId)?.config ?? {};
-    } catch {
-      return {};
-    }
-  });
+  const [expanded, setExpanded] = useState(true);
+  // 配置与它属于哪个插件一起存。详情页换插件时组件位置不变、不会重挂,只靠
+  // useState 初始化器会一直显示上一个插件的授权档位,并以它为基准覆盖写入。
+  const [loaded, setLoaded] = useState<{ ghostId: string; config: GhostToolPermissionConfig }>(
+    () => ({ ghostId, config: readToolPermissions(ghostId) }),
+  );
+  if (loaded.ghostId !== ghostId) {
+    // React 官方的「prop 变化时调整 state」写法:本轮渲染输出被丢弃,立刻带新
+    // state 重渲染,不会有一帧串味。
+    setLoaded({ ghostId, config: readToolPermissions(ghostId) });
+  }
+  const config = loaded.config;
+  // 连续快速点击时,后一次点击的 handler 闭包里还是上一次渲染的 config,直接以它
+  // 为基准会把前一次的改动覆盖掉。ref 始终指向最新值,handler 按它算增量。
+  // (副作用不能塞进 setState updater:StrictMode 下 updater 会跑两遍,IPC 写会重发。)
+  const configRef = useRef(config);
+  configRef.current = config;
 
-  const updateConfig = (next: GhostToolPermissionConfig) => {
-    setConfig(next);
-    void window.electronAPI.ghosts.setToolPermissions(ghostId, next);
+  /**
+   * 落盘 + 失败回滚。这是安全设置:写盘失败却把 UI 留在新档位,等于告诉用户
+   * "已阻止"而实际没拦,所以不能 fire-and-forget。
+   */
+  const persist = (next: GhostToolPermissionConfig) => {
+    const rollbackTo = configRef.current;
+    configRef.current = next;
+    setLoaded({ ghostId, config: next });
+    void window.electronAPI.ghosts.setToolPermissions(ghostId, next).catch(() => {
+      configRef.current = rollbackTo;
+      setLoaded((current) =>
+        current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,
+      );
+      toast.error(t('settings.ghosts.detail.toolPermissionSaveFailed'));
+    });
   };
 
   const currentGlobalPolicy: GlobalToolPolicy = useMemo(() => {
@@ -619,39 +685,45 @@ export function ToolsSection({
   }, [config, tools]);
 
   const handleSetGlobalPolicy = (policy: ToolApprovalMode) => {
-    setConfig((prev) => {
-      const updatedTools: Record<string, ToolApprovalMode> = {};
-      for (const tool of tools) {
-        updatedTools[tool.name] = policy;
-      }
-      const next: GhostToolPermissionConfig = {
-        globalPolicy: policy,
-        tools: updatedTools,
-      };
-      void window.electronAPI.ghosts.setToolPermissions(ghostId, next);
-      return next;
-    });
+    const updatedTools: Record<string, ToolApprovalMode> = {};
+    for (const tool of tools) {
+      updatedTools[tool.name] = policy;
+    }
+    persist({ globalPolicy: policy, tools: updatedTools });
   };
 
   const handleSetToolMode = (toolName: string, mode: ToolApprovalMode) => {
-    setConfig((prev) => {
-      const nextTools = { ...(prev.tools ?? {}), [toolName]: mode };
-      const allSame = tools.every((tool) => (nextTools[tool.name] ?? 'needs-approval') === mode);
-      const next: GhostToolPermissionConfig = {
-        globalPolicy: allSame ? mode : 'custom',
-        tools: nextTools,
-      };
-      void window.electronAPI.ghosts.setToolPermissions(ghostId, next);
-      return next;
-    });
+    const nextTools = { ...(configRef.current.tools ?? {}), [toolName]: mode };
+    const allSame = tools.every((tool) => (nextTools[tool.name] ?? 'needs-approval') === mode);
+    persist({ globalPolicy: allSame ? mode : 'custom', tools: nextTools });
   };
 
   return (
     <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-tools-title">
       <div className="flex items-center justify-between gap-4">
-        <h2 id="ghost-tools-title" className={DETAIL_SECTION_HEADING_CLASS}>
-          {t('settings.ghosts.detail.toolsTitle')} ({tools.length})
-        </h2>
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          aria-controls="ghost-tools-list"
+          className="group inline-flex items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          <ChevronDown
+            size={16}
+            aria-hidden="true"
+            className={cn(
+              'text-[var(--text-tertiary)] transition-transform duration-150',
+              !expanded && '-rotate-90',
+            )}
+          />
+          {/* 计数走独立 badge,标题本体保持不带计数(既有设计裁决)。 */}
+          <h2 id="ghost-tools-title" className={DETAIL_SECTION_HEADING_CLASS}>
+            {t('settings.ghosts.detail.toolsTitle')}
+          </h2>
+          <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium leading-none text-[var(--text-secondary)]">
+            {tools.length}
+          </span>
+        </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -663,23 +735,36 @@ export function ToolsSection({
               )}
             >
               <PolicyStatusIcon policy={currentGlobalPolicy} />
-              <span>{t(`settings.ghosts.detail.${currentGlobalPolicy}`)}</span>
-              <ChevronDown size={14} className="text-[var(--text-tertiary)]" />
+              <span>{t(TOOL_POLICY_LABEL_KEY[currentGlobalPolicy])}</span>
+              <ChevronDown size={14} className="text-[var(--text-tertiary)]" aria-hidden="true" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-[180px]">
-            <DropdownMenuItem onClick={() => handleSetGlobalPolicy('always-allow')}>
-              <Check size={14} className="mr-2 text-[var(--text-secondary)]" />
-              {t('settings.ghosts.detail.alwaysAllow')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => handleSetGlobalPolicy('needs-approval')}>
-              <Hand size={14} className="mr-2 text-[var(--text-secondary)]" />
-              {t('settings.ghosts.detail.needsApproval')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => handleSetGlobalPolicy('blocked')}>
-              <Ban size={14} className="mr-2 text-[var(--text-secondary)]" />
-              {t('settings.ghosts.detail.blocked')}
-            </DropdownMenuItem>
+          <DropdownMenuContent align="end" className="w-[200px]">
+            {SELECTABLE_TOOL_POLICIES.map((policy) => {
+              const Icon = TOOL_POLICY_ICON[policy];
+              return (
+                <DropdownMenuItem key={policy} onClick={() => handleSetGlobalPolicy(policy)}>
+                  <Icon size={14} className="mr-2 text-[var(--text-secondary)]" aria-hidden="true" />
+                  <span className="flex-1">{t(TOOL_POLICY_LABEL_KEY[policy])}</span>
+                  {currentGlobalPolicy === policy ? (
+                    <Check size={14} className="ml-2 text-[var(--model-item-check)]" aria-hidden="true" />
+                  ) : null}
+                </DropdownMenuItem>
+              );
+            })}
+            {/* custom 是「各工具档位不一致」的派生态,不是可选项;只在命中时露出
+                并打勾,让用户知道当前处于哪一档(与逐工具控件的读数保持一致)。 */}
+            {currentGlobalPolicy === 'custom' ? (
+              <DropdownMenuItem disabled>
+                <SlidersHorizontal
+                  size={14}
+                  className="mr-2 text-[var(--text-secondary)]"
+                  aria-hidden="true"
+                />
+                <span className="flex-1">{t('settings.ghosts.detail.custom')}</span>
+                <Check size={14} className="ml-2 text-[var(--model-item-check)]" aria-hidden="true" />
+              </DropdownMenuItem>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -688,22 +773,26 @@ export function ToolsSection({
         {t('settings.ghosts.detail.chooseToolPermission')}
       </p>
 
-      <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-2')}>
-        {tools.map((tool) => {
-          const mode =
-            config.tools?.[tool.name] ??
-            (config.globalPolicy !== 'custom' ? config.globalPolicy : undefined) ??
-            'needs-approval';
-          return (
-            <ToolPermissionRow
-              key={tool.name}
-              tool={tool}
-              mode={mode}
-              onChangeMode={(nextMode) => handleSetToolMode(tool.name, nextMode)}
-            />
-          );
-        })}
-      </div>
+      {expanded ? (
+        <div id="ghost-tools-list" className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-2')}>
+          {tools.map((tool) => {
+            const mode =
+              config.tools?.[tool.name] ??
+              (config.globalPolicy && config.globalPolicy !== 'custom'
+                ? config.globalPolicy
+                : undefined) ??
+              'needs-approval';
+            return (
+              <ToolPermissionRow
+                key={tool.name}
+                tool={tool}
+                mode={mode}
+                onChangeMode={(nextMode) => handleSetToolMode(tool.name, nextMode)}
+              />
+            );
+          })}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -738,50 +827,40 @@ function ToolPermissionRow({
         ) : null}
       </div>
 
-      {/* 3-State Segmented Control */}
-      <div className="flex shrink-0 items-center rounded-full border border-[color-mix(in_srgb,var(--border-default)_72%,transparent)] bg-[var(--surface)] p-0.5">
-        <button
-          type="button"
-          aria-label={t('settings.ghosts.detail.alwaysAllow')}
-          title={t('settings.ghosts.detail.alwaysAllow')}
-          onClick={() => onChangeMode('always-allow')}
-          className={cn(
-            'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150',
-            mode === 'always-allow'
-              ? 'bg-[var(--surface-chip)] text-[var(--text-primary)] shadow-sm'
-              : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
-          )}
-        >
-          <Check size={13} />
-        </button>
-        <button
-          type="button"
-          aria-label={t('settings.ghosts.detail.needsApproval')}
-          title={t('settings.ghosts.detail.needsApproval')}
-          onClick={() => onChangeMode('needs-approval')}
-          className={cn(
-            'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150',
-            mode === 'needs-approval'
-              ? 'bg-[var(--surface-chip)] text-[var(--text-primary)] shadow-sm'
-              : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
-          )}
-        >
-          <Hand size={13} />
-        </button>
-        <button
-          type="button"
-          aria-label={t('settings.ghosts.detail.blocked')}
-          title={t('settings.ghosts.detail.blocked')}
-          onClick={() => onChangeMode('blocked')}
-          className={cn(
-            'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150',
-            mode === 'blocked'
-              ? 'bg-[var(--surface-chip)] text-[var(--warning-fg)] shadow-sm'
-              : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
-          )}
-        >
-          <Ban size={13} />
-        </button>
+      {/* 三态分段控件。选中态不能只靠颜色/底色传达,每个按钮都带 aria-pressed。 */}
+      <div
+        role="group"
+        aria-label={t('settings.ghosts.detail.toolPermissionGroup', { name: tool.name })}
+        className="flex shrink-0 items-center rounded-full border border-[color-mix(in_srgb,var(--border-default)_72%,transparent)] bg-[var(--surface)] p-0.5"
+      >
+        {SELECTABLE_TOOL_POLICIES.map((policy) => {
+          const Icon = TOOL_POLICY_ICON[policy];
+          const active = mode === policy;
+          const label = t(TOOL_POLICY_LABEL_KEY[policy]);
+          return (
+            <button
+              key={policy}
+              type="button"
+              aria-label={label}
+              aria-pressed={active}
+              title={label}
+              onClick={() => onChangeMode(policy)}
+              className={cn(
+                'flex h-7 items-center justify-center rounded-full px-2.5 text-12 font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                active
+                  ? cn(
+                      'bg-[var(--surface-chip)] shadow-sm',
+                      policy === 'blocked'
+                        ? 'text-[var(--warning-fg)]'
+                        : 'text-[var(--text-primary)]',
+                    )
+                  : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+              )}
+            >
+              <Icon size={13} aria-hidden="true" />
+            </button>
+          );
+        })}
       </div>
     </div>
   );
