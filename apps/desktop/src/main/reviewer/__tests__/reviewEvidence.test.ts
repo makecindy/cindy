@@ -1010,10 +1010,36 @@ describe('loadReviewEvidence attachment boundaries', () => {
     expect(evidence.branch?.baseRef).toBe('main');
   });
 
-  it('detects a moved comparison base even though HEAD did not change', async () => {
-    // The workspace fingerprint pins the source HEAD. Fetching the base branch
-    // advances the merge base and changes what the branch diff means, without
-    // touching HEAD — so freshness has to check the baseline separately.
+  it('accepts a base tip that moved without moving the merge base', async () => {
+    // Fetching commits onto the base after this branch diverged advances the
+    // tip but not the merge base, so the patch is byte-for-byte the same.
+    // Failing here would throw away a perfectly valid review.
+    const branch = {
+      baseRef: 'origin/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      fileCount: 1,
+      diffs: [],
+      capped: null,
+    };
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/main',
+      baseOid: 'd'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [],
+      diffs: [],
+      capped: null,
+      warning: null,
+    });
+
+    await expect(reviewBranchBaselineIsCurrent('source', branch)).resolves.toBe(true);
+  });
+
+  it('detects a moved merge base even though HEAD did not change', async () => {
+    // The workspace fingerprint pins the source HEAD. A merge base that moves
+    // changes what the branch diff means without touching HEAD — so freshness
+    // has to check the baseline separately.
     const branch = {
       baseRef: 'origin/main',
       baseOid: 'b'.repeat(40),

@@ -339,11 +339,13 @@ export async function reviewBranchBaselineIsCurrent(
   if (!branch) return true;
   try {
     const current = await readBranchDiff(sourceSessionId, branch.baseRef);
-    return (
-      current.baseRef === branch.baseRef &&
-      current.baseOid === branch.baseOid &&
-      current.mergeBaseOid === branch.mergeBaseOid
-    );
+    // The patch runs from the merge base to the source HEAD, so only those two
+    // define the evidence. The base tip is deliberately not compared: fetching
+    // commits onto the base after this branch diverged moves it without moving
+    // the merge base, and failing the review there would discard a result whose
+    // content is byte-for-byte the same. HEAD is covered by the workspace
+    // fingerprint.
+    return current.baseRef === branch.baseRef && current.mergeBaseOid === branch.mergeBaseOid;
   } catch {
     // An unreadable baseline cannot be proven unchanged.
     return false;
