@@ -303,6 +303,9 @@ export class MemoryStorage {
     // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
     this.beforeFileWrite?.();
     await fs.writeFile(fullPath, fileText, 'utf8');
+    // shard write 后、索引重建前复核 (review #2388 Codex 12th P1): writeFile
+    // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
+    this.beforeFileWrite?.();
     await this.rebuildIndex();
 
     const result: WriteResult = { ok: true, filename };
