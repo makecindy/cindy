@@ -207,15 +207,22 @@ export class MakerMemoryStore {
     } else {
       writeOpts.mode = 'create';
     }
+    // tryReadRaw 与 entry check 之间有 await 窗口 — 写 target 前再复核一次
+    // (review #2388 Codex 7th P1), 边界不得写入旧 owner 文件。
+    this.assertScopeOk();
     const writeRes = await this.storage.write(writeOpts);
 
-    // 删源
+    // 删源 — 每次删除前复核 scope (review #2388 Codex 7th P1): target write 与
+    // 删源之间有 await, 边界若在窗口内发生, 裸 storage.delete 仍会变更旧 owner
+    // 文件; 后置复核无法撤销, 必须在每个删除动作前拦截。
     const deleted: string[] = [];
     for (const src of sourcesToDelete) {
       try {
+        this.assertScopeOk();
         await this.storage.delete(src);
         deleted.push(src);
       } catch (e) {
+        if (e instanceof MemoryError && e.code === 'not-ready') throw e;
         if (e instanceof MemoryError && e.code === 'not-found') continue;
         this.logger.warn('consolidate: failed to delete source (continuing)', {
           source: src,
