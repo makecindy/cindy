@@ -141,7 +141,7 @@ describe('customProviderModelConfigFromCatalogModel', () => {
     });
   });
 
-  it('preserves an explicit Pi image-input capability through the edit round trip', () => {
+  it('preserves explicit image-input capabilities through the edit round trip', () => {
     expect(customProviderModelConfigFromCatalogModel({
       id: 'vision-model',
       name: 'Vision Model',
@@ -151,6 +151,16 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       id: 'vision-model',
       name: 'Vision Model',
       supportsImageInput: true,
+    });
+    expect(customProviderModelConfigFromCatalogModel({
+      id: 'text-model',
+      name: 'Text Model',
+      contextWindow: 200_000,
+      supportsImageInput: false,
+    })).toEqual({
+      id: 'text-model',
+      name: 'Text Model',
+      supportsImageInput: false,
     });
   });
 

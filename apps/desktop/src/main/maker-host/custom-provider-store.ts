@@ -378,7 +378,9 @@ function normalizeRuntime(
       name: m.name.trim(),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-      ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+      ...(m.supportsImageInput !== undefined
+        ? { supportsImageInput: m.supportsImageInput }
+        : {}),
       ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
         ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
         : {}),
@@ -523,7 +525,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               ? { contextWindow: m.contextWindow }
               : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+            ...(typeof m.supportsImageInput === 'boolean'
+              ? { supportsImageInput: m.supportsImageInput }
+              : {}),
             ...parseStoredPiReasoningCapability(agent, m),
           }))
       : [];

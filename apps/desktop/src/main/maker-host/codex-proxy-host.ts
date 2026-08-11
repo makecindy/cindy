@@ -74,9 +74,25 @@ import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { getDefaultCodexImageCapabilityResolver } from './codex-image-capability.js';
+import { createCodexHistoryImageMarkerTransform } from './codex-history-image-marker.js';
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
 const log = createMakerLogger('codex-proxy');
+
+const codexImageCapability = getDefaultCodexImageCapabilityResolver({
+  getCatalog: getActiveCatalog,
+  getSessionProvider,
+});
+const codexHistoryImageMarkerTransform = createCodexHistoryImageMarkerTransform({
+  sessionIdFromHeaders,
+  shouldStripImages: (body, sessionId) =>
+    Boolean(
+      sessionId &&
+      typeof body.model === 'string' &&
+      codexImageCapability.resolveCodexRoute(sessionId, body.model) === false,
+    ),
+});
 
 const registry = createInstructionsRegistry();
 const sessionToThread = new Map<string, string>();
@@ -655,8 +671,8 @@ function createChatBridgeDecision(
     // 出站代理;显式注入代理感知 fetch(见 outbound-fetch.ts)。
   }, { logger: log, fetchImpl: outboundFetch });
   return {
-    localHandler: ({ rawBody, parsedBody, res }) => {
-      const body = prepareLocalBridgeBody({
+    localHandler: ({ rawBody, parsedBody, ctx, res }) => {
+      let body = prepareLocalBridgeBody({
         rawBody,
         parsedBody,
         instructions,
@@ -665,6 +681,8 @@ function createChatBridgeDecision(
         providerId,
         upstreamBase: route.routing.upstream,
       });
+      const historySafe = ctx ? codexHistoryImageMarkerTransform(body, ctx) : null;
+      if (historySafe !== null && historySafe !== undefined) body = historySafe;
       return handler.handle({ parsedBody: body, res });
     },
   };
@@ -972,7 +990,7 @@ function createAnthropicBridgeDecision(
   });
   return {
     localHandler: ({ rawBody, parsedBody, ctx, res }) => {
-      const body = prepareLocalBridgeBody({
+      let body = prepareLocalBridgeBody({
         rawBody,
         parsedBody,
         instructions,
@@ -981,6 +999,8 @@ function createAnthropicBridgeDecision(
         providerId,
         upstreamBase,
       });
+      const historySafe = ctx ? codexHistoryImageMarkerTransform(body, ctx) : null;
+      if (historySafe !== null && historySafe !== undefined) body = historySafe;
       return handler.handle({ parsedBody: body, ctx, res });
     },
   };
@@ -2287,6 +2307,7 @@ function createTransformRequestChain(
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.
     createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
+    codexHistoryImageMarkerTransform,
     createGatewayNativeWebSearchTransform(),
     // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
     // 后续针对具体供应商的 input 归一化才能稳定处理。

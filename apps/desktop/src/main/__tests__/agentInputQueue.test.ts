@@ -92,6 +92,51 @@ describe('agentInputQueue', () => {
     });
   });
 
+  it('does not append an unavailable marker when the original image is delivered', () => {
+    const entry = queuedMessage([
+      {
+        id: 'image-1',
+        name: 'shot.png',
+        path: '/repo/shot.png',
+        ext: '.png',
+        size: 128,
+        category: 'image',
+        mimeType: 'image/png',
+      },
+    ]);
+    const message = buildMakerUserMessage(entry);
+    expect(message).toMatchObject({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        { type: 'image', path: '/repo/shot.png', mimeType: 'image/png' },
+      ],
+    });
+    expect(JSON.stringify(message)).not.toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+  });
+
+  it('projects an unavailable marker without deleting the stored image attachment', () => {
+    const entry = queuedMessage([
+      {
+        id: 'image-1',
+        name: 'shot.png',
+        path: '/repo/shot.png',
+        ext: '.png',
+        size: 128,
+        category: 'image',
+        mimeType: 'image/png',
+      },
+    ]);
+    const message = buildMakerUserMessage(entry, [], { imageMode: 'omit' });
+    const serialized = JSON.stringify(message);
+    expect(serialized).not.toContain('"type":"image"');
+    expect(serialized).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+    expect(serialized).toContain('user_uploaded_image');
+    expect(serialized).toContain('shot.png');
+    expect(serialized).toContain('did not receive the image');
+    expect(entry.files).toHaveLength(1);
+  });
+
   it('appends the hidden annotation note once after all blocks for annotated images', () => {
     expect(
       buildMakerUserMessage(

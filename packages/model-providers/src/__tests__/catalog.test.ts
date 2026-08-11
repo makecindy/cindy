@@ -187,6 +187,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       for (const id of ['deepseek-v4-flash', 'deepseek-v4-pro']) {
         const m = rt!.models.find((x) => x.id === id);
         expect(m?.contextWindow, `${agent}/${id}`).toBe(1_000_000);
+        expect(m?.supportsImageInput, `${agent}/${id}`).toBe(false);
       }
     }
     // OpenRouter 托管的同款模型页面同样标注 1,048,576,取与仓库口径一致的 1M。
@@ -195,6 +196,10 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       openrouter?.runtimes['claude-code']?.models.find((m) => m.id === 'deepseek/deepseek-v4-pro')
         ?.contextWindow,
     ).toBe(1_000_000);
+    expect(
+      openrouter?.runtimes['claude-code']?.models.find((m) => m.id === 'deepseek/deepseek-v4-pro')
+        ?.supportsImageInput,
+    ).toBeUndefined();
   });
 
   it('Kimi Code(编程计划)预设的每个模型都带 contextWindow(k3 缺失曾回落 200K)', () => {

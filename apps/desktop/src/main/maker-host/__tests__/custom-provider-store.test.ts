@@ -336,7 +336,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(got?.runtimes.codex?.headers).toBeUndefined();
   });
 
-  it('round-trips only an explicitly enabled Pi image-input capability', async () => {
+  it('round-trips explicit positive and negative image-input capabilities', async () => {
     mountDb();
     await createCustomProvider({
       id: 'visual-pi',
@@ -356,7 +356,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect((await getCustomProvider('visual-pi'))?.runtimes.pi?.models).toEqual([
       { id: 'vision', name: 'Vision', supportsImageInput: true },
       { id: 'legacy', name: 'Legacy' },
-      { id: 'explicit-text', name: 'Explicit text' },
+      { id: 'explicit-text', name: 'Explicit text', supportsImageInput: false },
     ]);
   });
 

@@ -130,7 +130,9 @@ export function customProviderModelConfigFromCatalogModel(
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
-    ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),
+    ...(model.supportsImageInput !== undefined
+      ? { supportsImageInput: model.supportsImageInput }
+      : {}),
     ...(reasoningEfforts.length > 0 ? { reasoning: true, reasoningEfforts } : {}),
   };
 }

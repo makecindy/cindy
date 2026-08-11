@@ -293,6 +293,24 @@ describe('buildUserProvider (per-runtime)', () => {
     expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
   });
 
+  it('preserves explicit false image capability while leaving undeclared models unknown', () => {
+    const p = buildUserProvider({
+      id: 'text-route',
+      name: 'Text route',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.test/v1',
+          models: [
+            { id: 'text', name: 'Text', supportsImageInput: false },
+            { id: 'unknown', name: 'Unknown' },
+          ],
+        },
+      },
+    });
+    expect((p.models.codex ?? [])[0]?.supportsImageInput).toBe(false);
+    expect((p.models.codex ?? [])[1]).not.toHaveProperty('supportsImageInput');
+  });
+
   it('exports only the explicitly supported effort levels for a Pi reasoning model', () => {
     const p = buildUserProvider({
       id: 'reasoning-pi',

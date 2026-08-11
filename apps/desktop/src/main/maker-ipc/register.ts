@@ -676,6 +676,7 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { getDefaultCodexImageCapabilityResolver } from '../maker-host/codex-image-capability.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
 import { beginProviderRouteMutation, isUserProviderSession } from '../maker-host/provider-route.js';
@@ -8680,6 +8681,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       agentKind: createOpts.agentKind,
       workingDir: createOpts.workingDir,
       model: createOpts.model,
+      providerId: row.providerId,
       effort: createOpts.effort,
       fastMode: createOpts.fastMode,
       permissionMode: createOpts.permissionMode,
@@ -10516,6 +10518,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   };
 
+  const codexImageCapability = getDefaultCodexImageCapabilityResolver({
+    getCatalog: getActiveCatalog,
+    getSessionProvider,
+  });
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -10534,6 +10541,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throw err;
       }
     },
+    resolveImageInputMode: (sessionId, item) =>
+      codexImageCapability.resolve(sessionId, item) === false ? 'omit' : 'include',
+    onImageInputRejected: (sessionId, item) => codexImageCapability.markRejected(sessionId, item),
     // turn 被上游打断(且已有产出)→ 自动替用户点一次「继续」。判据、额度、退避都在
     // interruptedTurnAutoResume;这里只做编排:决策 → 退避 → 复核 → 补发 → 失败回滚。
     // 纯判定,无副作用:coordinator 用它在「决策还做不了」的时序里先把红横幅与 error 行
@@ -11284,6 +11294,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    // Learned fallback state is main-owned. Never trust renderer/device-link copies.
+    delete normalized.imageFallbackAttempted;
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
       // preload/renderer 不属于可信边界，不能直接注入历史正文。

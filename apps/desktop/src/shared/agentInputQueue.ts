@@ -42,6 +42,25 @@ export interface AgentInputSerializedFile {
   annotated?: boolean;
 }
 
+export function buildUnavailableImageDataBlock(
+  file: Pick<AgentInputSerializedFile, 'id' | 'name'>,
+): string {
+  const payload = JSON.stringify({
+    event: 'user_uploaded_image',
+    fileId: file.id,
+    fileName: file.name,
+    delivery: 'not_delivered',
+    reason: 'model_route_does_not_support_images',
+  });
+  return (
+    'IMAGE_ATTACHMENT_UNAVAILABLE_V1\n' +
+    payload +
+    '\nEND_IMAGE_ATTACHMENT_UNAVAILABLE_V1\n' +
+    'The user uploaded an image, but this model route did not receive the image. ' +
+    'Do not claim to have seen or analyzed its visual content. State this limitation when needed.'
+  );
+}
+
 export interface AgentInputMention {
   type: 'file' | 'dir' | 'agent';
   name: string;
@@ -208,6 +227,8 @@ export interface AgentInputQueuedMessage {
   workingDir: string;
   vendorOptions?: Record<string, unknown>;
   files?: AgentInputSerializedFile[];
+  /** One-shot guard for the automatic image-schema fallback retry. */
+  imageFallbackAttempted?: boolean;
   mentions?: AgentInputMention[];
   sessionRefs?: AgentInputSessionRef[];
   trustedSessionReferenceContexts?: AgentInputSessionReferenceContext[];
@@ -921,6 +942,7 @@ export function deriveAutoTitleSeed(
 export function buildMakerUserMessage(
   queued: AgentInputQueuedMessage,
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
+  options: { imageMode?: 'include' | 'omit' } = {},
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
   const agentFacingText = getAgentFacingText(queued);
@@ -933,6 +955,7 @@ export function buildMakerUserMessage(
   let hasAnnotatedImage = false;
   for (const f of queued.files ?? []) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
+    if (type === 'image' && options.imageMode === 'omit') continue;
     if (f.url) {
       blocks.push({ type, path: f.url, mimeType: f.mimeType });
     } else if (f.path && !f.path.startsWith('clipboard://')) {
@@ -948,6 +971,12 @@ export function buildMakerUserMessage(
   // 文本紧随图片;claude 侧所有 text 会合并进文本前缀,红色笔迹自身即区分符。
   if (hasAnnotatedImage) {
     blocks.push({ type: 'text', text: ANNOTATED_IMAGE_NOTE });
+  }
+  if (options.imageMode === 'omit') {
+    for (const file of queued.files ?? []) {
+      if (getAgentInputAttachmentBlockType(file.category, file.ext) !== 'image') continue;
+      blocks.push({ type: 'text', text: buildUnavailableImageDataBlock(file) });
+    }
   }
   if (sessionReferenceContexts.length > 0) {
     const payload = serializeSessionReferencePayload(sessionReferenceContexts);

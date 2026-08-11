@@ -89,77 +89,6 @@ function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>
   return getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
 }
 
-function attachmentSourceKey(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.url === 'string') return `url:${record.url}`;
-  if (typeof record.base64 === 'string') return `base64:${record.base64}`;
-  return null;
-}
-
-function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
-  const remainingFiles = item.files?.filter((file) => !isMakerImageAttachment(file));
-  const remainingImageSources = new Set(
-    (remainingFiles ?? [])
-      .filter((file) => file.category === 'image')
-      .map(attachmentSourceKey)
-      .filter((source): source is string => source !== null),
-  );
-  const chatMessage = { ...item.chatMessage };
-  const remainingChatImages = chatMessage.images?.filter((image) => {
-    const source = attachmentSourceKey(image);
-    return source !== null && remainingImageSources.has(source);
-  });
-  if (remainingChatImages && remainingChatImages.length > 0) {
-    chatMessage.images = remainingChatImages;
-  } else {
-    delete chatMessage.images;
-  }
-
-  // Renderer queue objects historically carry retryFiles as an extra presentation field even
-  // though it is not part of the main-process wire contract. Strip only attachments that become
-  // maker image blocks: GIF keeps category=image for preview, but is sent as a file block.
-  const compatibleChatMessage = chatMessage as typeof chatMessage & {
-    retryFiles?: QueuedAttachment[];
-  };
-  if (Array.isArray(compatibleChatMessage.retryFiles)) {
-    const retryFiles = compatibleChatMessage.retryFiles.filter(
-      (file) => !isMakerImageAttachment(file),
-    );
-    if (retryFiles.length > 0) compatibleChatMessage.retryFiles = retryFiles;
-    else delete compatibleChatMessage.retryFiles;
-  }
-
-  let persistedContent = item.persistedContent;
-  try {
-    const parsed = JSON.parse(persistedContent) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const record = parsed as Record<string, unknown>;
-      const remainingPersistedImages = Array.isArray(record.images)
-        ? record.images.filter((image) => {
-            const source = attachmentSourceKey(image);
-            return source !== null && remainingImageSources.has(source);
-          })
-        : [];
-      persistedContent = JSON.stringify({
-        ...record,
-        images: remainingPersistedImages,
-      });
-    }
-  } catch {
-    // Historical plain-text queue payloads contain no persisted image references.
-  }
-
-  const stripped: AgentInputQueuedMessage = {
-    ...item,
-    persistedContent,
-    chatMessage,
-  };
-  if (remainingFiles && remainingFiles.length > 0) stripped.files = remainingFiles;
-  else delete stripped.files;
-  return stripped;
-}
-
 function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
   return (
     getAgentFacingText(item).trim().length > 0 ||
@@ -167,6 +96,17 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
     (item.mentions?.length ?? 0) > 0 ||
     (item.sessionRefs?.length ?? 0) > 0
   );
+}
+
+function isUnsupportedImageSchemaPayload(value: unknown): boolean {
+  if (
+    (typeof value === 'string' || value === null) &&
+    isUnsupportedResponsesImageErrorPayload(value)
+  ) {
+    return true;
+  }
+  const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
+  return /unknown variant\s+[`'"]?image_url[`'"]?\s*,?\s*expected\s+[`'"]?text/i.test(text);
 }
 
 export interface AgentInputSendOpts {
@@ -268,6 +208,10 @@ export interface AgentInputCoordinatorDeps {
   hasPendingInteraction: (sessionId: string) => boolean;
   getAgentKind: (sessionId: string) => AgentInputCreateOpts['agentKind'] | null;
   getSdkSessionId: (sessionId: string) => Promise<string | undefined>;
+  /** Route-aware image projection. Unknown/capable routes include the original image. */
+  resolveImageInputMode?: (sessionId: string, item: AgentInputQueuedMessage) => 'include' | 'omit';
+  /** Records a schema rejection against the exact live route (negative capability cache). */
+  onImageInputRejected?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /** Read a bounded, durable progress snapshot before a retry is re-enqueued. */
   getRecoveryContextSnapshot?: (
     sessionId: string,
@@ -863,6 +807,15 @@ export class AgentInputCoordinator {
   private readonly autoResumeDispatchAttempts = new Map<string, number>();
 
   constructor(private readonly deps: AgentInputCoordinatorDeps) {}
+
+  private buildUserMessageForRoute(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    referenceContexts: AgentInputSessionReferenceContext[],
+  ): AgentInputMakerMessage {
+    const imageMode = this.deps.resolveImageInputMode?.(sessionId, item) ?? 'include';
+    return buildMakerUserMessage(item, referenceContexts, { imageMode });
+  }
 
   /**
    * 媒体回收器活引用取证(recycler.ts 的内存队列暂存区):序列化所有会话在
@@ -1776,15 +1729,16 @@ export class AgentInputCoordinator {
     }
 
     try {
+      const dispatchSignal = AbortSignal.any([inputBoundarySignal, steerAbort.signal]);
       const referenceContexts = await this.resolveReferenceContexts(item);
       item.persistedContent = attachSessionReferenceMetadata(
         item.persistedContent,
         referenceContexts,
       );
-      await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
+      await this.deps.steerToAgent(sessionId, this.buildUserMessageForRoute(sessionId, item, referenceContexts), {
         messageUuid,
         userName: item.userName,
-        signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
+        signal: dispatchSignal,
         expectedClearBoundaryMs: steerClearBoundaryMs,
         expectedInputGeneration: steerGeneration,
         // 同 drain:steer 投递也在入队时的 async context 之外。
@@ -2300,14 +2254,16 @@ export class AgentInputCoordinator {
     if (
       !continueItem &&
       retryItem &&
-      isUnsupportedResponsesImageErrorPayload(state.error ?? state.stickyError)
+      isUnsupportedImageSchemaPayload(state.error ?? state.stickyError)
     ) {
-      retryItem = stripQueuedMessageImages(retryItem);
-      if (!hasRetryableQueuedContent(retryItem)) {
-        // An image-only turn has no truthful fallback. Keep the error/recovery intact so a later
-        // text message or model switch can take over instead of inventing replacement text.
-        log.debug('image-only retry skipped for unsupported Chat bridge input', { sessionId });
-        return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
+      retryItem = { ...retryItem, imageFallbackAttempted: true };
+      try {
+        this.deps.onImageInputRejected?.(sessionId, retryItem);
+      } catch (error) {
+        log.warn('image capability rejection callback failed during retry', {
+          sessionId,
+          error: errorMessage(error),
+        });
       }
     }
     state.error = null;
@@ -2678,6 +2634,7 @@ export class AgentInputCoordinator {
         return;
       }
       if (active?.persisted) {
+        if (this.tryAutomaticImageFallback(sessionId, state, active, message)) return;
         state.activeTurn = null;
         state.stickyError = null;
         const schedulerItem = active.item && isSchedulerOriginItem(active.item);
@@ -2843,6 +2800,57 @@ export class AgentInputCoordinator {
     state.recovery = null;
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'turn-done');
+  }
+
+  private tryAutomaticImageFallback(
+    sessionId: string,
+    state: SessionInputState,
+    active: ActiveTurn,
+    message: string | undefined,
+  ): boolean {
+    const original = active.item;
+    if (
+      !original ||
+      original.imageFallbackAttempted === true ||
+      !isUnsupportedImageSchemaPayload(message) ||
+      !(original.files?.some(isMakerImageAttachment) ?? false)
+    ) {
+      return false;
+    }
+    const clientId = crypto.randomUUID();
+    const retry: AgentInputQueuedMessage = {
+      ...original,
+      clientId,
+      imageFallbackAttempted: true,
+      // Reuse the durable hidden-user-row contract so this internal retry does not create a
+      // duplicate user bubble. Unlike interrupted-turn recovery it intentionally has no info.
+      autoResume: true,
+      autoResumeInfo: undefined,
+      supersedesUserClientId: undefined,
+      chatMessage: {
+        ...original.chatMessage,
+        clientId,
+        createdAt: new Date().toISOString(),
+      },
+    };
+    state.activeTurn = null;
+    state.error = null;
+    state.stickyError = null;
+    state.recovery = null;
+    state.pendingQueue.unshift(retry);
+    this.prependPendingCompactWaitClientId(state, clientId);
+    try {
+      this.deps.onImageInputRejected?.(sessionId, original);
+    } catch (error) {
+      log.warn('image capability rejection callback failed', {
+        sessionId,
+        error: errorMessage(error),
+      });
+    }
+    this.deps.onUiRetry?.(sessionId, clientId, 'auto');
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'automatic-image-capability-fallback');
+    return true;
   }
 
   /**
@@ -3211,6 +3219,7 @@ export class AgentInputCoordinator {
       // may synchronously emit the new turn's started marker before it returns;
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
+      const inputSignal = this.getInputAbortSignal(sessionId, active.generation);
       const referenceContexts = await this.resolveReferenceContexts(head);
       head.persistedContent = attachSessionReferenceMetadata(
         head.persistedContent,
@@ -3218,7 +3227,7 @@ export class AgentInputCoordinator {
       );
       const result = await this.deps.sendToAgent(
         sessionId,
-        buildMakerUserMessage(head, referenceContexts),
+        this.buildUserMessageForRoute(sessionId, head, referenceContexts),
         head.createOpts,
         {
           messageUuid: active.messageUuid,
@@ -3227,7 +3236,7 @@ export class AgentInputCoordinator {
           ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
             ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
             : {}),
-          signal: this.getInputAbortSignal(sessionId, active.generation),
+          signal: inputSignal,
           expectedClearBoundaryMs: active.clearBoundaryMs,
           expectedInputGeneration: active.generation,
           ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),

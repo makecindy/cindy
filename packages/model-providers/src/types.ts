@@ -362,9 +362,8 @@ export interface CatalogModel {
    */
   newSessionDefault?: ('claude-code' | 'codex')[];
   /**
-   * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
-   * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与
-   * `modelSignature` 的同 id 跨供应商一致性校验。
+   * 该来源下的模型是否支持图片输入；true/false 为显式声明，缺省表示能力未知。
+   * 它是 per-provider 能力，不参与 `modelSignature` 的同 id 跨供应商一致性校验。
    */
   supportsImageInput?: boolean;
   /**
@@ -476,7 +475,7 @@ export interface ProviderRuntimeModelConfig {
   contextWindow?: number;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
-  /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
+  /** 是否支持原生图片输入；true/false 为显式声明，缺省表示能力未知。 */
   supportsImageInput?: boolean;
   /** Pi 自定义模型是否支持 reasoning；缺省 / false 均按不支持处理。 */
   reasoning?: boolean;

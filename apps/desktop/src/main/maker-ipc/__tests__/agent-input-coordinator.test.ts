@@ -167,6 +167,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 
 function createHarness(opts?: {
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
+  resolveImageInputMode?: NonNullable<AgentInputCoordinatorDeps['resolveImageInputMode']>;
 }) {
   let running = false;
   let turnGeneration = 0;
@@ -186,6 +187,15 @@ function createHarness(opts?: {
   const getSdkSessionId = vi.fn<AgentInputCoordinatorDeps['getSdkSessionId']>(
     async () => 'sdk-session',
   );
+  let imageInputRejected = false;
+  const resolveImageInputMode = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['resolveImageInputMode']>
+  >(opts?.resolveImageInputMode ?? (() => (imageInputRejected ? 'omit' : 'include')));
+  const onImageInputRejected = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onImageInputRejected']>
+  >(() => {
+    imageInputRejected = true;
+  });
   const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(
     () => false,
   );
@@ -285,6 +295,8 @@ function createHarness(opts?: {
     hasPendingInteraction: () => pendingInteraction,
     getAgentKind: () => agentKind,
     getSdkSessionId,
+    resolveImageInputMode,
+    onImageInputRejected,
     hasAssistantProgressAfter: (sessionId, userClientId) =>
       hasAssistantProgressAfter
         ? hasAssistantProgressAfter(sessionId, userClientId)
@@ -327,6 +339,8 @@ function createHarness(opts?: {
     steerToAgent,
     abortSession,
     getSdkSessionId,
+    resolveImageInputMode,
+    onImageInputRejected,
     reconcileTurnIdle,
     beforeDispatchUserTurn,
     onUndispatchedUserTurn,
@@ -422,6 +436,143 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe('AgentInputCoordinator image capability projection', () => {
+  function withImage(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+    return {
+      ...item,
+      files: [
+        {
+          id: 'image-1',
+          name: 'screen.png',
+          path: '/repo/screen.png',
+          ext: '.png',
+          size: 128,
+          category: 'image',
+          mimeType: 'image/png',
+        },
+      ],
+    };
+  }
+
+  it('projects an unavailable marker for a normal send to a text route', async () => {
+    const h = createHarness({
+      resolveImageInputMode: () => 'omit',
+    });
+    h.coordinator.enqueue('image-send', withImage(makeItem('image-1', 'explain this')));
+    await flush();
+
+    expect(h.resolveImageInputMode).toHaveBeenCalledTimes(1);
+    const wire = JSON.stringify(h.sendToAgent.mock.calls[0]?.[1]);
+    expect(wire).not.toContain('"type":"image"');
+    expect(wire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+    expect(wire).toContain('user_uploaded_image');
+    expect(wire).toContain('did not receive the image');
+  });
+
+  it('applies the same route projection to steer', async () => {
+    const h = createHarness({
+      resolveImageInputMode: () => 'omit',
+    });
+    h.setRunning(true);
+
+    await h.coordinator.steer('image-steer', withImage(makeItem('image-2', 'check this')));
+
+    const wire = JSON.stringify(h.steerToAgent.mock.calls[0]?.[1]);
+    expect(wire).not.toContain('"type":"image"');
+    expect(wire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+  });
+
+  it('sends an unavailable marker for a pure image on a text route', async () => {
+    const h = createHarness({
+      resolveImageInputMode: () => 'omit',
+    });
+    h.coordinator.enqueue('image-only-text', withImage(makeItem('image-3', '')));
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    const wire = JSON.stringify(h.sendToAgent.mock.calls[0]?.[1]);
+    expect(wire).not.toContain('"type":"image"');
+    expect(wire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+  });
+
+  it('retries an unknown Codex route once with a marker after schema rejection', async () => {
+    let rejected = false;
+    const h = createHarness({
+      resolveImageInputMode: () => (rejected ? 'omit' : 'include'),
+    });
+    h.onImageInputRejected.mockImplementation(() => {
+      rejected = true;
+    });
+    const item = withImage(
+      makeItem('image-auto', 'explain this', {
+        model: 'deepseek-chat',
+        createOpts: {
+          agentKind: 'codex',
+          workingDir: '/repo',
+          model: 'deepseek-chat',
+          providerId: 'deepseek',
+        },
+      }),
+    );
+    h.coordinator.enqueue('image-auto-session', item);
+    await flush();
+    expect(JSON.stringify(h.sendToAgent.mock.calls[0]?.[1])).toContain('"type":"image"');
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(
+      'image-auto-session',
+      'error',
+      'Failed to deserialize messages[5]: unknown variant `image_url`, expected `text`',
+    );
+    await flush();
+
+    expect(h.onImageInputRejected).toHaveBeenCalledWith(
+      'image-auto-session',
+      expect.objectContaining({ clientId: 'image-auto', model: 'deepseek-chat' }),
+    );
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    const fallbackWire = JSON.stringify(h.sendToAgent.mock.calls[1]?.[1]);
+    expect(fallbackWire).not.toContain('"type":"image"');
+    expect(fallbackWire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+    expect(fallbackWire).toContain('user_uploaded_image');
+    expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage?.autoResume).toBe(true);
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(
+      'image-auto-session',
+      'error',
+      'unknown variant `image_url`, expected `text`',
+    );
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a pure-image schema failure with an unavailable marker', async () => {
+    let rejected = false;
+    const h = createHarness({
+      resolveImageInputMode: () => (rejected ? 'omit' : 'include'),
+    });
+    h.onImageInputRejected.mockImplementation(() => {
+      rejected = true;
+    });
+    h.coordinator.enqueue('image-no-fallback', withImage(makeItem('image-empty-auto', '')));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(
+      'image-no-fallback',
+      'error',
+      'unknown variant `image_url`, expected `text`',
+    );
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.onImageInputRejected).toHaveBeenCalledTimes(1);
+    const fallbackWire = JSON.stringify(h.sendToAgent.mock.calls[1]?.[1]);
+    expect(fallbackWire).not.toContain('"type":"image"');
+    expect(fallbackWire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+  });
 });
 
 describe('AgentInputCoordinator trusted session reference snapshots', () => {
@@ -2351,7 +2502,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual', undefined);
   });
 
-  it('removes unsupported image blocks but preserves GIF and PDF files on retry', async () => {
+  it('projects an image marker while preserving source image, GIF and PDF metadata on retry', async () => {
     const h = createHarness();
     const sid = 'retry-unsupported-image-with-text';
     h.setHasAssistantProgressAfter(async () => false);
@@ -2436,20 +2587,23 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
-      type: 'user',
-      content: [
-        { type: 'text', text: 'describe this' },
-        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
-        { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
-      ],
-    });
+    const retryWire = JSON.stringify(h.sendToAgent.mock.calls[1]?.[1]);
+    expect(retryWire).not.toContain('"type":"image"');
+    expect(retryWire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+    expect(retryWire).toContain('xdt-image://session/clip.gif');
+    expect(retryWire).toContain('/repo/notes.pdf');
     const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
     expect(retried?.files).toEqual([
+      expect.objectContaining({ id: 'image-1', ext: '.png', category: 'image' }),
       expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
       expect.objectContaining({ id: 'file-1', category: 'pdf' }),
     ]);
     expect(retried?.chatMessage.images).toEqual([
+      {
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      },
       {
         url: 'xdt-image://session/clip.gif',
         mimeType: 'image/gif',
@@ -2464,12 +2618,18 @@ describe('AgentInputCoordinator send transaction', () => {
         }
       ).retryFiles,
     ).toEqual([
+      expect.objectContaining({ id: 'image-1', ext: '.png', category: 'image' }),
       expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
       expect.objectContaining({ id: 'file-1', category: 'pdf' }),
     ]);
     expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
       text: 'describe this',
       images: [
+        {
+          url: 'data:image/png;base64,aW1hZ2U=',
+          mimeType: 'image/png',
+          originalName: 'image.png',
+        },
         {
           url: 'xdt-image://session/clip.gif',
           mimeType: 'image/gif',
@@ -2480,7 +2640,7 @@ describe('AgentInputCoordinator send transaction', () => {
     });
   });
 
-  it('keeps an unsupported image-only retry recoverable without fabricating text', async () => {
+  it('retries an unsupported image-only turn with a marker instead of fabricated content', async () => {
     const h = createHarness();
     const sid = 'retry-unsupported-image-only';
     h.setHasAssistantProgressAfter(async () => false);
@@ -2529,14 +2689,11 @@ describe('AgentInputCoordinator send transaction', () => {
     await h.coordinator.retryLastError(sid);
     await flush();
 
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestProjection(h.projections).error).toBe(error);
-    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
-
-    h.coordinator.enqueue(sid, makeItem('q-next', 'continue in text'));
-    await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'continue in text' });
+    const retryWire = JSON.stringify(h.sendToAgent.mock.calls[1]?.[1]);
+    expect(retryWire).not.toContain('"type":"image"');
+    expect(retryWire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
+    expect(retryWire).not.toContain(error);
   });
 
   it('keeps retry recovery compatible with the legacy bridge image error', async () => {
@@ -2567,7 +2724,10 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
+    const retryWire = JSON.stringify(h.sendToAgent.mock.calls[1]?.[1]);
+    expect(retryWire).not.toContain('"type":"image"');
+    expect(retryWire).toContain('describe this');
+    expect(retryWire).toContain('IMAGE_ATTACHMENT_UNAVAILABLE_V1');
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
