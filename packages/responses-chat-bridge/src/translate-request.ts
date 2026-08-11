@@ -692,6 +692,23 @@ function reportDroppedTools(
   });
 }
 
+function hasDroppedWebSearchTool(tools: ResponsesRequest['tools']): boolean {
+  return (tools ?? []).some((tool) => (
+    isPlainObject(tool) && tool.type === 'web_search'
+  ));
+}
+
+function explicitlySelectsWebSearch(choice: unknown): boolean {
+  if (!isPlainObject(choice)) return false;
+  if (choice.type === 'web_search') return true;
+  if (
+    (choice.type === 'function' || choice.type === 'custom')
+    && choice.name === 'web_search'
+  ) return true;
+  const nestedFunction = isPlainObject(choice.function) ? choice.function : undefined;
+  return nestedFunction?.name === 'web_search';
+}
+
 function translateToolChoice(
   choice: unknown,
   forceAuto: boolean,
@@ -806,6 +823,9 @@ export function translateResponsesRequestWithContext(
   const developerRole = capabilities.developerRole ?? 'system';
   const toolContext = ChatBridgeToolContext.fromRequest(input);
   reportDroppedTools(input.tools, opts.onDroppedTool);
+  if (hasDroppedWebSearchTool(input.tools) && explicitlySelectsWebSearch(input.tool_choice)) {
+    throw new UnsupportedResponsesFeatureError('tool_choice.web_search');
+  }
   const messages = translateInput(input.input, {
     developerRole,
     mediaCapabilities: capabilities,
