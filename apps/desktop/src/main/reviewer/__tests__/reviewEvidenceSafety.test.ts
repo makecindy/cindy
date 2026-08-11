@@ -127,7 +127,11 @@ describe('review change set content paths', () => {
   // on the Windows CI runner, matching what a real change set records there.
   const abs = (...segments: string[]) => path.resolve(...segments);
 
-  function changeSet(files: TurnChangeSetDetail['files'], cwd = '/repo'): TurnChangeSetDetail {
+  function changeSet(
+    files: TurnChangeSetDetail['files'],
+    cwd = '/repo',
+    overrides: Partial<TurnChangeSetDetail> = {},
+  ): TurnChangeSetDetail {
     return {
       id: 'turn-1',
       sessionId: 'source-1',
@@ -146,6 +150,7 @@ describe('review change set content paths', () => {
       additions: 0,
       deletions: 0,
       diffs: [],
+      ...overrides,
     };
   }
 
@@ -158,20 +163,20 @@ describe('review change set content paths', () => {
       reviewChangeSetContentPaths(
         changeSet([file('src/a.ts'), file('docs/new.md', 'docs/old.md')]),
         '/other',
-      ).sort(),
+      ).paths.sort(),
     ).toEqual(
       [abs('/repo', 'docs/new.md'), abs('/repo', 'docs/old.md'), abs('/repo', 'src/a.ts')].sort(),
     );
   });
 
   it('returns nothing when there is no change set', () => {
-    expect(reviewChangeSetContentPaths(null, '/repo')).toEqual([]);
+    expect(reviewChangeSetContentPaths(null, '/repo')).toEqual({ paths: [], truncated: false });
   });
 
   it('falls back to the working directory when the change set has no cwd', () => {
-    expect(reviewChangeSetContentPaths(changeSet([file('src/a.ts')], ''), '/fallback')).toEqual([
-      abs('/fallback', 'src/a.ts'),
-    ]);
+    expect(
+      reviewChangeSetContentPaths(changeSet([file('src/a.ts')], ''), '/fallback').paths,
+    ).toEqual([abs('/fallback', 'src/a.ts')]);
   });
 
   it('refuses escapes, absolute paths and credential files', () => {
@@ -185,7 +190,7 @@ describe('review change set content paths', () => {
           file('config/credentials.json'),
         ]),
         '/repo',
-      ),
+      ).paths,
     ).toEqual([]);
   });
 
@@ -193,13 +198,50 @@ describe('review change set content paths', () => {
     // Each side is validated on its own: the file really did change and belongs
     // in the baseline, while the escaping rename source is simply dropped.
     expect(
-      reviewChangeSetContentPaths(changeSet([file('renamed.ts', '../secret.ts')]), '/repo'),
+      reviewChangeSetContentPaths(changeSet([file('renamed.ts', '../secret.ts')]), '/repo').paths,
     ).toEqual([abs('/repo', 'renamed.ts')]);
   });
 
   it('deduplicates paths reached through more than one entry', () => {
     expect(
-      reviewChangeSetContentPaths(changeSet([file('src/a.ts'), file('src/a.ts')]), '/repo'),
+      reviewChangeSetContentPaths(changeSet([file('src/a.ts'), file('src/a.ts')]), '/repo').paths,
     ).toEqual([abs('/repo', 'src/a.ts')]);
+  });
+
+  it('recovers files that the summarized list dropped but the patch still names', () => {
+    // Persisted details are rebuilt through toSummary(), which caps `files` at
+    // 50 while `diffs` keeps the full patch. Reading only `files` would leave
+    // the 51st file onward outside the baseline.
+    const result = reviewChangeSetContentPaths(
+      changeSet([file('kept.ts')], '/repo', {
+        fileCount: 2,
+        diffs: [fileDiff({ path: 'dropped.ts' })],
+      }),
+      '/repo',
+    );
+
+    expect(result.paths.sort()).toEqual(
+      [abs('/repo', 'dropped.ts'), abs('/repo', 'kept.ts')].sort(),
+    );
+    expect(result.truncated).toBe(false);
+  });
+
+  it('reports truncation when the change set names fewer files than it counts', () => {
+    const result = reviewChangeSetContentPaths(
+      changeSet([file('kept.ts')], '/repo', { fileCount: 51 }),
+      '/repo',
+    );
+
+    expect(result.paths).toEqual([abs('/repo', 'kept.ts')]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('does not treat a rename as two files when judging truncation', () => {
+    // A rename contributes two names for one recorded file; counting raw
+    // entries would hide a real truncation or invent one.
+    expect(
+      reviewChangeSetContentPaths(changeSet([file('new.ts', 'old.ts')], '/repo'), '/repo')
+        .truncated,
+    ).toBe(false);
   });
 });

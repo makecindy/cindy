@@ -109,32 +109,65 @@ function isSafeRelativeChangePath(rawPath: string): boolean {
   );
 }
 
+export interface ReviewChangeSetContentPaths {
+  paths: string[];
+  /**
+   * True when the change set records more files than it can enumerate, so the
+   * returned paths cannot be a complete baseline for it.
+   *
+   * Persisted details are rebuilt through `toSummary()`, which caps `files` at
+   * 50 entries while keeping the true `fileCount`. Callers that rely on these
+   * paths for freshness must fail closed rather than publish a conclusion whose
+   * baseline silently omitted the 51st file onward.
+   */
+  truncated: boolean;
+}
+
 /**
- * Absolute paths of the files a non-Git change set touches.
+ * Absolute paths of the files a change set touches.
  *
- * A non-Git task has no Git identity to bind, so without these the review would
- * carry no content baseline at all and could publish a conclusion drawn from
- * bytes that changed mid-review. Paths are resolved against the change set's own
- * recorded `cwd` and must stay inside it; anything sensitive, unsafe or outside
- * is dropped rather than silently widening the review's read scope.
+ * Git evidence covers tracked content only: its fingerprint hashes Git identity,
+ * porcelain status and patches, so a Git-ignored deliverable (a built report, a
+ * generated bundle) produced by the reviewed turn is invisible to it. These
+ * paths therefore matter even when a Git fingerprint exists — the caller decides
+ * which of them Git already covers.
+ *
+ * Paths come from both `files` and `diffs` because those truncate independently.
+ * Each is resolved against the change set's own recorded `cwd` and must stay
+ * inside it; anything sensitive, unsafe or outside is dropped rather than
+ * silently widening the review's read scope.
  */
 export function reviewChangeSetContentPaths(
   changeSet: TurnChangeSetDetail | null,
   workingDir: string,
-): string[] {
-  if (!changeSet) return [];
+): ReviewChangeSetContentPaths {
+  if (!changeSet) return { paths: [], truncated: false };
   const root = path.resolve(changeSet.cwd || workingDir);
   const paths = new Set<string>();
+  const named = new Set<string>();
+  const collect = (rawPath: string | null | undefined): void => {
+    if (typeof rawPath !== 'string' || !isSafeRelativeChangePath(rawPath)) return;
+    named.add(rawPath);
+    if (isReviewSensitiveCredentialPath(rawPath)) return;
+    const absolute = path.resolve(root, ...rawPath.split(/[\\/]/));
+    const relative = path.relative(root, absolute);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return;
+    if (isReviewSensitiveCredentialPath(absolute)) return;
+    paths.add(absolute);
+  };
+
   for (const file of changeSet.files) {
-    for (const rawPath of [file.path, file.oldPath]) {
-      if (typeof rawPath !== 'string' || !isSafeRelativeChangePath(rawPath)) continue;
-      if (isReviewSensitiveCredentialPath(rawPath)) continue;
-      const absolute = path.resolve(root, ...rawPath.split(/[\\/]/));
-      const relative = path.relative(root, absolute);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-      if (isReviewSensitiveCredentialPath(absolute)) continue;
-      paths.add(absolute);
-    }
+    collect(file.path);
+    collect(file.oldPath);
   }
-  return [...paths];
+  // `diffs` is parsed from the full unified patch and can still describe files
+  // the summarized `files` array dropped.
+  for (const diff of changeSet.diffs) {
+    collect(diff.path);
+    collect(diff.oldPath);
+  }
+
+  // Compare against distinct names actually seen: a rename contributes two
+  // names for one recorded file, so counting raw entries would misjudge this.
+  return { paths: [...paths], truncated: named.size < changeSet.fileCount };
 }

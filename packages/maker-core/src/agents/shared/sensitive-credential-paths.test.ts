@@ -66,12 +66,29 @@ describe("Review credential path policy", () => {
     // A reviewed repository may legitimately keep source under an `updates`
     // directory. Only Cindy's own managed harness payloads are excluded, so a
     // wildcard here would silently drop real changes from the review.
+    //
+    // The harness names are the dangerous case: matching them by name alone
+    // would deny a reviewed repository that happens to use the same folder.
+    // Cindy's payloads always sit at `updates/<version>/<platform>-<arch>/`.
     for (const allowed of [
       "/userrepo/tools/database/updates/migrate.ts",
       "/userrepo/tools/schema/updates/v2.sql",
       "/userrepo/tools/build/updates/index.ts",
+      "/userrepo/tools/codex/updates/migrate.ts",
+      "/userrepo/tools/claude/updates/index.ts",
+      "/userrepo/tools/ripgrep/updates/v2/schema.sql",
     ]) {
       expect(isReviewSensitiveCredentialPath(allowed)).toBe(false);
+    }
+  });
+
+  it("excludes managed harness payloads on every platform", () => {
+    for (const denied of [
+      "/repo/tools/pi/updates/0.83.0/linux-x64/pi",
+      "/repo/tools/ripgrep/updates/15.1.0/win32-x64/rg.exe",
+      "tools/codex/updates/0.144.6/darwin-arm64/codex",
+    ]) {
+      expect(isReviewSensitiveCredentialPath(denied)).toBe(true);
     }
   });
 
@@ -108,10 +125,10 @@ describe("Review credential path policy", () => {
         "**/.git/**",
         "**/node_modules/**",
         "**/apps/codex-bin/**",
-        "**/tools/claude/updates/**",
-        "**/tools/codex/updates/**",
-        "**/tools/pi/updates/**",
-        "**/tools/ripgrep/updates/**",
+        "**/tools/claude/updates/*/*-*/**",
+        "**/tools/codex/updates/*/*-*/**",
+        "**/tools/pi/updates/*/*-*/**",
+        "**/tools/ripgrep/updates/*/*-*/**",
         "**/.vite/**",
         "**/credentials.json",
         "**/auth.json",

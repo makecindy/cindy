@@ -53,12 +53,16 @@ describe('Review external input wiring', () => {
     expect(registerSource).not.toContain(
       'const artifactPaths = [...reviewReadPaths, sourceWorkingDir];',
     );
-    // Non-Git tasks have no Git identity to bind, so their change-set files
-    // still need a content baseline or the review would have none at all.
+    // Change-set files are bound unconditionally. Git evidence hashes identity,
+    // status and patches, so an ignored deliverable built by the reviewed turn
+    // is covered by neither fingerprint unless it is included here.
+    expect(registerSource).toContain('const changeSetContent = reviewChangeSetContentPaths(');
     expect(registerSource).toContain(
-      'reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)',
+      'const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];',
     );
-    expect(registerSource).toContain('evidence.workspaceFingerprint');
+    // A change set that cannot enumerate its own files is not a usable
+    // baseline; publishing against it would skip the truncated remainder.
+    expect(registerSource).toContain('changeSetContent.truncated');
     expect(registerSource).toContain(
       'const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };',
     );

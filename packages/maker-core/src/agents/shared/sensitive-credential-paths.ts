@@ -60,12 +60,16 @@ export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
     source: String.raw`(?:^|[\\/])apps[\\/](?:claude-code|codex|pi|ripgrep)-bin(?:[\\/]|$)`,
     flags: "i",
   },
-  // Enumerate the managed harness update directories rather than matching every
-  // `tools/*/updates`: an arbitrary reviewed repository may legitimately keep
-  // source such as `tools/database/updates/migrate.ts`, and this list also
-  // removes matches from the reviewer's diff, not just from a fingerprint.
+  // Cindy downloads harness binaries into `tools/<kind>/updates/<version>/
+  // <platform>/` at its own repository root (see .gitignore); the payloads are
+  // executables, never reviewable source.
+  //
+  // Require that full shape rather than any `tools/<kind>/updates` prefix. This
+  // list also removes matches from the reviewer's diff and read scope, so a
+  // reviewed repository that legitimately keeps source at
+  // `tools/codex/updates/migrate.ts` must stay reviewable.
   {
-    source: String.raw`(?:^|[\\/])tools[\\/](?:claude|codex|pi|ripgrep)[\\/]updates(?:[\\/]|$)`,
+    source: String.raw`(?:^|[\\/])tools[\\/](?:claude|codex|pi|ripgrep)[\\/]updates[\\/][^\\/]+[\\/](?:darwin|linux|win32)-[^\\/]+(?:[\\/]|$)`,
     flags: "i",
   },
   { source: String.raw`(?:^|[\\/])\.vite(?:[\\/]|$)`, flags: "i" },
@@ -89,10 +93,13 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/apps/codex-bin/**",
   "**/apps/pi-bin/**",
   "**/apps/ripgrep-bin/**",
-  "**/tools/claude/updates/**",
-  "**/tools/codex/updates/**",
-  "**/tools/pi/updates/**",
-  "**/tools/ripgrep/updates/**",
+  // Match the path rule above: only the downloaded
+  // `updates/<version>/<platform>-<arch>/` payloads, so a reviewed repository
+  // keeping its own source under these names stays searchable.
+  "**/tools/claude/updates/*/*-*/**",
+  "**/tools/codex/updates/*/*-*/**",
+  "**/tools/pi/updates/*/*-*/**",
+  "**/tools/ripgrep/updates/*/*-*/**",
   "**/.vite/**",
   "**/.ssh/**",
   "**/.aws/**",

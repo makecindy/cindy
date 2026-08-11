@@ -7067,20 +7067,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
           }
           // Fingerprint what the review actually covers, not the whole
-          // workspace: explicit artifacts, attachments, and — when there is no
-          // Git identity to bind — the files of the reviewed change set. The
-          // reviewer still reads the full workspace through workingDir, but an
-          // unrelated file edit must not invalidate a completed review, and a
-          // full-workspace content hash cannot stay inside its byte budget on a
-          // real checkout.
-          const artifactPaths = [
-            ...new Set([
-              ...reviewReadPaths,
-              ...(evidence.workspaceFingerprint
-                ? []
-                : reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)),
-            ]),
-          ];
+          // workspace: explicit artifacts, attachments and the reviewed change
+          // set. The reviewer still reads the full workspace through workingDir,
+          // but an unrelated file edit must not invalidate a completed review,
+          // and a full-workspace content hash cannot stay inside its byte budget
+          // on a real checkout.
+          //
+          // Change-set paths are bound even when Git evidence exists: the Git
+          // fingerprint hashes identity, porcelain status and patches, so an
+          // ignored deliverable built by the reviewed turn (dist/report.html)
+          // is covered by neither unless it is included here.
+          const changeSetContent = reviewChangeSetContentPaths(
+            evidence.changeSet,
+            sourceWorkingDir,
+          );
+          // A change set that cannot enumerate all of its own files cannot serve
+          // as a baseline. Refuse instead of publishing a conclusion whose
+          // freshness check silently skipped everything past the summarized
+          // prefix. Git evidence, when present, still covers tracked files.
+          if (changeSetContent.truncated && !evidence.workspaceFingerprint) {
+            throw new ReviewPreconditionError({
+              code: 'artifact-unavailable',
+              message:
+                'The reviewed change set lists more files than it can enumerate, so Review cannot bind a complete content baseline',
+            });
+          }
+          const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];
           const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
           let artifactFingerprint: string;
           try {
