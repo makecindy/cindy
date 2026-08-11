@@ -368,6 +368,24 @@ function refreshStaleProcessProofs(userDataDir: string): void {
 }
 
 /**
+ * Warm the short-lived PID-reuse proofs before synchronous legacy consumers
+ * inspect a stable local profile during first-window startup. Provenance
+ * failures are deliberately swallowed here; the synchronous guards remain
+ * fail-closed until a complete, exact proof is available.
+ */
+export async function warmStaleProcessProvenance(
+  userDataDir = app.getPath('userData'),
+): Promise<void> {
+  try {
+    await findConcurrentLiveInstancePids(productionDeps, userDataDir);
+  } catch (error) {
+    log.debug('startup stale process provenance warmup failed closed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * PID liveness alone is insufficient: macOS and Windows routinely reuse old
  * PIDs. Ignore a registration only when OS provenance proves that the current
  * process started well after the record and is not another Cindy/Electron
@@ -1808,5 +1826,10 @@ export const __testing = {
   LEGACY_PATHS,
   isSameUserDataDir,
   pathExistsNoFollowSync,
+  warmStaleProcessProvenance: (
+    userDataDir: string,
+    deps: MigrationDeps,
+  ): Promise<void> =>
+    findConcurrentLiveInstancePids(deps, userDataDir).then(() => undefined).catch(() => undefined),
   resetLegacyGhostRecoveryState: () => legacyGhostMigrationResults.clear(),
 };

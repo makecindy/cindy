@@ -185,6 +185,7 @@ import {
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
+import { warmStaleProcessProvenance } from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
@@ -6987,6 +6988,12 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  // Local profiles bypass authManager's cloud claim path. Await the same
+  // asynchronous PID provenance scan before the first BrowserWindow exists so
+  // sidebar's synchronous legacy migration reads can consume an exact proof.
+  if (getActiveAppSession().mode === 'local') {
+    await warmStaleProcessProvenance();
+  }
   startupWindowCreationAllowed = true;
   createWindow();
   // The macOS release watcher stays disarmed until a task drag begins. Start

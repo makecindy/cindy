@@ -221,6 +221,42 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
   });
 
+  it('warms stale-pid provenance for local startup before synchronous guards inspect it', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    await __testing.warmStaleProcessProvenance(
+      root,
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
+  });
+
+  it('keeps local startup fail-closed when provenance warmup cannot read identity', async () => {
+    const root = await tempRoot();
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs: 1_000_000 });
+
+    await __testing.warmStaleProcessProvenance(
+      root,
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => {
+          throw new Error('process inspection denied');
+        },
+      }),
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+  });
+
   it('keeps deferring when a reused pid now belongs to another Cindy process', async () => {
     const root = await tempRoot();
     const startedAtMs = 1_000_000;
