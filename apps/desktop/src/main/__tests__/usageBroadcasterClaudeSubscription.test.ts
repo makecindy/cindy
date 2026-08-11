@@ -106,6 +106,23 @@ describe('claude subscription snapshot hydration race', () => {
     expect(mocks.exec).not.toHaveBeenCalled();
   });
 
+  it('persists a rejected status even without windows (与 codex 侧 reached 标记同口径)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // rejected 是权威的「请求已被拒」信号(isClaudeSubscriptionAlerting 直接据此告警),
+    // 缺窗口时也必须落库 —— 否则重启后 chip 不知道当前正被限流。
+    mocks.queryOne.mockRejectedValue(new Error('db busy'));
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: null,
+      sevenDay: null,
+      rateLimitStatus: 'rejected',
+      source: 'unified-headers',
+      updatedAt: 5,
+    });
+
+    expect(mocks.exec).toHaveBeenCalled();
+  });
+
   it('persists a status-only snapshot merged onto hydrated windows (regression guard)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // hydration 正常命中 → status-only 增量并入已有窗口, 照常落库且窗口保留。

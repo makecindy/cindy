@@ -428,6 +428,39 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(mocks.exec).not.toHaveBeenCalled();
   });
 
+  // 权威的「已达限额」标记本身就是要落库的状态: 它没有窗口是正常的(如 credits
+  // 耗尽), 且 isCodexWindowlessFallback 明确把它当权威值 —— merge 会正当地把旧窗口
+  // 清成 null。goal-host 的 getAccountLimit 从持久化的 rateLimitReachedType 判
+  // limited, 漏存会让重启后暂停的目标直接重新撞进同一个限额。
+  const CREDITS_DEPLETED_EVENT = {
+    limitId: 'codex',
+    primary: null,
+    secondary: null,
+    rateLimitReachedType: 'credits_depleted',
+    source: 'codex-app-server',
+  };
+
+  it('persists an authoritative rate-limit-reached marker even without windows', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+
+    await broadcaster.recordCodexAccountUsageSnapshot(CREDITS_DEPLETED_EVENT);
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.rateLimitReachedType).toBe('credits_depleted');
+  });
+
+  it('persists a reached marker arriving on an empty cache too', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockRejectedValue(new Error('db busy'));
+
+    await broadcaster.recordCodexAccountUsageSnapshot(CREDITS_DEPLETED_EVENT);
+
+    expect(mocks.exec).toHaveBeenCalled();
+  });
+
   it('still persists windowless events merged onto hydrated windows (regression guard)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // hydration 正常命中: windowless 稀疏事件按契约并入已有桶, 窗口保留 → 照常落库。

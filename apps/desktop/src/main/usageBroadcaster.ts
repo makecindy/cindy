@@ -549,19 +549,32 @@ function hasUsableCodexWindow(snapshot: RateLimitSnapshot | null | undefined): b
 }
 
 /**
- * payload 是否值得落库: 任一槽(顶层 / 桶表 / web)带可用窗口。
+ * 单槽是否有值得落库的内容: 可用窗口, 或权威的「已达限额」标记。
+ *
+ * reached 标记没有窗口是正常形态(如 credits 耗尽), 且 isCodexWindowlessFallback 明确
+ * 把它当权威值 —— merge 会正当地把旧窗口清成 null。它必须落库: goal-host 的
+ * getAccountLimit 从持久化的 rateLimitReachedType 判 limited, 漏存会让重启后暂停的
+ * 目标直接重新撞进同一个限额。
+ */
+function hasPersistableCodexSlot(snapshot: RateLimitSnapshot | null | undefined): boolean {
+  if (!snapshot) return false;
+  return hasUsableCodexWindow(snapshot) || hasCodexRateLimitReached(snapshot);
+}
+
+/**
+ * payload 是否值得落库: 任一槽(顶层 / 桶表 / web)有可用窗口或权威 reached 标记。
  *
  * windowless 稀疏事件本身是合法的(app-server 滚动更新契约), merge 靠内存旧值兜住
  * 窗口 —— 但内存为空时(hydration 读库失败 / owner 未初始化被跳过)无值可兜, 全 null
  * payload 会原样 upsert, 把持久化行里的有效数据永久抹掉(2026-08-11 用户实报)。
- * 空 payload 不落库: 保留旧行, 重启后 hydration 仍能读回有效数据。
+ * 这种空壳不落库: 保留旧行, 重启后 hydration 仍能读回有效数据。
  */
 function hasPersistableCodexAccountUsage(payload: CodexAccountUsagePayload | null): boolean {
   if (!payload) return false;
   return (
-    hasUsableCodexWindow(payload)
-    || hasUsableCodexWindow(payload.webSnapshot)
-    || Object.values(payload.appServerBuckets ?? {}).some(hasUsableCodexWindow)
+    hasPersistableCodexSlot(payload)
+    || hasPersistableCodexSlot(payload.webSnapshot)
+    || Object.values(payload.appServerBuckets ?? {}).some(hasPersistableCodexSlot)
   );
 }
 
@@ -778,7 +791,12 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
   await claudeSubscriptionUsageLoadPromise;
 }
 
-/** 与 codex 侧 hasUsableCodexWindow 同口径: 窗口非空且 utilization 是有限数。 */
+/**
+ * 与 codex 侧同口径: 窗口非空且 utilization 是有限数, 或带权威的限流状态。
+ *
+ * rateLimitStatus='rejected' 是「请求已被拒」的权威信号(isClaudeSubscriptionAlerting
+ * 直接据此告警), 缺窗口时同样必须落库 —— 对应 codex 侧的 rateLimitReachedType。
+ */
 function hasPersistableClaudeSubscriptionUsage(
   snapshot: ClaudeSubscriptionUsageSnapshot,
 ): boolean {
@@ -788,6 +806,7 @@ function hasPersistableClaudeSubscriptionUsage(
     usable(snapshot.fiveHour)
     || usable(snapshot.sevenDay)
     || (snapshot.scoped?.some(usable) ?? false)
+    || snapshot.rateLimitStatus?.trim().toLowerCase() === 'rejected'
   );
 }
 
