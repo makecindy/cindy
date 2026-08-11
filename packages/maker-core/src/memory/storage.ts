@@ -322,13 +322,20 @@ export class MemoryStorage {
   async delete(filename: string): Promise<void> {
     this.assertSafeFilename(filename);
     const fullPath = path.join(this.dir, filename);
+    // 删除前复核 (review #2388 Codex 14th P1): 单次预检只保护 delete 开始瞬间,
+    // 边界在 fs.unlink / rebuildIndex 之间发生仍会删旧 owner 文件并重建索引。
+    this.beforeFileWrite?.();
     try {
       await fs.unlink(fullPath);
     } catch (e) {
       if (isENOENT(e)) throw new MemoryError('not-found', `${filename} 不存在`);
       throw new MemoryError('io-error', `unlink failed: ${(e as Error).message}`);
     }
+    // unlink 后复核 — await 窗口后边界可能发生, 不得继续在旧 owner 下重建索引。
+    this.beforeFileWrite?.();
     await this.rebuildIndex();
+    // rebuildIndex 内部多次 await 后、返回前复核。
+    this.beforeFileWrite?.();
   }
 
   /** 当前 MEMORY.md 内容 (索引文本, 给 system prompt 拼). 不存在返空串 */

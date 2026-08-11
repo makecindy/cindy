@@ -541,6 +541,10 @@ export class MakerMemoryManager {
     // 每次目录删除前复核, owner 已切换则中止, 绝不递归删新 owner 的 maker-memory。
     const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
     const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
+    // 入口池快照 (review #2388 Greptile 12th): 删除 await 期间 owner 可能切换,
+    // 新 owner 的并发 getStore 会换根重建 store 入池 — 结尾只能关闭/移除**本
+    // 次操作开始时**的 entry, 绝不碰新加入的 store。
+    const storeSnapshot = [...this.stores.entries()];
     let total = 0;
     // 还没 open 的 workdir 文件也要清: 扫 basePath/maker-memory 下所有目录
     const fs = await import('node:fs/promises');
@@ -567,11 +571,13 @@ export class MakerMemoryManager {
         });
       }
     }
-    // 已 open 的 db 都失效了, 全部 close + 清池 — 下次 getStore 会重建
-    for (const { db } of this.stores.values()) {
+    // 仅关闭/移除入口快照内的 entry — 已失效 (旧 owner) 的 db 全部 close;
+    // 若 scope 未变则等价于清空池; 若已切换, 快照内 db 可能已被 closeAllStores
+    // 关闭 (幂等), 且**不得**动并发新加入的新 owner store。
+    for (const [workdir, { db }] of storeSnapshot) {
       try { db.close(); } catch { /* swallow */ }
+      if (this.stores.get(workdir)?.db === db) this.stores.delete(workdir);
     }
-    this.stores.clear();
     // 删除后复核 (review #2388 Greptile 5th): 目标 root 在入口已固定为操作开始时
     // owner (不会误删新 owner), 但删除期间 owner 若已切换, 结果不可信 ——
     // fail-closed 抛 not-ready, 调用方不得按「成功清空」对待。
