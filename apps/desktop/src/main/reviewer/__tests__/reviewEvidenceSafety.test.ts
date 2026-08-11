@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { FileDiff, ReviewDiffBucket } from '../../../shared/gitReviewWire.js';
 import type { TurnChangeSetDetail } from '../../../shared/turnChangeSet.js';
-import { sanitizeReviewChangeSet, sanitizeReviewDiffBucket } from '../reviewEvidenceSafety.js';
+import {
+  reviewChangeSetContentPaths,
+  sanitizeReviewChangeSet,
+  sanitizeReviewDiffBucket,
+} from '../reviewEvidenceSafety.js';
 
 function fileDiff(overrides: Partial<FileDiff> = {}): FileDiff {
   return {
@@ -113,5 +117,81 @@ describe('review Git evidence safety', () => {
     expect(result.value?.files).toEqual([]);
     expect(result.value?.incompleteReasons).toContain('sensitive-file');
     expect(JSON.stringify(result.value)).not.toContain('TOKEN=secret');
+  });
+});
+
+describe('review change set content paths', () => {
+  function changeSet(files: TurnChangeSetDetail['files'], cwd = '/repo'): TurnChangeSetDetail {
+    return {
+      id: 'turn-1',
+      sessionId: 'source-1',
+      anchorClientId: 'message-1',
+      provider: 'codex',
+      providerTurnId: null,
+      cwd,
+      state: 'complete',
+      workspaceState: 'applied',
+      isReversible: true,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files,
+      fileCount: files.length,
+      additions: 0,
+      deletions: 0,
+      diffs: [],
+    };
+  }
+
+  function file(path: string, oldPath: string | null = null): TurnChangeSetDetail['files'][number] {
+    return { id: path, path, oldPath, status: 'modified', additions: 1, deletions: 0 };
+  }
+
+  it('resolves changed and renamed-from paths against the recorded cwd', () => {
+    expect(
+      reviewChangeSetContentPaths(
+        changeSet([file('src/a.ts'), file('docs/new.md', 'docs/old.md')]),
+        '/other',
+      ).sort(),
+    ).toEqual(['/repo/docs/new.md', '/repo/docs/old.md', '/repo/src/a.ts']);
+  });
+
+  it('returns nothing when there is no change set', () => {
+    expect(reviewChangeSetContentPaths(null, '/repo')).toEqual([]);
+  });
+
+  it('falls back to the working directory when the change set has no cwd', () => {
+    expect(reviewChangeSetContentPaths(changeSet([file('src/a.ts')], ''), '/fallback')).toEqual([
+      '/fallback/src/a.ts',
+    ]);
+  });
+
+  it('refuses escapes, absolute paths and credential files', () => {
+    expect(
+      reviewChangeSetContentPaths(
+        changeSet([
+          file('../outside.ts'),
+          file('a/../../outside.ts'),
+          file('/etc/passwd'),
+          file('.env'),
+          file('config/credentials.json'),
+        ]),
+        '/repo',
+      ),
+    ).toEqual([]);
+  });
+
+  it('keeps a confined new path when only its rename source is unsafe', () => {
+    // Each side is validated on its own: the file really did change and belongs
+    // in the baseline, while the escaping rename source is simply dropped.
+    expect(
+      reviewChangeSetContentPaths(changeSet([file('renamed.ts', '../secret.ts')]), '/repo'),
+    ).toEqual(['/repo/renamed.ts']);
+  });
+
+  it('deduplicates paths reached through more than one entry', () => {
+    expect(
+      reviewChangeSetContentPaths(changeSet([file('src/a.ts'), file('src/a.ts')]), '/repo'),
+    ).toEqual(['/repo/src/a.ts']);
   });
 });

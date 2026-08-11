@@ -205,6 +205,7 @@ import {
   ReviewArtifactFingerprintChangedError,
   ReviewArtifactFingerprintLimitError,
 } from '../reviewer/reviewArtifactFingerprint.js';
+import { reviewChangeSetContentPaths } from '../reviewer/reviewEvidenceSafety.js';
 import { enforceReviewCreateOptions } from '../reviewer/reviewSessionPolicy.js';
 import { reviewSourceIdentityMatches } from '../reviewer/reviewSourceIdentity.js';
 import { buildReviewSessionTitle } from '../reviewer/reviewSessionTitle.js';
@@ -7065,11 +7066,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               }
             }
           }
-          // Fingerprint only the files the review actually targets (diff,
-          // explicit artifacts, attachments). The reviewer still has read
-          // access to the full workspace via workingDir, but unrelated file
-          // changes should not invalidate a completed review.
-          const artifactPaths = [...reviewReadPaths];
+          // Fingerprint what the review actually covers, not the whole
+          // workspace: explicit artifacts, attachments, and — when there is no
+          // Git identity to bind — the files of the reviewed change set. The
+          // reviewer still reads the full workspace through workingDir, but an
+          // unrelated file edit must not invalidate a completed review, and a
+          // full-workspace content hash cannot stay inside its byte budget on a
+          // real checkout.
+          const artifactPaths = [
+            ...new Set([
+              ...reviewReadPaths,
+              ...(evidence.workspaceFingerprint
+                ? []
+                : reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)),
+            ]),
+          ];
           const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
           let artifactFingerprint: string;
           try {

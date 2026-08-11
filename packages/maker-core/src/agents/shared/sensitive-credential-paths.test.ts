@@ -48,8 +48,6 @@ describe("Review credential path policy", () => {
       "/repo/tools/claude/updates/2.1.215/darwin-arm64/claude",
       "/repo/tools/ripgrep/updates/15.1.0/darwin-arm64/rg",
       "/repo/apps/desktop/.vite/build/main.js",
-      "/repo/.cindy-worktrees/bold-euclid/apps/mobile/src/file.ts",
-      ".cindy-worktrees/quirky-leakey/packages/foo/index.ts",
     ]) {
       expect(isReviewSensitiveCredentialPath(denied)).toBe(true);
     }
@@ -62,6 +60,31 @@ describe("Review credential path policy", () => {
     expect(
       isReviewSensitiveCredentialPath("/repo/tools/codex/src/main.ts"),
     ).toBe(false);
+  });
+
+  it("keeps unrelated tools/*/updates source reviewable", () => {
+    // A reviewed repository may legitimately keep source under an `updates`
+    // directory. Only Cindy's own managed harness payloads are excluded, so a
+    // wildcard here would silently drop real changes from the review.
+    for (const allowed of [
+      "/userrepo/tools/database/updates/migrate.ts",
+      "/userrepo/tools/schema/updates/v2.sql",
+      "/userrepo/tools/build/updates/index.ts",
+    ]) {
+      expect(isReviewSensitiveCredentialPath(allowed)).toBe(false);
+    }
+  });
+
+  it("keeps a managed worktree checkout readable as a review root", () => {
+    // Cindy sessions frequently run inside `<repo>/.cindy-worktrees/<name>`.
+    // Denying that prefix would classify the review's own working directory as
+    // sensitive and make /review unusable for every managed-worktree session.
+    for (const allowed of [
+      "/repo/.cindy-worktrees/bold-euclid",
+      "/repo/.cindy-worktrees/bold-euclid/apps/desktop/src/main.ts",
+    ]) {
+      expect(isReviewSensitiveCredentialPath(allowed)).toBe(false);
+    }
   });
 
   it("recognizes credentials hidden behind file selector syntax", () => {
@@ -85,9 +108,11 @@ describe("Review credential path policy", () => {
         "**/.git/**",
         "**/node_modules/**",
         "**/apps/codex-bin/**",
-        "**/tools/*/updates/**",
+        "**/tools/claude/updates/**",
+        "**/tools/codex/updates/**",
+        "**/tools/pi/updates/**",
+        "**/tools/ripgrep/updates/**",
         "**/.vite/**",
-        "**/.cindy-worktrees/**",
         "**/credentials.json",
         "**/auth.json",
         "**/*.pem",

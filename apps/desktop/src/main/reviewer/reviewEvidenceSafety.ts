@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { isReviewSensitiveCredentialPath } from '@cindy/maker-core';
 
 import type {
@@ -95,4 +97,44 @@ export function sanitizeReviewStatusFiles<T extends { path: string; oldPath: str
   files: readonly T[],
 ): T[] {
   return files.filter((file) => !hasSensitivePath(file));
+}
+
+function isSafeRelativeChangePath(rawPath: string): boolean {
+  return (
+    !!rawPath &&
+    !rawPath.includes('\0') &&
+    !path.posix.isAbsolute(rawPath) &&
+    !path.win32.isAbsolute(rawPath) &&
+    !rawPath.split(/[\\/]/).includes('..')
+  );
+}
+
+/**
+ * Absolute paths of the files a non-Git change set touches.
+ *
+ * A non-Git task has no Git identity to bind, so without these the review would
+ * carry no content baseline at all and could publish a conclusion drawn from
+ * bytes that changed mid-review. Paths are resolved against the change set's own
+ * recorded `cwd` and must stay inside it; anything sensitive, unsafe or outside
+ * is dropped rather than silently widening the review's read scope.
+ */
+export function reviewChangeSetContentPaths(
+  changeSet: TurnChangeSetDetail | null,
+  workingDir: string,
+): string[] {
+  if (!changeSet) return [];
+  const root = path.resolve(changeSet.cwd || workingDir);
+  const paths = new Set<string>();
+  for (const file of changeSet.files) {
+    for (const rawPath of [file.path, file.oldPath]) {
+      if (typeof rawPath !== 'string' || !isSafeRelativeChangePath(rawPath)) continue;
+      if (isReviewSensitiveCredentialPath(rawPath)) continue;
+      const absolute = path.resolve(root, ...rawPath.split(/[\\/]/));
+      const relative = path.relative(root, absolute);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      if (isReviewSensitiveCredentialPath(absolute)) continue;
+      paths.add(absolute);
+    }
+  }
+  return [...paths];
 }

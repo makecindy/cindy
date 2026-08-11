@@ -60,15 +60,15 @@ export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
     source: String.raw`(?:^|[\\/])apps[\\/](?:claude-code|codex|pi|ripgrep)-bin(?:[\\/]|$)`,
     flags: "i",
   },
+  // Enumerate the managed harness update directories rather than matching every
+  // `tools/*/updates`: an arbitrary reviewed repository may legitimately keep
+  // source such as `tools/database/updates/migrate.ts`, and this list also
+  // removes matches from the reviewer's diff, not just from a fingerprint.
   {
-    source: String.raw`(?:^|[\\/])tools[\\/][^\\/]+[\\/]updates(?:[\\/]|$)`,
+    source: String.raw`(?:^|[\\/])tools[\\/](?:claude|codex|pi|ripgrep)[\\/]updates(?:[\\/]|$)`,
     flags: "i",
   },
   { source: String.raw`(?:^|[\\/])\.vite(?:[\\/]|$)`, flags: "i" },
-  // Cindy-managed worktrees are internal infrastructure — duplicate checkouts
-  // with their own node_modules and pnpm hardlinks. Scanning them wastes the
-  // bounded content fingerprint budget on content that is never the review target.
-  { source: String.raw`(?:^|[\\/])\.cindy-worktrees(?:[\\/]|$)`, flags: "i" },
 ] as const;
 
 /**
@@ -89,9 +89,11 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/apps/codex-bin/**",
   "**/apps/pi-bin/**",
   "**/apps/ripgrep-bin/**",
-  "**/tools/*/updates/**",
+  "**/tools/claude/updates/**",
+  "**/tools/codex/updates/**",
+  "**/tools/pi/updates/**",
+  "**/tools/ripgrep/updates/**",
   "**/.vite/**",
-  "**/.cindy-worktrees/**",
   "**/.ssh/**",
   "**/.aws/**",
   "**/.gnupg/**",

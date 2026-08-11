@@ -47,11 +47,18 @@ describe('Review external input wiring', () => {
     expect(reviewStartSource).not.toContain('MAKER_INVOKE.INPUT_ENQUEUE');
   });
 
-  it('fingerprints only evidence files, not the full workspace', () => {
-    expect(registerSource).toContain('const artifactPaths = [...reviewReadPaths];');
+  it('fingerprints reviewed evidence instead of scanning the whole workspace', () => {
+    // A full-workspace content hash cannot stay inside its byte budget on a
+    // real checkout, and unrelated edits must not invalidate a finished review.
     expect(registerSource).not.toContain(
       'const artifactPaths = [...reviewReadPaths, sourceWorkingDir];',
     );
+    // Non-Git tasks have no Git identity to bind, so their change-set files
+    // still need a content baseline or the review would have none at all.
+    expect(registerSource).toContain(
+      'reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)',
+    );
+    expect(registerSource).toContain('evidence.workspaceFingerprint');
     expect(registerSource).toContain(
       'const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };',
     );
