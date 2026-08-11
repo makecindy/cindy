@@ -673,6 +673,9 @@ export class MakerMemoryManager {
         // 空根/ENOENT 分支 (review #2388 Codex 21st P1): 也视为一次完成的 reset
         // 尝试 — 必须 bump generation, 否则 init 中暂停的 getStore 恢复后通过
         // generation 检查, 在用户可见的 reset 完成后写入新 memory。
+        // 先复核 scope (review #2388 Greptile 23rd P1): readdir await 期间边界
+        // 可能发生 — 不得把跨边界的 reset 误判为成功。
+        this.assertScopeUnchanged(scopeAtEntry);
         this.poolGeneration += 1;
         return { removedCount: 0 };
       }
