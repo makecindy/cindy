@@ -438,7 +438,7 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
 
     await expect(
       lifecycle.recoverPendingCreatesAtStartup?.([]),
-    ).resolves.toEqual([UDID]);
+    ).resolves.toEqual({ recovered: [UDID], complete: true });
     expect(run.mock.calls.filter(([, args]) => args[1] === "delete")).toEqual([
       expect.arrayContaining(["/usr/bin/xcrun", ["simctl", "delete", UDID]]),
     ]);
@@ -540,7 +540,7 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
       lifecycle.recoverPendingCreatesAtStartup?.([
         { udid: ownedUdid, name: "Cindy Restored iPhone" },
       ]),
-    ).resolves.toEqual([UDID, ownedUdid]);
+    ).resolves.toEqual({ recovered: [UDID, ownedUdid], complete: true });
     expect(run.mock.calls.filter(([, args]) => args[1] === "delete")).toEqual([
       expect.arrayContaining(["/usr/bin/xcrun", ["simctl", "delete", UDID]]),
     ]);
@@ -591,7 +591,43 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
 
     await expect(
       lifecycle.recoverPendingCreatesAtStartup?.([]),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ recovered: [], complete: false });
+    expect(
+      run.mock.calls.filter(([, args]) => args[1] === "list"),
+    ).toHaveLength(2);
+    expect(run.mock.calls.filter(([, args]) => args[1] === "delete")).toEqual(
+      [],
+    );
+  });
+
+  it("reports incomplete startup recovery when marker metadata is missing", async () => {
+    const markerName =
+      "__CindyPending__profilealpha__11111111-2222-4333-8444-555555555555";
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args[1] === "list") {
+          return {
+            stdout: devicesJson([
+              { udid: UDID, name: markerName, deviceTypeIdentifier: null },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[1] === "delete") {
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        throw new Error(`unexpected ${args.join(" ")}`);
+      },
+    );
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "profilealpha",
+    });
+
+    await expect(
+      lifecycle.recoverPendingCreatesAtStartup?.([]),
+    ).resolves.toEqual({ recovered: [], complete: false });
     expect(
       run.mock.calls.filter(([, args]) => args[1] === "list"),
     ).toHaveLength(2);

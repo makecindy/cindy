@@ -51,6 +51,13 @@ export interface IOSSimulatorSimctlLifecycleOptions {
   pendingCreateEvidence?: IOSSimulatorPendingCreateEvidence;
 }
 
+export interface IOSSimulatorPendingCreateRecoveryResult {
+  /** Marker UUIDs that were renamed or deleted during the sweep. */
+  recovered: readonly string[];
+  /** False when a marker was observed but could not be safely attributed. */
+  complete: boolean;
+}
+
 /**
  * Carries the exact device identity when a failed or aborted `simctl create`
  * produced a device but its immediate compensating delete also failed. The
@@ -151,7 +158,7 @@ export interface IOSSimulatorSimctlLifecycle {
   recoverPendingCreatesAtStartup?(
     ownedDevices: readonly { udid: string; name: string }[],
     signal?: AbortSignal,
-  ): Promise<readonly string[]>;
+  ): Promise<IOSSimulatorPendingCreateRecoveryResult>;
   deleteExact(udid: string, signal?: AbortSignal): Promise<void>;
   /** Set the simulated system appearance without bringing Simulator.app forward. */
   setAppearance?(
@@ -962,7 +969,7 @@ export function createIOSSimulatorSimctlLifecycle(
     async recoverPendingCreatesAtStartup(
       ownedDevices,
       signal,
-    ): Promise<readonly string[]> {
+    ): Promise<IOSSimulatorPendingCreateRecoveryResult> {
       const owned = new Map(
         ownedDevices.map((device) => [
           requireUdid(device.udid),
@@ -973,6 +980,7 @@ export function createIOSSimulatorSimctlLifecycle(
         isPendingCreateName(device.name),
       );
       const recovered: string[] = [];
+      let complete = true;
       let firstFailure: unknown = null;
       for (const device of pending) {
         const udid = device.udid.toUpperCase();
@@ -993,8 +1001,13 @@ export function createIOSSimulatorSimctlLifecycle(
             current.name !== device.name ||
             !isPendingCreateName(current.name) ||
             current.runtimeIdentifier !== device.runtimeIdentifier ||
+            current.deviceTypeIdentifier === null ||
             current.deviceTypeIdentifier !== device.deviceTypeIdentifier
           ) {
+            // We deliberately avoid deleting a marker whose identity changed or
+            // whose metadata is incomplete. That is not a completed sweep: the
+            // breadcrumb must survive so a later startup can retry the cleanup.
+            complete = false;
             continue;
           }
           await cleanupFailedCreate(udid, signal);
@@ -1005,7 +1018,7 @@ export function createIOSSimulatorSimctlLifecycle(
         }
       }
       if (firstFailure !== null) throw firstFailure;
-      return recovered;
+      return { recovered, complete };
     },
 
     async deleteExact(udid, signal): Promise<void> {

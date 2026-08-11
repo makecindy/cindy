@@ -517,7 +517,7 @@ async function recoverProfilePendingCreatesAtStartup(
   );
   timer.unref?.();
   try {
-    await lifecycle.recoverPendingCreatesAtStartup(
+    const recovery = await lifecycle.recoverPendingCreatesAtStartup(
       persistedInstances.map((instance) => ({
         udid: instance.simulatorUdid,
         name: instance.simulatorName,
@@ -527,7 +527,7 @@ async function recoverProfilePendingCreatesAtStartup(
     // A completed sweep proves this profile holds no leftover create marker.
     // Retire the breadcrumb so the next startup stays off xcrun — unless
     // another create armed it while this sweep was still running.
-    evidence?.clearIfUnchanged(evidenceGeneration);
+    if (recovery.complete) evidence?.clearIfUnchanged(evidenceGeneration);
   } catch (error) {
     // A marker remains hidden and profile-scoped, so an optional Simulator
     // cleanup failure must not block Cindy startup. Keeping it intact lets the

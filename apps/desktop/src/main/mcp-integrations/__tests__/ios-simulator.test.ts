@@ -295,10 +295,11 @@ describe('iOS Simulator host', () => {
       await mkdir(path.dirname(evidencePath), { recursive: true });
       await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
       const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
-      let finishRecovery: (value: readonly string[]) => void = () => undefined;
+      let finishRecovery: (value: { recovered: readonly string[]; complete: boolean }) => void =
+        () => undefined;
       const recoverPendingCreatesAtStartup = vi.fn(
         (_owned: readonly { udid: string; name: string }[], _signal?: AbortSignal) =>
-          new Promise<readonly string[]>((resolve) => {
+          new Promise<{ recovered: readonly string[]; complete: boolean }>((resolve) => {
             finishRecovery = resolve;
           }),
       );
@@ -318,7 +319,7 @@ describe('iOS Simulator host', () => {
         expect(recoverPendingCreatesAtStartup).toHaveBeenCalledWith([], expect.any(AbortSignal));
         expect(competingRegistry.acquireWriterSync()).toBe(false);
 
-        finishRecovery([]);
+        finishRecovery({ recovered: [], complete: true });
         await expect(recovering).resolves.toBeUndefined();
         expect(competingRegistry.acquireWriterSync()).toBe(true);
         // A completed sweep retires the breadcrumb, so the next startup has no
@@ -392,6 +393,37 @@ describe('iOS Simulator host', () => {
     }
   });
 
+  itMac('keeps interrupted-create evidence when a startup sweep is incomplete', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-incomplete-sweep-'));
+    const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
+    const evidencePath = path.join(root, 'ios-simulator', 'pending-create-evidence.json');
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      recoverPendingCreatesAtStartup: vi.fn(async () => ({
+        recovered: [],
+        complete: false,
+      })),
+      deleteExact: vi.fn(),
+    };
+    try {
+      await expect(
+        reconcilePersistedIOSSimulatorOwnership({ createLifecycle: () => lifecycle }),
+      ).resolves.toBeUndefined();
+
+      // The runtime observed a marker but could not safely attribute it. Keeping
+      // the breadcrumb is what makes the next startup retry instead of leaking it.
+      await expect(stat(evidencePath)).resolves.toMatchObject({});
+    } finally {
+      getPath.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   itMac(
     'does not inspect or delete pending markers when the ownership registry is invalid',
     async () => {
@@ -417,10 +449,11 @@ describe('iOS Simulator host', () => {
   );
 
   it('gates an already-created Host on one startup pending-create recovery', async () => {
-    let finishRecovery: (value: readonly string[]) => void = () => undefined;
+    let finishRecovery: (value: { recovered: readonly string[]; complete: boolean }) => void =
+      () => undefined;
     const recoverPendingCreatesAtStartup = vi.fn(
       (_owned: readonly { udid: string; name: string }[], _signal?: AbortSignal) =>
-        new Promise<readonly string[]>((resolve) => {
+        new Promise<{ recovered: readonly string[]; complete: boolean }>((resolve) => {
           finishRecovery = resolve;
         }),
     );
@@ -452,7 +485,7 @@ describe('iOS Simulator host', () => {
     expect(inspect).not.toHaveBeenCalled();
     expect(pendingCreateEvidence.clearIfUnchanged).not.toHaveBeenCalled();
 
-    finishRecovery([]);
+    finishRecovery({ recovered: [], complete: true });
     await expect(firstCall).resolves.toMatchObject({ ok: true });
     await expect(
       host.callTool('list_devices', {}, { sessionId: 'session-a' }),
@@ -465,7 +498,10 @@ describe('iOS Simulator host', () => {
 
   it('retries startup pending-create recovery after the ownership gate becomes available', async () => {
     let recoveryAllowed = false;
-    const recoverPendingCreatesAtStartup = vi.fn(async () => [] as readonly string[]);
+    const recoverPendingCreatesAtStartup = vi.fn(async () => ({
+      recovered: [] as readonly string[],
+      complete: true,
+    }));
     const lifecycle: IOSSimulatorSimctlLifecycle = {
       findExact: vi.fn(),
       bootExact: vi.fn(),
