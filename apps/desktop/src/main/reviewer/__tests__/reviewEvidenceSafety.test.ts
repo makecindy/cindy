@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { FileDiff, ReviewDiffBucket } from '../../../shared/gitReviewWire.js';
@@ -121,6 +123,10 @@ describe('review Git evidence safety', () => {
 });
 
 describe('review change set content paths', () => {
+  // path.resolve keeps expectations platform-native: '/repo' becomes 'D:\repo'
+  // on the Windows CI runner, matching what a real change set records there.
+  const abs = (...segments: string[]) => path.resolve(...segments);
+
   function changeSet(files: TurnChangeSetDetail['files'], cwd = '/repo'): TurnChangeSetDetail {
     return {
       id: 'turn-1',
@@ -153,7 +159,9 @@ describe('review change set content paths', () => {
         changeSet([file('src/a.ts'), file('docs/new.md', 'docs/old.md')]),
         '/other',
       ).sort(),
-    ).toEqual(['/repo/docs/new.md', '/repo/docs/old.md', '/repo/src/a.ts']);
+    ).toEqual(
+      [abs('/repo', 'docs/new.md'), abs('/repo', 'docs/old.md'), abs('/repo', 'src/a.ts')].sort(),
+    );
   });
 
   it('returns nothing when there is no change set', () => {
@@ -162,7 +170,7 @@ describe('review change set content paths', () => {
 
   it('falls back to the working directory when the change set has no cwd', () => {
     expect(reviewChangeSetContentPaths(changeSet([file('src/a.ts')], ''), '/fallback')).toEqual([
-      '/fallback/src/a.ts',
+      abs('/fallback', 'src/a.ts'),
     ]);
   });
 
@@ -186,12 +194,12 @@ describe('review change set content paths', () => {
     // in the baseline, while the escaping rename source is simply dropped.
     expect(
       reviewChangeSetContentPaths(changeSet([file('renamed.ts', '../secret.ts')]), '/repo'),
-    ).toEqual(['/repo/renamed.ts']);
+    ).toEqual([abs('/repo', 'renamed.ts')]);
   });
 
   it('deduplicates paths reached through more than one entry', () => {
     expect(
       reviewChangeSetContentPaths(changeSet([file('src/a.ts'), file('src/a.ts')]), '/repo'),
-    ).toEqual(['/repo/src/a.ts']);
+    ).toEqual([abs('/repo', 'src/a.ts')]);
   });
 });
