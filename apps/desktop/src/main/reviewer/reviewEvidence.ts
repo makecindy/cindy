@@ -212,8 +212,19 @@ function workspacePathsWithoutContent(workspace: ReviewWorkspaceEvidence): strin
   const contentless = [...workspace.diffs.staged, ...workspace.diffs.unstaged]
     // Submodules are excluded on purpose: a gitlink is a directory, and the
     // content fingerprinter only accepts regular files, so passing one would
-    // abort evidence loading outright. Its identity is a commit oid, which the
-    // porcelain status already carries into the Git digest.
+    // abort evidence loading outright — an initialized submodule anywhere in
+    // the workspace would make Review refuse to run at all.
+    //
+    // The accepted cost, stated plainly: edits living *inside* a dirty
+    // submodule are not bound. Porcelain v2 spends one boolean on "the
+    // submodule has modified content" and FileStatus keeps neither that flag
+    // nor any object id, so replacing one internal edit with another leaves
+    // every value this digest sees unchanged. Closing it needs an identity
+    // read this layer does not have — the gitlink oid plus a recursive digest
+    // of the inner worktree — which is a submodule-aware reader, not another
+    // path added to the file fingerprinter. That reader is out of scope here
+    // and tracked separately; do not "fix" this by feeding the directory back
+    // in, which is the crash described above.
     .filter((diff) => !diff.rawPatch && !diff.isSubmodule)
     .flatMap((diff) => [diff.path, diff.oldPath].filter(Boolean) as string[]);
   return [...new Set([...capped, ...contentless])];
