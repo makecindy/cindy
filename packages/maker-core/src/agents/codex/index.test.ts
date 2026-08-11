@@ -282,16 +282,22 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createLoggerSpy(): { logger: Logger; warn: ReturnType<typeof vi.fn> } {
+function createLoggerSpy(): {
+  logger: Logger;
+  warn: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+} {
   const warn = vi.fn();
+  const error = vi.fn();
   const logger: Logger = {
     ...createNoopLogger(),
     warn,
+    error,
     child() {
       return logger;
     },
   };
-  return { logger, warn };
+  return { logger, warn, error };
 }
 
 function createDeps(
@@ -13036,10 +13042,16 @@ describe('CodexAgent MCP thread context hooks', () => {
       decision: 'deny' as const,
       reason: 'use the embedded iOS Simulator',
     }));
+    let acknowledgeInterrupt!: () => void;
+    const interruptAck = new Promise<unknown>((resolve) => {
+      acknowledgeInterrupt = () => resolve({});
+    });
     const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
-    const host = installFakeHost(agent, (method) =>
-      method === Method.TurnInterrupt ? {} : undefined,
-    );
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.TurnInterrupt) return interruptAck;
+      return undefined;
+    });
     const handle = await agent.startSession({
       sessionId: 'session-command-item-host-policy',
       model: 'gpt-5.4',
@@ -13047,7 +13059,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       permissionMode: 'bypassPermissions',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.itemStarted) throw new Error('expected itemStarted handler');
+    if (!handlers?.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected itemStarted and turnCompleted handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    await handle.send({ type: 'user', content: 'test host policy' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { isRunning: true },
+    });
 
     const command = 'API_TOKEN=super-secret /usr/bin/open -a Simulator';
     handlers.itemStarted({
@@ -13075,6 +13095,454 @@ describe('CodexAgent MCP thread context hooks', () => {
       reason: 'use the embedded iOS Simulator',
     });
     expect(JSON.stringify(warn.mock.calls)).not.toContain('super-secret');
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: {
+        message: 'use the embedded iOS Simulator',
+        isTerminal: false,
+        reason: 'host-shell-command-blocked',
+      },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-absolute',
+        type: 'commandExecution',
+        command,
+        cwd: '/repo',
+      },
+    });
+    expect(
+      host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
+    ).toHaveLength(1);
+
+    acknowledgeInterrupt();
+    await Promise.resolve();
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-absolute-after-ack',
+        type: 'commandExecution',
+        command: '/usr/bin/open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
+      ).toHaveLength(2);
+    });
+
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'interrupted' },
+    });
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: {
+        message: 'use the embedded iOS Simulator',
+        isTerminal: true,
+        reason: 'host-shell-command-blocked',
+      },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('keeps explicit user Stop attribution after a policy hit and late blocked item', async () => {
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    let resolvePolicyInterrupt!: () => void;
+    const policyInterruptAck = new Promise<unknown>((resolve) => {
+      resolvePolicyInterrupt = () => resolve({});
+    });
+    let interruptCount = 0;
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.TurnInterrupt) {
+        interruptCount += 1;
+        return interruptCount === 1 ? policyInterruptAck : {};
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-command-item-host-policy-user-stop',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected itemStarted and turnCompleted handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    await handle.send({ type: 'user', content: 'test user Stop after host policy' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { isRunning: true },
+    });
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-before-stop',
+        type: 'commandExecution',
+        command: '/usr/bin/open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
+    });
+
+    await handle.abort();
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-after-stop',
+        type: 'commandExecution',
+        command: '/usr/bin/open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    expect(
+      host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
+    ).toHaveLength(2);
+
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'interrupted' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'done',
+      data: { cancelled: true },
+    });
+
+    resolvePolicyInterrupt();
+    await Promise.resolve();
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('ends an active plan cycle after a host-policy interruption', async () => {
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    let turnSeq = 0;
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-command-item-host-policy-plan-cycle',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+      planMode: true,
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected itemStarted and turnCompleted handlers');
+    }
+
+    await handle.send({ type: 'user', content: 'make a plan' });
+    const turnStartRequests = () =>
+      host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+    const [, planParams] = turnStartRequests()[0] as [string, Record<string, unknown>];
+    expect(planParams.collaborationMode).toMatchObject({ mode: 'plan' });
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-plan-bypass',
+        type: 'commandExecution',
+        command: '/usr/bin/open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'interrupted' },
+    });
+
+    await handle.send({ type: 'user', content: 'continue normally' });
+    const [, normalParams] = turnStartRequests()[1] as [string, Record<string, unknown>];
+    expect(normalParams.collaborationMode).toMatchObject({ mode: 'default' });
+    await handle.close();
+  });
+
+  it.each(['interrupted', 'completed', 'failed'] as const)(
+    'preserves an early %s turn completion while interrupt ACK is pending',
+    async (turnStatus) => {
+      const policy = vi.fn(() => ({
+        decision: 'deny' as const,
+        reason: 'use the embedded iOS Simulator',
+      }));
+      let acknowledgeInterrupt!: () => void;
+      const interruptAck = new Promise<unknown>((resolve) => {
+        acknowledgeInterrupt = () => resolve({});
+      });
+      const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+        if (method === Method.TurnInterrupt) return interruptAck;
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-command-item-host-policy-completes-before-ack',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        permissionMode: 'bypassPermissions',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.itemStarted || !handlers.turnCompleted) {
+        throw new Error('expected itemStarted and turnCompleted handlers');
+      }
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      await handle.send({ type: 'user', content: 'test early completion' });
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: 'status',
+        data: { isRunning: true },
+      });
+
+      handlers.itemStarted({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: {
+          id: 'cmd-absolute',
+          type: 'commandExecution',
+          command: '/usr/bin/open -a Simulator',
+          cwd: '/repo',
+        },
+      });
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: 'error',
+        data: { isTerminal: false, reason: 'host-shell-command-blocked' },
+      });
+
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: turnStatus },
+      });
+      if (turnStatus === 'interrupted') {
+        expect(await nextEvent(iterator)).toMatchObject({
+          type: 'error',
+          data: { isTerminal: true, reason: 'host-shell-command-blocked' },
+        });
+        expect(await nextEvent(iterator)).toMatchObject({
+          type: 'status',
+          data: { status: 'Done', isRunning: false },
+        });
+      } else if (turnStatus === 'failed') {
+        expect(await nextEvent(iterator)).toMatchObject({
+          type: 'error',
+          data: { isTerminal: true, reason: 'turn-failed' },
+        });
+        expect(await nextEvent(iterator)).toMatchObject({
+          type: 'done',
+          data: { cancelled: false, raw: { status: 'failed' } },
+        });
+      } else {
+        expect(await nextEvent(iterator)).toMatchObject({
+          type: 'status',
+          data: { status: 'Done', isRunning: false },
+        });
+        expect(await nextEvent(iterator)).toMatchObject({
+          type: 'done',
+          data: { raw: { status: 'completed' } },
+        });
+      }
+      expect(handle.isTurnRunning?.()).toBe(false);
+
+      acknowledgeInterrupt();
+      await Promise.resolve();
+      await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+      await handle.close();
+    },
+  );
+
+  it('keeps the turn visible when a host-policy interrupt cannot be acknowledged', async () => {
+    const { logger, error } = createLoggerSpy();
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.TurnInterrupt) throw new Error('transport closed');
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-command-item-host-policy-interrupt-failed',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected itemStarted and turnCompleted handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    await handle.send({ type: 'user', content: 'test failed host-policy interrupt' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { isRunning: true },
+    });
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-absolute',
+        type: 'commandExecution',
+        command: '/usr/bin/open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: {
+        message: 'use the embedded iOS Simulator',
+        isTerminal: false,
+        reason: 'host-shell-command-blocked',
+      },
+    });
+    expect(
+      host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
+    ).toHaveLength(2);
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await vi.waitFor(() => {
+      expect(error).toHaveBeenCalledWith('host policy could not interrupt running command', {
+        turnId: 'turn-1',
+      });
+    });
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-absolute-2',
+        type: 'commandExecution',
+        command: '/usr/bin/open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt),
+      ).toHaveLength(4);
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('preserves policy origin when interrupt ACKs are lost before an interrupted completion', async () => {
+    const { logger, error } = createLoggerSpy();
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy, logger }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.TurnInterrupt) throw new Error('ACK lost');
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-command-item-host-policy-interrupt-ack-lost',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected itemStarted and turnCompleted handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    await handle.send({ type: 'user', content: 'test lost interrupt ACK' });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { isRunning: true },
+    });
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: {
+        id: 'cmd-absolute',
+        type: 'commandExecution',
+        command: '/usr/bin/open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false, reason: 'host-shell-command-blocked' },
+    });
+    await vi.waitFor(() => {
+      expect(error).toHaveBeenCalledWith('host policy could not interrupt running command', {
+        turnId: 'turn-1',
+      });
+    });
+
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'interrupted' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: { isTerminal: true, reason: 'host-shell-command-blocked' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
     await handle.close();
   });
 

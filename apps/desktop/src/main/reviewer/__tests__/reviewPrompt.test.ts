@@ -300,4 +300,94 @@ describe('buildReviewPrompt', () => {
     expect(result.prompt).toContain('&lt;/untrusted-review-focus&gt;');
     expect(result.prompt).toContain('用户特别关注”、“显式成果”');
   });
+
+  it('reviews the branch against its base once the work is committed', () => {
+    // A committed branch leaves a clean tree, so without branch evidence the
+    // review would silently fall back to whatever the last turn happened to be.
+    const result = buildReviewPrompt({
+      context: [],
+      workspace: null,
+      branch: {
+        baseRef: 'origin/main',
+        baseOid: 'b'.repeat(40),
+        mergeBaseOid: 'c'.repeat(40),
+        fileCount: 1,
+        diffs: [fileDiff({ source: 'branch', path: 'src/feature.ts' })],
+        capped: null,
+      },
+      changeSet: changeSet({ diffs: [fileDiff({ path: 'src/unrelated.ts' })] }),
+      artifacts: [],
+    });
+
+    expect(result.targetKind).toBe('changes');
+    expect(result.prompt).toContain('origin/main');
+    expect(result.prompt).toContain('src/feature.ts');
+    // The last turn must not stand in for the branch when both are present.
+    expect(result.prompt).not.toContain('src/unrelated.ts');
+  });
+
+  it('prefers uncommitted work over the branch diff', () => {
+    // Uncommitted changes are what the user is looking at right now.
+    const result = buildReviewPrompt({
+      context: [],
+      workspace: {
+        dirty: true,
+        totalFiles: 1,
+        stagedFiles: 0,
+        unstagedFiles: 1,
+        untrackedFiles: 0,
+        disabledReason: null,
+        diffs: {
+          staged: [],
+          unstaged: [fileDiff({ source: 'unstaged', path: 'src/wip.ts' })],
+          capped: { staged: null, unstaged: null },
+        },
+      },
+      branch: {
+        baseRef: 'origin/main',
+        baseOid: 'b'.repeat(40),
+        mergeBaseOid: 'c'.repeat(40),
+        fileCount: 1,
+        diffs: [fileDiff({ source: 'branch', path: 'src/committed.ts' })],
+        capped: null,
+      },
+      changeSet: null,
+      artifacts: [],
+    });
+
+    expect(result.prompt).toContain('src/wip.ts');
+    expect(result.prompt).not.toContain('src/committed.ts');
+  });
+
+  it('says so when the branch diff was unreadable and there is no change set', () => {
+    // Context alone is enough for the preflight to launch, so this path is
+    // reachable; without the note the reviewer would be told there is simply
+    // no Git evidence and conclude the branch is unchanged.
+    const result = buildReviewPrompt({
+      context: [{ role: 'user', text: '看看这个分支' }],
+      workspace: null,
+      branch: null,
+      branchUnavailableReason: 'too-many-files',
+      changeSet: null,
+      artifacts: [],
+    });
+
+    expect(result.prompt).toContain('too-many-files');
+    expect(result.prompt).toContain('不得据此认为本分支没有变更');
+  });
+
+  it('says so when the branch diff was expected but unreadable', () => {
+    // Falling back silently would let a one-turn review look like a full one.
+    const result = buildReviewPrompt({
+      context: [],
+      workspace: null,
+      branch: null,
+      branchUnavailableReason: 'no-base-candidates',
+      changeSet: changeSet({ diffs: [fileDiff()] }),
+      artifacts: [],
+    });
+
+    expect(result.prompt).toContain('no-base-candidates');
+    expect(result.prompt).toContain('只是最近一轮');
+  });
 });

@@ -17,6 +17,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
   'permission-tighten-interrupt-failed': 'logic.errors.permissionTightenInterruptFailed',
   'codex-auto-review-unavailable': 'logic.errors.codexAutoReviewUnavailable',
+  'host-shell-command-blocked': 'logic.errors.hostShellCommandBlocked',
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
   codex_reconnect_stalled: 'logic.errors.upstreamResponseIdleTimeout',
   // 压缩风暴分两条:有切模型证据的才点名切模型。共用一条会让没切过模型(或已切回)

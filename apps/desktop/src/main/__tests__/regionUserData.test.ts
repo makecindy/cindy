@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveRegionUserDataDirName } from '../regionUserData';
 
 /**
- * 同机双装的核心不变量:cn 构建 / dev 完全不动 Electron 默认 userData
- * (线上 cn 包行为零变化),global packaged 构建切到独立目录。
- * 这个函数跑在 main 入口最早期,回归 = 两个区域的包共库串台(P0),
- * 所以把所有象限全部锁死。
+ * 同机双装的核心不变量:保持已发布的 cn=Cindy、global=CindyGlobal 映射，数据库 /
+ * 登录态 / 单实例锁 / sessionData 随 userData 目录天然隔离。此模块跑在 main 入口
+ * 最早期，回归 = 两个区域的包共库串台(P0)，所以把所有象限全部锁死。
  */
 describe('resolveRegionUserDataDirName', () => {
   const ARGV = ['Cindy.exe'] as const;
@@ -22,16 +21,19 @@ describe('resolveRegionUserDataDirName', () => {
     ).toBeNull();
   });
 
-  it('dev(非 packaged)任何区域都不覆写(隔离语义归 --isolated)', () => {
+  it('dev(非 packaged)按区域选择正式 profile，隔离沙箱再基于它派生', () => {
     expect(
       resolveRegionUserDataDirName({ isPackaged: false, region: 'cn', argv: ARGV }),
     ).toBeNull();
     expect(
       resolveRegionUserDataDirName({ isPackaged: false, region: 'global', argv: ARGV }),
-    ).toBeNull();
+    ).toBe('CindyGlobal');
+    expect(
+      resolveRegionUserDataDirName({ isPackaged: false, region: 'dev', argv: ARGV }),
+    ).toBe('CindyDev');
   });
 
-  it('显式 --user-data-dir(smoke 脚本临时目录)时不覆写,尊重调用方', () => {
+  it('显式 Chromium --user-data-dir 时不覆写,尊重调用方', () => {
     expect(
       resolveRegionUserDataDirName({
         isPackaged: true,
@@ -39,7 +41,6 @@ describe('resolveRegionUserDataDirName', () => {
         argv: ['Cindy.exe', '--smoke-test', '--user-data-dir=C:\\tmp\\xdt-smoke-x'],
       }),
     ).toBeNull();
-    // 空格分隔形态同样尊重。
     expect(
       resolveRegionUserDataDirName({
         isPackaged: true,
@@ -47,5 +48,16 @@ describe('resolveRegionUserDataDirName', () => {
         argv: ['Cindy.exe', '--user-data-dir', 'C:\\tmp\\xdt-smoke-x'],
       }),
     ).toBeNull();
+  });
+
+  it('XDT_USER_DATA_DIR 仍保留区域默认 profile 作为隔离 epoch 基线', () => {
+    expect(
+      resolveRegionUserDataDirName({
+        isPackaged: false,
+        region: 'global',
+        argv: ARGV,
+        envUserDataDir: '/tmp/custom-profile',
+      }),
+    ).toBe('CindyGlobal');
   });
 });

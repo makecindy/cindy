@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { execFile } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -59,7 +60,7 @@ interface MigrationDeps {
   readFile(file: string): Promise<string>;
   writeFileExclusive(file: string, text: string): Promise<void>;
   writeFile(file: string, text: string): Promise<void>;
-  lstat(file: string): Promise<{ isDirectory(): boolean }>;
+  lstat(file: string): Promise<{ isDirectory(): boolean; mtimeMs?: number }>;
   readdir(dir: string): Promise<string[]>;
   mkdir(dir: string): Promise<void>;
   rename(source: string, target: string): Promise<void>;
@@ -69,7 +70,22 @@ interface MigrationDeps {
   passiveSharedUserData(): boolean;
   selfPid(): number;
   isPidAlive(pid: number): boolean;
+  readProcessIdentity?(pid: number): ProcessIdentitySnapshot | null;
 }
+
+interface RegisteredInstanceRecord {
+  pid?: number;
+  userDataDir?: string;
+  startedAtMs?: number;
+  rootDir?: string;
+}
+
+interface ProcessIdentitySnapshot {
+  startedAtMs: number;
+  command: string;
+}
+
+type ProcessIdentityReader = (pid: number) => ProcessIdentitySnapshot | null;
 
 /** claim 被推迟(而非放弃)的原因;下次独占启动时自然重试完成。 */
 export type OwnerNamespaceClaimDeferredReason =
@@ -85,10 +101,19 @@ export interface OwnerNamespaceMigrationResult {
 }
 
 const log = createLogger('ownerNamespaceMigration');
+// Process start timestamps are reported at one-second precision by `ps` on
+// Unix. Keep only enough tolerance for that rounding (plus modest clock
+// sampling skew): a large window would permanently classify a PID reused
+// shortly after the record was written as the old Cindy process.
+const PID_REUSE_TOLERANCE_MS = 2_000;
+const PROCESS_IDENTITY_QUERY_TIMEOUT_MS = 1_500;
+const STALE_PROCESS_PROOF_TTL_MS = 10_000;
 const legacyGhostMigrationResults = new Map<
   string,
   OwnerNamespaceMigrationResult['status']
 >();
+const staleProcessProofs = new Map<string, number>();
+const staleProcessProofRefreshes = new Map<string, Promise<void>>();
 
 const productionDeps: MigrationDeps = {
   userDataDir: () => app.getPath('userData'),
@@ -114,6 +139,7 @@ const productionDeps: MigrationDeps = {
       return (error as NodeJS.ErrnoException).code === 'EPERM';
     }
   },
+  readProcessIdentity: undefined,
 };
 
 function verifiedCloudOwner(state: MigrationSessionState): string | null {
@@ -155,16 +181,244 @@ function isPidAliveDefault(pid: number): boolean {
   }
 }
 
+function parseProcessIdentityOutput(raw: string): ProcessIdentitySnapshot | null {
+  const newline = raw.indexOf('\n');
+  if (newline < 0) return null;
+  const startedAtMs = Date.parse(raw.slice(0, newline).trim());
+  const command = raw.slice(newline + 1).trim();
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0 || command.length === 0) return null;
+  return { startedAtMs, command };
+}
+
+function execFileUtf8(
+  file: string,
+  args: readonly string[],
+  options: {
+    maxBuffer: number;
+    env?: NodeJS.ProcessEnv;
+    windowsHide?: boolean;
+  },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      [...args],
+      {
+        ...options,
+        encoding: 'utf-8',
+        timeout: PROCESS_IDENTITY_QUERY_TIMEOUT_MS,
+      },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout);
+      },
+    );
+  });
+}
+
+/** Read all candidate process identities asynchronously with one OS query per scan. */
+async function readProcessIdentitiesDefault(
+  pids: readonly number[],
+): Promise<ReadonlyMap<number, ProcessIdentitySnapshot | null>> {
+  const uniquePids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  const result = new Map<number, ProcessIdentitySnapshot | null>();
+  if (uniquePids.length === 0) return result;
+  try {
+    if (process.platform === 'win32') {
+      const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+      const output = await execFileUtf8(
+        powershell,
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `$ids = @(${uniquePids.join(',')}); ` +
+            '$rows = Get-Process -Id $ids -ErrorAction Stop | ForEach-Object { ' +
+            '$command = if ($_.Path) { $_.Path } else { $_.ProcessName }; ' +
+            "[PSCustomObject]@{ pid = $_.Id; startedAt = $_.StartTime.ToUniversalTime().ToString('O'); command = $command } }; " +
+            '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ' +
+            '$rows | ConvertTo-Json -Compress',
+        ],
+        {
+          maxBuffer: 16_384,
+          windowsHide: true,
+        },
+      );
+      const parsed = JSON.parse(output) as unknown;
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
+        const value = row as Record<string, unknown>;
+        const pid = value.pid;
+        const startedAtMs = typeof value.startedAt === 'string' ? Date.parse(value.startedAt) : NaN;
+        const command = value.command;
+        if (
+          typeof pid === 'number' &&
+          Number.isInteger(pid) &&
+          Number.isFinite(startedAtMs) &&
+          startedAtMs > 0 &&
+          typeof command === 'string' &&
+          command.length > 0
+        ) {
+          result.set(pid, { startedAtMs, command });
+        }
+      }
+      return result;
+    }
+
+    const output = await execFileUtf8(
+      'ps',
+      ['-p', uniquePids.join(','), '-o', 'pid=', '-o', 'lstart=', '-o', 'command='],
+      {
+        maxBuffer: 16_384,
+        env: { ...process.env, LC_ALL: 'C' },
+      },
+    );
+    for (const line of output.split('\n')) {
+      const match = /^\s*(\d+)\s+(.{24})\s+([\s\S]+)$/.exec(line.trimEnd());
+      if (!match) continue;
+      const pid = Number(match[1]);
+      const identity = parseProcessIdentityOutput(`${match[2]}\n${match[3]}`);
+      if (identity) result.set(pid, identity);
+    }
+  } catch {
+    // Missing entries keep the caller fail-closed when provenance is ambiguous.
+  }
+  return result;
+}
+
+function looksLikeCindyRuntime(command: string, rootDir?: string): boolean {
+  const normalizedCommand = command.replaceAll('\\', '/').toLowerCase();
+  const normalizedRoot = rootDir?.replaceAll('\\', '/').toLowerCase();
+  if (normalizedRoot && normalizedCommand.includes(normalizedRoot)) return true;
+
+  const resourcesMarker = '/contents/resources/';
+  const resourcesIndex = normalizedRoot?.indexOf(resourcesMarker) ?? -1;
+  if (
+    normalizedRoot &&
+    resourcesIndex > 0 &&
+    normalizedCommand.includes(normalizedRoot.slice(0, resourcesIndex))
+  ) {
+    return true;
+  }
+
+  return (
+    normalizedCommand.includes('/cindy.app/') ||
+    normalizedCommand.includes('/electron.app/') ||
+    /(^|[\s/])cindy(?:\.exe)?(?:\s|$)/.test(normalizedCommand) ||
+    /(^|[\s/])electron(?:\.exe)?(?:\s|$)/.test(normalizedCommand)
+  );
+}
+
+function readProcessIdentitySafely(
+  reader: ProcessIdentityReader,
+  pid: number,
+): ProcessIdentitySnapshot | null {
+  try {
+    return reader(pid);
+  } catch {
+    return null;
+  }
+}
+
+async function readProcessIdentitiesForPids(
+  pids: readonly number[],
+  reader?: ProcessIdentityReader,
+): Promise<ReadonlyMap<number, ProcessIdentitySnapshot | null>> {
+  if (!reader) return readProcessIdentitiesDefault(pids);
+  return new Map(pids.map((pid) => [pid, readProcessIdentitySafely(reader, pid)] as const));
+}
+
+function processProofKey(
+  userDataDir: string,
+  kind: 'registry' | 'singleton-lock',
+  fingerprint: string,
+): string {
+  return `${path.resolve(userDataDir)}\u0000${kind}\u0000${fingerprint}`;
+}
+
+function rememberStaleProcessProof(key: string): void {
+  staleProcessProofs.set(key, Date.now() + STALE_PROCESS_PROOF_TTL_MS);
+}
+
+function hasFreshStaleProcessProof(key: string): boolean {
+  const expiresAt = staleProcessProofs.get(key);
+  if (expiresAt === undefined) return false;
+  if (expiresAt <= Date.now()) {
+    staleProcessProofs.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function refreshStaleProcessProofs(userDataDir: string): void {
+  const key = path.resolve(userDataDir);
+  if (staleProcessProofRefreshes.has(key)) return;
+  const refresh: Promise<void> = findConcurrentLiveInstancePids(productionDeps, userDataDir)
+    .then(() => undefined)
+    .catch((error) => {
+      log.debug('stale process provenance refresh failed closed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  staleProcessProofRefreshes.set(key, refresh);
+  void refresh.then(() => {
+    if (staleProcessProofRefreshes.get(key) === refresh) staleProcessProofRefreshes.delete(key);
+  });
+}
+
 /**
- * Synchronous twin of findConcurrentLiveInstancePids for the importer gate
- * (hasLegacyOwnerNamespaceClaim runs in sync call sites). Fail-closed: any
- * unreadable registry state counts as "a peer may be live". Same signals —
- * `.dev-instances/<pid>.json` records plus the packaged SingletonLock
- * symlink (retroactive signal for pre-registry packaged builds).
+ * Warm the short-lived PID-reuse proofs before synchronous legacy consumers
+ * inspect a stable local profile during first-window startup. Provenance
+ * failures are deliberately swallowed here; the synchronous guards remain
+ * fail-closed until a complete, exact proof is available.
+ */
+export async function warmStaleProcessProvenance(
+  userDataDir = app.getPath('userData'),
+): Promise<void> {
+  try {
+    await findConcurrentLiveInstancePids(productionDeps, userDataDir);
+  } catch (error) {
+    log.debug('startup stale process provenance warmup failed closed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * PID liveness alone is insufficient: macOS and Windows routinely reuse old
+ * PIDs. Ignore a registration only when OS provenance proves that the current
+ * process started well after the record and is not another Cindy/Electron
+ * runtime. Missing or ambiguous provenance remains live (fail closed).
+ */
+function recordedPidMayStillBeLive(
+  recordedAtMs: number | undefined,
+  rootDir: string | undefined,
+  identity: ProcessIdentitySnapshot | null,
+): boolean {
+  if (
+    typeof recordedAtMs !== 'number' ||
+    !Number.isFinite(recordedAtMs) ||
+    recordedAtMs <= 0 ||
+    identity === null
+  ) {
+    return true;
+  }
+  if (identity.startedAtMs <= recordedAtMs + PID_REUSE_TOLERANCE_MS) return true;
+  return looksLikeCindyRuntime(identity.command, rootDir);
+}
+
+/**
+ * Synchronous twin of findConcurrentLiveInstancePids for importer and sidebar
+ * guards. It never launches an OS inspection command from these reusable main
+ * thread paths. A live PID is ignored only when a recent asynchronous scan
+ * proved this exact immutable registry/lock fingerprint stale; changes and
+ * unreadable state keep the fail-closed behavior.
  */
 function hasConcurrentLiveInstanceSync(
   userDataDir: string,
   isPidAlive: (pid: number) => boolean,
+  readProcessIdentity?: ProcessIdentityReader,
 ): boolean {
   const selfPid = process.pid;
   const registryDir = path.join(userDataDir, '.dev-instances');
@@ -174,6 +428,13 @@ function hasConcurrentLiveInstanceSync(
   } catch (error) {
     if (!isMissing(error)) return true;
   }
+  const candidates: Array<{
+    raw: string;
+    fileName: string;
+    pid: number;
+    recordedAtMs: number | undefined;
+    rootDir: string | undefined;
+  }> = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     let raw: string;
@@ -183,33 +444,78 @@ function hasConcurrentLiveInstanceSync(
       if (isMissing(error)) continue;
       return true;
     }
-    let record: Partial<{ pid: number; userDataDir: string }>;
+    let record: RegisteredInstanceRecord;
     try {
-      record = JSON.parse(raw) as Partial<{ pid: number; userDataDir: string }>;
+      record = JSON.parse(raw) as RegisteredInstanceRecord;
     } catch {
       continue; // torn leftover
     }
     const pid = record.pid;
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid === selfPid) continue;
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {
+      continue;
+    }
     if (
       typeof record.userDataDir === 'string' &&
       !isSameUserDataDir(record.userDataDir, userDataDir, process.platform)
     ) {
       continue;
     }
-    if (isPidAlive(pid)) return true;
+    if (!isPidAlive(pid)) continue;
+    candidates.push({
+      raw,
+      fileName: name,
+      pid,
+      recordedAtMs: record.startedAtMs,
+      rootDir: record.rootDir,
+    });
+  }
+  if (readProcessIdentity) {
+    for (const candidate of candidates) {
+      const identity = readProcessIdentitySafely(readProcessIdentity, candidate.pid);
+      if (recordedPidMayStillBeLive(candidate.recordedAtMs, candidate.rootDir, identity)) {
+        return true;
+      }
+    }
+  } else {
+    for (const candidate of candidates) {
+      if (
+        !hasFreshStaleProcessProof(
+          processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`),
+        )
+      ) {
+        if (isPidAlive === isPidAliveDefault) refreshStaleProcessProofs(userDataDir);
+        return true;
+      }
+    }
   }
   try {
-    const lockTarget = fsSync.readlinkSync(path.join(userDataDir, 'SingletonLock'));
+    const lockPath = path.join(userDataDir, 'SingletonLock');
+    const lockTarget = fsSync.readlinkSync(lockPath);
     const match = /-(\d+)$/.exec(lockTarget);
     const lockPid = match ? Number(match[1]) : null;
     if (
       lockPid !== null &&
       Number.isInteger(lockPid) &&
+      lockPid > 0 &&
       lockPid !== selfPid &&
       isPidAlive(lockPid)
     ) {
-      return true;
+      let lockMtimeMs: number;
+      try {
+        lockMtimeMs = fsSync.lstatSync(lockPath).mtimeMs;
+      } catch {
+        return true;
+      }
+      if (readProcessIdentity) {
+        const identity = readProcessIdentitySafely(readProcessIdentity, lockPid);
+        if (recordedPidMayStillBeLive(lockMtimeMs, undefined, identity)) return true;
+      } else {
+        const fingerprint = `${lockTarget}\u0000${lockMtimeMs}`;
+        if (!hasFreshStaleProcessProof(processProofKey(userDataDir, 'singleton-lock', fingerprint))) {
+          if (isPidAlive === isPidAliveDefault) refreshStaleProcessProofs(userDataDir);
+          return true;
+        }
+      }
     }
   } catch {
     // ENOENT(无 packaged 实例)/EINVAL(非 symlink)——无信号。
@@ -226,10 +532,11 @@ function hasConcurrentLiveInstanceSync(
 export function hasExclusiveSharedLegacyUserDataAccess(
   userDataDir = app.getPath('userData'),
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
+  readProcessIdentity?: ProcessIdentityReader,
 ): boolean {
   return (
     process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1' &&
-    !hasConcurrentLiveInstanceSync(userDataDir, isPidAlive)
+    !hasConcurrentLiveInstanceSync(userDataDir, isPidAlive, readProcessIdentity)
   );
 }
 
@@ -254,8 +561,11 @@ export function hasLegacyOwnerNamespaceClaim(
   ownerId: string,
   userDataDir = app.getPath('userData'),
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
+  readProcessIdentity?: ProcessIdentityReader,
 ): boolean {
-  if (!hasExclusiveSharedLegacyUserDataAccess(userDataDir, isPidAlive)) return false;
+  if (!hasExclusiveSharedLegacyUserDataAccess(userDataDir, isPidAlive, readProcessIdentity)) {
+    return false;
+  }
   try {
     const parsed = JSON.parse(
       fsSync.readFileSync(path.join(userDataDir, CLAIM_MARKER), 'utf-8'),
@@ -542,6 +852,7 @@ export function getLegacyGhostRecoveryStatus(
     rejectReservedIds?: boolean;
   } = {},
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
+  readProcessIdentity?: ProcessIdentityReader,
 ): LegacyGhostRecoveryStatus {
   if (boundaryPending || session.mode !== 'cloud' || !session.dataOwnerId || !session.user) {
     return NO_LEGACY_GHOST_RECOVERY;
@@ -584,7 +895,7 @@ export function getLegacyGhostRecoveryStatus(
   if (process.env.XDT_PASSIVE_SHARED_USER_DATA === '1') {
     return { state: 'deferred', legacyPluginCount, canRetry: false };
   }
-  if (hasConcurrentLiveInstanceSync(root, isPidAlive)) {
+  if (hasConcurrentLiveInstanceSync(root, isPidAlive, readProcessIdentity)) {
     return { state: 'deferred', legacyPluginCount, canRetry: false };
   }
 
@@ -1189,7 +1500,13 @@ async function findConcurrentLiveInstancePids(
     names = []; // 注册表目录不存在 ≠ 无并发:下方 SingletonLock 探测仍要跑。
   }
   const selfPid = deps.selfPid();
-  const pids: number[] = [];
+  const candidates: Array<{
+    raw: string;
+    fileName: string;
+    pid: number;
+    recordedAtMs: number | undefined;
+    rootDir: string | undefined;
+  }> = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     let raw: string;
@@ -1199,14 +1516,16 @@ async function findConcurrentLiveInstancePids(
       if (isMissing(error)) continue;
       throw error;
     }
-    let record: Partial<{ pid: number; userDataDir: string }>;
+    let record: RegisteredInstanceRecord;
     try {
-      record = JSON.parse(raw) as Partial<{ pid: number; userDataDir: string }>;
+      record = JSON.parse(raw) as RegisteredInstanceRecord;
     } catch {
       continue; // torn leftover, never a live registration
     }
     const pid = record.pid;
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid === selfPid) continue;
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {
+      continue;
+    }
     // 只认同一 userData 的记录;userDataDir 不一致说明是异常拷贝进来的残留。
     if (
       typeof record.userDataDir === 'string' &&
@@ -1214,7 +1533,32 @@ async function findConcurrentLiveInstancePids(
     ) {
       continue;
     }
-    if (deps.isPidAlive(pid)) pids.push(pid);
+    if (!deps.isPidAlive(pid)) continue;
+    candidates.push({
+      raw,
+      fileName: name,
+      pid,
+      recordedAtMs: record.startedAtMs,
+      rootDir: record.rootDir,
+    });
+  }
+
+  const readProcessIdentity = deps.readProcessIdentity;
+  const identities = await readProcessIdentitiesForPids(
+    candidates.map(({ pid }) => pid),
+    readProcessIdentity,
+  );
+  const pids: number[] = [];
+  for (const candidate of candidates) {
+    const identity = identities.get(candidate.pid) ?? null;
+    if (recordedPidMayStillBeLive(candidate.recordedAtMs, candidate.rootDir, identity)) {
+      pids.push(candidate.pid);
+    } else {
+      rememberStaleProcessProof(
+        processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`),
+      );
+      log.info('ignoring stale instance registry record after PID reuse', { pid: candidate.pid });
+    }
   }
 
   // 追溯 fallback:本补丁之前的 packaged build 不写注册表,但 Chromium 单例锁是
@@ -1225,17 +1569,34 @@ async function findConcurrentLiveInstancePids(
   // win32 的 Chromium 用命名 mutex 无文件可查,该平台的历史盲区随 release 升级
   // 消失。best-effort:读不出/解析不出不阻塞(Chromium 自身会清理重建锁)。
   try {
-    const lockTarget = await deps.readlink(path.join(userDataDir, 'SingletonLock'));
+    const lockPath = path.join(userDataDir, 'SingletonLock');
+    const lockTarget = await deps.readlink(lockPath);
     const match = /-(\d+)$/.exec(lockTarget);
     const lockPid = match ? Number(match[1]) : null;
     if (
       lockPid !== null &&
       Number.isInteger(lockPid) &&
+      lockPid > 0 &&
       lockPid !== selfPid &&
       !pids.includes(lockPid) &&
       deps.isPidAlive(lockPid)
     ) {
-      pids.push(lockPid);
+      let lockMtimeMs: number | undefined;
+      try {
+        lockMtimeMs = (await deps.lstat(lockPath)).mtimeMs;
+      } catch {
+        // Missing provenance keeps the old fail-closed live-PID behavior.
+      }
+      const identity =
+        (await readProcessIdentitiesForPids([lockPid], readProcessIdentity)).get(lockPid) ?? null;
+      if (recordedPidMayStillBeLive(lockMtimeMs, undefined, identity)) {
+        pids.push(lockPid);
+      } else {
+        rememberStaleProcessProof(
+          processProofKey(userDataDir, 'singleton-lock', `${lockTarget}\u0000${lockMtimeMs}`),
+        );
+        log.info('ignoring stale SingletonLock after PID reuse', { pid: lockPid });
+      }
     }
   } catch {
     // ENOENT(无 packaged 实例)/EINVAL(非 symlink,如 win32 lockfile)——无信号。
@@ -1275,6 +1636,22 @@ export async function claimLegacyOwnerNamespace(
     return { status: 'claimed-by-other-owner', moved: 0, conflicts: 0 };
   }
   if (existingMarker?.complete) {
+    // The claim marker only covers the main owner-tree move. Provider secrets,
+    // IM files, and retired integration accounts still pass through the
+    // synchronous legacy-import gate immediately after this async call. Warm
+    // the exact PID-reuse provenance proof here so those consumers can make a
+    // safe decision on their first check; otherwise their one async refresh
+    // would finish after the check and the import would wait until a later
+    // login or restart.
+    try {
+      await findConcurrentLiveInstancePids(deps, userDataDir);
+    } catch (error) {
+      // Provenance errors remain fail-closed in the synchronous guards. The
+      // completed claim itself is still a valid idempotent result.
+      log.debug('completed owner namespace claim provenance warmup failed closed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return { status: 'migrated', moved: 0, conflicts: 0 };
   }
 
@@ -1449,5 +1826,10 @@ export const __testing = {
   LEGACY_PATHS,
   isSameUserDataDir,
   pathExistsNoFollowSync,
+  warmStaleProcessProvenance: (
+    userDataDir: string,
+    deps: MigrationDeps,
+  ): Promise<void> =>
+    findConcurrentLiveInstancePids(deps, userDataDir).then(() => undefined).catch(() => undefined),
   resetLegacyGhostRecoveryState: () => legacyGhostMigrationResults.clear(),
 };

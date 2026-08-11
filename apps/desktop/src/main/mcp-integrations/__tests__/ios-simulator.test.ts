@@ -27,6 +27,7 @@ import {
   type IOSSimulatorTouchPoint,
   type WdaRunningInstance,
 } from '@cindy/ios-simulator-runtime';
+import { IOSSimulatorToolRegistry, registerIOSSimulatorTools } from '@cindy/mcps';
 import type { IOSSimulatorPublicRouteStatus } from '../../../shared/iosSimulatorIpc';
 import {
   cancelIOSSimulatorSessionOperations,
@@ -291,11 +292,15 @@ describe('iOS Simulator host', () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-lazy-reconcile-'));
       const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
       const registryPath = path.join(root, 'ios-simulator', 'ownership-registry.json');
+      const evidencePath = path.join(root, 'ios-simulator', 'pending-create-evidence.json');
+      await mkdir(path.dirname(evidencePath), { recursive: true });
+      await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
       const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
-      let finishRecovery: (value: readonly string[]) => void = () => undefined;
+      let finishRecovery: (value: { recovered: readonly string[]; complete: boolean }) => void =
+        () => undefined;
       const recoverPendingCreatesAtStartup = vi.fn(
         (_owned: readonly { udid: string; name: string }[], _signal?: AbortSignal) =>
-          new Promise<readonly string[]>((resolve) => {
+          new Promise<{ recovered: readonly string[]; complete: boolean }>((resolve) => {
             finishRecovery = resolve;
           }),
       );
@@ -315,8 +320,36 @@ describe('iOS Simulator host', () => {
         expect(recoverPendingCreatesAtStartup).toHaveBeenCalledWith([], expect.any(AbortSignal));
         expect(competingRegistry.acquireWriterSync()).toBe(false);
 
-        finishRecovery([]);
+        finishRecovery({ recovered: [], complete: true });
         await expect(recovering).resolves.toBeUndefined();
+        expect(competingRegistry.acquireWriterSync()).toBe(true);
+        // A completed sweep retires the breadcrumb, so the next startup has no
+        // reason to touch CoreSimulator at all.
+        await expect(stat(evidencePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        competingRegistry.releaseWriterSync();
+        getPath.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  itMac(
+    'performs no simulator probe at startup when the profile never created a device',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-quiet-startup-'));
+      const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
+      const registryPath = path.join(root, 'ios-simulator', 'ownership-registry.json');
+      const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
+      const createLifecycle = vi.fn();
+      try {
+        await expect(
+          reconcilePersistedIOSSimulatorOwnership({ createLifecycle }),
+        ).resolves.toBeUndefined();
+
+        // No lifecycle means no xcrun/xcodebuild child process, so macOS never
+        // raises an Xcode consent prompt detached from a user action.
+        expect(createLifecycle).not.toHaveBeenCalled();
         expect(competingRegistry.acquireWriterSync()).toBe(true);
       } finally {
         competingRegistry.releaseWriterSync();
@@ -325,6 +358,72 @@ describe('iOS Simulator host', () => {
       }
     },
   );
+
+  itMac('retries an interrupted-create sweep that failed on the next startup', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-failed-sweep-'));
+    const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
+    const evidencePath = path.join(root, 'ios-simulator', 'pending-create-evidence.json');
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
+    const competingRegistry = new IOSSimulatorOwnershipRegistryFile(
+      path.join(root, 'ios-simulator', 'ownership-registry.json'),
+    );
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      recoverPendingCreatesAtStartup: vi.fn(async () => {
+        throw new Error('simctl list failed');
+      }),
+      deleteExact: vi.fn(),
+    };
+    try {
+      await expect(
+        reconcilePersistedIOSSimulatorOwnership({ createLifecycle: () => lifecycle }),
+      ).resolves.toBeUndefined();
+
+      // Keeping the breadcrumb is what makes the retry happen; dropping it here
+      // would leak the hidden marker device.
+      await expect(stat(evidencePath)).resolves.toMatchObject({});
+      expect(competingRegistry.acquireWriterSync()).toBe(true);
+    } finally {
+      competingRegistry.releaseWriterSync();
+      getPath.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  itMac('keeps interrupted-create evidence when a startup sweep is incomplete', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-incomplete-sweep-'));
+    const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
+    const evidencePath = path.join(root, 'ios-simulator', 'pending-create-evidence.json');
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      recoverPendingCreatesAtStartup: vi.fn(async () => ({
+        recovered: [],
+        complete: false,
+      })),
+      deleteExact: vi.fn(),
+    };
+    try {
+      await expect(
+        reconcilePersistedIOSSimulatorOwnership({ createLifecycle: () => lifecycle }),
+      ).resolves.toBeUndefined();
+
+      // The runtime observed a marker but could not safely attribute it. Keeping
+      // the breadcrumb is what makes the next startup retry instead of leaking it.
+      await expect(stat(evidencePath)).resolves.toMatchObject({});
+    } finally {
+      getPath.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   itMac(
     'does not inspect or delete pending markers when the ownership registry is invalid',
@@ -351,10 +450,11 @@ describe('iOS Simulator host', () => {
   );
 
   it('gates an already-created Host on one startup pending-create recovery', async () => {
-    let finishRecovery: (value: readonly string[]) => void = () => undefined;
+    let finishRecovery: (value: { recovered: readonly string[]; complete: boolean }) => void =
+      () => undefined;
     const recoverPendingCreatesAtStartup = vi.fn(
       (_owned: readonly { udid: string; name: string }[], _signal?: AbortSignal) =>
-        new Promise<readonly string[]>((resolve) => {
+        new Promise<{ recovered: readonly string[]; complete: boolean }>((resolve) => {
           finishRecovery = resolve;
         }),
     );
@@ -367,28 +467,42 @@ describe('iOS Simulator host', () => {
       deleteExact: vi.fn(),
     };
     const inspect = vi.fn(async () => READY_REPORT);
+    const pendingCreateEvidence = {
+      arm: vi.fn(() => 7),
+      isArmed: vi.fn(() => true),
+      generation: vi.fn(() => 7),
+      clearIfUnchanged: vi.fn(),
+    };
     const host = createIOSSimulatorHost({
       lifecycle,
       runtime: { inspect },
       getSession: vi.fn(async (id) => localSession(id)),
+      pendingCreateEvidence,
     });
 
     const firstCall = host.callTool('list_devices', {}, { sessionId: 'session-a' });
     await vi.waitFor(() => expect(recoverPendingCreatesAtStartup).toHaveBeenCalledOnce());
     expect(recoverPendingCreatesAtStartup).toHaveBeenCalledWith([], expect.any(AbortSignal));
     expect(inspect).not.toHaveBeenCalled();
+    expect(pendingCreateEvidence.clearIfUnchanged).not.toHaveBeenCalled();
 
-    finishRecovery([]);
+    finishRecovery({ recovered: [], complete: true });
     await expect(firstCall).resolves.toMatchObject({ ok: true });
     await expect(
       host.callTool('list_devices', {}, { sessionId: 'session-a' }),
     ).resolves.toMatchObject({ ok: true });
     expect(recoverPendingCreatesAtStartup).toHaveBeenCalledOnce();
+    // The in-process sweep retires the same breadcrumb the create path arms, so
+    // a profile that stops owning devices returns to quiet startups.
+    expect(pendingCreateEvidence.clearIfUnchanged).toHaveBeenCalledWith(7);
   });
 
   it('retries startup pending-create recovery after the ownership gate becomes available', async () => {
     let recoveryAllowed = false;
-    const recoverPendingCreatesAtStartup = vi.fn(async () => [] as readonly string[]);
+    const recoverPendingCreatesAtStartup = vi.fn(async () => ({
+      recovered: [] as readonly string[],
+      complete: true,
+    }));
     const lifecycle: IOSSimulatorSimctlLifecycle = {
       findExact: vi.fn(),
       bootExact: vi.fn(),
@@ -756,6 +870,51 @@ describe('iOS Simulator host', () => {
         read_build_diagnostics: { state: 'available', backend: 'host' },
       },
     });
+  });
+
+  it('reports availability under exactly the advertised simulator tool names', async () => {
+    const host = createIOSSimulatorHost({
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => localSession(id)),
+    });
+    const registry = new IOSSimulatorToolRegistry();
+    registerIOSSimulatorTools(registry, { callTool: vi.fn() });
+    const advertised = new Set(registry.list().map((tool) => tool.name));
+
+    // The registry merges this map by advertised name, so a renamed tool that
+    // kept its old availability key would silently report TOOL_NOT_REPORTED.
+    const reported = Object.keys((await host.describeTools('session-a')).tools).sort();
+    expect(reported).toEqual([...advertised].sort());
+
+    // The rejected-session branch reports its own reduced map and must use the
+    // same names, or the real rejection reason never reaches discovery.
+    const rejectedHost = createIOSSimulatorHost({
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async () => null),
+    });
+    const rejected = await rejectedHost.describeTools('missing-session');
+    expect(rejected.ready).toBe(false);
+    expect(Object.keys(rejected.tools).length).toBeGreaterThan(0);
+    for (const [name, availability] of Object.entries(rejected.tools)) {
+      expect(advertised.has(name)).toBe(true);
+      expect(availability).toBeDefined();
+    }
+    expect(rejected.tools.list_simulator_devices).toMatchObject({
+      state: 'unavailable',
+      reasonCode: 'SESSION_NOT_FOUND',
+    });
+
+    // Recommendations are model guidance too: naming a superseded tool sends the
+    // model back to the ambiguous name this rename hides.
+    const doctor = await host.callTool('doctor', {}, { sessionId: 'session-a' });
+    const recommended = (doctor as { data: { recommendedActions: string[] } }).data
+      .recommendedActions;
+    expect(recommended).toContain('list_simulator_devices');
+    for (const action of recommended) {
+      expect(advertised.has(action) || action === 'create_instance_or_attach_device').toBe(
+        true,
+      );
+    }
   });
 
   it('removes stale orphaned xcresult bundles during ownership reconciliation', async () => {
@@ -1173,6 +1332,138 @@ describe('iOS Simulator host', () => {
       errorCode: null,
     });
     expect(driverManager.stop).not.toHaveBeenCalled();
+  });
+
+  it('keeps a routable binding usable while another binding cannot be reconciled', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    const routable = actor.attach({
+      sessionId: 'routable-session',
+      worktreeRoot: '/tmp/routable-session',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+    });
+    actor.attach({
+      sessionId: 'unreadable-session',
+      worktreeRoot: '/tmp/unreadable-session',
+      sourceFingerprint: 'fingerprint-b',
+      device: { ...READY_REPORT.devices[0]!, udid: 'E4DED148-43B9-4193-9D80-399976A43E08' },
+    });
+    const inspect = vi.fn(async () => READY_REPORT);
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect },
+      getSession: vi.fn(async (id: string) => {
+        if (id === 'unreadable-session') throw new Error('session row is unreadable');
+        return localSession(id);
+      }),
+    });
+
+    try {
+      await host.reconcileOwnership();
+      const afterFirstSweep = actor.getOwned('routable-session', routable.instanceId);
+
+      // A binding whose session row cannot be read keeps the pass incomplete, so
+      // the sweep runs again on the next dispatch. It must not invalidate the
+      // route of a binding it observed as unchanged, or no caller could ever use
+      // a generation/lease pair it just read.
+      await host.reconcileOwnership();
+      expect(inspect).toHaveBeenCalledTimes(2);
+      const afterSecondSweep = actor.getOwned('routable-session', routable.instanceId);
+      expect(afterSecondSweep.generation).toBe(afterFirstSweep.generation);
+      expect(afterSecondSweep.lease.id).toBe(afterFirstSweep.lease.id);
+      expect(() =>
+        actor.assertRoute({
+          sessionId: afterFirstSweep.sessionId,
+          instanceId: afterFirstSweep.instanceId,
+          generation: afterFirstSweep.generation,
+          leaseId: afterFirstSweep.lease.id,
+        }),
+      ).not.toThrow();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  it('normalizes inherited viewer state per binding, not per sweep', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    const reconciledFirst = actor.attach({
+      sessionId: 'readable-session',
+      worktreeRoot: '/tmp/readable-session',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+    });
+    const skippedFirst = actor.attach({
+      sessionId: 'late-session',
+      worktreeRoot: '/tmp/late-session',
+      sourceFingerprint: 'fingerprint-b',
+      device: { ...READY_REPORT.devices[0]!, udid: 'E4DED148-43B9-4193-9D80-399976A43E08' },
+    });
+    const normalizeRequests: { instanceId: string; normalizeViewerState: boolean }[] = [];
+    const reconcile = actor.reconcile.bind(actor);
+    vi.spyOn(actor, 'reconcile').mockImplementation((...args) => {
+      normalizeRequests.push({
+        instanceId: args[0],
+        normalizeViewerState: args[5]?.normalizeViewerState === true,
+      });
+      return reconcile(...args);
+    });
+    let lateSessionReadable = false;
+    const inspect = vi.fn(async () => READY_REPORT);
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect },
+      getSession: vi.fn(async (id: string) => {
+        if (id === 'late-session' && !lateSessionReadable) {
+          throw new Error('session row is unreadable');
+        }
+        return localSession(id);
+      }),
+    });
+
+    try {
+      await host.reconcileOwnership();
+      // The skipped binding never reached a reconcile, so nothing corrected the
+      // viewer state it inherited from the previous process.
+      expect(normalizeRequests).toEqual([
+        { instanceId: reconciledFirst.instanceId, normalizeViewerState: true },
+      ]);
+
+      lateSessionReadable = true;
+      normalizeRequests.length = 0;
+      await host.reconcileOwnership();
+      expect(inspect).toHaveBeenCalledTimes(2);
+      // The retry must still normalize the binding it skipped, while leaving the
+      // already-reconciled one alone so a viewer that attached meanwhile survives.
+      expect(normalizeRequests).toEqual([
+        { instanceId: reconciledFirst.instanceId, normalizeViewerState: false },
+        { instanceId: skippedFirst.instanceId, normalizeViewerState: true },
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+      await host.dispose();
+    }
   });
 
   it.each(['Booted', 'Booting'] as const)(
@@ -6803,7 +7094,7 @@ describe('iOS Simulator host', () => {
           instanceCount: 1,
           runningInstanceCount: 1,
           tools: {
-            drag: { state: 'available', backend: 'wda' },
+            drag_on_simulator: { state: 'available', backend: 'wda' },
             touch_path: { state: 'unavailable', reasonCode: 'NATIVE_HID_NOT_ADMITTED' },
           },
         },

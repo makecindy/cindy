@@ -11,15 +11,15 @@ import { createLogger, initLogger } from './logger.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
 
-// 同机双装(cn/global):global 构建把 userData 切到区域目录(CindyGlobal),
-// 与 cn 版(productName 默认 'Cindy')彻底分库;数据库 / 登录态 / 单实例锁 /
-// sessionData 随 userData 目录天然隔离。必须在 initLogger()(packaged 日志
-// 目录)、crashReporter、单实例锁与一切 userData 读取之前执行。cn 构建与
-// dev 返回 null,零行为变化(dev 隔离语义由下方 devCliFlags 的 --isolated 承载)。
+// 正式目录保持历史兼容：global 构建继续使用 CindyGlobal，cn 版继续使用
+// productName 默认的 Cindy；dev 也按构建区域选择对应 profile。必须在
+// initLogger()(packaged 日志目录)、crashReporter、单实例锁与一切 userData
+// 读取之前完成区域映射。
 const regionUserDataDirName = resolveRegionUserDataDirName({
   isPackaged: app.isPackaged,
   region: CURRENT_CINDY_REGION,
   argv: process.argv,
+  envUserDataDir: process.env.XDT_USER_DATA_DIR,
 });
 if (regionUserDataDirName) {
   app.setPath('userData', path.join(app.getPath('appData'), regionUserDataDirName));
@@ -226,6 +226,7 @@ if (devFlags.needsIsolatedDeviceId) {
     rootDir,
     commit,
     mode,
+    region: CURRENT_CINDY_REGION,
     passive: devFlags.schedulerPassive,
     isolated: Boolean(devFlags.userDataDirOverride),
   });

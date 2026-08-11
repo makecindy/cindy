@@ -1,6 +1,6 @@
 /**
  * MessageNavRailCell — TipsSection 内的 "显示提问导航条" cell row。
- * 纯 Renderer 本地偏好(localStorage,默认关闭),切换立即生效,无 IPC。
+ * 纯 Renderer 本地偏好(localStorage,默认开启),切换立即生效,无 IPC。
  * 行内形态与 SilentEncryptedRetryCell 对齐;恢复默认走 DefaultOverrideControls
  * (语义 = 清 override 跟随版本默认,见 useMessageNavRailPreference)。
  */
@@ -38,7 +38,7 @@ export function MessageNavRailCell() {
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <DefaultOverrideControls isCustomized={isCustomized} onReset={() => setEnabled(false)} />
+        <DefaultOverrideControls isCustomized={isCustomized} onReset={() => setEnabled(true)} />
         <Switch
           checked={enabled}
           onCheckedChange={setEnabled}
