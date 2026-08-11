@@ -42,6 +42,29 @@ function isNoReply(text: string): boolean {
   return text.trim() === NO_REPLY_SENTINEL;
 }
 
+/**
+ * 这次出站是**确定没送达**, 还是回执未知?
+ *
+ * Telegram 以 4xx 应答时报文已经完整往返: 它明确拒绝了这一段, 聊天里不可能
+ * 出现它。此时把该段留给重试是安全的, 跳过反而造成答案缺段。
+ *
+ * 其余情况(网络中断、超时、5xx、以及 429 退避耗尽——退避里最后那次请求可能
+ * 已经抵达 Telegram)都无法证明未送达, 一律按"可能已送达"处理: 重试跳过它,
+ * 宁可缺一段, 也不让用户看到重复的整篇正文。
+ *
+ * 用结构判定而非 `instanceof`: 本模块是不做 I/O 的纯生命周期层, 不应反向依赖
+ * api.ts 的具体错误类; deps 的实现方(index.ts)抛的正是带 errorCode 的那一种。
+ */
+function isDefiniteRejection(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = (err as { errorCode?: unknown }).errorCode;
+  if (typeof code !== 'number') return false;
+  // 429 不算确定拒绝: callSend 的退避重试里, 最后一次请求可能已经被 Telegram
+  // 受理而回执丢失, 无法证明这一段没出现在聊天里。
+  if (code === 429) return false;
+  return code >= 400 && code < 500;
+}
+
 export interface TelegramStreamingDeps {
   /** 发送一条 markdown 渲染消息, 返回编码 messageId。 */
   send: (markdown: string) => Promise<string>;
@@ -95,6 +118,16 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
   private deliveredChunks = 0;
   /** 受管图片是否已收口; 与分段同理, 成功过就不重传。 */
   private imagesDelivered = false;
+  /**
+   * 本轮**过程载体**的 messageId, 在首次 finalize 进入终稿路径时冻结。
+   *
+   * 不能在每次尝试里从 `messageIdValue` 重算: 首段一旦新发成功, 那个字段就指向
+   * 终稿了。首段成功、尾段失败后重试时再读它, 清理会把**终稿**删掉而留下过程
+   * 载体 —— 用户看到的就是答案消失、只剩一条停在过程态的消息。
+   *
+   * `null` = 尚未冻结; `''` = 已冻结且本轮从未建过过程载体(惰性占位)。
+   */
+  private carrierMessageId: string | null = null;
   private readonly lifecycle: TelegramMessageLifecycle;
   private extraImageAbsPaths: string[] = [];
   /**
@@ -177,7 +210,10 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       }
     }
 
-    const staleMessageId = this.messageIdValue;
+    // 过程载体只在**首次**进入终稿路径时冻结; 之后 messageIdValue 会被终稿覆盖,
+    // 重试再读它就会把终稿当成待清理的旧消息(见 carrierMessageId 的说明)。
+    this.carrierMessageId ??= this.messageIdValue;
+    const staleMessageId = this.carrierMessageId;
     if (isNoReply(finalText)) {
       // 惰性占位下通常从未发过消息(真零痕迹); 已建过程消息则尽力清掉。
       this.lifecycle.cancel();
@@ -235,14 +271,23 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       }
       // 逐段推进计数: 中途抛错时前面几段的进度已经记下, 重试从这里接着走。
       //
-      // 计数在 send **发起前**推进, 不在成功后 —— 一次抛错的 send 无法区分
-      // 「Telegram 没收到」和「收到了但回执丢在路上」。把它记成已投递, 最坏是
-      // 这一段没出现(上游仍持有完整正文可再收口); 反过来记成未投递则会在重试时
-      // 把用户已经看见的一段再发一遍, 长答案里就是整篇重复。宁可不重复。
+      // 计数在 send **发起前**推进 —— 抛错的 send 通常无法区分「Telegram 没收到」
+      // 和「收到了但回执丢在路上」。默认按"可能已送达"记账: 最坏是这一段没出现
+      // (上游仍持有完整正文可再收口); 反过来默认未送达则会在重试时把用户已经看见
+      // 的一段再发一遍, 长答案里就是整篇重复。
+      //
+      // 例外是 Telegram **明确拒绝**(4xx, 429 除外): 报文完整往返、它拒绝了这一段,
+      // 聊天里不可能出现它。这时必须把计数退回去, 否则重试会跳过一段确定未送达的
+      // 正文, 随后照样 markFinalSent 并清掉过程载体 —— 答案就此缺段。
       while (this.deliveredChunks < chunks.length) {
         const chunk = chunks[this.deliveredChunks]!;
         this.deliveredChunks += 1;
-        await this.deps.send(chunk);
+        try {
+          await this.deps.send(chunk);
+        } catch (err) {
+          if (isDefiniteRejection(err)) this.deliveredChunks -= 1;
+          throw err;
+        }
       }
       // extraImageAbsPaths(tool_result 账本图)与正文图都交 uploadImages 收口;
       // 去重职责在 index.ts 的 uploadImages 实现里(absPath / url 双口径)。

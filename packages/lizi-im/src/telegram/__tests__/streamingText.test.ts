@@ -206,6 +206,83 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.sent).toEqual(['⚙️ 工作中 · 8m', '第二段', '第三段']);
   });
 
+  it('分段被 Telegram 明确拒绝(4xx)时保留该段, 重试补齐不缺段', async () => {
+    // 4xx = 报文完整往返、Telegram 拒绝了这一段, 聊天里不可能出现它。
+    // 若按"可能已送达"跳过, 重试后照样 markFinalSent 并清掉过程载体 —— 答案缺段。
+    let rejectTail = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第二段' && rejectTail) {
+          throw Object.assign(new Error('telegram sendMessage failed: 400 Bad Request'), {
+            errorCode: 400,
+          });
+        }
+        return 'msg-x';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 5m');
+
+    await expect(handle.finalize('第一段|第二段|第三段')).rejects.toThrow(/400/);
+
+    rejectTail = false;
+    await handle.finalize('第一段|第二段|第三段');
+
+    // 第二段确定未送达 → 必须重发; 首段已可见 → 绝不重发。
+    expect(h.reposted).toEqual(['第一段']);
+    expect(h.sent).toEqual(['⚙️ 工作中 · 5m', '第二段', '第二段', '第三段']);
+  });
+
+  it('429 退避耗尽仍按回执未知处理(不重发, 避免整篇重复)', async () => {
+    // 429 的最后一次请求可能已被 Telegram 受理而回执丢失, 不能算确定拒绝。
+    let flood = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第二段' && flood) {
+          throw Object.assign(new Error('telegram sendMessage failed: 429'), { errorCode: 429 });
+        }
+        return 'msg-x';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 7m');
+
+    await expect(handle.finalize('第一段|第二段|第三段')).rejects.toThrow(/429/);
+    flood = false;
+    await handle.finalize('第一段|第二段|第三段');
+
+    expect(h.sent).toEqual(['⚙️ 工作中 · 7m', '第二段', '第三段']);
+  });
+
+  it('重试后清理的是原始过程载体, 不是已经送达的终稿', async () => {
+    // 首段成功后 messageIdValue 已指向终稿; 若重试时从它重算清理目标,
+    // 会把答案删掉而留下过程载体。
+    let failTail = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第二段' && failTail) throw new Error('sendMessage failed: 500');
+        // 过程载体与终稿必须是不同的 messageId, 否则这条断言没有意义。
+        return markdown.startsWith('⚙️') ? 'carrier-msg' : 'final-msg';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 12m');
+    const carrierId = handle.messageId;
+    expect(carrierId).toBe('carrier-msg');
+
+    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/500/);
+    // 首段已落地, handle 现在指向终稿而非过程载体。
+    expect(handle.messageId).not.toBe(carrierId);
+    expect(h.deleted).toEqual([]);
+
+    failTail = false;
+    await handle.finalize('第一段|第二段');
+
+    // 删的必须是最初那条过程消息。
+    expect(h.deleted).toEqual([carrierId]);
+    expect(h.deleted).not.toContain(handle.messageId);
+  });
+
   it('Rich 终稿新发成功时既不走 HTML 补送也不编辑过程消息', async () => {
     const sendFinal = vi.fn(async () => 'rich-2');
     const h = makeHarness();
