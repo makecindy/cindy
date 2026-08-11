@@ -3681,7 +3681,13 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           tools: {
             doctor: { state: 'available', backend: 'host' },
             check_environment: { state: 'available', backend: 'host' },
-            list_devices: { state: 'unavailable', reasonCode: resolved.errorCode },
+            // Advertised name: the registry merges availability by the name it
+            // lists, so a stale key would report TOOL_NOT_REPORTED instead of the
+            // real session rejection reason.
+            list_simulator_devices: {
+              state: 'unavailable',
+              reasonCode: resolved.errorCode,
+            },
           },
         };
       }

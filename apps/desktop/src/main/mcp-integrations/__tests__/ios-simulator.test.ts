@@ -766,11 +766,30 @@ describe('iOS Simulator host', () => {
     });
     const registry = new IOSSimulatorToolRegistry();
     registerIOSSimulatorTools(registry, { callTool: vi.fn() });
+    const advertised = new Set(registry.list().map((tool) => tool.name));
 
     // The registry merges this map by advertised name, so a renamed tool that
     // kept its old availability key would silently report TOOL_NOT_REPORTED.
     const reported = Object.keys((await host.describeTools('session-a')).tools).sort();
-    expect(reported).toEqual(registry.list().map((tool) => tool.name).sort());
+    expect(reported).toEqual([...advertised].sort());
+
+    // The rejected-session branch reports its own reduced map and must use the
+    // same names, or the real rejection reason never reaches discovery.
+    const rejectedHost = createIOSSimulatorHost({
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async () => null),
+    });
+    const rejected = await rejectedHost.describeTools('missing-session');
+    expect(rejected.ready).toBe(false);
+    expect(Object.keys(rejected.tools).length).toBeGreaterThan(0);
+    for (const [name, availability] of Object.entries(rejected.tools)) {
+      expect(advertised.has(name)).toBe(true);
+      expect(availability).toBeDefined();
+    }
+    expect(rejected.tools.list_simulator_devices).toMatchObject({
+      state: 'unavailable',
+      reasonCode: 'SESSION_NOT_FOUND',
+    });
   });
 
   it('removes stale orphaned xcresult bundles during ownership reconciliation', async () => {
