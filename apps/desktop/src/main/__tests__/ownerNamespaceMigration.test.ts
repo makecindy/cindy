@@ -218,7 +218,7 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(result).toEqual({ status: 'migrated', moved: 0, conflicts: 0 });
     // Omit the synchronous identity reader: this assertion must consume the
     // proof produced by claimLegacyOwnerNamespace's async warm-up.
-    expect(hasLegacyOwnerNamespaceClaim('cloud-a', root, (pid) => pid === 4242)).toBe(true);
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
   });
 
   it('keeps deferring when a reused pid now belongs to another Cindy process', async () => {
