@@ -1002,6 +1002,48 @@ describe('loadReviewEvidence attachment boundaries', () => {
     expect(evidence.branch?.baseRef).toBe('origin/stable');
   });
 
+  it('counts branch files before redaction, including an all-sensitive branch', async () => {
+    // Deriving the count from the sanitized list would report zero here, which
+    // resolveTargetKind reads as "no changes" and downgrades to a `task`
+    // review even though the branch is the selected evidence. The count is
+    // coverage metadata; the patches themselves stay excluded.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'origin/main',
+          shortName: 'origin/main',
+          kind: 'remote-default',
+          remote: 'origin',
+          oid: 'b'.repeat(40),
+        },
+      ],
+      diffs: [branchFileDiff('.env'), branchFileDiff('deploy/id_rsa')],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch?.fileCount).toBe(2);
+    expect(evidence.branch?.sensitiveFilesOmitted).toBe(2);
+    expect(evidence.branch?.diffs).toEqual([]);
+  });
+
   it('refuses a branch whose last segment merely looks like a default', async () => {
     // `feature/main` is an ordinary branch. Judging by basename would let it
     // pass as a default and reintroduce the unrelated-sibling comparison.

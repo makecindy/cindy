@@ -154,8 +154,16 @@ async function loadReviewBranchEvidence(
   });
   const diffs = sanitized.value.staged;
   const capped = sanitized.value.capped?.staged ?? null;
-  const fileCount = capped ? capped.stats.fileCount : diffs.length;
-  if (fileCount === 0 && sanitized.omittedSensitiveFiles === 0) {
+  // Count what the branch changed, not what survived redaction. `capped.stats`
+  // is already a pre-redaction total, so deriving the uncapped count from the
+  // sanitized list would make the two paths disagree — and a branch whose
+  // every changed path is sensitive would report zero, which
+  // `resolveTargetKind` reads as "no changes" and downgrades the run to a
+  // `task` review even though the branch is the selected evidence. The count
+  // is coverage metadata; the content stays excluded either way, and the
+  // prompt states how many were withheld via `sensitiveFilesOmitted`.
+  const fileCount = capped ? capped.stats.fileCount : data.diffs.length;
+  if (fileCount === 0) {
     // A guard like `too-many-files` also yields zero entries, but it means the
     // branch changed too much to load — not that it changed nothing. Falling
     // through silently would present one turn as the branch review.
