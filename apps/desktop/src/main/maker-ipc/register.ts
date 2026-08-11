@@ -7086,6 +7086,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             evidence.changeSet,
             sourceWorkingDir,
           );
+          // The change set is the review target only when nothing better was
+          // selected. With uncommitted work or a branch diff in hand it is not
+          // part of the evidence, so its own gaps must not block the review —
+          // those commits are already represented by the selected evidence.
+          const changeSetIsReviewed = !evidence.workspace?.dirty && !evidence.branch;
           // A change set that cannot account for everything the turn changed —
           // whether it was summarized away or never enumerable in the first
           // place — cannot serve as a baseline. Refuse instead of publishing a
@@ -7094,7 +7099,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // A Git fingerprint is not an exemption: it hashes tracked evidence
           // only, so a missing entry that happens to be an ignored deliverable
           // is covered by neither side — exactly the gap this change closes.
-          if (changeSetContent.truncated) {
+          if (changeSetIsReviewed && changeSetContent.truncated) {
             throw new ReviewPreconditionError({
               code: 'artifact-unavailable',
               message:

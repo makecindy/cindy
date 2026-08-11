@@ -136,6 +136,10 @@ async function loadReviewBranchEvidence(
   const capped = sanitized.value.capped?.staged ?? null;
   const fileCount = capped ? capped.stats.fileCount : diffs.length;
   if (fileCount === 0 && sanitized.omittedSensitiveFiles === 0) {
+    // A guard like `too-many-files` also yields zero entries, but it means the
+    // branch changed too much to load — not that it changed nothing. Falling
+    // through silently would present one turn as the branch review.
+    if (data.warning) return { branch: null, unavailableReason: data.warning.code };
     // Nothing of its own to review; fall through to the last turn.
     return { branch: null };
   }

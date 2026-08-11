@@ -201,6 +201,52 @@ function cappedReviewData(repoRoot: string, filePath: string): ReviewData {
   };
 }
 
+/** A Git workspace with everything committed, which is when branch review applies. */
+function cleanGitReviewData(repoRoot: string): ReviewData {
+  const scope = {
+    sessionId: 'source',
+    workdir: repoRoot,
+    worktreePath: repoRoot,
+    workingDir: repoRoot,
+    repoRoot,
+    branch: 'feature',
+    headOid: 'a'.repeat(40),
+    isDetached: false,
+    isUnborn: false,
+    source: 'workingDir' as const,
+    aheadBehind: { ahead: 1, behind: 0, upstream: 'origin/main', stale: false },
+    disabledReason: null,
+    disabledMessage: null,
+    resolutionChain: [],
+  };
+  return {
+    scope,
+    status: {
+      scope,
+      files: [],
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      unmergedCount: 0,
+      inProgress: [],
+      writeDisabledReasons: [],
+      dirty: false,
+    },
+    diffs: { staged: [], unstaged: [], capped: { staged: null, unstaged: null } },
+    summary: {
+      sessionId: 'source',
+      disabledReason: null,
+      disabledMessage: null,
+      totalFiles: 0,
+      stagedFiles: 0,
+      unstagedFiles: 0,
+      untrackedFiles: 0,
+      unmergedFiles: 0,
+      dirty: false,
+    },
+  };
+}
+
 function nonGitReviewData(): ReviewData {
   const scope = {
     sessionId: 'source',
@@ -668,6 +714,38 @@ describe('loadReviewEvidence attachment boundaries', () => {
 
     expect(readReviewBranchDiffMock).not.toHaveBeenCalled();
     expect(evidence.branch).toBeNull();
+  });
+
+  it('reports why a too-large branch diff is missing instead of falling back silently', async () => {
+    // A guard like too-many-files returns a resolved base with no entries,
+    // which looks identical to an unchanged branch. Falling through without
+    // saying so would present one turn as the whole branch review.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [],
+      diffs: [],
+      capped: null,
+      warning: { code: 'too-many-files', message: 'too many files' },
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch).toBeNull();
+    expect(evidence.branchUnavailableReason).toBe('too-many-files');
   });
 
   it('detects a moved comparison base even though HEAD did not change', async () => {

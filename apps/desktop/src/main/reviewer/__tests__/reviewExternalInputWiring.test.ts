@@ -64,7 +64,9 @@ describe('Review external input wiring', () => {
     // baseline; publishing against it would skip the truncated remainder.
     // A Git fingerprint is not an exemption — it cannot see ignored files,
     // so a dropped entry that is an ignored deliverable is covered by neither.
-    expect(registerSource).toContain('if (changeSetContent.truncated) {');
+    // The gate applies only when the change set is the selected evidence: with
+    // a branch diff in hand its gaps are already covered and must not block.
+    expect(registerSource).toContain('if (changeSetIsReviewed && changeSetContent.truncated) {');
     // The workspace fingerprint pins HEAD, not the base being compared against,
     // so both gates must recheck the branch baseline as well.
     expect(
