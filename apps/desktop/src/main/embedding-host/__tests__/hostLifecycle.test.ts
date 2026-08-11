@@ -302,7 +302,6 @@ describe('chat embedding availability wiring', () => {
       'setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);',
     );
   });
-
   it('keeps provider broadcasts alive when runtime reconciliation throws', () => {
     const refreshStart = makerHostSource.indexOf(
       'function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {',
@@ -322,7 +321,6 @@ describe('chat embedding availability wiring', () => {
       refreshSource.indexOf('BrowserWindow.getAllWindows()'),
     );
   });
-
   it('stops unavailable consumers and restores an enabled preference when access returns', () => {
     expect(bootstrapSource).toContain(
       "setEmbeddingSourceSuspended('chat', !chatAvailable);",
