@@ -62,6 +62,10 @@ const IOS_SIMULATOR_SAFE_IPC_MESSAGES: Record<IOSSimulatorIpcOperation, string> 
 
 export interface IOSSimulatorHandlerDeps {
   assertTrustedSender(event: unknown): void;
+  isPluginAvailable(workingDir: string | null): boolean;
+  getSessionContext(
+    sessionId: string,
+  ): Promise<{ workingDir: string | null } | null>;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
   getSessionAccess(
@@ -138,6 +142,10 @@ export interface IOSSimulatorHandlerDeps {
 const defaultDeps: IOSSimulatorHandlerDeps = {
   assertTrustedSender: (event) =>
     assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+  // Production registration must inject the live Ghost capability gate. Tests
+  // and any accidental alternate registration fail closed by default.
+  isPluginAvailable: () => false,
+  getSessionContext: async () => null,
   getOwnerScopeKey: activeOwnerScopeKey,
   isOwnerBoundaryPending: isAppSessionBoundaryPending,
   getSessionAccess: getIOSSimulatorRendererSessionAccess,
@@ -182,9 +190,20 @@ function throwIOSSimulatorIpcError(
 async function callIOSSimulatorHost<T>(
   deps: IOSSimulatorHandlerDeps,
   operation: IOSSimulatorIpcOperation,
+  sessionId: string,
   call: (assertCurrent: () => void) => T | Promise<T>,
   assertStillAuthorized?: () => void,
 ): Promise<T> {
+  let sessionContext: { workingDir: string | null } | null;
+  try {
+    sessionContext = await deps.getSessionContext(sessionId);
+  } catch {
+    sessionContext = null;
+  }
+  if (!sessionContext) {
+    throwIpcError('PERMISSION_DENIED', 'iOS Simulator access is limited to the current task');
+  }
+  const workingDir = sessionContext.workingDir?.trim() || null;
   const ownerScopeKey = deps.getOwnerScopeKey();
   const assertOwnerScopeCurrent = (): void => {
     if (deps.isOwnerBoundaryPending() || deps.getOwnerScopeKey() !== ownerScopeKey) {
@@ -195,6 +214,12 @@ async function callIOSSimulatorHost<T>(
     }
   };
   const assertCurrent = (): void => {
+    if (!deps.isPluginAvailable(workingDir)) {
+      throwIpcError(
+        'PERMISSION_DENIED',
+        'The iOS Simulator plugin must be installed and enabled.',
+      );
+    }
     assertOwnerScopeCurrent();
     assertStillAuthorized?.();
   };
@@ -284,7 +309,7 @@ export function registerIOSSimulatorHandlers(
     if (!expectedAccess || expectedAccess.sessionId !== sessionId) {
       throwIpcError('PERMISSION_DENIED', 'iOS Simulator access is limited to the current task');
     }
-    return callIOSSimulatorHost(resolved, operation, call, () => {
+    return callIOSSimulatorHost(resolved, operation, sessionId, call, () => {
       const currentAccess = resolved.getSessionAccess(sender);
       if (
         !currentAccess ||
@@ -298,7 +323,7 @@ export function registerIOSSimulatorHandlers(
   handle(MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS, async (event, payload) => {
     const sessionId = readSessionId(payload);
     const sender = readSenderWebContents(event);
-    const granted = await callIOSSimulatorHost(resolved, 'request-access', () =>
+    const granted = await callIOSSimulatorHost(resolved, 'request-access', sessionId, () =>
       resolved.hasSessionAccess(sender, sessionId)
         ? true
         : resolved.requestSessionAccess(sender, sessionId),

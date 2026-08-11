@@ -25,6 +25,12 @@ export interface SessionScrollSnapshot {
   offset: number;
   /** 离开时是否贴在底部。true 时不需要还原,重建后正常 pin 到底即可。 */
   isNearBottom: boolean;
+  /**
+   * render-window-bidirectional: 锚定窗口的向后 item 上界。
+   * 仅在 windowAnchorKey !== null 时写入；null 表示旧版快照（无此字段）或默认窗口。
+   * 还原时用于重建足够大的窗口，确保 viewportTopKey 落在 DOM 中。
+   */
+  anchoredForwardCount?: number;
 }
 
 const store = new Map<string, SessionScrollSnapshot>();

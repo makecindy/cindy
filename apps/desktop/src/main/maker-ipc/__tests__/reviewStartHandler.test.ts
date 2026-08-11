@@ -6,6 +6,7 @@ import {
   readStartReviewRequest,
   REVIEW_START_REQUEST_LIMITS,
   registerReviewStartHandler,
+  ReviewPreconditionError,
   type PreparedReviewLaunch,
   type PreparedReviewRun,
   type ReviewRunnerHandle,
@@ -790,6 +791,35 @@ describe('maker:review:start IPC lifecycle', () => {
     );
     expect(deps.publishReviewerLink).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists a stable failure code when artifact fingerprint preparation is unsafe', async () => {
+    const harness = new IpcHarness();
+    const reviewer = new FakeReviewer();
+    const deps = makeDeps(reviewer, {
+      prepareRun: vi.fn(async () =>
+        makePreparedRun(makeLaunch(), {
+          prepareLaunch: vi.fn(async () => {
+            throw new ReviewPreconditionError({
+              code: 'artifact-unavailable',
+              message: 'internal artifact safety detail',
+            });
+          }),
+        }),
+      ),
+    });
+    registerReviewStartHandler(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest())).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(deps.startReviewer).not.toHaveBeenCalled();
+    expect(deps.updateSourceCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meta: expect.objectContaining({ status: 'failed', failureCode: 'artifact-unavailable' }),
+      }),
+    );
+    expect(vi.mocked(deps.updateSourceCard).mock.calls[0]?.[0].meta).not.toHaveProperty('error');
   });
 
   it('does not publish a generated reviewer id when reviewer bootstrap itself fails', async () => {

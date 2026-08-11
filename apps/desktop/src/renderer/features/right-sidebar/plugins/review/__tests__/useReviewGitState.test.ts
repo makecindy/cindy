@@ -20,8 +20,8 @@ function Probe({ sessionId, oid }: { sessionId: string; oid: string }) {
   return createElement('div', { 'data-testid': 'state' }, `${state.data?.commitOid ?? 'null'}|${state.loading ? 'loading' : 'idle'}`);
 }
 
-function SummaryProbe({ sessionId }: { sessionId: string | null }) {
-  const state = useReviewDirtySummary(sessionId);
+function SummaryProbe({ sessionId, deviceId = null }: { sessionId: string | null; deviceId?: string | null }) {
+  const state = useReviewDirtySummary(sessionId, deviceId);
   return createElement('div', { 'data-testid': 'state' }, `${state.data?.sessionId ?? 'null'}|${state.loading ? 'loading' : 'idle'}`);
 }
 
@@ -128,25 +128,40 @@ describe('useReviewGitState cache continuity', () => {
     });
     await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('commit-b|idle'));
   });
-
-  it('does not write back an in-flight request after the session is disabled', async () => {
-    const pending = deferred<ReviewDirtySummary>();
-    const summary = vi.fn(() => pending.promise);
+  it('invalidates an in-flight request before a new device scope load effect runs', async () => {
+    const pendingOld = deferred<{ ok: true; result: ReviewDirtySummary }>();
+    const invoke = vi.fn((deviceId: string) => {
+      if (deviceId === 'device-a') return pendingOld.promise;
+      return Promise.reject(new Error('device-b unavailable'));
+    });
     (window as unknown as { electronAPI: unknown }).electronAPI = {
-      gitReview: { summary },
+      deviceLink: {
+        invoke: (deviceId: string) => invoke(deviceId),
+      },
     };
 
-    const { rerender } = render(createElement(SummaryProbe, { sessionId: 'summary-session' }));
+    const { rerender } = render(createElement(SummaryProbe, {
+      sessionId: 'shared-session',
+      deviceId: 'device-a',
+    }));
     await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('null|loading'));
 
-    rerender(createElement(SummaryProbe, { sessionId: null }));
-    await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('null|idle'));
-
+    let oldRequestResolved = false;
     await act(async () => {
-      pending.resolve(dirtySummary('summary-session'));
-      await pending.promise;
+      rerender(createElement(SummaryProbe, {
+        sessionId: 'shared-session',
+        deviceId: 'device-b',
+      }));
+      pendingOld.resolve({ ok: true, result: dirtySummary('shared-session') });
+      oldRequestResolved = true;
+      await pendingOld.promise;
+      await Promise.resolve();
     });
-    expect(screen.getByTestId('state').textContent).toBe('null|idle');
+    expect(oldRequestResolved).toBe(true);
+    expect(screen.getByTestId('state').textContent).not.toContain('shared-session');
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('device-b'));
+    await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('null|idle'));
   });
 
   it('reloads a file diff when the write refresh version changes without changing the IPC payload', async () => {

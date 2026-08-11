@@ -40,6 +40,7 @@ import {
   applyCodexPlanSnapshotOnDone,
   getLatestMessageTodoState,
   isAgentPlanToolName,
+  isSubagentParentToolUseId,
   markCodexPlanTurnFailed,
 } from '@cindy/maker-shared/message-render';
 import {
@@ -14380,7 +14381,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
           ? { model: m.agentMeta.model }
           : {}),
-        ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+        // 只提升 SDK tool-parent 形态(toolu_ / call_):legacy Claude 导入把
+        // transcript 链边(preceding-user-uuid 这类非 RFC 串)也存在 parentUuid 上,
+        // 无条件提升会让顶层计划行被判成子代理、普通 user 行被当成合成边界,而
+        // 保留裸字段的 mobile / main 不会——同一份历史两端分组分叉(review P2)。
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
           ? { parentToolUseId: m.agentMeta.parentUuid }
           : {}),
       };
@@ -14460,7 +14466,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
           ? { model: m.agentMeta.model }
           : {}),
-        ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
           ? { parentToolUseId: m.agentMeta.parentUuid }
           : {}),
       };
@@ -14634,6 +14641,16 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(delivery === 'turn' || delivery === 'steer' ? { delivery } : {}),
         ...(goalObjective ? { goalBadge: goalObjective } : {}),
         ...(hookSource ? { hookSource } : {}),
+        // 子代理内部的 user 行(SDK parent_tool_use_id):投影给计划归属判定,
+        // 否则 maker-shared 会把它当成"用户开新话题"切断主线程计划 session。
+        // 只提升 SDK tool-parent 形态:legacy Claude 导入把 transcript 链边
+        // (preceding-user-uuid 这类非 RFC 串)也存在 parentUuid 上,无条件提升会
+        // 反过来把**普通 user 行**当成子代理内部消息,新计划继续复用旧 session/key、
+        // 跨话题合并计划卡(review P1)。
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
+          ? { parentToolUseId: m.agentMeta.parentUuid }
+          : {}),
       };
     }
     // /goal 达成记录:持久消息(role:'assistant' + 空 content + agentMeta.goalCompletion)
@@ -14769,7 +14786,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
         ? { model: m.agentMeta.model }
         : {}),
-      ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+      ...(typeof m.agentMeta?.parentUuid === 'string' &&
+      isSubagentParentToolUseId(m.agentMeta.parentUuid)
         ? { parentToolUseId: m.agentMeta.parentUuid }
         : {}),
       isStreaming: false,

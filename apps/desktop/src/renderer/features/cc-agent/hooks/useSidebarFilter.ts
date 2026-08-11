@@ -12,12 +12,12 @@
  *
  * 持久化：
  *   - localStorage key `cc-agent.sidebar.filter.status`
- *   - localStorage key `cc-agent.sidebar.filter.projects`
+ *   - owner-scoped localStorage key derived from `cc-agent.sidebar.filter.projects`
  *   - localStorage key `cc-agent.sidebar.filter.vendor`
  *   - localStorage key `cc-agent.sidebar.filter.groupBy`
  *   - localStorage key `cc-agent.sidebar.filter.lastActivity`
  *   - localStorage key `cc-agent.sidebar.filter.sortBy`
- *   - localStorage key `cc-agent.sidebar.filter.manualProjectOrder`
+ *   - owner-scoped localStorage key derived from `cc-agent.sidebar.filter.manualProjectOrder`
  *
  * GC（mount 后由编排层在 sessions 首次加载完成时调用一次 `gc(activeWorkingDirs)`）：
  *   - 剔除 projects 数组中已不在 activeWorkingDirs 集合的条目
@@ -41,7 +41,15 @@
  *   不依赖 React 渲染。Hook 只做 `useState` + 持久化副作用。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+
+import { createLogger } from '@/lib/logger';
+import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
+import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
+import type {
+  SidebarPinnedOrderMutation,
+  SidebarSettingsSnapshot,
+} from '../../../../shared/sidebarSettings';
 
 import {
   loadStatus,
@@ -52,6 +60,7 @@ import {
   loadSortBy,
   loadManualProjectOrder,
   loadManualPinnedOrder,
+  finishManualPinnedOrderLegacyMigration,
   persistStatus,
   persistProjects,
   persistVendor,
@@ -140,108 +149,280 @@ export interface UseSidebarFilterReturn {
   /** 设置主列表排序方式，持久化到 localStorage。 */
   setSortBy: (sortBy: FilterSortBy) => void;
   /** 直接替换 Project 手动排序顺序，持久化到 localStorage。 */
-  setManualProjectOrder: (
-    order: readonly string[],
-    activeWorkingDirs: readonly string[],
-  ) => void;
+  setManualProjectOrder: (order: readonly string[], activeWorkingDirs: readonly string[]) => void;
   /** 直接替换 Pinned 手动排序顺序并持久化。
-   *  activeEntryIds 是当前所有仍有效的 pinned session / project entry id。 */
+   *  activeEntryIds 是拖拽开始时所有仍有效的 pinned session / project entry id；
+   *  baseOrder 是该次拖拽实际看到的完整顺序，供 Main 在最新快照上安全 rebase。 */
   setManualPinnedOrder: (
     order: readonly string[],
     activeEntryIds: readonly string[],
-  ) => void;
+    baseOrder: readonly string[],
+  ) => Promise<void>;
   /** 把一个 pinned entry 提到 manualPinnedOrder 首位（已存在则去重移位）。
    *  pin / re-pin 都调它，确保新置顶立刻可见 rank=0；不调它则 re-pin 会带着
    *  老 rank 卡在原位。函数式更新，对快速连点 pin 安全。 */
-  promotePin: (entryId: string) => void;
+  promotePin: (entryId: string) => Promise<void>;
   /** 从 Pinned 顺序中删除一个 entry；project 置顶状态以 entry 是否存在为准。 */
-  removePin: (entryId: string) => void;
+  removePin: (entryId: string) => Promise<void>;
 }
 
-export function useSidebarFilter(hiddenProjectKeys: ReadonlySet<string>): UseSidebarFilterReturn {
+const log = createLogger('UseSidebarFilter');
+
+function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function isExactOwnerStampCurrent(
+  actual: DataOwnerPushStamp,
+  expected: DataOwnerPushStamp,
+): boolean {
+  return (
+    actual.dataOwnerId === expected.dataOwnerId &&
+    actual.ownerGeneration === expected.ownerGeneration &&
+    isDataOwnerPushStampCurrent(actual)
+  );
+}
+
+export function useSidebarFilter(
+  hiddenProjectKeys: ReadonlySet<string>,
+  initialSnapshot: SidebarSettingsSnapshot,
+): UseSidebarFilterReturn {
+  const ownerId = initialSnapshot.dataOwnerId;
+  const ownerStamp = useMemo<DataOwnerPushStamp>(
+    () => ({
+      dataOwnerId: initialSnapshot.dataOwnerId,
+      ownerGeneration: initialSnapshot.ownerGeneration,
+    }),
+    [initialSnapshot.dataOwnerId, initialSnapshot.ownerGeneration],
+  );
+  const [loadedPinned] = useState(() => loadManualPinnedOrder(initialSnapshot));
   const [status, setStatusState] = useState<FilterStatus>(() => loadStatus());
-  const [projects, setProjectsState] = useState<FilterProjects>(() => loadProjects());
+  const [projects, setProjectsState] = useState<FilterProjects>(() => loadProjects(ownerId));
   const [vendor, setVendorState] = useState<FilterVendor>(() => loadVendor());
-  const [lastActivity, setLastActivityState] = useState<FilterLastActivity>(() => loadLastActivity());
+  const [lastActivity, setLastActivityState] = useState<FilterLastActivity>(() =>
+    loadLastActivity(),
+  );
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => loadSortBy());
-  const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() => loadManualProjectOrder());
-  const [manualPinnedOrder, setManualPinnedOrderState] = useState<string[]>(() => loadManualPinnedOrder());
+  const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
+    loadManualProjectOrder(ownerId),
+  );
+  const [manualPinnedOrder, setManualPinnedOrderState] = useState<string[]>(
+    () => loadedPinned.order,
+  );
+  const latestPinnedOrderRef = useRef<string[]>(loadedPinned.order);
+  // A claimed legacy copy remains durable until main confirms migration, so it
+  // is also the rollback baseline while that first write is in flight.
+  const durablePinnedOrderRef = useRef<string[]>(
+    loadedPinned.needsLegacyMigration
+      ? Array.from(loadedPinned.order)
+      : Array.from(initialSnapshot.pinnedOrder),
+  );
+  const pinnedWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingPinnedWritesRef = useRef(0);
+  const legacyMigrationStartedRef = useRef(false);
+  const legacyMigrationPendingRef = useRef(loadedPinned.needsLegacyMigration);
+
+  const reconcilePinnedSnapshot = useCallback(
+    (
+      next: readonly string[],
+      nextOwnerStamp: DataOwnerPushStamp,
+      pinnedOrderIsAuthoritative: boolean,
+    ): void => {
+      if (!isExactOwnerStampCurrent(nextOwnerStamp, ownerStamp)) return;
+      const snapshot = Array.from(next);
+      if (pinnedOrderIsAuthoritative) {
+        finishManualPinnedOrderLegacyMigration(ownerId);
+        legacyMigrationPendingRef.current = false;
+        durablePinnedOrderRef.current = snapshot;
+      } else if (legacyMigrationPendingRef.current) {
+        return;
+      } else {
+        durablePinnedOrderRef.current = snapshot;
+      }
+      if (pendingPinnedWritesRef.current > 0) return;
+      latestPinnedOrderRef.current = snapshot;
+      setManualPinnedOrderState((prev) => (sameStringArray(prev, snapshot) ? prev : snapshot));
+    },
+    [ownerId, ownerStamp],
+  );
+
+  const enqueuePinnedPersist = useCallback(
+    (
+      mutation: SidebarPinnedOrderMutation,
+      desiredOrder: readonly string[],
+      mutationOwnerStamp = ownerStamp,
+    ): Promise<void> => {
+      const desired = Array.from(desiredOrder);
+      pendingPinnedWritesRef.current += 1;
+      const task = pinnedWriteQueueRef.current.then(async () => {
+        let succeeded = false;
+        try {
+          if (mutation.kind !== 'migrate-legacy' && legacyMigrationPendingRef.current) {
+            const migrated = await persistManualPinnedOrder(
+              {
+                kind: 'migrate-legacy',
+                order: durablePinnedOrderRef.current,
+              },
+              mutationOwnerStamp,
+            );
+            if (isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)) {
+              durablePinnedOrderRef.current = Array.from(migrated);
+              finishManualPinnedOrderLegacyMigration(ownerId);
+              legacyMigrationPendingRef.current = false;
+            }
+          }
+          const persisted = await persistManualPinnedOrder(mutation, mutationOwnerStamp);
+          if (isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)) {
+            durablePinnedOrderRef.current = Array.from(persisted);
+            finishManualPinnedOrderLegacyMigration(ownerId);
+            legacyMigrationPendingRef.current = false;
+          }
+          succeeded = true;
+        } catch (err) {
+          if (
+            isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp) &&
+            sameStringArray(latestPinnedOrderRef.current, desired)
+          ) {
+            const rollback = Array.from(durablePinnedOrderRef.current);
+            latestPinnedOrderRef.current = rollback;
+            setManualPinnedOrderState(rollback);
+          }
+          throw err;
+        } finally {
+          pendingPinnedWritesRef.current = Math.max(0, pendingPinnedWritesRef.current - 1);
+          if (
+            succeeded &&
+            pendingPinnedWritesRef.current === 0 &&
+            isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)
+          ) {
+            const persisted = Array.from(durablePinnedOrderRef.current);
+            latestPinnedOrderRef.current = persisted;
+            setManualPinnedOrderState((prev) =>
+              sameStringArray(prev, persisted) ? prev : persisted,
+            );
+          }
+        }
+      });
+      pinnedWriteQueueRef.current = task.catch(() => undefined);
+      return task;
+    },
+    [ownerId, ownerStamp],
+  );
+
+  const updatePinnedOrder = useCallback(
+    (
+      updater: (current: readonly string[]) => string[],
+      createMutation: (
+        current: readonly string[],
+        next: readonly string[],
+      ) => SidebarPinnedOrderMutation,
+    ): Promise<void> => {
+      const current = Array.from(latestPinnedOrderRef.current);
+      const next = updater(current);
+      if (sameStringArray(next, current)) return Promise.resolve();
+      latestPinnedOrderRef.current = next;
+      setManualPinnedOrderState(next);
+      return enqueuePinnedPersist(createMutation(current, next), next);
+    },
+    [enqueuePinnedPersist],
+  );
 
   // Hidden projects are a main-process snapshot shared by every renderer.
   // Reconcile before paint so a broadcast received in another window cannot
   // leave a stale project-only filter behind.
   useLayoutEffect(() => {
     setProjectsState((prev) => {
-      const next = removeProjectsFromFilter(
-        prev,
-        hiddenProjectKeys,
-        window.electronAPI.platform,
-      );
+      const next = removeProjectsFromFilter(prev, hiddenProjectKeys, window.electronAPI.platform);
       if (next === prev) return prev;
-      persistProjects(next);
+      persistProjects(next, ownerId);
       return next;
     });
-  }, [hiddenProjectKeys]);
+  }, [hiddenProjectKeys, ownerId]);
 
-  useEffect(
-    () =>
-      window.electronAPI.sidebarSettingsOnPinnedOrderChanged((next) => {
-        setManualPinnedOrderState((prev) =>
-          next.length === prev.length && next.every((id, index) => id === prev[index])
-            ? prev
-            : Array.from(next),
-        );
-      }),
-    [],
-  );
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.sidebarSettings.onPinnedOrderChanged(
+      (order, ownerStamp) => {
+        reconcilePinnedSnapshot(order, ownerStamp, true);
+      },
+    );
+    const latest = window.electronAPI.sidebarSettings.loadSnapshot();
+    reconcilePinnedSnapshot(latest.pinnedOrder, latest, latest.pinnedOrderIsAuthoritative);
+    if (
+      isExactOwnerStampCurrent(latest, ownerStamp) &&
+      !latest.pinnedOrderIsAuthoritative &&
+      legacyMigrationPendingRef.current &&
+      !legacyMigrationStartedRef.current
+    ) {
+      legacyMigrationStartedRef.current = true;
+      const legacyOrder = Array.from(durablePinnedOrderRef.current);
+      void enqueuePinnedPersist(
+        { kind: 'migrate-legacy', order: legacyOrder },
+        legacyOrder,
+        ownerStamp,
+      ).catch((err) => {
+        log.warn('legacy pinned order migration failed; keeping the legacy copy', err);
+      });
+    }
+    return unsubscribe;
+  }, [enqueuePinnedPersist, ownerStamp, reconcilePinnedSnapshot]);
 
   const setStatus = useCallback((s: FilterStatus) => {
     setStatusState(s);
     persistStatus(s);
   }, []);
 
-  const toggleProject = useCallback((workingDir: string) => {
-    setProjectsState((prev) => {
-      const next = nextProjectsAfterToggle(prev, workingDir);
-      if (next === prev) return prev;
-      persistProjects(next);
-      return next;
-    });
-  }, []);
+  const toggleProject = useCallback(
+    (workingDir: string) => {
+      setProjectsState((prev) => {
+        const next = nextProjectsAfterToggle(prev, workingDir);
+        if (next === prev) return prev;
+        persistProjects(next, ownerId);
+        return next;
+      });
+    },
+    [ownerId],
+  );
 
-  const ensureProjectIncluded = useCallback((workingDir: string) => {
-    setProjectsState((prev) => {
-      const next = includeProjectInFilter(prev, workingDir);
-      if (next === prev) return prev;
-      persistProjects(next);
-      return next;
-    });
-  }, []);
+  const ensureProjectIncluded = useCallback(
+    (workingDir: string) => {
+      setProjectsState((prev) => {
+        const next = includeProjectInFilter(prev, workingDir);
+        if (next === prev) return prev;
+        persistProjects(next, ownerId);
+        return next;
+      });
+    },
+    [ownerId],
+  );
 
   const setProjectsAll = useCallback(() => {
     setProjectsState((prev) => {
       if (prev === 'all') return prev;
-      persistProjects('all');
+      persistProjects('all', ownerId);
       return 'all';
     });
-  }, []);
+  }, [ownerId]);
 
-  const gc = useCallback((activeWorkingDirs: readonly string[]) => {
-    setProjectsState((prev) => {
-      const next = gcProjectsAgainstActive(prev, activeWorkingDirs);
-      if (next === prev) return prev;
-      persistProjects(next);
-      return next;
-    });
-    setManualProjectOrderState((prev) => {
-      if (prev.length === 0) return prev;
-      const next = normalizeManualProjectOrder(prev, activeWorkingDirs);
-      if (next.length === prev.length && next.every((wd, index) => wd === prev[index])) return prev;
-      persistManualProjectOrder(next);
-      return next;
-    });
-  }, []);
+  const gc = useCallback(
+    (activeWorkingDirs: readonly string[]) => {
+      setProjectsState((prev) => {
+        const next = gcProjectsAgainstActive(prev, activeWorkingDirs);
+        if (next === prev) return prev;
+        persistProjects(next, ownerId);
+        return next;
+      });
+      setManualProjectOrderState((prev) => {
+        if (prev.length === 0) return prev;
+        const next = normalizeManualProjectOrder(prev, activeWorkingDirs);
+        if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
+          return prev;
+        persistManualProjectOrder(next, ownerId);
+        return next;
+      });
+    },
+    [ownerId],
+  );
 
   const projectsAsSet = useMemo<Set<string> | null>(
     () => (projects === 'all' ? null : new Set(projects)),
@@ -272,52 +453,53 @@ export function useSidebarFilter(hiddenProjectKeys: ReadonlySet<string>): UseSid
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
       setManualProjectOrderState((prev) => {
         const next = normalizeManualProjectOrder(order, activeWorkingDirs);
-        if (next.length === prev.length && next.every((wd, index) => wd === prev[index])) return prev;
-        persistManualProjectOrder(next);
+        if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
+          return prev;
+        persistManualProjectOrder(next, ownerId);
         return next;
       });
     },
-    [],
+    [ownerId],
   );
 
   const setManualPinnedOrder = useCallback(
-    (order: readonly string[], activeEntryIds: readonly string[]) => {
-      setManualPinnedOrderState((prev) => {
-        const next = normalizeManualPinnedOrder(order, activeEntryIds);
-        if (next.length === prev.length && next.every((id, index) => id === prev[index])) return prev;
-        persistManualPinnedOrder(next);
-        return next;
-      });
-    },
-    [],
+    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
+      updatePinnedOrder(
+        () => normalizeManualPinnedOrder(order, activeEntryIds),
+        (_latestOrder, nextOrder) => ({
+          kind: 'reorder',
+          baseOrder: Array.from(baseOrder),
+          order: nextOrder,
+        }),
+      ),
+    [updatePinnedOrder],
   );
 
-  const promotePin = useCallback((entryId: string) => {
-    setManualPinnedOrderState((prev) => {
-      if (prev[0] === entryId) return prev;
-      const next = [entryId, ...prev.filter((id) => id !== entryId)];
-      persistManualPinnedOrder(next);
-      return next;
-    });
-  }, []);
+  const promotePin = useCallback(
+    (entryId: string) =>
+      updatePinnedOrder(
+        (prev) =>
+          prev[0] === entryId
+            ? Array.from(prev)
+            : [entryId, ...prev.filter((id) => id !== entryId)],
+        () => ({ kind: 'promote', entryId }),
+      ),
+    [updatePinnedOrder],
+  );
 
-  const removePin = useCallback((entryId: string) => {
-    setManualPinnedOrderState((prev) => {
-      if (!prev.includes(entryId)) return prev;
-      const next = prev.filter((id) => id !== entryId);
-      persistManualPinnedOrder(next);
-      return next;
-    });
-  }, []);
+  const removePin = useCallback(
+    (entryId: string) =>
+      updatePinnedOrder(
+        (prev) => (prev.includes(entryId) ? prev.filter((id) => id !== entryId) : Array.from(prev)),
+        () => ({ kind: 'remove', entryId }),
+      ),
+    [updatePinnedOrder],
+  );
 
   const isSessionContentFiltered =
-    status !== 'active' ||
-    projects !== 'all' ||
-    vendor !== 'all' ||
-    lastActivity !== 'all';
+    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all';
 
-  const isFilterActive =
-    isSessionContentFiltered || groupBy !== 'project' || sortBy !== 'recency';
+  const isFilterActive = isSessionContentFiltered || groupBy !== 'project' || sortBy !== 'recency';
 
   return {
     status,

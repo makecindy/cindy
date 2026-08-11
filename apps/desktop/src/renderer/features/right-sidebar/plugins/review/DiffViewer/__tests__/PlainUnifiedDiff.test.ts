@@ -16,6 +16,7 @@ import type { FileDiff, Hunk } from '@/lib/gitReview.types';
 import { buildSplitRows, buildUnifiedRows, shouldVirtualizeDiffRows, shouldVirtualizeFileList } from '../diffRows';
 import {
   collectHighlightLines,
+  HIGHLIGHT_MAX_DIFF_LINES,
   HIGHLIGHT_MAX_LINE_LENGTH,
   highlightLineKey,
   LruCache,
@@ -523,14 +524,19 @@ describe('PlainUnifiedDiff split rows', () => {
 
 describe('PlainUnifiedDiff performance helpers', () => {
   it('uses explicit thresholds for diff and file-list virtualization', () => {
-    expect(shouldVirtualizeDiffRows(500)).toBe(false);
-    expect(shouldVirtualizeDiffRows(501)).toBe(true);
+    expect(shouldVirtualizeDiffRows(200)).toBe(false);
+    expect(shouldVirtualizeDiffRows(201)).toBe(true);
     expect(shouldVirtualizeFileList(100)).toBe(false);
     expect(shouldVirtualizeFileList(101)).toBe(true);
   });
 
-  it('marks the virtualized diff branch for large diffs', () => {
-    const manyLines = Array.from({ length: 510 }, (_, index) =>
+  it('virtualizes files shaped like the two-file whole-file rewrite regression', () => {
+    expect(shouldVirtualizeDiffRows(487)).toBe(true);
+    expect(shouldVirtualizeDiffRows(478)).toBe(true);
+  });
+
+  it('marks the virtualized diff branch for a file from the two-file regression', () => {
+    const manyLines = Array.from({ length: 487 }, (_, index) =>
       line(index, 'context', `line ${index}`, index + 1, index + 1),
     );
     const diff: FileDiff = {
@@ -677,6 +683,19 @@ describe('PlainUnifiedDiff highlighting helpers', () => {
       { key: '0:2', content: 'const b = 2;' },
     ]);
     expect(shouldSkipHighlightDiff(rows)).toBe(false);
+  });
+
+  it('skips per-line worker highlighting for medium whole-file rewrites', () => {
+    const manyLines = Array.from({ length: HIGHLIGHT_MAX_DIFF_LINES + 1 }, (_, index) =>
+      line(index, 'add', `const value${index} = true;`, null, index + 1),
+    );
+    const rows = buildUnifiedRows([{
+      ...hunk(0, 1, manyLines.length),
+      lines: manyLines,
+      selectableLines: manyLines.map((_, index) => index),
+    }]);
+
+    expect(shouldSkipHighlightDiff(rows)).toBe(true);
   });
 
   it('keeps multi-hunk highlight keys from overwriting same local line indices', () => {

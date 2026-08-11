@@ -1468,6 +1468,67 @@
         },
         "advanced": {
           "label": "詳細設定（モデル / リクエストヘッダー）"
+        },
+        "runtimeFill": {
+          "action": "他の runtime に入力",
+          "reviewTitle": "他の runtime に入力",
+          "reviewSubtitle": "差分を確認してください。各 runtime は個別に保存されます。",
+          "confirmTitle": "上書きを確認",
+          "confirmSubtitle": "{{source}} からコピーする項目を選択してください。",
+          "source": "コピー元",
+          "columns": { "field": "項目", "source": "コピー元", "target": "現在値" },
+          "fields": {
+            "endpointBundle": "エンドポイントと API プロトコル",
+            "baseUrl": "ベース URL",
+            "requestPath": "リクエストパス",
+            "wireProtocol": "API プロトコル",
+            "apiKey": "API キー",
+            "models": "モデル",
+            "headers": "追加ヘッダー",
+            "modelsUrl": "モデル一覧 URL"
+          },
+          "values": {
+            "empty": "空",
+            "default": "既定/推測",
+            "configured": "設定済み",
+            "secretSet": "設定済み（非表示）",
+            "models_one": "{{count}} モデル",
+            "models_other": "{{count}} モデル",
+            "headers_one": "{{count}} ヘッダー",
+            "headers_other": "{{count}} ヘッダー"
+          },
+          "targetConflict_one": "既存の {{count}} 項目が異なります",
+          "targetConflict_other": "既存の {{count}} 項目が異なります",
+          "targetReady_one": "{{count}} 項目を入力できます",
+          "targetReady_other": "{{count}} 項目を入力できます",
+          "targetIncompatible_one": "{{count}} 項目は互換性がありません",
+          "targetIncompatible_other": "{{count}} 項目は互換性がありません",
+          "status": {
+            "needsConfirm": "確認が必要",
+            "ready": "入力可能",
+            "incompatible": "互換性なし"
+          },
+          "secretIndependent": "{{target}} の個別キーとしてコピー",
+          "overwriteCurrent": "現在値を置換",
+          "fillEmpty": "空の項目を入力",
+          "incompatibleProtocol": "コピーされません：{{target}} はこの API プロトコルをサポートしていません",
+          "incompatibleHeaders": "コピーされません：{{target}} にはここで安全にコピーできないヘッダーが必要です",
+          "incompatibleEndpoint": "コピーされません：{{target}} ではこのエンドポイント設定を使用できません",
+          "noSelectableFields": "この runtime に入力できる互換項目はありません。",
+          "endpointBundleNote": "{{target}} には、ベース URL、リクエストパス、API プロトコルを一括コピーし、不整合を防ぎます。",
+          "oauthPiUnavailable": "Pi のネイティブ runtime は OAuth プロバイダーをサポートしないため、入力先から除外されます。",
+          "independentNote": "これは一度だけの入力です。以後 runtime 間で同期されません。キーは個別の safeStorage に保存されます。",
+          "continue": "上書きを確認",
+          "apply": "入力を確定",
+          "applyOverwrite": "上書きして入力",
+          "back": "差分に戻る",
+          "nothingToFill": "現在の runtime に再利用可能な項目を入力してください",
+          "alreadySame": "他の runtime と同じです",
+          "loadingKeys": "保存済み API キーの読み込み完了後に、他の runtime へ入力してください",
+          "keysUnavailable": "保存済み API キーを読み込めなかったため、ほかの runtime には入力できません",
+          "modelsBusy": "モデル一覧の取得または選択を完了してから、他の runtime へ入力してください",
+          "noCompatibleFields": "現在の runtime の再利用可能な項目は、他の runtime でサポートされていません",
+          "filledToast": "{{targets}} に入力しました"
         }
       },
       "models": {
@@ -3271,10 +3332,11 @@
         "update": "マーケットから更新",
         "updateTo": "v{{version}} に更新",
         "installed": "インストール済み",
-        "conflict": "利用不可",
-        "conflictAria": "{{name}} にプラグイン ID の競合があります",
-        "conflictDescription": "このプラグイン ID は使用中のため、インストールできません。",
+        "replace": "置き換え",
+        "replaceAria": "{{name}} をこのマーケット版で置き換える",
+        "replaceDescription": "同じ ID のプラグインがすでにインストールされています。続行するとこのマーケット版で置き換え、プラグインのデータは保持されます。",
         "unavailable": "プラグインマーケットを一時的に利用できません。インストール済みプラグインは引き続き利用できます。",
+        "customSourcesUnavailable": "次のカスタムマーケットは一時的に利用できません：{{names}}。他のマーケットには影響しません。",
         "authenticationRequired": "プラグインマーケットを表示するには Cindy にログインしてください。",
         "notConfigured": "この環境ではプラグインマーケットが設定されていません。インストール済みプラグインは引き続き利用できます。",
         "upgradeNotice": {
@@ -3696,15 +3758,8 @@
       },
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
-        "description": "権限に変更がない更新は自動で完了します。権限が拡張される更新は項目ごとに確認が必要です。",
+        "description": "通常の更新は自動で完了し、検証済みの実パッケージが新しい権限を要求する場合のみ個別に確認します。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "権限に変更あり",
-        "reviewOutdated": "権限の差分が古くなりました",
-        "rereview": "再確認",
-        "reviewDiff": "確認する",
-        "collapseDiff": "閉じる",
-        "approve": "同意して更新",
-        "skip": "スキップ",
         "statusPending": "待機中",
         "statusInstalling": "更新中…",
         "statusDone": "更新済み",
@@ -4768,7 +4823,15 @@
         "unmerged": "未マージのファイルがあります",
         "in-progress": "git 操作が進行中です",
         "agent-running": "エージェントが実行中です",
-        "disabled": "レビューを利用できません"
+        "disabled": "レビューを利用できません",
+        "remote-device": "リモートデバイスのセッションは閲覧のみです",
+        "remote-ssh": "SSH ワークスペースのレビューは表示専用です"
+      },
+      "remote": {
+        "deviceTooOldTitle": "相手デバイスのバージョンが古すぎます",
+        "deviceTooOldDesc": "相手デバイスの {{appName}} のバージョンが古く、リモートレビューに対応していません。相手デバイスをアップグレードしてから再試行してください。",
+        "oversizeTitle": "変更データが大きすぎます",
+        "oversizeDesc": "このビューの変更はデバイス連携の転送上限を超えています。相手デバイス上でご確認ください。"
       },
       "unmodifiedLines_one": "{{count}} 行未変更",
       "unmodifiedLines_other": "{{count}} 行未変更",
@@ -4969,7 +5032,7 @@
         },
         "no-session": {
           "title": "セッションが見つかりません",
-          "desc": "現在のセッション記録が見つかりません。"
+          "desc": "このデバイスでは現在のセッション記録が見つかりません。"
         },
         "no-workdir": {
           "title": "作業ディレクトリがありません",
@@ -5406,6 +5469,7 @@
     "modelSelector": {
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
       "hidden": "非表示",
+      "modelListAria": "モデル一覧",
       "subscriptionDirectDisabled": {
         "chatgpt": "サブスクリプション直結の GPT モデルは SSH リモートセッションに未対応です",
         "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",
@@ -5556,6 +5620,7 @@
     },
     "worktree": {
       "detecting": "環境を検出中…",
+      "detectFailed": "環境の検出に失敗しました。worktree は現在使用できません",
       "gitMissing": "git が検出されません。先にインストールしてください",
       "notGitRepo": "現在のディレクトリは git リポジトリではありません",
       "alreadyInWorktree": "すでに worktree 内です。ネストは禁止です",
@@ -5904,6 +5969,7 @@
     "verificationFailed": "ChatGPT ログインが復旧したか確認できませんでした。再確認してください。"
   },
   "chat": {
+    "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
       "skippedAnswer": "スキップ済み"
     },
@@ -6417,6 +6483,7 @@
           "sourceConversationChanged": "元のタスクが変更されました。現在のタスクに対して /review をもう一度実行してください。",
           "sourceFilesChanged": "元のタスクのファイルが変更されました。現在の成果に対して /review をもう一度実行してください。",
           "artifactChanged": "レビュー対象の成果が変更されました。現在の成果に対して /review をもう一度実行してください。",
+          "artifactUnavailable": "Cindy はレビュー対象の成果を安全に読み取れませんでした。ワークスペースまたは添付ファイルを確認して、/review をもう一度実行してください。",
           "providerFailed": "レビュータスクの実行に失敗しました"
         }
       }

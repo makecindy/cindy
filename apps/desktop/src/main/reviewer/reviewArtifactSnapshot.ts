@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   isPathWithinReviewWorkspace,
+  reviewArtifactFileLinkLayoutIsSafe,
   reviewArtifactPathIdentityMatches,
   ReviewArtifactAuthorizationError,
   type ReviewArtifactPathIdentity,
@@ -261,6 +262,7 @@ async function copyOpenFile(
   sourcePath: string,
   destinationPath: string,
   expectedIdentity: ReviewArtifactPathIdentity,
+  canonicalWorkingDir: string | null,
   openFile: ReviewArtifactFileOpener,
 ): Promise<number> {
   const source = await openFile(sourcePath, constants.O_RDONLY | NOFOLLOW_FLAG).catch((error) => {
@@ -286,10 +288,8 @@ async function copyOpenFile(
     if (!before.isFile()) {
       throw new ReviewArtifactAuthorizationError('Review only snapshots regular files');
     }
-    if (before.nlink > 1) {
-      throw new ReviewArtifactAuthorizationError(
-        'Review refused a multiply linked artifact file',
-      );
+    if (!(await reviewArtifactFileLinkLayoutIsSafe(sourcePath, canonicalWorkingDir, before))) {
+      throw new ReviewArtifactAuthorizationError('Review refused a multiply linked artifact file');
     }
     if (before.size > MAX_SNAPSHOT_FILE_BYTES) {
       throw new ReviewArtifactAuthorizationError(
@@ -317,13 +317,21 @@ async function copyOpenFile(
     }
     const after = await source.stat();
     const afterPath = await fs.lstat(sourcePath).catch(() => null);
+    const afterHandleLayoutIsSafe = await reviewArtifactFileLinkLayoutIsSafe(
+      sourcePath,
+      canonicalWorkingDir,
+      after,
+    );
+    const afterPathLayoutIsSafe = afterPath
+      ? await reviewArtifactFileLinkLayoutIsSafe(sourcePath, canonicalWorkingDir, afterPath)
+      : false;
     if (
       sourceOffset !== before.size ||
       !reviewArtifactSnapshotStatMatches(before, after) ||
-      after.nlink > 1 ||
+      !afterHandleLayoutIsSafe ||
       !afterPath ||
       afterPath.isSymbolicLink() ||
-      afterPath.nlink > 1 ||
+      !afterPathLayoutIsSafe ||
       !reviewArtifactPathIdentityMatches(expectedIdentity, afterPath)
     ) {
       throw new ReviewArtifactAuthorizationError(
@@ -416,7 +424,7 @@ export async function materializeReviewArtifactSnapshots(input: {
       if (!entry.isFile()) {
         throw new ReviewArtifactAuthorizationError('Review only snapshots regular files');
       }
-      if (entry.nlink > 1) {
+      if (!(await reviewArtifactFileLinkLayoutIsSafe(sourcePath, canonicalWorkingDir, entry))) {
         throw new ReviewArtifactAuthorizationError(
           'Review refused a multiply linked artifact file',
         );
@@ -457,6 +465,7 @@ export async function materializeReviewArtifactSnapshots(input: {
         sourcePath,
         destinationPath,
         expectedIdentity,
+        canonicalWorkingDir,
         input.openFile ?? ((filePath, flags) => fs.open(filePath, flags)),
       );
       if (totalBytes > MAX_SNAPSHOT_TOTAL_BYTES) {
@@ -494,14 +503,18 @@ export async function prepareStableReviewArtifactSnapshots<T>(input: {
 }): Promise<PreparedStableReviewArtifacts<T>> {
   const holder: { materialized?: MaterializedReviewArtifacts } = {};
   try {
-    const stable = await prepareWithStableReviewArtifacts(input.grant.paths, async () => {
-      holder.materialized = await materializeReviewArtifactSnapshots({
-        workingDir: input.workingDir,
-        grant: input.grant,
-        owner: input.owner,
-      });
-      return input.prepare(holder.materialized.grant);
-    });
+    const stable = await prepareWithStableReviewArtifacts(
+      input.grant.paths,
+      async () => {
+        holder.materialized = await materializeReviewArtifactSnapshots({
+          workingDir: input.workingDir,
+          grant: input.grant,
+          owner: input.owner,
+        });
+        return input.prepare(holder.materialized.grant);
+      },
+      { linkConfinementRoot: input.workingDir },
+    );
     const ready = holder.materialized;
     if (!ready) throw new Error('Review artifact snapshots were not prepared');
     return {

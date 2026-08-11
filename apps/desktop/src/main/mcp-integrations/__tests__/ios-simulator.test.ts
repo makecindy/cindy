@@ -109,6 +109,40 @@ describe('iOS Simulator host', () => {
     }
   });
 
+  it('keeps plugin-required discovery passive and returns installation guidance', async () => {
+    const getPath = vi.spyOn(app, 'getPath');
+    try {
+      const deps = getIOSSimulatorMcpDeps({
+        resolveAccess: () => ({
+          allowed: false,
+          errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
+          message: 'Open Plugins → Marketplace and install iOS Simulator.',
+          data: { action: 'install-plugin', pluginId: 'ios-simulator' },
+        }),
+      });
+
+      await expect(
+        deps.describeTools?.({ sessionId: 'plugin-required-session' }),
+      ).resolves.toMatchObject({
+        ready: false,
+        notice: {
+          errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
+          data: { action: 'install-plugin', pluginId: 'ios-simulator' },
+        },
+      });
+      await expect(
+        deps.callTool('check_environment', {}, { sessionId: 'plugin-required-session' }),
+      ).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
+        data: { action: 'install-plugin', pluginId: 'ios-simulator' },
+      });
+      expect(getPath).not.toHaveBeenCalled();
+    } finally {
+      getPath.mockRestore();
+    }
+  });
+
   it('keeps a cold plugin status probe passive and leaves the ownership writer available', async () => {
     const acquireWriter = vi.spyOn(
       IOSSimulatorOwnershipRegistryFile.prototype,

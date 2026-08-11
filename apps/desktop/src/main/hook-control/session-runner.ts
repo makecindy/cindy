@@ -64,8 +64,11 @@ import {
   type InteractionRouteLease,
   type TurnOrigin as RoutedTurnOrigin,
 } from '../maker-ipc/interactionRouter.js';
-import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
+import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
+import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
+import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
@@ -968,12 +971,26 @@ export function createMakerHookSessionRunner(deps: {
       let turnChangeSetStarted = false;
       try {
         const pendingHandoff = await agentHandoffPending.peek(session.id);
-        const outgoingMessage: UserMessage = pendingHandoff
+        const withHandoff: UserMessage = pendingHandoff
           ? (prependHandoffToUserMessage(
               { type: 'user', content: sendContent },
               pendingHandoff,
             ) as UserMessage)
           : { type: 'user', content: sendContent };
+        const planReconcileNote = req.source?.im ? await (async () => {
+          try {
+            const rows = await enqueueDurableWrite(`plan-reconcile-read:${session.id}`, () =>
+              listMessagesForAgentHandoff(session.id, 1000),
+            );
+            const summary = summarizeOpenPlan(rows);
+            return summary ? buildPlanReconcileNote(summary) : null;
+          } catch {
+            return null;
+          }
+        })() : null;
+        const outgoingMessage: UserMessage = planReconcileNote
+          ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
+          : withHandoff;
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,

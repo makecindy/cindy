@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 
+import { reviewFileLinkLayoutIsSafe } from '@cindy/maker-core';
+
 export interface ReviewArtifactAuthorizationAttachment {
   name: string;
   path?: string;
@@ -109,6 +111,24 @@ export function isPathWithinReviewWorkspace(workingDir: string, candidate: strin
 }
 
 /**
+ * Reuses the workspace read boundary for explicitly selected files. Only the
+ * exact pnpm mirror layout inside the canonical source workspace is allowed;
+ * external or additional hard links remain denied.
+ */
+export async function reviewArtifactFileLinkLayoutIsSafe(
+  artifactPath: string,
+  canonicalWorkingDir: string | null,
+  stat: Stats,
+): Promise<boolean> {
+  if (stat.nlink <= 1) return true;
+  return Boolean(
+    canonicalWorkingDir &&
+    isPathWithinReviewWorkspace(canonicalWorkingDir, artifactPath) &&
+    (await reviewFileLinkLayoutIsSafe(artifactPath, canonicalWorkingDir, stat)),
+  );
+}
+
+/**
  * Turns renderer-supplied paths into a one-run Main-owned grant. Workspace
  * paths and Cindy-managed media need no extra click; external files and
  * renderer-only inline bytes require an explicit native confirmation.
@@ -135,10 +155,11 @@ export async function authorizeReviewExplicitArtifacts(input: {
         'A review artifact changed while permission was being prepared',
       );
     }
-    if (stat.isFile() && stat.nlink > 1) {
-      throw new ReviewArtifactAuthorizationError(
-        'Review refused a multiply linked artifact file',
-      );
+    if (
+      stat.isFile() &&
+      !(await reviewArtifactFileLinkLayoutIsSafe(resolved.absPath, canonicalWorkingDir, stat))
+    ) {
+      throw new ReviewArtifactAuthorizationError('Review refused a multiply linked artifact file');
     }
     const existingIdentity = pathIdentities.get(resolved.absPath);
     if (existingIdentity && !reviewArtifactPathIdentityMatches(existingIdentity, stat)) {

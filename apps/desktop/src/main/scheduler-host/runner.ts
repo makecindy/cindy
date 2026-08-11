@@ -42,6 +42,7 @@ import type {
   TurnContinuationState,
 } from '@cindy/maker-core';
 import { clampEffortToSupported } from '@cindy/model-providers';
+import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type {
   Schedule,
   ScheduleRun,
@@ -314,14 +315,88 @@ interface TurnCompletionWaiterOptions {
   requireTurnOrigin?: boolean;
 }
 
+interface SchedulerRunContextOwner {
+  session: Pick<Session, 'id' | 'setVendorOptions'>;
+  runId: string;
+}
+
 export class MakerScheduleRunner implements ScheduleRunner {
   private scheduler: Scheduler | null = null;
+  /**
+   * The vendor option is a single session-level value, so a late finally from
+   * an older fire must not clear a newer fire's binding. The map is the host's
+   * ownership record for that value; it is deliberately not persisted.
+   */
+  private readonly schedulerRunContextOwners = new Map<string, SchedulerRunContextOwner>();
 
   constructor(private readonly deps: MakerScheduleRunnerDeps) {}
 
   /** scheduler-host/index.ts 在 startScheduler 内调一次，让 runner 反向 pause schedule */
   attachScheduler(scheduler: Scheduler): void {
     this.scheduler = scheduler;
+  }
+
+  /**
+   * Keep the scheduler's authoritative run id in the host-owned session
+   * context for the lifetime of the actual turn, including auto-resume
+   * continuations. The normal session→run mapping remains the primary path;
+   * this is the in-process fallback when that mapping is gone.
+   */
+  private async bindSchedulerRunContext(
+    session: Pick<Session, 'id' | 'setVendorOptions'>,
+    runId: string,
+    holder: EphemeralSessionHolder,
+  ): Promise<void> {
+    if (typeof session.setVendorOptions !== 'function') return;
+    const owner: SchedulerRunContextOwner = { session, runId };
+    // Publish ownership before the async write starts. setVendorOptions mutates
+    // the shared session context before its promise necessarily settles, so an
+    // older fire must already see this generation and skip its late cleanup.
+    this.schedulerRunContextOwners.set(session.id, owner);
+    holder.schedulerRunContextOwner = owner;
+    try {
+      await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: runId });
+    } catch (err) {
+      if (this.schedulerRunContextOwners.get(session.id) === owner) {
+        this.schedulerRunContextOwners.delete(session.id);
+        holder.schedulerRunContextOwner = undefined;
+        try {
+          await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined });
+        } catch (rollbackErr) {
+          this.deps.logger.warn?.('[runner] scheduler run context rollback failed (non-fatal)', {
+            runId,
+            error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+          });
+        }
+      }
+      this.deps.logger.warn?.('[runner] scheduler run context bind failed (non-fatal)', {
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async clearSchedulerRunContext(holder: EphemeralSessionHolder): Promise<void> {
+    const holderOwner = holder.schedulerRunContextOwner;
+    holder.schedulerRunContextOwner = undefined;
+    if (!holderOwner) return;
+    const { session, runId } = holderOwner;
+    if (typeof session.setVendorOptions !== 'function') return;
+    const currentOwner = this.schedulerRunContextOwners.get(session.id);
+    if (currentOwner !== holderOwner) {
+      // Another fire now owns the shared session-level option. Do not let this
+      // older fire erase the newer run's auto-resume context.
+      return;
+    }
+    this.schedulerRunContextOwners.delete(session.id);
+    try {
+      await session.setVendorOptions({ [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined });
+    } catch (err) {
+      this.deps.logger.warn?.('[runner] scheduler run context clear failed (non-fatal)', {
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -406,6 +481,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     } finally {
       holder.releaseAgentSwitchLock?.();
       holder.releaseAgentSwitchLock = undefined;
+      await this.clearSchedulerRunContext(holder);
       holder.headlessGhostSetupTurn?.close();
       if (
         holder.sessionId &&
@@ -622,7 +698,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
-          return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, {
+          return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, {
             model: meta?.model,
             effort: meta?.effort,
             fastMode: meta?.fastMode,
@@ -1118,6 +1194,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         schedule,
         ctx,
         session.id,
+        holder,
         {
           model: session.model ?? model,
           effort: runtimeReconciledEffort,
@@ -1273,6 +1350,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // turn 误标成 headless；只在本轮 send 真正跨过接受边界后 acquire。
           // fire 已收口后才到达的迟发 callback 由 guard 拒绝，避免重新污染 session。
           if (!holder.headlessGhostSetupTurn?.markDispatched()) return;
+          // Bind only after Session.send accepts this turn. A competing fire
+          // rejected with SESSION_RUNNING must not overwrite the active run's
+          // shared auto-resume context before it is rejected.
+          await this.bindSchedulerRunContext(session, ctx.runId, holder);
           turnAccepted = true;
           // turn 已被会话接受 → 此刻才落定 sessionId → 本轮 runId 反向映射(供按
           // session 静默解析)。在 send 被接受这一刻写,被 SESSION_RUNNING 拒的并发 run
@@ -1481,6 +1562,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     schedule: Schedule,
     ctx: FireContext,
     sessionId: string,
+    holder: EphemeralSessionHolder,
     /** 绑定会话的当前路由基线(meta.model / meta.effort / sessions.provider_id)。 */
     routingBaseline: {
       model?: string;
@@ -1499,6 +1581,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         schedule,
         ctx,
         sessionId,
+        holder,
         routingBaseline,
         () => {
           // A cancelled queue item may still report a late accept after the
@@ -1520,6 +1603,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     schedule: Schedule,
     ctx: FireContext,
     sessionId: string,
+    holder: EphemeralSessionHolder,
     routingBaseline: {
       model?: string;
       effort?: string;
@@ -1713,6 +1797,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
           blockAcceptedDispatch(undefined, 'session unavailable for queued route sync');
           return;
         }
+        // Only bind at the accepted→vendor-dispatch boundary. Binding while
+        // the item is merely queued would let an unrelated interactive turn
+        // observe this scheduler run id.
+        await this.bindSchedulerRunContext(live, ctx.runId, holder);
         // 任务编辑器里选的 model/effort/来源在排队派发时刻热同步到会话(此回调
         // 运行于 vendor dispatch 之前,setModel 对本 turn 生效)—— 对齐直发路径
         // 的 4.4.1/4.4.2 语义,不让"任务改了模型且每轮都撞忙"的用户被静默忽略
@@ -2514,6 +2602,8 @@ interface EphemeralSessionHolder {
   keepAlive?: boolean;
   /** heartbeat direct-send route lock; released immediately after Session.send settles. */
   releaseAgentSwitchLock?: () => void;
+  /** unique ownership generation for the session-level scheduler run context. */
+  schedulerRunContextOwner?: SchedulerRunContextOwner;
 }
 
 interface HeadlessGhostSetupTurnGuard {

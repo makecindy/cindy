@@ -103,9 +103,9 @@
   （deny-by-default，不得改成黑名单——调试级别的功能日志是用户内容的主要泄漏源）、
   **标记代次 + 原子清除**（并发实例下仅靠时间戳会误删另一实例刚写的新崩溃标记）。
   脱敏规则**只增不减**，放宽任一条视为隐私变更、需重新评审。
-- 升级 `cindy-protocol`、修改插件分发来源边界或 device-link 协议／relay／隧道
+- 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
-  `docs/dev-rules/protocol-and-submodules.md`。
+  `docs/dev-rules/protocol-compatibility.md`。
 - 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider

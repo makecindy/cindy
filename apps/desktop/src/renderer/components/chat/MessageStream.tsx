@@ -50,6 +50,7 @@ import type {
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
+import { BrandLoadingMark } from '@/components/branding/BrandLoadingMark';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
@@ -110,17 +111,20 @@ const CARD_EXPAND_PIN_SUPPRESS_MS = 300;
 // 不用 index — DB prepend / 流式追加 / 客户端扩窗都会让 index 漂移,key 稳定。
 // export 供 render-window 集成单测复用同一基准值,避免测试里再定义一份靠注释手动同步。
 export const RENDER_WINDOW_INITIAL_ITEMS = 80;
-// 首屏两段式窗口:切会话(mount)首帧只画末尾 FIRST_PAINT 个 item,首帧提交后的
-// 空闲期再把默认窗口扩回 INITIAL —— 首屏 commit 体量近似减半,补窗那笔开销移出
-// 点击关键路径(实测切换大提交 50-116ms 的大头就是消息树首次挂载)。
+// 首屏窗口:切会话(mount)首帧只画末尾 FIRST_PAINT 个 item,首帧提交后的
+// 空闲期再把默认窗口扩回 INITIAL —— 首屏 commit 体量减少,补窗那笔开销移出
+// 点击关键路径。15 条足以覆盖典型视口(240px/条 × 15 = 3600px > 常见屏幕高度),
+// 且锚定恢复路径下 viewportTopKey 就是窗口首条,大小 ≥1 天然满足。
 // 安全约束:
 //   - 扩窗 = 在视口上方 prepend,仅在"仍钉在底部"时执行,pin-to-bottom layout
 //     effect 会在同一帧把视口重新钉回底,无视觉跳动;
 //   - 用户在 FIRST_PAINT 阶段就向上滚动时,走既有 expandWindow 锚点路径,
 //     默认窗口保持小尺寸不再自动扩(读历史的人不需要底部多 mount 50 条)。
-export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 30;
+export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 15;
 const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
+/** shell-first mount 的首帧空窗口。模块级常量保证引用稳定,不触发下游 memo 重算。 */
+const EMPTY_RENDER_ITEMS: RenderItem[] = [];
 
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
@@ -205,11 +209,13 @@ import {
   decideAutoFillAction,
   decideUserIntentFillAction,
   TOP_HISTORY_TRIGGER_PX,
+  NO_SCROLL_TOLERANCE_PX,
 } from './viewportFillDetect';
 import {
   resolveNearBottomOnScroll,
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
+  selectTailUserMessageId,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
@@ -412,6 +418,85 @@ export type RenderItem =
 
 function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
   return item?.type === 'fork_origin' || (item?.type === 'message' && item.message.role === 'user');
+}
+
+/**
+ * 首帧字节预算:单条 render item 的挂载成本估算(≈ markdown parse 体量)。
+ * message 正文按字符数计(react-markdown parse 成本与正文长度近似线性);
+ * 折叠类卡片(tool_segment / agent_task / work_group)默认收拢、不 parse 正文,
+ * 按小常量计;ghost_card 挂 html 卡体,按较大常量计。
+ */
+export function estimateRenderItemMountCost(item: RenderItem): number {
+  if (item.type === 'message') return 200 + item.message.content.length;
+  if (item.type === 'ghost_card') return 2000;
+  return 300;
+}
+
+/**
+ * 首帧窗口的内容预算(估算成本单位 ≈ 字符数)。
+ *
+ * 条数上限(FIRST_PAINT_ITEMS)防"多而小",本预算防"少而大"——单条 12KB
+ * 大表格的压测 session,15 条 = ~380ms(dev 构建实测,2026-08-10 perf 日志),
+ * 条数封顶对它无效。两者先到为准。64k ≈ 5 条大表格 ≈ ~130ms dev、release 减半;
+ * 普通 session(单条 <2KB)触不到本预算,照走条数上限。
+ * 被预算推迟的 item 由既有空闲扩窗(FIRST_PAINT → INITIAL)在 ~1s 内补回,
+ * 不影响内容完整性。
+ */
+export const RENDER_WINDOW_FIRST_PAINT_BUDGET = 64_000;
+
+/**
+ * 从末尾向前累计挂载成本,预算耗尽时把窗口起点向后收(渲染更少条)。
+ * 至少保留最后 1 条(单条超预算也要渲染它)。export 供单测。
+ */
+export function clampTailWindowStartByBudget(
+  items: readonly RenderItem[],
+  countStartIdx: number,
+  budget = RENDER_WINDOW_FIRST_PAINT_BUDGET,
+): number {
+  let cost = 0;
+  for (let i = items.length - 1; i >= countStartIdx; i--) {
+    cost += estimateRenderItemMountCost(items[i]);
+    if (cost > budget && i < items.length - 1) return i + 1;
+  }
+  return countStartIdx;
+}
+
+export function resolveAnchoredWindowItemCount(
+  startIdx: number,
+  anchorIdx: number,
+  desiredForwardItems: number,
+): number {
+  return desiredForwardItems + Math.max(0, anchorIdx - startIdx);
+}
+
+export function shouldBoostDefaultWindow({
+  allItemCount,
+  visibleItemCount,
+  defaultWindowItems,
+}: {
+  allItemCount: number;
+  visibleItemCount: number;
+  defaultWindowItems: number;
+}): boolean {
+  if (defaultWindowItems >= RENDER_WINDOW_INITIAL_ITEMS) return false;
+  return visibleItemCount < allItemCount;
+}
+
+export function resolveDefaultWindowStartIdx({
+  allItemCount,
+  defaultWindowItems,
+  visibleStartIdx,
+  visibleItemCount,
+}: {
+  allItemCount: number;
+  defaultWindowItems: number;
+  visibleStartIdx: number;
+  visibleItemCount: number;
+}): number {
+  // 首帧字节预算可能让实际 DOM 窗口比声明容量小。用户在 idle boost 前主动
+  // 向上滚动时，必须从真实 visibleStartIdx 扩，而不是用声明容量反算出 0。
+  if (visibleItemCount < allItemCount) return visibleStartIdx;
+  return Math.max(0, allItemCount - defaultWindowItems);
 }
 
 // export 仅供 render-window 集成单测使用。窗口默认/扩窗时如果刚好切在
@@ -2436,6 +2521,20 @@ export function MessageStream({
     }
     return RENDER_WINDOW_FIRST_PAINT_ITEMS;
   });
+  /**
+   * 锚点窗口向后的 item 上界（render-window-bidirectional 要点 1）。
+   * 仅 firstVisibleItemKey !== null 时生效；null（默认窗口）时不参与 slice。
+   * 锚点变化时重置为 FIRST_PAINT，expandWindow / 向下扩窗时增长。
+   * 初始化时从滚动快照恢复（P1 fix：否则扩窗后切走的浏览位置会丢失）。
+   */
+  const [anchoredForwardItems, setAnchoredForwardItems] = useState(() => {
+    if (!restoringRef.current) return RENDER_WINDOW_FIRST_PAINT_ITEMS;
+    const snap = restoreSnapshotRef.current;
+    if (snap?.anchoredForwardCount && snap.anchoredForwardCount > 0) {
+      return snap.anchoredForwardCount;
+    }
+    return RENDER_WINDOW_FIRST_PAINT_ITEMS;
+  });
   const [highlightMessageClientId, setHighlightMessageClientId] = useState<string | null>(null);
   const lastAppliedFocusRef = useRef<string | null>(null);
   const lastMissingFocusRef = useRef<{
@@ -2546,39 +2645,48 @@ export function MessageStream({
   );
 
   /**
-   * TODO(render-window-bidirectional): 锚定分支目前是 `slice(startIdx)` —— 从锚点切到
-   * 末尾、**没有上界**。这是 #676 review 反复指向的根因:补齐 / 跳转让 messages 变长后,
-   * 深跳会一次挂载"锚点 → 末尾"的全部 item。因为它无界,store 侧只能靠"跳转补齐预算"
-   * 间接限制挂载量,而那个预算必须逐一追平 buildRenderItems 的每种 item 展开规则
-   * (agent_task 卡、空洞切段、ghost_card、tool_media…),review 中已发现 5 种
-   * 被低估的路径 —— 是一条追不完的线。
-   *
-   * 决定:把锚定窗口做成双向有界 + 配套向下扩窗,作为紧随其后的独立改动(不塞进本 PR ——
-   * 它要动下面 5 处联动派生,且滚动手感必须实机验证,需要一个完整的实施与验证窗口)。
-   * 之前那套补齐预算是它落地前的过渡兜底,落地后可以大幅放宽甚至移除。
-   *
-   * 实施要点(照此改,别重新推导):
-   *   1. 新增 anchoredForwardItems state 作为锚点向后的 item 上界,锚点变化时重置;
-   *      锚定分支改为 slice(start, start + anchoredForwardItems)。
-   *   2. windowAtTop 现在是 `visible.length === all.length`,加上界后即使 start 已到 0
-   *      也恒为 false → decideUserIntentFillAction 再也走不到 load-from-db。必须改成
-   *      基于 startIdx === 0 判定,因此要把 startIdx 从这个 useMemo 里一并导出。
-   *   3. isNearBottom:窗口未覆盖末尾时 DOM 距底 <100px 会被误判成"贴底",auto-follow 与
-   *      jump-down chip 语义都会错。窗口未覆盖末尾时必须强制判为非贴底。
-   *   4. expandWindow(向上扩)必须同步把上界 +RENDER_WINDOW_GROWTH_ITEMS,否则 start 前移
-   *      而上界不动,会把用户视口下方的内容反向截掉。
-   *   5. handleScroll 已有 distanceFromBottom:距底 <threshold 且窗口未覆盖末尾时扩上界。
-   *      向下扩窗比向上简单 —— 在下方 append 不改变已有内容的滚动偏移,不需要 F-SYNC-2
-   *      那种 delta 补偿。上界扩到覆盖末尾后清除它,此后贴底语义与现状完全一致。
+   * render-window-bidirectional 已实施：锚定窗口改为双向有界
+   * `slice(startIdx, startIdx + anchoredForwardItems)`（要点 1）。
+   * 配合 expandWindow 同步扩上界（要点 4）、handleScroll 向下扩窗（要点 5）、
+   * windowAtTop 改 visibleStartIdx === 0（要点 2）、isNearBottom 强制非贴底（要点 3）。
+   * 之前那套 store 侧补齐预算是它落地前的过渡兜底，后续可大幅放宽甚至移除。
    */
-  const visibleRenderItems = useMemo(() => {
-    if (allRenderItems.length === 0) return allRenderItems;
+  /**
+   * render-window-bidirectional: 锚定窗口从 `slice(startIdx)` 改成
+   * `slice(startIdx, startIdx + anchoredForwardItems)`，配合向下扩窗（要点 1）。
+   * 同时导出 startIdx 供 windowAtTop 判定使用（要点 2）。
+   */
+  // ── 切换立即响应(shell-first mount)──
+  // 旧行为:点击切 session → 首个提交同步构建整个消息树 → 期间界面冻结(压测
+  // session 实测 ~380ms 无响应),体感是"卡住才切过去"。
+  // 新行为:首个提交只渲染外壳(标题栏/输入框/空消息区 + spinner),消息树推迟
+  // 到外壳绘制后的下一帧 —— 点击零冻结,先切进去再看到内容浮现(对齐 Codex
+  // Desktop 的加载体感)。挂载后的滚动定位不受影响:pin-to-bottom 与 applyRestore
+  // 都由 ResizeObserver 在内容真正挂载时驱动,首帧空内容它们自然 no-op。
+  // 各 auto-fill effect 均有 `visibleRenderItems.length === 0` 早退守卫,空帧不误触发。
+  const [firstMountDeferred, setFirstMountDeferred] = useState(true);
+  useEffect(() => {
+    // rAF 保证外壳那一帧真正上屏后才挂消息树;卸载时取消,防 setState-after-unmount。
+    const raf = requestAnimationFrame(() => setFirstMountDeferred(false));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const { items: visibleRenderItems, startIdx: visibleStartIdx } = useMemo(() => {
+    if (firstMountDeferred) return { items: EMPTY_RENDER_ITEMS, startIdx: 0 };
+    if (allRenderItems.length === 0) return { items: allRenderItems, startIdx: 0 };
     if (firstVisibleItemKey === null) {
-      const defaultStartIdx = snapRenderWindowStartIdx(
-        allRenderItems,
-        Math.max(0, allRenderItems.length - defaultWindowItems),
-      );
-      return allRenderItems.slice(defaultStartIdx);
+      // 首帧阶段(defaultWindowItems 还没被空闲扩窗抬到 INITIAL)叠加内容预算:
+      // 条数上限防"多而小",字节预算防"少而大"(单条 12KB 表格 × 15 条 = ~380ms)。
+      // 顺序:先 snap(边界吸附向前扩)再按预算收 —— 预算是硬上界,否则 snap 会把
+      // 刚裁掉的大条目又吸回来。预算收窄后的起点可能不在 turn 边界上(顶部短暂出现
+      // 无上下文卡片),空闲扩窗(→INITIAL)会在 ~1s 内带着正常 snap 重建窗口。
+      const countStartIdx = Math.max(0, allRenderItems.length - defaultWindowItems);
+      const snappedStartIdx = snapRenderWindowStartIdx(allRenderItems, countStartIdx);
+      const defaultStartIdx =
+        defaultWindowItems < RENDER_WINDOW_INITIAL_ITEMS
+          ? clampTailWindowStartByBudget(allRenderItems, snappedStartIdx)
+          : snappedStartIdx;
+      return { items: allRenderItems.slice(defaultStartIdx), startIdx: defaultStartIdx };
     }
     let idx = allRenderItems.findIndex((it) => it.key === firstVisibleItemKey);
     if (idx < 0) {
@@ -2595,7 +2703,7 @@ export function MessageStream({
           allRenderItems,
           Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS),
         );
-        return allRenderItems.slice(defaultStartIdx);
+        return { items: allRenderItems.slice(defaultStartIdx), startIdx: defaultStartIdx };
       }
     }
 
@@ -2613,11 +2721,20 @@ export function MessageStream({
         allRenderItems,
         Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS),
       );
-      return allRenderItems.slice(defaultStartIdx);
+      return { items: allRenderItems.slice(defaultStartIdx), startIdx: defaultStartIdx };
     }
 
-    return allRenderItems.slice(snapRenderWindowStartIdx(allRenderItems, idx));
-  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems]);
+    const startIdx = snapRenderWindowStartIdx(allRenderItems, idx);
+    const windowItemCount = resolveAnchoredWindowItemCount(
+      startIdx,
+      idx,
+      anchoredForwardItems,
+    );
+    return {
+      items: allRenderItems.slice(startIdx, startIdx + windowItemCount),
+      startIdx,
+    };
+  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems, anchoredForwardItems, firstMountDeferred]);
 
   // If a restored default-tail anchor fell out of the tail while this session
   // was backgrounded, permanently fall back to the bounded default window for
@@ -2646,10 +2763,21 @@ export function MessageStream({
   // 无跳动);已向上滚离底部 / 已切到锚点窗口的,交给既有 expandWindow 路径。
   // requestIdleCallback 带 1s timeout 兜底;测试等无 ric 环境退化为 setTimeout。
   useEffect(() => {
-    if (defaultWindowItems >= RENDER_WINDOW_INITIAL_ITEMS) return;
     if (firstVisibleItemKey !== null) return;
     if (visibleRenderItems.length === 0) return;
-    if (allRenderItems.length <= defaultWindowItems) return; // 短会话无需扩
+    // 不能只比较 allItems <= defaultWindowItems。短会话的声明窗口容量可能已
+    // 覆盖全量，但首帧字节预算仍会把实际 DOM 起点向后裁；此时 visible.length
+    // 才是窗口是否完整的事实源。只要实际可见数 < 全量，就要在空闲期 boost，
+    // 将 defaultWindowItems 升到 INITIAL（预算仅在 <INITIAL 阶段生效），恢复全部 item。
+    if (
+      !shouldBoostDefaultWindow({
+        allItemCount: allRenderItems.length,
+        visibleItemCount: visibleRenderItems.length,
+        defaultWindowItems,
+      })
+    ) {
+      return;
+    }
     const boost = () => {
       if (isNearBottomRef.current) {
         setDefaultWindowItems(RENDER_WINDOW_INITIAL_ITEMS);
@@ -2696,6 +2824,7 @@ export function MessageStream({
     lastMissingFocusRef.current = null;
     if (!visibleRenderItems.some((item) => item.key === targetKey)) {
       setFirstVisibleItemKey(targetKey);
+      setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
       return;
     }
     const root = scrollRef.current;
@@ -2773,11 +2902,19 @@ export function MessageStream({
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
+  // render-window-bidirectional 要点 4: expandWindow 必须同步把上界 +GROWTH，
+  // 否则 start 前移而上界不动，会把用户视口下方的内容反向截掉。
   const expandWindow = useCallback(() => {
     if (allRenderItems.length === 0) return;
     let currentStartIdx: number;
-    if (firstVisibleItemKey === null) {
-      currentStartIdx = Math.max(0, allRenderItems.length - defaultWindowItems);
+    const wasDefaultWindow = firstVisibleItemKey === null;
+    if (wasDefaultWindow) {
+      currentStartIdx = resolveDefaultWindowStartIdx({
+        allItemCount: allRenderItems.length,
+        defaultWindowItems,
+        visibleStartIdx,
+        visibleItemCount: visibleRenderItems.length,
+      });
     } else {
       currentStartIdx = allRenderItems.findIndex((it) => it.key === firstVisibleItemKey);
       if (currentStartIdx < 0) {
@@ -2794,20 +2931,61 @@ export function MessageStream({
     const newIdx = Math.max(0, currentStartIdx - RENDER_WINDOW_GROWTH_ITEMS);
     const newAnchorIdx = snapRenderWindowStartIdx(allRenderItems, newIdx);
     const newAnchor = allRenderItems[newAnchorIdx]?.key ?? null;
-    if (newAnchor) setFirstVisibleItemKey(newAnchor);
-  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems]);
+    if (newAnchor) {
+      setFirstVisibleItemKey(newAnchor);
+      if (wasDefaultWindow) {
+        // 默认窗口 → 锚定窗口：从新锚点到末尾全部可见（数量 = defaultWindowItems + GROWTH，有界）。
+        setAnchoredForwardItems(allRenderItems.length - newAnchorIdx);
+      } else {
+        // P1 fix: 按实际起点位移增长，而非固定 GROWTH。
+        // snapRenderWindowStartIdx 可能因边界吸附向前多移最多 RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS，
+        // 若上界只 +GROWTH 会把尾部截掉差值条 item。
+        setAnchoredForwardItems((prev) => prev + (currentStartIdx - newAnchorIdx));
+      }
+    }
+  }, [
+    allRenderItems,
+    firstVisibleItemKey,
+    defaultWindowItems,
+    visibleStartIdx,
+    visibleRenderItems.length,
+  ]);
 
-  // 当前窗口是否已经覆盖到内存中所有 render item(用于 handleScroll 判断该走客户端
-  // 扩窗还是走 DB onLoadMore)。
-  const windowAtTop = visibleRenderItems.length === allRenderItems.length;
+  // render-window-bidirectional 要点 2: windowAtTop 改基于 visibleStartIdx === 0。
+  // 原定义 visible.length === all.length 在双向窗口下即使 start 已到 0 也恒为 false。
+  const windowAtTop = visibleStartIdx === 0;
+
+  // render-window-bidirectional 要点 3/5: 窗口是否已覆盖到内存末尾。
+  // 默认窗口(firstVisibleItemKey === null)始终覆盖末尾。
+  const windowCoversEnd =
+    firstVisibleItemKey === null ||
+    allRenderItems.length === 0 ||
+    visibleStartIdx + visibleRenderItems.length >= allRenderItems.length;
 
   // ── 滚动位置 保存 / 还原 的辅助 ──
   // unmount cleanup 与 ResizeObserver 回调里读不到最新的 visibleRenderItems /
   // firstVisibleItemKey(闭包会 stale),用 ref 镜像每次 render 同步一份,供它们读取。
   const visibleRenderItemsRef = useRef(visibleRenderItems);
   visibleRenderItemsRef.current = visibleRenderItems;
+  const windowCoversEndRef = useRef(windowCoversEnd);
+  windowCoversEndRef.current = windowCoversEnd;
   const firstVisibleItemKeyRef = useRef(firstVisibleItemKey);
   firstVisibleItemKeyRef.current = firstVisibleItemKey;
+  const anchoredForwardItemsRef = useRef(anchoredForwardItems);
+  anchoredForwardItemsRef.current = anchoredForwardItems;
+
+  // render-window-bidirectional P1 fix: 新消息导致锚定窗口不再覆盖末尾时，
+  // 重置 near-bottom 以触发未读提示（覆盖末尾→清锚回默认窗的逻辑在 handleScroll 里）。
+  const prevWindowCoversEndRef = useRef(windowCoversEnd);
+  useLayoutEffect(() => {
+    const wasCovering = prevWindowCoversEndRef.current;
+    prevWindowCoversEndRef.current = windowCoversEnd;
+
+    if (firstVisibleItemKey !== null && wasCovering && !windowCoversEnd) {
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
+    }
+  }, [firstVisibleItemKey, windowCoversEnd]);
 
   // 量出当前视口顶端那条 render-item 的 key + 它被滚到视口上方的像素数。
   // 用 children 索引 ↔ visibleRenderItems 索引的天然对应关系反查(map 一条 item
@@ -2871,6 +3049,10 @@ export function MessageStream({
       viewportTopKey: measured.viewportTopKey,
       offset: measured.offset,
       isNearBottom: isNearBottomRef.current,
+      anchoredForwardCount:
+        firstVisibleItemKeyRef.current !== null
+          ? anchoredForwardItemsRef.current
+          : undefined,
     });
   }, [sessionId, measureViewportTop]);
 
@@ -2995,6 +3177,17 @@ export function MessageStream({
         return;
       }
       case 'none':
+        // render-window-bidirectional: 锚定窗口未覆盖末尾且内容不溢出时，
+        // expandWindow 只向前扩（向最早方向）、保持窗口尾边不变；对向后
+        // 方向（锚点后的内容）没有帮助。这里从尾部扩 anchoredForwardItems
+        // 把锚点后内容逐步纳入 DOM，直到视口撑出滚动条或窗口触及全量末尾。
+        if (
+          firstVisibleItemKey !== null &&
+          !windowCoversEnd &&
+          Math.abs(el.scrollHeight - el.clientHeight) <= NO_SCROLL_TOLERANCE_PX
+        ) {
+          setAnchoredForwardItems((prev) => prev + RENDER_WINDOW_GROWTH_ITEMS);
+        }
         return;
     }
   }, [
@@ -3005,6 +3198,8 @@ export function MessageStream({
     onLoadMore,
     windowAtTop,
     expandWindow,
+    windowCoversEnd,
+    firstVisibleItemKey,
   ]);
 
   // ── F2 / new-message-indicator ──
@@ -3233,6 +3428,8 @@ export function MessageStream({
     setIsNearBottom(true);
     isNearBottomRef.current = true;
     programmaticScrollRef.current = true;
+    // render-window-bidirectional: 清除锚点回到默认尾部窗口（chip/jump-down 语义）。
+    setFirstVisibleItemKey(null);
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, []);
 
@@ -3275,19 +3472,53 @@ export function MessageStream({
   // result land.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
-    // tail item 在 visibleRenderItems 与 allRenderItems 末尾完全一致(window 始终
-    // 包含最新的一段),用 visibleRenderItems 避免扩窗时多触发一次。
-    // 用户消息总是产出独立的 message item(不进 segment / 不被丢弃),所以这里
-    // 只需要解开 type==='message' && role==='user' 这一支。
-    const lastItem = visibleRenderItems[visibleRenderItems.length - 1];
+    const visibleLastItem = visibleRenderItems[visibleRenderItems.length - 1];
+    const realLastItem = allRenderItems[allRenderItems.length - 1];
+    const tailUserMessageId = selectTailUserMessageId({
+      windowCoversEnd,
+      visibleLastItem,
+      realLastItem,
+      userMessageId: (item) =>
+        item?.type === 'message' && item.message.role === 'user'
+          ? item.message.clientId
+          : null,
+    });
     const lastUserMsg =
-      lastItem?.type === 'message' && lastItem.message.role === 'user' ? lastItem.message : null;
+      tailUserMessageId === null
+        ? null
+        : realLastItem?.type === 'message' && realLastItem.message.clientId === tailUserMessageId
+          ? realLastItem.message
+          : visibleLastItem?.type === 'message' &&
+              visibleLastItem.message.clientId === tailUserMessageId
+            ? visibleLastItem.message
+            : null;
+
+    // 锚定窗口外检测到真实的新发送：当前 effect 的 visibleRenderItems 仍是旧切片，
+    // 不能同帧 pinToBottom。先清锚并恢复 near-bottom，下一次 render 切回默认尾窗
+    // 后再自然 pin；提前同步 lastUserMsgIdRef，防下一帧重复判成新发送。
+    let windowAnchorClearedOnSend = false;
+    const realTailUserSendOutsideWindow =
+      !restoringRef.current &&
+      firstVisibleItemKey !== null &&
+      !windowCoversEnd &&
+      lastUserMsg !== null &&
+      lastUserMsg.clientId !== lastUserMsgIdRef.current;
+    if (realTailUserSendOutsideWindow) {
+      setFirstVisibleItemKey(null);
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+      lastUserMsgIdRef.current = lastUserMsg.clientId;
+      windowAnchorClearedOnSend = true;
+    }
     const userMessageObservation = resolveLastUserMessageObservation({
       restoring: restoringRef.current,
       tailUserMessageId: lastUserMsg?.clientId ?? null,
       previousTailUserMessageId: lastUserMsgIdRef.current,
     });
-    lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
+    if (!windowAnchorClearedOnSend) {
+      lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
+    }
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
       newUserSend: userMessageObservation.isNewUserSend,
@@ -3301,11 +3532,11 @@ export function MessageStream({
       restoringRef.current = false;
       isNearBottomRef.current = true;
     }
-    if (decision.pinToBottom) pinToBottom();
+    if (decision.pinToBottom && !windowAnchorClearedOnSend) pinToBottom();
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
-  }, [visibleRenderItems, bottomPadding, pinToBottom]);
+  }, [visibleRenderItems, bottomPadding, pinToBottom, firstVisibleItemKey, windowCoversEnd, allRenderItems]);
 
   // ── 还原浏览位置(layout effect,在上面的 pin-to-bottom effect 之后跑) ──
   // mount 首帧 + 还原期间窗口变化时把视口摆回锚点。settle(图片/markdown 异步加载
@@ -3503,12 +3734,21 @@ export function MessageStream({
         thresholdPx: threshold,
         directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
       });
-      if (nowNearBottom !== isNearBottomRef.current) {
-        isNearBottomRef.current = nowNearBottom;
-        setIsNearBottom(nowNearBottom);
-        if (nowNearBottom) setUnreadCount(0);
+      // render-window-bidirectional 要点 3: 窗口未覆盖末尾时强制判为非贴底。
+      // 否则 DOM 距底 <100px 会被误判成"贴底"，auto-follow 拽回底部、jump-down chip 不出现。
+      const effectiveNearBottom = !windowCoversEnd ? false : nowNearBottom;
+      if (effectiveNearBottom !== isNearBottomRef.current) {
+        isNearBottomRef.current = effectiveNearBottom;
+        setIsNearBottom(effectiveNearBottom);
+        if (effectiveNearBottom) setUnreadCount(0);
       }
-      if (nowNearBottom) {
+      // render-window-bidirectional P1 fix: 锚定窗口覆盖末尾 + 用户到达底部 →
+      // 切回默认尾窗。必须在 handleScroll 里而不是 layout effect 里做——
+      // 用户从"向上扩窗"滚回底部时 wasCovering 从始至终为 true，layout effect 捕不到。
+      if (effectiveNearBottom && firstVisibleItemKey !== null && windowCoversEnd) {
+        setFirstVisibleItemKey(null);
+      }
+      if (effectiveNearBottom) {
         // 到底了:无论方向都隐藏 chip,清掉 timer
         if (jumpDownIdleTimerRef.current !== null) {
           window.clearTimeout(jumpDownIdleTimerRef.current);
@@ -3532,6 +3772,18 @@ export function MessageStream({
           jumpDownIdleTimerRef.current = null;
         }
         setShowJumpDown((cur) => (cur ? false : cur));
+      }
+
+      // render-window-bidirectional 要点 5: 向下扩窗。
+      // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
+      // 向下 append 不改变已有内容的滚动偏移，不需要 F-SYNC-2 delta 补偿。
+      // 扩到覆盖末尾后直接清除锚点，回到默认贴底窗口。
+      if (!windowCoversEnd && delta > SCROLL_DIRECTION_DEAD_ZONE_PX && distanceFromBottom < threshold) {
+        const nextForward = anchoredForwardItems + RENDER_WINDOW_GROWTH_ITEMS;
+        // 最后一批照常渲染：不在此处清除锚点。用户真正滚到窗口底部后，
+        // 上面 effectiveNearBottom + windowCoversEnd 分支会自然清除锚点、
+        // 切回默认尾窗并恢复 near-bottom 状态。
+        setAnchoredForwardItems(nextForward);
       }
     }
     prevScrollTopRef.current = currentScrollTop;
@@ -3573,7 +3825,20 @@ export function MessageStream({
     prevScrollHeightRef.current = el.scrollHeight;
     prevScrollTopAtLoadRef.current = el.scrollTop;
     onLoadMore();
-  }, [onLoadMore, isLoadingMore, hasMoreMessages, windowAtTop, expandWindow, saveScrollSnapshot]);
+  }, [
+    onLoadMore,
+    isLoadingMore,
+    hasMoreMessages,
+    windowAtTop,
+    expandWindow,
+    saveScrollSnapshot,
+    windowCoversEnd,
+    anchoredForwardItems,
+    visibleStartIdx,
+    allRenderItems.length,
+    setFirstVisibleItemKey,
+    setAnchoredForwardItems,
+  ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"
   // 死锁不可能复现:`buildRenderItems(messages)` 喂全量 → orphan / ask_user /
@@ -3736,6 +4001,7 @@ export function MessageStream({
       // 目标在渲染窗口外:先把窗口锚到目标。本 effect 因 visibleRenderItems
       // 变化重跑,下一轮走下面的滚动分支(focus-jump 同款两段式)。
       setFirstVisibleItemKey(targetKey);
+      setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
       return;
     }
     const root = scrollRef.current;
@@ -3829,6 +4095,16 @@ export function MessageStream({
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <ImageGalleryContext.Provider value={sessionImageSrcs}>
           <div className="relative h-full w-full">
+            {/* shell-first mount:外壳帧(消息树推迟一帧挂载)的品牌加载指示。
+                挂在滚动容器外的 overlay 层,视口正中(absolute inset-0 center),
+                不随滚动内容移动,也不参与 contentH / pin-to-bottom 计算。
+                只在确有内容待挂时挂载;指示器自带延迟浮现(CSS animation-delay)
+                —— 小会话下一帧就挂载完,指示器从未可见,不闪 loading。 */}
+            {firstMountDeferred && messages.length > 0 && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                <BrandLoadingMark />
+              </div>
+            )}
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (

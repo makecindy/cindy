@@ -390,7 +390,7 @@ import {
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
 import { registerGitContextIpc, disposeGitContext } from './git-context';
-import { registerGitReviewIpc } from './git-review';
+import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
@@ -549,6 +549,7 @@ import {
   type BuiltinApiKeyBridgeDeps,
 } from './secrets/builtinApiKeyBridge.js';
 import {
+  isCustomProviderRuntimeKeyStorageKey,
   isRendererAccessibleSafeStorageKey,
   type ProviderSecretId,
 } from '../shared/providerSecrets.js';
@@ -3899,12 +3900,18 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     'safe-storage-read',
     async (event: Electron.IpcMainInvokeEvent, key: string): Promise<string | null> => {
+      const strictCustomProviderRead = isCustomProviderRuntimeKeyStorageKey(key);
       try {
         assertTrustedAppRendererEvent(event);
         if (!isValidRendererKey(key)) return null;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return null;
-        if (!safeStorage.isEncryptionAvailable()) return null;
+        if (!safeStorage.isEncryptionAvailable()) {
+          if (strictCustomProviderRead) {
+            throwIpcError('INTERNAL', 'custom provider credential is unavailable');
+          }
+          return null;
+        }
         if (!fs.existsSync(filepath)) return null;
         const content = fs.readFileSync(filepath, 'utf-8');
         const buffer = Buffer.from(content, 'base64');
@@ -3919,6 +3926,9 @@ const registerIpcHandlers = () => {
           safeStorageReadLog.error('read failed', {
             error: isIpcError(err) ? err.code : err instanceof Error ? err.name : 'unknown',
           });
+          if (strictCustomProviderRead) {
+            throwIpcError('INTERNAL', 'custom provider credential is unreadable');
+          }
         }
         return null;
       }
@@ -6718,6 +6728,9 @@ app.on('ready', async () => {
       }
     },
   });
+  // device-link 远程 git 审查(只读):git-review:remote-op handler(被控端角色;
+  // invoke-registry 捕获后供控制端隧道调用,本机 renderer 不调用)。
+  registerGitReviewDeviceOp();
   registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart

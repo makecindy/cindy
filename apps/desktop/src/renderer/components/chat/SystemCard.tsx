@@ -1140,6 +1140,7 @@ const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'source-conversation-changed': 'chat.systemCard.review.failure.sourceConversationChanged',
   'source-files-changed': 'chat.systemCard.review.failure.sourceFilesChanged',
   'artifact-changed': 'chat.systemCard.review.failure.artifactChanged',
+  'artifact-unavailable': 'chat.systemCard.review.failure.artifactUnavailable',
   'provider-failed': 'chat.systemCard.review.failure.providerFailed',
 };
 

@@ -16,6 +16,7 @@ describe('parseModelsSyncPayload', () => {
     currency: 'CNY' as const,
     agents: ['claude-code', 'codex'] as const,
     mode: 'chat',
+    icon: 'deepseek',
     modalities: { input: ['text'], output: ['text'] },
   };
 
@@ -34,6 +35,34 @@ describe('parseModelsSyncPayload', () => {
     expect(parseModelsSyncPayload({ schemaVersion: 2, models: [model] })).toEqual({
       ok: true,
       models: [model],
+    });
+  });
+
+  it('preserves a missing legacy currency for the pricing fallback path', () => {
+    const { currency: _currency, ...modelWithoutCurrency } = baseModel;
+
+    expect(parseModelsSyncPayload({ schemaVersion: 2, models: [modelWithoutCurrency] })).toEqual({
+      ok: true,
+      models: [modelWithoutCurrency],
+    });
+  });
+
+  it('preserves missing agents and null effort defaults for existing catalog fallbacks', () => {
+    const { agents: _agents, ...modelWithoutAgents } = baseModel;
+    const legacyModel = { ...modelWithoutAgents, defaultEffort: null } as const;
+    const modelWithOverride = {
+      ...baseModel,
+      defaultEffort: null,
+      perAgent: { codex: { defaultEffort: null } },
+    } as const;
+
+    expect(parseModelsSyncPayload({ schemaVersion: 2, models: [legacyModel] })).toEqual({
+      ok: true,
+      models: [legacyModel],
+    });
+    expect(parseModelsSyncPayload({ schemaVersion: 2, models: [modelWithOverride] })).toEqual({
+      ok: true,
+      models: [modelWithOverride],
     });
   });
 

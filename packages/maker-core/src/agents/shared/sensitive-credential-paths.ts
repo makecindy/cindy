@@ -52,6 +52,19 @@ export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
   // the Review read scope also keeps the full-workspace freshness fingerprint
   // bounded without leaving readable ignored content outside that baseline.
   { source: String.raw`(?:^|[\\/])node_modules(?:[\\/]|$)`, flags: "i" },
+  // Cindy's managed harness binaries and local build cache are executable
+  // runtime inputs, not reviewable source artifacts. A real Cindy worktree is
+  // larger than the bounded content fingerprint if these generated payloads
+  // remain readable, so every harness excludes the same paths.
+  {
+    source: String.raw`(?:^|[\\/])apps[\\/](?:claude-code|codex|pi|ripgrep)-bin(?:[\\/]|$)`,
+    flags: "i",
+  },
+  {
+    source: String.raw`(?:^|[\\/])tools[\\/]pi[\\/]updates(?:[\\/]|$)`,
+    flags: "i",
+  },
+  { source: String.raw`(?:^|[\\/])\.vite(?:[\\/]|$)`, flags: "i" },
 ] as const;
 
 /**
@@ -68,6 +81,12 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/.git/**",
   "**/node_modules",
   "**/node_modules/**",
+  "**/apps/claude-code-bin/**",
+  "**/apps/codex-bin/**",
+  "**/apps/pi-bin/**",
+  "**/apps/ripgrep-bin/**",
+  "**/tools/pi/updates/**",
+  "**/.vite/**",
   "**/.ssh/**",
   "**/.aws/**",
   "**/.gnupg/**",
