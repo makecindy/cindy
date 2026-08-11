@@ -116,6 +116,30 @@ describe("IOSSimulatorInstanceActor", () => {
     ).not.toThrow();
   });
 
+  it("renews an expired lease on an unchanged reconcile without issuing a new generation", () => {
+    const harness = createHarness();
+    const before = harness.instance;
+    // A persisted lease restored from a previous process, or idle past its TTL.
+    harness.setNow(Date.parse(before.lease.expiresAt) + 1);
+
+    const reconciled = harness.actor.reconcile(
+      before.instanceId,
+      before.sessionId,
+      before.lifecycleState,
+      before.healthState,
+      before.errorCode,
+    );
+
+    // Without this, every later sweep stays unchanged too, so the binding could
+    // never produce a usable route again.
+    expect(reconciled.generation).toBe(before.generation);
+    expect(reconciled.lease.id).not.toBe(before.lease.id);
+    expect(reconciled.viewerState).toBe(before.viewerState);
+    expect(() =>
+      harness.actor.assertRoute(harness.route(reconciled)),
+    ).not.toThrow();
+  });
+
   it("issues a new route when the observed state changed", () => {
     const harness = createHarness();
     const before = harness.instance;

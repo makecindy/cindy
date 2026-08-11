@@ -315,7 +315,17 @@ export class IOSSimulatorInstanceActor {
       current.errorCode === errorCode;
     const staleViewerState =
       options.normalizeViewerState === true && current.viewerState !== "detached";
-    if (unchanged && !staleViewerState) return current;
+    if (unchanged && !staleViewerState) {
+      // Preserving the route must not mean preserving a lease that can no longer
+      // authorize one. A persisted lease can already be expired here — restored
+      // from a previous process, or idle past its TTL — and because every later
+      // sweep is unchanged too, nothing would ever renew it: reads that hand back
+      // a full route without heartbeating (`doctor`) would then fail
+      // LEASE_EXPIRED forever. `heartbeat` is exactly the needed shape: it leaves
+      // a healthy lease and its id untouched, extends one close to expiry under
+      // the same id, and mints a new id only when the old one is already unusable.
+      return this.#store.heartbeat(instanceId, sessionId);
+    }
     this.#cancelActiveAgentMutation(instanceId);
     this.#abortLifecycleStartsForInstance(instanceId);
     const renewed = this.#store.renew(instanceId, sessionId, {
