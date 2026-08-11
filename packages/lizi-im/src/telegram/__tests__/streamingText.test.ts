@@ -390,6 +390,53 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.deleted).toEqual([]);
   });
 
+  it('有未确认分段时不进 final-sent, 后续 finalize 仍能进来对账', async () => {
+    // 关键: finalize() 开头会让 final-sent / complete 直接 return。若未确认分段
+    // 存在却提前收口, 这一轮再也无法补投, 而调用方还以为成功了。
+    let tailBroken = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第二段' && tailBroken) throw new Error('socket hang up');
+        return markdown.startsWith('⚙️') ? 'carrier-msg' : 'final-msg';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 5m');
+
+    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/socket hang up/);
+    tailBroken = false;
+
+    // 第二段回执未知 → 不重投(可能已落地), 但也不宣布收口。
+    await handle.finalize('第一段|第二段');
+    expect(h.deleted).toEqual([]);
+
+    // 未收口 ⇒ 状态没被锁死, 后续 finalize 仍会真正执行(而非被 final-sent 挡在
+    // 第一行直接 return)。用一次会抛错的图片上传把"确实走进了主体"钉住。
+    h.deps.extractImageUrls = () => ['cindy-media://blobs/x.png'];
+    h.deps.uploadImages = async () => {
+      throw new Error('probe: finalize body executed');
+    };
+    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/probe/);
+    expect(h.sent.filter((t) => t === '第二段')).toHaveLength(1); // 始终不重投
+  });
+
+  it('全部分段确认后正常进入 final-sent 并清理载体', async () => {
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) =>
+        markdown.startsWith('⚙️') ? 'carrier-msg' : 'final-msg',
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 2m');
+
+    await handle.finalize('第一段|第二段');
+    expect(h.deleted).toEqual(['carrier-msg']);
+
+    // 已收口: 再次 finalize 直接返回, 不产生任何出站。
+    const sentBefore = h.sent.length;
+    await handle.finalize('第一段|第二段');
+    expect(h.sent).toHaveLength(sentBefore);
+  });
+
   it('多批图片: 后批失败后重试从断点续传, 不重复已发附件', async () => {
     const uploaded: Array<{ start: number; count: number }> = [];
     let failSecondBatch = true;

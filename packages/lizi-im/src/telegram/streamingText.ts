@@ -417,7 +417,20 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
         });
         this.deliveredImages = allImageRefs.length;
       }
-      this.lifecycle.markFinalSent(intent);
+      // 正文**完整确认**才收口成 final-sent。
+      //
+      // 有未确认分段时不能标已送达: `finalize()` 开头会让 final-sent / complete
+      // 状态直接 return, 于是这一轮再也无法对账或补投, 而调用方还以为成功了
+      // (2026-08-11 review)。保持 final-failed 让生命周期停在可恢复状态 —— 同一
+      // delivery key 的后续 finalize 仍能进来, 只补真正缺的部分。
+      //
+      // 这不是"发送失败": 未确认段可能已经落地, 所以既不重投也不谎报成功, 只是
+      // 不宣布收口。过程载体同样保留(见下方清理判据), 用户看得到现场。
+      if (this.firstChunkConfirmed && this.unconfirmedChunks.size === 0) {
+        this.lifecycle.markFinalSent(intent);
+      } else {
+        this.lifecycle.markFinalFailed(intent);
+      }
     } catch (err) {
       // The process carrier remains visible and no cleanup runs. A later
       // explicit finalize may retry the same delivery key, resuming from
