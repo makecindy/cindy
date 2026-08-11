@@ -131,10 +131,10 @@ describe("Review credential path policy", () => {
         "**/.git/**",
         "**/node_modules/**",
         "**/apps/codex-bin/**",
-        "**/tools/claude/updates/*.*.*/{darwin,linux,win32}-*/**",
-        "**/tools/codex/updates/*.*.*/{darwin,linux,win32}-*/**",
-        "**/tools/pi/updates/*.*.*/{darwin,linux,win32}-*/**",
-        "**/tools/ripgrep/updates/*.*.*/{darwin,linux,win32}-*/**",
+        "**/tools/claude/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
+        "**/tools/codex/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
+        "**/tools/pi/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
+        "**/tools/ripgrep/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
         "**/.vite/**",
         "**/credentials.json",
         "**/auth.json",
@@ -151,6 +151,8 @@ describe("Review credential path policy", () => {
     const reviewable = [
       "/userrepo/tools/codex/updates/v2/darwin-arm64/main.ts",
       "/userrepo/tools/claude/updates/next/linux-x64/index.ts",
+      // Dotted but not a version: the glob must not settle for "has dots".
+      "/userrepo/tools/codex/updates/release.candidate.final/darwin-arm64/main.ts",
       "/userrepo/tools/pi/updates/migrate.ts",
       "/userrepo/tools/database/updates/migrate.ts",
       "/userrepo/src/app.ts",

@@ -97,14 +97,15 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/apps/pi-bin/**",
   "**/apps/ripgrep-bin/**",
   // Match the path rule above: only the downloaded
-  // `updates/<semver>/<platform>-<arch>/` payloads. These globs run as a
-  // second, result-level filter for directory search, so anything broader
-  // than the regex would silently drop reviewable source that the regex
-  // already allowed. `*.*.*` keeps the version segment equivalent to it.
-  "**/tools/claude/updates/*.*.*/{darwin,linux,win32}-*/**",
-  "**/tools/codex/updates/*.*.*/{darwin,linux,win32}-*/**",
-  "**/tools/pi/updates/*.*.*/{darwin,linux,win32}-*/**",
-  "**/tools/ripgrep/updates/*.*.*/{darwin,linux,win32}-*/**",
+  // `updates/<semver>/<platform>-<arch>/` payloads. These globs also act as a
+  // second, result-level filter for directory search, so anything broader than
+  // the regex would silently drop reviewable source the regex already allowed.
+  // Each version component starts with a digit, so a dotted non-version
+  // directory such as `release.candidate.final` stays reviewable.
+  "**/tools/claude/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
+  "**/tools/codex/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
+  "**/tools/pi/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
+  "**/tools/ripgrep/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
   "**/.vite/**",
   "**/.ssh/**",
   "**/.aws/**",
