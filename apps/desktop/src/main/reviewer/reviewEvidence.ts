@@ -127,6 +127,19 @@ async function loadReviewBranchEvidence(
   if (!data.baseRef || !data.mergeBaseOid) {
     return { branch: null, unavailableReason: data.warning?.code ?? '未找到基线分支' };
   }
+  // Nobody picks the base here — unlike the Git review pane, this runs
+  // unattended. With no upstream or default branch present, the picker falls
+  // back to the first ordinary local branch, which can be an unrelated sibling;
+  // presenting that comparison as "the branch's work" is worse than presenting
+  // nothing. Accept only a base that identifies itself: a remote, an upstream,
+  // or a branch actually named like the default. A local `main` qualifies; a
+  // local `some-other-feature` does not.
+  const chosen = data.candidates.find((candidate) => candidate.refName === data.baseRef);
+  const baseIsAnonymousLocal =
+    chosen?.kind === 'local' && !/^(?:main|master|develop|trunk)$/i.test(chosen.refName);
+  if (baseIsAnonymousLocal) {
+    return { branch: null, unavailableReason: 'ambiguous-base' };
+  }
   const sanitized = sanitizeReviewDiffBucket({
     staged: data.diffs,
     unstaged: [],

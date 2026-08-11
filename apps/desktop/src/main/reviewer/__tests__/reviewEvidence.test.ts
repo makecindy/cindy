@@ -748,6 +748,105 @@ describe('loadReviewEvidence attachment boundaries', () => {
     expect(evidence.branchUnavailableReason).toBe('too-many-files');
   });
 
+  it('refuses to compare against an unrelated local branch', async () => {
+    // Unattended review picks no base. With no upstream or default present the
+    // picker falls back to the first ordinary local branch, and presenting that
+    // diff as "the branch's work" would be worse than presenting nothing.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'some-other-feature',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'some-other-feature',
+          shortName: 'some-other-feature',
+          kind: 'local',
+          remote: null,
+          oid: 'b'.repeat(40),
+        },
+      ],
+      diffs: [],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch).toBeNull();
+    expect(evidence.branchUnavailableReason).toBe('ambiguous-base');
+  });
+
+  it('accepts a local default branch as a base', async () => {
+    // A repository with no remote still has a meaningful base when it is named
+    // like the default; rejecting it would disable branch review offline.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'main',
+          shortName: 'main',
+          kind: 'local',
+          remote: null,
+          oid: 'b'.repeat(40),
+        },
+      ],
+      diffs: [
+        {
+          id: 'branch:src/a.ts',
+          source: 'branch',
+          path: 'src/a.ts',
+          oldPath: null,
+          status: 'modified',
+          kind: 'text',
+          size: 12,
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          isSubmodule: false,
+          isTooLarge: false,
+          mode: { old: null, new: null },
+          index: { oldOid: null, newOid: null },
+          rawHeader: 'diff --git a/src/a.ts b/src/a.ts',
+          rawPatch: '@@ -1 +1 @@\n-old\n+new',
+          hunks: [],
+          error: null,
+        },
+      ],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch?.baseRef).toBe('main');
+  });
+
   it('detects a moved comparison base even though HEAD did not change', async () => {
     // The workspace fingerprint pins the source HEAD. Fetching the base branch
     // advances the merge base and changes what the branch diff means, without

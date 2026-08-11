@@ -359,6 +359,23 @@ describe('buildReviewPrompt', () => {
     expect(result.prompt).not.toContain('src/committed.ts');
   });
 
+  it('says so when the branch diff was unreadable and there is no change set', () => {
+    // Context alone is enough for the preflight to launch, so this path is
+    // reachable; without the note the reviewer would be told there is simply
+    // no Git evidence and conclude the branch is unchanged.
+    const result = buildReviewPrompt({
+      context: [{ role: 'user', text: '看看这个分支' }],
+      workspace: null,
+      branch: null,
+      branchUnavailableReason: 'too-many-files',
+      changeSet: null,
+      artifacts: [],
+    });
+
+    expect(result.prompt).toContain('too-many-files');
+    expect(result.prompt).toContain('不得据此认为本分支没有变更');
+  });
+
   it('says so when the branch diff was expected but unreadable', () => {
     // Falling back silently would let a one-turn review look like a full one.
     const result = buildReviewPrompt({

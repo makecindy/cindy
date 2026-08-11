@@ -246,7 +246,7 @@ function coverageSection(input: BuildReviewPromptInput): string {
         ? `其中 ${input.branch.sensitiveFilesOmitted} 份敏感路径变更已从证据中排除；不得读取或评价其内容。`
         : '';
     return input.branch.capped
-      ? `${summary}${sensitiveNote}部分变更���体量上限只有摘要；必须用只读工具补查非敏感路径，且不得声称已完整覆盖。`
+      ? `${summary}${sensitiveNote}部分变更因体量上限只有摘要；必须用只读工具补查非敏感路径，且不得声称已完整覆盖。`
       : `${summary}${sensitiveNote}二进制、超大或不可渲染的非敏感文件仍须用只读工具核对。`;
   }
   if (input.changeSet) {
@@ -266,10 +266,17 @@ function coverageSection(input: BuildReviewPromptInput): string {
         : `最近一轮变更证据可能不完整。状态=${input.changeSet.state}；缺口=${input.changeSet.incompleteReasons.join(', ') || '未说明'}。不得声称已完整覆盖。`;
     return `${workspaceNote}${branchNote}${turnNote}`;
   }
+  // A failed branch read must be stated on every path that reaches here, not
+  // only alongside a change set: without one the reviewer would otherwise be
+  // told there is simply no Git evidence, hiding that there is work it could
+  // not load.
+  const branchFailureNote = input.branchUnavailableReason
+    ? `本分支相对基线的整体差异无法读取（${input.branchUnavailableReason}），下方没有对应补丁；不得据此认为本分支没有变更。`
+    : '';
   if (input.workspace?.disabledReason) {
-    return `没有可用的 Git 变更证据（${input.workspace.disabledReason}）。这不是跳过审查的理由：请审查当前成果、显式附件和工作目录中的相关文件。`;
+    return `没有可用的 Git 变更证据（${input.workspace.disabledReason}）。${branchFailureNote}这不是跳过审查的理由：请审查当前成果、显式附件和工作目录中的相关文件。`;
   }
-  return '没有可用的 Git 变更证据。这不是跳过审查的理由：请审查当前成果、显式附件和工作目录中的相关文件。';
+  return `没有可用的 Git 变更证据。${branchFailureNote}这不是跳过审查的理由：请审查当前成果、显式附件和工作目录中的相关文件。`;
 }
 
 function changeEvidenceSection(input: BuildReviewPromptInput): string {
