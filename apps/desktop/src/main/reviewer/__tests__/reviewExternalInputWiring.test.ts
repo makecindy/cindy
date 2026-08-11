@@ -67,8 +67,10 @@ describe('Review external input wiring', () => {
     // evidence: an unrelated turn must not refuse the review through the gate,
     // nor bind its own paths into the fingerprint and invalidate the result.
     expect(registerSource).toContain('const changeSetIsReviewed = !evidence.workspace?.dirty');
-    expect(registerSource).toContain(
-      '? reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)\n            : { paths: [], truncated: false };',
+    // Matched with a regex rather than a literal: the repository checks out
+    // with CRLF on Windows, so an embedded \n would never match there.
+    expect(registerSource).toMatch(
+      /\?\s*reviewChangeSetContentPaths\(evidence\.changeSet, sourceWorkingDir\)\s*:\s*\{ paths: \[\], truncated: false \};/,
     );
     expect(registerSource).toContain('if (changeSetContent.truncated) {');
     // The workspace fingerprint pins HEAD, not the base being compared against,

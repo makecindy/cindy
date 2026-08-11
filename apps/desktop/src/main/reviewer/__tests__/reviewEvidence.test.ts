@@ -224,6 +224,32 @@ function branchFileDiff(filePath: string) {
   };
 }
 
+/** A dirty workspace whose only change is a binary file — a diff with no content. */
+function binaryReviewData(repoRoot: string, filePath: string): ReviewData {
+  const data = cappedReviewData(repoRoot, filePath);
+  return {
+    ...data,
+    diffs: {
+      staged: [],
+      unstaged: [
+        {
+          ...branchFileDiff(filePath),
+          id: `unstaged:${filePath}`,
+          source: 'unstaged' as const,
+          kind: 'binary' as const,
+          isBinary: true,
+          rawHeader: '',
+          rawPatch: '',
+          additions: 0,
+          deletions: 0,
+          error: 'Binary file',
+        },
+      ],
+      capped: { staged: null, unstaged: null },
+    },
+  };
+}
+
 /** A Git workspace with everything committed, which is when branch review applies. */
 function cleanGitReviewData(repoRoot: string): ReviewData {
   const scope = {
@@ -337,6 +363,25 @@ describe('readReviewWorkspaceSnapshot', () => {
 
     const before = await readReviewWorkspaceSnapshot('source');
     await fs.writeFile(file, 'aaa222zzz');
+    const after = await readReviewWorkspaceSnapshot('source');
+
+    expect(after?.workspace).toEqual(before?.workspace);
+    expect(after?.fingerprint).not.toBe(before?.fingerprint);
+  });
+
+  it('changes the fingerprint for a same-size binary replacement', async () => {
+    // A binary diff carries no patch and no blob oids — only path, kind and
+    // size — so without its own content hash, swapping the bytes for different
+    // ones of the same length would leave the Git digest identical.
+    const repoRoot = await tempDir();
+    const relativePath = 'assets/logo.png';
+    const file = path.join(repoRoot, relativePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, Buffer.from([1, 2, 3, 4]));
+    readReviewDataMock.mockResolvedValue(binaryReviewData(repoRoot, relativePath));
+
+    const before = await readReviewWorkspaceSnapshot('source');
+    await fs.writeFile(file, Buffer.from([5, 6, 7, 8]));
     const after = await readReviewWorkspaceSnapshot('source');
 
     expect(after?.workspace).toEqual(before?.workspace);

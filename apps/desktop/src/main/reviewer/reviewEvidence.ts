@@ -197,12 +197,26 @@ const defaultReviewWorkspaceSnapshotDeps: ReviewWorkspaceSnapshotDeps = {
   fingerprintCappedWorkspaceFiles: fingerprintReviewCappedWorkspaceFiles,
 };
 
-function cappedWorkspacePaths(workspace: ReviewWorkspaceEvidence): string[] {
-  return [workspace.diffs.capped?.staged, workspace.diffs.capped?.unstaged].flatMap((capped) =>
-    capped
-      ? capped.files.flatMap((file) => [file.path, file.oldPath].filter(Boolean) as string[])
-      : [],
+/**
+ * Dirty paths whose Git evidence does not carry their content.
+ *
+ * A capped bucket replaces patches with summaries, and a binary, submodule or
+ * over-limit file is recorded with an empty patch and no blob oids — only path,
+ * kind and size. Swapping such a file for different bytes of the same size
+ * leaves the Git digest identical, so the reviewer could read the old bytes and
+ * still pass both freshness gates. These paths need a content hash of their own.
+ */
+function workspacePathsWithoutContent(workspace: ReviewWorkspaceEvidence): string[] {
+  const capped = [workspace.diffs.capped?.staged, workspace.diffs.capped?.unstaged].flatMap(
+    (bucket) =>
+      bucket
+        ? bucket.files.flatMap((file) => [file.path, file.oldPath].filter(Boolean) as string[])
+        : [],
   );
+  const contentless = [...workspace.diffs.staged, ...workspace.diffs.unstaged]
+    .filter((diff) => !diff.rawPatch)
+    .flatMap((diff) => [diff.path, diff.oldPath].filter(Boolean) as string[]);
+  return [...new Set([...capped, ...contentless])];
 }
 
 async function buildReviewWorkspaceSnapshot(
@@ -210,13 +224,13 @@ async function buildReviewWorkspaceSnapshot(
   fingerprintCappedWorkspaceFiles: typeof fingerprintReviewCappedWorkspaceFiles,
 ): Promise<ReviewWorkspaceSnapshot> {
   const workspace = mapReviewWorkspace(reviewData);
-  const hasCappedDiff = Boolean(workspace.diffs.capped?.staged || workspace.diffs.capped?.unstaged);
+  const contentlessPaths = workspacePathsWithoutContent(workspace);
+  // Whichever files needed their own content hash also need the stability
+  // re-read below: both are answering "did these bytes hold still?".
+  const hasCappedDiff = contentlessPaths.length > 0;
   const cappedContentFingerprint =
     hasCappedDiff && reviewData.scope.repoRoot
-      ? await fingerprintCappedWorkspaceFiles(
-          reviewData.scope.repoRoot,
-          cappedWorkspacePaths(workspace),
-        )
+      ? await fingerprintCappedWorkspaceFiles(reviewData.scope.repoRoot, contentlessPaths)
       : null;
   return {
     workspace,
