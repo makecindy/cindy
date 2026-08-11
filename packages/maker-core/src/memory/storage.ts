@@ -307,6 +307,8 @@ export class MemoryStorage {
     // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
     this.beforeFileWrite?.();
     await this.rebuildIndex();
+    // rebuildIndex 自身多次 await 后、返回前复核 (review #2388 Codex 13th P1)。
+    this.beforeFileWrite?.();
 
     const result: WriteResult = { ok: true, filename };
     const detail = this.computeWarning(nextBody);
@@ -383,6 +385,9 @@ export class MemoryStorage {
       }
     }
     const content = lines.join('\n');
+    // 索引写盘前复核 (review #2388 Codex 13th P1): rebuildIndex 自身有多次
+    // awaited shard reads, 边界不得在旧 owner 下重写 MEMORY.md。
+    this.beforeFileWrite?.();
     await fs.writeFile(path.join(this.dir, INDEX_FILENAME), content, 'utf8');
     this.indexCache = content;
   }
