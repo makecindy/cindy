@@ -2847,6 +2847,9 @@ export class AgentInputCoordinator {
 
   /**
    * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。
+   * @param opts.preserveAutoResumeIntent 为 true 时保留当前自动续跑接管态。
+   *   仅用于 provider rebuild 在退避 timer 触发前关闭旧 Session 的交棒窗口；
+   *   active turn / steer / drain 等旧实例运行态仍照常清理。
    *   用于 rehydrate / 凭证切换 close-rebuild 窗口:abort 会取消驱动本次重建的
    *   input signal(#1930),但**其余清理必须照常**(activeTurn / steer / queue
    *   状态不能残留,否则 rebuild 失败或 close 后不 rebuild 时 coordinator
@@ -2854,10 +2857,12 @@ export class AgentInputCoordinator {
    */
   onSessionClosed(
     sessionId: string,
-    opts?: { preserveInputBoundary?: boolean },
+    opts?: { preserveInputBoundary?: boolean; preserveAutoResumeIntent?: boolean },
   ): void {
     const state = this.getState(sessionId);
-    this.supersedePendingAutoResumeRecoveries(sessionId);
+    if (!opts?.preserveAutoResumeIntent) {
+      this.supersedePendingAutoResumeRecoveries(sessionId);
+    }
     const releasedAbortLock = state.queueAbortPending;
     this.cancelScheduledDrain(state);
     this.clearAbortReconcileRetry(state);

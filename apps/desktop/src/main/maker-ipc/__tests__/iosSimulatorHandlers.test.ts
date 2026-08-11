@@ -17,6 +17,8 @@ describe('iOS Simulator IPC handlers', () => {
   function registerTrusted(harness: IpcHarness, deps: Partial<IOSSimulatorHandlerDeps> = {}): void {
     registerIOSSimulatorHandlers(harness, {
       assertTrustedSender: () => undefined,
+      isPluginAvailable: () => true,
+      getSessionContext: async () => ({ workingDir: '/repo/session-a' }),
       getOwnerScopeKey: () => 'local:owner-a:1',
       isOwnerBoundaryPending: () => false,
       getSessionAccess: () => ({ sessionId: 'session-a', generation: 1 }),
@@ -54,6 +56,32 @@ describe('iOS Simulator IPC handlers', () => {
     expect(getStatus).not.toHaveBeenCalled();
   });
 
+  it('rejects every Renderer entry before reaching the Host when the plugin is unavailable', async () => {
+    const harness = new IpcHarness();
+    const getStatus = vi.fn();
+    const requestSessionAccess = vi.fn();
+    registerIOSSimulatorHandlers(harness, {
+      assertTrustedSender: () => undefined,
+      isPluginAvailable: () => false,
+      getSessionContext: async () => ({ workingDir: '/repo/session-a' }),
+      getStatus,
+      requestSessionAccess,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_REQUEST_ACCESS, {
+        sessionId: 'session-a',
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
+        sessionId: 'session-a',
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(requestSessionAccess).not.toHaveBeenCalled();
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
   it('returns an existing Main-owned grant without opening confirmation', async () => {
     const harness = new IpcHarness();
     const requestSessionAccess = vi.fn(async () => false);
@@ -65,6 +93,25 @@ describe('iOS Simulator IPC handlers', () => {
       }),
     ).resolves.toEqual({ granted: true });
     expect(requestSessionAccess).not.toHaveBeenCalled();
+  });
+
+  it('passes the authoritative session workdir to the plugin gate', async () => {
+    const harness = new IpcHarness();
+    const isPluginAvailable = vi.fn(() => false);
+    const getStatus = vi.fn();
+    registerTrusted(harness, {
+      isPluginAvailable,
+      getSessionContext: async () => ({ workingDir: '/repo/disabled' }),
+      getStatus,
+    });
+
+    await expect(
+      harness.invokeFrom(17, MAKER_INVOKE.IOS_SIMULATOR_STATUS, {
+        sessionId: 'session-a',
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(isPluginAvailable).toHaveBeenCalledWith('/repo/disabled');
+    expect(getStatus).not.toHaveBeenCalled();
   });
 
   it('returns the explicit native confirmation result for a manual access request', async () => {
@@ -337,6 +384,8 @@ describe('iOS Simulator IPC handlers', () => {
     const callTool = vi.fn();
     registerIOSSimulatorHandlers(harness, {
       assertTrustedSender: () => undefined,
+      isPluginAvailable: () => true,
+      getSessionContext: async () => ({ workingDir: '/repo/session-a' }),
       hasSessionAccess: () => false,
       getStatus,
       callTool,

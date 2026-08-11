@@ -1,7 +1,7 @@
 /**
  * device-link 客户端完整协议(desktop / mobile 共享)。
  *
- * relay 能理解的信封、连接层 payload 与错误码来自 cindy-protocol submodule；
+ * relay 能理解的信封、连接层 payload 与错误码来自本仓 device-link-protocol；
  * 本文件只补充 relay 不解析的端到端隧道 payload、客户端本地错误与 REST 视图。
  */
 import {

@@ -1,5 +1,9 @@
-import { parseListModelsResponse } from '@cindy/model-access-protocol';
-import type { ModelAccessGatewayModel, ModelAccessStatus } from '../../shared/modelAccess.js';
+import { parseListModelsResponse } from '@cindy/model-providers';
+import type {
+  ModelAccessGatewayModel,
+  ModelAccessModelsResponse,
+  ModelAccessStatus,
+} from '../../shared/modelAccess.js';
 import type { CredentialsSync } from './credentialsSync.js';
 
 /** Bound the shared single-flight so a black-hole connection cannot block later refreshes. */
@@ -10,13 +14,14 @@ export type ModelsSyncPayloadParseResult =
 
 /**
  * Validate the actual `/models` wire envelope before it can replace the last-known-good snapshot.
- * The shared protocol parser is the version boundary: it accepts the frozen v1 and current v2
+ * The client-owned parser is the version boundary: it accepts the frozen v1 and current v2
  * contracts, and rejects unknown versions or fields instead of partially interpreting them.
  */
 export function parseModelsSyncPayload(value: unknown): ModelsSyncPayloadParseResult {
   const parsed = parseListModelsResponse(value);
   if (!parsed.ok) return parsed;
-  return { ok: true, models: parsed.value.models };
+  const response: ModelAccessModelsResponse = parsed.value;
+  return { ok: true, models: response.models };
 }
 
 /**

@@ -2,12 +2,11 @@
 /**
  * ensure-deps — 启动/构建/发布前的依赖守护
  *
- * 五道检查（任一失败都会自动修复）：
- *   1. 协议 submodule — 先初始化 cindy-protocol，避免 pnpm 少发现 workspace
- *   2. Lockfile 同步性 — 比对 pnpm-lock.yaml 与 node_modules/.modules.yaml 的 mtime
- *   3. 关键依赖完整性 — 确认 workspace / native / binary 依赖的 package.json 存在
- *   4. Electron binary 完整性 — 确认 electron postinstall 已完整解出 dist binary
- *   5. native ABI 隔离 — root 保持 Node ABI，Electron cache 单独准备 native binding
+ * 四道检查（任一失败都会自动修复）：
+ *   1. Lockfile 同步性 — 比对 pnpm-lock.yaml 与 node_modules/.modules.yaml 的 mtime
+ *   2. 关键依赖完整性 — 确认 workspace / native / binary 依赖的 package.json 存在
+ *   3. Electron binary 完整性 — 确认 electron postinstall 已完整解出 dist binary
+ *   4. native ABI 隔离 — root 保持 Node ABI，Electron cache 单独准备 native binding
  *
  * 关于 hoisted 模式：项目 .npmrc 指定 node-linker=hoisted，绝大多数依赖被平铺到根
  * node_modules，但原生二进制包（electron、protobufjs 等）必须留
@@ -57,11 +56,6 @@ const CRITICAL_DEPS = [
 ];
 
 const WORKSPACE_CRITICAL_DEPS = CRITICAL_DEPS.slice(0, 2);
-const SUBMODULE_WORKSPACE_FILES = Object.freeze([
-  'cindy-protocol/packages/device-link-protocol/package.json',
-  'cindy-protocol/packages/slack-hook-protocol/package.json',
-]);
-
 // 子包下的残缺目录 —— 这些本不该存在于子包 node_modules（pnpm 10 会 hoist 到根），
 // 但某些 postinstall 残留（例如 electron postinstall 解压的 dist/）可能会让这些路径
 // 看起来"存在"。Node.js 的 require 解析会卡在残缺目录（有路径但没 package.json）
@@ -225,48 +219,6 @@ function findBrokenDeps(deps = CRITICAL_DEPS) {
     }
   }
   return broken;
-}
-
-/** Protocol package manifests that a complete checkout must expose to pnpm. */
-export function findMissingSubmoduleWorkspaceFiles(root = ROOT) {
-  return SUBMODULE_WORKSPACE_FILES.filter((relativePath) => !fs.existsSync(path.join(root, relativePath)));
-}
-
-function ensureSubmoduleWorkspaces() {
-  // `.gitmodules` 的 URL 会随仓库迁移变化，但 Git 会把已初始化 submodule 的旧 URL
-  // 缓存在本地 `.git/config`。每次依赖检查先同步一次（纯本地操作），确保老 checkout
-  // 在 pull 后也改从当前公开仓拉取，而不是继续访问已经退役的旧组织仓库。
-  const syncResult = spawnSync('git', ['submodule', 'sync', '--', 'cindy-protocol'], {
-    cwd: ROOT,
-    stdio: 'inherit',
-  });
-  if (syncResult.error || syncResult.status !== 0) {
-    warn('协议 submodule URL 同步失败；将继续使用当前 checkout，缺失时初始化仍会 fail closed');
-  }
-
-  const missing = findMissingSubmoduleWorkspaceFiles();
-  if (missing.length === 0) return;
-
-  warn(`协议 workspace 缺失：${missing.join(', ')}`);
-  // 只初始化协议 submodule（pnpm workspace 依赖它）。内建插件不再作为 submodule
-  // 随客户端源码分发，插件通过 SkillHub 或手动安装。
-  log('运行 git submodule update --init cindy-protocol ...');
-  const result = spawnSync('git', ['submodule', 'update', '--init', '--recursive', '--', 'cindy-protocol'], {
-    cwd: ROOT,
-    stdio: 'inherit',
-  });
-  if (result.error || result.status !== 0) {
-    if (result.error) err(result.error.message);
-    err('协议 submodule 初始化失败；未继续安装依赖，避免生成不完整的 pnpm workspace');
-    process.exit(result.status ?? 1);
-  }
-
-  const stillMissing = findMissingSubmoduleWorkspaceFiles();
-  if (stillMissing.length > 0) {
-    err(`submodule 初始化后协议 workspace 仍缺失：${stillMissing.join(', ')}`);
-    process.exit(1);
-  }
-  log('协议 submodule 已就绪');
 }
 
 function ensureWorkspaceOnlyDependencies() {
@@ -780,8 +732,6 @@ function ensureElectronNativeBinding(electronVersion, electronArch) {
 }
 
 function main() {
-  ensureSubmoduleWorkspaces();
-
   if (process.argv.slice(2).includes('--workspace-only')) {
     ensureWorkspaceOnlyDependencies();
     return;

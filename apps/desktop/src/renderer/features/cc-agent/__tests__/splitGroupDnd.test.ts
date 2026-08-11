@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   SPLIT_GROUP_SESSION_MIME,
@@ -11,12 +11,31 @@ import {
   needsDedicatedSplitGroupDragHandle,
   resolveSplitDropSide,
   shouldStartSplitGroupDrag,
+  finishSessionDrag,
+  startSessionDrag,
   writeSplitGroupSessionDragData,
 } from '../splitGroupDnd';
 
 const RECT = { left: 100, top: 50, width: 400, height: 300 };
+const PREVIEW_PALETTE = {
+  surface: 'rgb(248, 248, 248)',
+  border: 'rgb(220, 223, 227)',
+  text: 'rgb(60, 63, 67)',
+};
+
+function mockPreviewPalette(): void {
+  vi.spyOn(window, 'getComputedStyle').mockReturnValue({
+    backgroundColor: PREVIEW_PALETTE.surface,
+    borderTopColor: PREVIEW_PALETTE.border,
+    color: PREVIEW_PALETTE.text,
+  } as unknown as CSSStyleDeclaration);
+}
 
 describe('splitGroupDnd', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('输入框内的任务拖放由 composer 消费，不属于分屏落点', () => {
     const composer = document.createElement('div');
     composer.setAttribute('data-split-group-composer-drop-target', '');
@@ -32,18 +51,26 @@ describe('splitGroupDnd', () => {
     expect(hasSplitGroupSessionType(['Files', 'text/plain'])).toBe(false);
   });
 
-  it('向侧栏拖拽写入专用 MIME 和纯文本回退', () => {
+  it('只写入 Cindy 专用 MIME，避免系统把任务拖拽落成桌面文件', () => {
     const values = new Map<string, string>();
     const dataTransfer = {
       effectAllowed: 'none',
+      clearData: (format?: string) => {
+        if (format === undefined) values.clear();
+        else values.delete(format);
+      },
       setData: (format: string, data: string) => values.set(format, data),
     };
+
+    values.set('text/plain', 'stale-text');
+    values.set('text/uri-list', 'https://example.com/dragged');
 
     expect(writeSplitGroupSessionDragData(dataTransfer, ' session-a ')).toBe(true);
     expect(dataTransfer.effectAllowed).toBe('copyMove');
     expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe('session-a');
     expect(values.get(SPLIT_GROUP_SESSION_LINK_MIME)).toBe('cindy://session/session-a');
-    expect(values.get('text/plain')).toBe('session-a');
+    expect(values.has('text/plain')).toBe(false);
+    expect(values.has('text/uri-list')).toBe(false);
     expect(
       writeSplitGroupSessionDragData(dataTransfer, 'session-remote', { deviceId: 'device-b' }),
     ).toBe(true);
@@ -51,6 +78,171 @@ describe('splitGroupDnd', () => {
       'cindy://session/session-remote?device=device-b',
     );
     expect(writeSplitGroupSessionDragData(dataTransfer, '   ')).toBe(false);
+  });
+
+  it('共享原生拖拽 helper 保留任务 payload 并在结束时请求窗口外判定', () => {
+    mockPreviewPalette();
+    const row = document.createElement('div');
+    const title = document.createElement('span');
+    row.append(title);
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: 'none',
+      setData: (format: string, data: string) => values.set(format, data),
+      setDragImage: vi.fn(),
+    };
+    const beginPreview = vi.fn().mockResolvedValue(undefined);
+    const endPreview = vi.fn();
+    const openOutside = vi.fn().mockResolvedValue(false);
+    const electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        maker: {
+          beginSessionDragPreview: beginPreview,
+          endSessionDragPreview: endPreview,
+          openSessionInNewWindowIfDroppedOutside: openOutside,
+        },
+      },
+    });
+    const dragStartEvent = {
+      target: title,
+      currentTarget: row,
+      dataTransfer,
+      preventDefault: vi.fn(),
+    };
+    expect(
+      startSessionDrag(dragStartEvent, {
+        sessionId: 'session-a',
+        deviceId: 'device-b',
+        label: '任务 A',
+        enabled: true,
+        needsDedicatedHandle: false,
+      }),
+    ).toBe(true);
+    expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe('session-a');
+    expect(row.dataset.sessionDragging).toBe('true');
+    expect(dataTransfer.setDragImage).toHaveBeenCalledOnce();
+    const preview = dataTransfer.setDragImage.mock.calls[0]?.[0];
+    expect(preview).toBeInstanceOf(HTMLCanvasElement);
+    expect((preview as HTMLCanvasElement).width).toBe(1);
+    expect((preview as HTMLCanvasElement).height).toBe(1);
+    expect((preview as HTMLCanvasElement).dataset.sessionDragPreviewTransparent).toBe('true');
+    expect(document.querySelector('[data-session-drag-preview-transparent]')).toBe(preview);
+    expect(beginPreview).toHaveBeenCalledWith('任务 A', 'session-a', 'device-b', PREVIEW_PALETTE);
+    expect(document.querySelector('[data-session-drag-preview-palette-probe]')).toBeNull();
+
+    window.dispatchEvent(new Event('pointerup'));
+    window.dispatchEvent(new Event('dragend'));
+    expect(row.dataset.sessionDragging).toBeUndefined();
+    expect(endPreview).toHaveBeenCalledOnce();
+    expect(endPreview).toHaveBeenCalledWith(expect.any(Number));
+    expect(openOutside).toHaveBeenCalledWith('session-a', 'device-b');
+    expect(document.querySelector('[data-session-drag-preview-transparent]')).toBeNull();
+    if (electronApiDescriptor) {
+      Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+    } else {
+      Reflect.deleteProperty(window, 'electronAPI');
+    }
+  });
+
+  it('macOS waits for the native mouse-up path before ending the drag', () => {
+    const row = document.createElement('div');
+    const dataTransfer = {
+      effectAllowed: 'none',
+      setData: vi.fn(),
+      setDragImage: vi.fn(),
+    };
+    const beginPreview = vi.fn().mockResolvedValue(undefined);
+    const endPreview = vi.fn();
+    const openOutside = vi.fn().mockResolvedValue(false);
+    const electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        maker: {
+          beginSessionDragPreview: beginPreview,
+          endSessionDragPreview: endPreview,
+          openSessionInNewWindowIfDroppedOutside: openOutside,
+        },
+      },
+    });
+
+    startSessionDrag(
+      {
+        target: row,
+        currentTarget: row,
+        dataTransfer,
+        preventDefault: vi.fn(),
+      },
+      {
+        sessionId: 'session-a',
+        enabled: true,
+        needsDedicatedHandle: false,
+      },
+    );
+    window.dispatchEvent(new Event('pointerup'));
+    expect(endPreview).not.toHaveBeenCalled();
+    expect(openOutside).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event('dragend'));
+    expect(endPreview).toHaveBeenCalledOnce();
+    expect(openOutside).toHaveBeenCalledWith('session-a', undefined);
+    if (electronApiDescriptor) {
+      Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+    } else {
+      Reflect.deleteProperty(window, 'electronAPI');
+    }
+  });
+
+  it('按 Escape 取消原生拖拽时不会请求窗口外开窗', () => {
+    mockPreviewPalette();
+    const row = document.createElement('div');
+    const dataTransfer = {
+      effectAllowed: 'none',
+      setData: vi.fn(),
+    };
+    const openOutside = vi.fn().mockResolvedValue(false);
+    const beginPreview = vi.fn().mockResolvedValue(undefined);
+    const endPreview = vi.fn();
+    const electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        maker: {
+          beginSessionDragPreview: beginPreview,
+          endSessionDragPreview: endPreview,
+          openSessionInNewWindowIfDroppedOutside: openOutside,
+        },
+      },
+    });
+
+    startSessionDrag(
+      {
+        target: row,
+        currentTarget: row,
+        dataTransfer,
+        preventDefault: vi.fn(),
+      },
+      {
+        sessionId: 'session-a',
+        enabled: true,
+        needsDedicatedHandle: false,
+      },
+    );
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    finishSessionDrag({ currentTarget: row }, 'session-a');
+
+    expect(beginPreview).toHaveBeenCalledWith('session-a', 'session-a', undefined, PREVIEW_PALETTE);
+    expect(endPreview).toHaveBeenCalledOnce();
+    expect(endPreview).toHaveBeenCalledWith(expect.any(Number));
+    expect(openOutside).not.toHaveBeenCalled();
+    if (electronApiDescriptor) {
+      Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+    } else {
+      Reflect.deleteProperty(window, 'electronAPI');
+    }
   });
 
   it.each([

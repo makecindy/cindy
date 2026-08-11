@@ -3933,14 +3933,30 @@ interface ElectronAPI {
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
-  // sidebar 偏好(置顶手动顺序)跨 dev / installed 共享;读 sendSync,写 invoke。
-  sidebarSettingsLoadPinnedOrderSync: () => string[];
-  sidebarSettingsSavePinnedOrder: (order: readonly string[]) => Promise<void>;
-  sidebarSettingsOnPinnedOrderChanged: (cb: (order: string[]) => void) => () => void;
   sidebarSettings: {
-    loadHiddenProjectKeys: () => string[];
-    setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
-    onHiddenProjectKeysChanged: (cb: (projectKeys: string[]) => void) => () => void;
+    claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;
+    loadSnapshot: () => import('../shared/sidebarSettings').SidebarSettingsSnapshot;
+    mutatePinnedOrder: (
+      mutation: import('../shared/sidebarSettings').SidebarPinnedOrderMutation,
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<string[]>;
+    onPinnedOrderChanged: (
+      cb: (
+        order: string[],
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    setProjectHidden: (
+      projectKey: string,
+      hidden: boolean,
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<boolean>;
+    onHiddenProjectKeysChanged: (
+      cb: (
+        projectKeys: string[],
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
   };
 
   remotePrecreatedWorktreeLedger: {
@@ -4703,7 +4719,18 @@ interface ElectronAPI {
     ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
 
     // 「在新窗口打开」会话多开
-    openSessionInNewWindow: (sessionId: string) => Promise<void>;
+    openSessionInNewWindow: (sessionId: string, deviceId?: string | null) => Promise<void>;
+    openSessionInNewWindowIfDroppedOutside: (
+      sessionId: string,
+      deviceId?: string | null,
+    ) => Promise<boolean>;
+    beginSessionDragPreview: (
+      label: string,
+      sessionId: string,
+      deviceId: string | null | undefined,
+      palette: import('../shared/sessionDragPreview').SessionDragPreviewPalette,
+    ) => Promise<void>;
+    endSessionDragPreview: (dragEndAtMs?: number) => void;
 
     // ── Palette `/` 命令三源 (palette refactor) ───────────────────────
     listDesktopCommands: () => Promise<{

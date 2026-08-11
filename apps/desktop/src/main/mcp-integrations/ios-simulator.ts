@@ -62,6 +62,7 @@ import {
 } from '@cindy/ios-simulator-runtime';
 import type {
   IOSSimulatorMcpCallContext,
+  IOSSimulatorMcpAccessDecision,
   IOSSimulatorMcpDeps,
   IOSSimulatorMcpErrorCode,
   IOSSimulatorMcpToolName,
@@ -6411,6 +6412,19 @@ function currentIOSSimulatorHost(): IOSSimulatorHost | null {
   return defaultIOSSimulatorRuntime?.host ?? null;
 }
 
+/**
+ * Whether this process installed the Host Simulator runtime, which means Cindy
+ * may hold simulator ownership right now.
+ *
+ * Synchronous and side-effect free by contract: it must never initialize the
+ * Host, because the plugin gate's whole point is that an absent plugin leaves
+ * the runtime untouched. A shutting-down runtime still counts as active so
+ * in-flight cleanup keeps its protection.
+ */
+export function isIOSSimulatorHostRuntimeActive(): boolean {
+  return currentIOSSimulatorHost() !== null || defaultIOSSimulatorRuntimeClosing;
+}
+
 export function getIOSSimulatorSessionStatus(
   sessionId: string,
 ): Promise<IOSSimulatorSessionStatus> {
@@ -6648,6 +6662,7 @@ export function updateIOSSimulatorViewerTouch(
 
 export interface IOSSimulatorMcpDepsOptions {
   isIOSSimulatorEnabled?: (context?: IOSSimulatorMcpCallContext) => boolean;
+  resolveAccess?: (context?: IOSSimulatorMcpCallContext) => IOSSimulatorMcpAccessDecision;
   host?: IOSSimulatorHost;
 }
 
@@ -6655,6 +6670,21 @@ export function getIOSSimulatorMcpDeps(
   options: IOSSimulatorMcpDepsOptions = {},
 ): IOSSimulatorMcpDeps {
   const getHost = (): IOSSimulatorHost => options.host ?? initializeIOSSimulatorHost();
+  const resolveAccess = (
+    context?: IOSSimulatorMcpCallContext,
+  ): IOSSimulatorMcpAccessDecision => {
+    const decision = options.resolveAccess?.(context);
+    if (decision) return decision;
+    if (options.isIOSSimulatorEnabled && !options.isIOSSimulatorEnabled(context)) {
+      return {
+        allowed: false,
+        errorCode: 'IOS_SIMULATOR_DISABLED',
+        message: 'iOS Simulator tools are disabled for this project.',
+        data: { reason: 'disabled-in-workdir', action: 'enable-plugin' },
+      };
+    }
+    return { allowed: true };
+  };
   return {
     describeTools: async (context) => {
       const sessionId = context?.sessionId?.trim();
@@ -6669,25 +6699,33 @@ export function getIOSSimulatorMcpDeps(
           },
         };
       }
-      if (options.isIOSSimulatorEnabled && !options.isIOSSimulatorEnabled(context)) {
+      const access = resolveAccess(context);
+      if (!access.allowed) {
         return {
           ready: false,
           instanceCount: 0,
           runningInstanceCount: 0,
           tools: {
-            doctor: { state: 'unavailable', reasonCode: 'IOS_SIMULATOR_DISABLED' },
-            check_environment: { state: 'unavailable', reasonCode: 'IOS_SIMULATOR_DISABLED' },
+            doctor: { state: 'unavailable', reasonCode: access.errorCode },
+            check_environment: { state: 'unavailable', reasonCode: access.errorCode },
+          },
+          notice: {
+            errorCode: access.errorCode,
+            message: access.message,
+            ...(access.data ? { data: access.data } : {}),
           },
         };
       }
       return getHost().describeTools(sessionId);
     },
     callTool: async (name, args, context) => {
-      if (options.isIOSSimulatorEnabled && !options.isIOSSimulatorEnabled(context)) {
+      const access = resolveAccess(context);
+      if (!access.allowed) {
         return {
           ok: false,
-          errorCode: 'IOS_SIMULATOR_DISABLED',
-          message: 'iOS Simulator tools are disabled for this project.',
+          errorCode: access.errorCode,
+          message: access.message,
+          ...(access.data ? { data: access.data } : {}),
         };
       }
       return getHost().callTool(name, args, context);

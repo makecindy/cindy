@@ -4826,7 +4826,8 @@
         "in-progress": "git operation in progress",
         "agent-running": "agent is running",
         "disabled": "review unavailable",
-        "remote-device": "remote device sessions are view-only"
+        "remote-device": "remote device sessions are view-only",
+        "remote-ssh": "SSH workspace review is view-only"
       },
       "remote": {
         "deviceTooOldTitle": "Device version too old",
@@ -5970,6 +5971,7 @@
     "verificationFailed": "Cindy couldn’t confirm whether the ChatGPT sign-in has recovered. Check again."
   },
   "chat": {
+    "sessionLoading": "Loading task",
     "askUserQuestion": {
       "skippedAnswer": "Skipped"
     },

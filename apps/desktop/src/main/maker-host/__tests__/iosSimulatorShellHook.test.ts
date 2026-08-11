@@ -57,4 +57,54 @@ describeMac('iOS Simulator shell guard hook', () => {
     expect(persistedLog).not.toContain(command);
     expect(persistedLog).not.toContain('super-secret');
   });
+
+  it('lets the command through when the capability is gated off', async () => {
+    const { logger, warn } = createLoggerSpy();
+    const shouldEnforce = vi.fn(() => false);
+    const hook = createIOSSimulatorShellGuardHook(logger, shouldEnforce);
+
+    const result = await hook(
+      {
+        session_id: 'session-1',
+        transcript_path: '/tmp/transcript',
+        cwd: '/repo',
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'xcrun simctl boot DEVICE' },
+      } as never,
+      'tool-1',
+      { signal: new AbortController().signal },
+    );
+
+    // The user's own Xcode tooling must run when there is no embedded simulator
+    // to protect; denying here would point at a tool the gate has removed.
+    expect(result).toEqual({ continue: true });
+    expect(shouldEnforce).toHaveBeenCalledWith('/repo');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('still denies while the capability is available', async () => {
+    const { logger } = createLoggerSpy();
+    const shouldEnforce = vi.fn(() => true);
+    const hook = createIOSSimulatorShellGuardHook(logger, shouldEnforce);
+
+    const result = await hook(
+      {
+        session_id: 'session-1',
+        transcript_path: '/tmp/transcript',
+        cwd: '   ',
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'open -a Simulator' },
+      } as never,
+      'tool-2',
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+    // A blank cwd is unknown, not the repository root.
+    expect(shouldEnforce).toHaveBeenCalledWith(null);
+  });
 });

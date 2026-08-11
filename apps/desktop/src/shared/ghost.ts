@@ -663,8 +663,8 @@ export interface GhostSecretExchangeDecl {
 
 /**
  * OAuth 凭证:scopes 条数上限(超出拒装;确认框逐条展示要可读)。
- * 数值正本在 cindy-protocol 的 plugin-protocol(manifest.ts,发布服务端同读),
- * 客户端只 re-export 不再手抄副本;调整上限一律改协议仓再 bump submodule。
+ * 数值正本在本仓 packages/plugin-protocol(manifest.ts)，服务端仓维护兼容副本。
+ * 客户端只 re-export 不再手抄副本；调整上限须同步两仓并先确认 wire 兼容性。
  * 本校验取值级"严出"(plugin-security-and-authoring.md §7):超上限的包在旧版
  * 客户端拒装,插件市场铺开须等携带新上限的客户端先行发布。
  *

@@ -81,12 +81,10 @@ import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import { OpenInSplitMenu } from './OpenInSplitMenu';
 import {
-  SPLIT_GROUP_DRAG_HANDLE_SELECTOR,
-  SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR,
+  finishSessionDrag,
   isSplitGroupDragSource,
   needsDedicatedSplitGroupDragHandle,
-  shouldStartSplitGroupDrag,
-  writeSplitGroupSessionDragData,
+  startSessionDrag,
 } from '../splitGroupDnd';
 
 const log = createLogger('SessionCard');
@@ -289,33 +287,17 @@ export function SessionCard({
 
   const handleDragStart = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
-      const target =
-        dragStartTargetRef.current ?? (event.target instanceof Element ? event.target : null);
-      dragStartTargetRef.current = null;
-      const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
-      const startedOnInteractiveElement = Boolean(
-        target !== event.currentTarget && target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
-      );
-      if (!shouldStartSplitGroupDrag({
+      startSessionDrag(event, {
+        sessionId: session.id,
+        deviceId: session.deviceLinkDeviceId,
+        label: displayTitle,
         enabled: splitDragEnabled,
         needsDedicatedHandle: needsSplitDragHandle,
-        startedOnDedicatedHandle,
-        startedOnInteractiveElement,
-      })) {
-        event.preventDefault();
-        return;
-      }
-      if (
-        !writeSplitGroupSessionDragData(event.dataTransfer, session.id, {
-          deviceId: session.deviceLinkDeviceId,
-        })
-      ) {
-        event.preventDefault();
-        return;
-      }
-      event.currentTarget.dataset.sessionDragging = 'true';
+        dragStartTarget: dragStartTargetRef.current,
+      });
+      dragStartTargetRef.current = null;
     },
-    [needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
+    [displayTitle, needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
   );
 
   // raw 由 SessionRenameInput 传入:输入框当前文本(Magic 生成的标题也先填入输入框,用户 Enter 确认后才走到这里)。
@@ -450,8 +432,8 @@ export function SessionCard({
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
-    void window.electronAPI.maker.openSessionInNewWindow(session.id);
-  }, [remoteWritesBlocked, session.id, t]);
+    void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
+  }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, t]);
 
   // 「导出会话…」——打成 .cshare 分享给同事。空草稿、remote / orca / device-link 会话不显示此入口
   // (转录在远端或协同关系不可移植，main 侧同样有双保险拒绝)。
@@ -615,7 +597,7 @@ export function SessionCard({
       onDragStart={handleDragStart}
       onDragEnd={(event) => {
         dragStartTargetRef.current = null;
-        delete event.currentTarget.dataset.sessionDragging;
+        finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
       }}
       onPointerDown={(e) => {
         if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {

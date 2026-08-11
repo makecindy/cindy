@@ -1,8 +1,8 @@
 /**
  * modelPlanePolicy —— 内置供应商模型平面的**表驱动 policy**(纯逻辑,零 IO)。
  *
- * 三件事严格分离(2026-08-02 架构收敛定案,协议侧契约见 cindy-protocol
- * MODEL_REGISTRY.md「Presence, entitlement, and sale availability」):
+ * 三件事严格分离(2026-08-02 架构收敛定案,协议侧契约见本仓
+ * modelRegistryCanonical.ts 的「Presence, entitlement, and sale availability」):
  *  - roots:该供应商的 canonical 实体列表落在哪些 agent。实体化 / discovery /
  *    本地 override 只作用于 root;派生端(bridge / Pi)永远重算,禁止直写。
  *  - membership:registry route.agents 声明「允许出现在哪些消费端」,不是 root

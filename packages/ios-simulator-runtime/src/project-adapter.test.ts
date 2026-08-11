@@ -259,7 +259,13 @@ describe("IOSSimulatorProjectBuilder", () => {
     roots.push(root, outside);
     const outsideWorkspace = path.join(outside, "Outside.xcworkspace");
     await mkdir(outsideWorkspace);
-    await symlink(outsideWorkspace, path.join(root, "Escape.xcworkspace"));
+    // Windows 上目录符号链接走 junction（无需管理员/开发者模式），
+    // 其他平台走 'dir'。junction escape 同样会被 inspect() 的 realpath 检测到。
+    await symlink(
+      outsideWorkspace,
+      path.join(root, "Escape.xcworkspace"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const builder = new IOSSimulatorProjectBuilder();
 
     await expect(builder.inspect(root, "README.md")).rejects.toMatchObject({

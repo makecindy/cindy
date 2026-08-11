@@ -208,6 +208,12 @@ describe('SessionItem — 置顶分屏拖拽', () => {
       effectAllowed: 'none',
       setData: (format: string, data: string) => values.set(format, data),
     };
+    const openOutside = vi.fn().mockResolvedValue(false);
+    const electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { maker: { openSessionInNewWindowIfDroppedOutside: openOutside } },
+    });
     const { container } = render(
       createElement(SessionAttentionUrgencyProvider, {
         urgentSessionIds: new Set<string>(),
@@ -247,6 +253,9 @@ describe('SessionItem — 置顶分屏拖拽', () => {
     expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(pinnedSession.id);
     expect(dataTransfer.effectAllowed).toBe('copyMove');
 
+    fireEvent.dragEnd(row!, { dataTransfer });
+    expect(openOutside).toHaveBeenCalledWith(pinnedSession.id, null);
+
     values.clear();
     dataTransfer.effectAllowed = 'none';
     fireEvent.pointerDown(actionButton!, { button: 0, pointerType: 'mouse' });
@@ -257,6 +266,12 @@ describe('SessionItem — 置顶分屏拖拽', () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(values.has(SPLIT_GROUP_SESSION_MIME)).toBe(false);
     expect(dataTransfer.effectAllowed).toBe('none');
+
+    if (electronApiDescriptor) {
+      Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+    } else {
+      Reflect.deleteProperty(window, 'electronAPI');
+    }
   });
 });
 
