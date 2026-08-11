@@ -60,19 +60,8 @@ export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
     source: String.raw`(?:^|[\\/])apps[\\/](?:claude-code|codex|pi|ripgrep)-bin(?:[\\/]|$)`,
     flags: "i",
   },
-  // Cindy downloads harness binaries to `tools/<kind>/updates/<semver>/
-  // <platform>-<arch>/` and gitignores them; they are executables, never
-  // reviewable source. Left readable, a single focused directory blows the
-  // bounded content fingerprint — the payloads are ~570 MB against a 512 MB
-  // budget.
-  //
-  // This list also strips matches from the reviewer's diff and read scope, so
-  // the rule is deliberately narrow: it demands the complete downloaded shape,
-  // including a semver version segment. A reviewed repository keeping its own
-  // source at `tools/codex/updates/migrate.ts`, or even at
-  // `tools/codex/updates/v2/darwin-arm64/`, stays fully reviewable.
   {
-    source: String.raw`(?:^|[\\/])tools[\\/](?:claude|codex|pi|ripgrep)[\\/]updates[\\/]\d+\.\d+\.\d+[^\\/]*[\\/](?:darwin|linux|win32)-[^\\/]+(?:[\\/]|$)`,
+    source: String.raw`(?:^|[\\/])tools[\\/]pi[\\/]updates(?:[\\/]|$)`,
     flags: "i",
   },
   { source: String.raw`(?:^|[\\/])\.vite(?:[\\/]|$)`, flags: "i" },
@@ -96,29 +85,7 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/apps/codex-bin/**",
   "**/apps/pi-bin/**",
   "**/apps/ripgrep-bin/**",
-  // Match the path rule above: only the downloaded
-  // `updates/<semver>/<platform>-<arch>/` payloads. These globs also act as a
-  // second, result-level filter for directory search, so anything broader than
-  // the regex would silently drop reviewable source the regex already allowed.
-  //
-  // These stay a close approximation of the regex, not an exact one, and that
-  // is deliberate. Glob has no repetition syntax for character classes, so
-  // `[0-9]*` constrains only the first character of each version component. A
-  // reviewed repository whose directory is `1x.2y.3z` — digit-led, dotted into
-  // three parts, and sitting directly above a `darwin-`/`linux-`/`win32-`
-  // directory — would still be denied here while the regex allows it. Such a
-  // file stays readable by explicit path; only directory search omits it.
-  //
-  // Closing that last gap needs the path predicate itself at the filtering
-  // step. Pi already runs it before these globs, but Claude and Codex hand
-  // this list to their own permission engines, which never call it — so the
-  // fix is a change to that shared permission plumbing, not a longer glob.
-  // Tracked separately; do not add another pattern variant here, because each
-  // one only moves the counterexample rather than removing it.
-  "**/tools/claude/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
-  "**/tools/codex/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
-  "**/tools/pi/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
-  "**/tools/ripgrep/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
+  "**/tools/pi/updates/**",
   "**/.vite/**",
   "**/.ssh/**",
   "**/.aws/**",
