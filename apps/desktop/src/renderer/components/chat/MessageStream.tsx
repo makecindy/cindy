@@ -39,6 +39,7 @@ import {
 import {
   isAgentPlanToolName,
   isDeliveryProseText,
+  isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
@@ -1002,8 +1003,25 @@ export function buildSubagentModelMap(messages: ChatMessage[]): Map<string, stri
   return out;
 }
 
+/**
+ * 子代理内部消息判据:这条消息是不是某个 Agent/Task 调用**内部**产生的,而不是
+ * 父会话自己说的话。
+ *
+ * 数据来源与 buildSubagentModelMap 同一份:SDK 给子代理的每条消息都带
+ * `parent_tool_use_id`(= 派生它的 Agent 工具调用 id),经 makerChatStore 投影成
+ * 顶层 `parentToolUseId`(实时事件与历史重载两条路径都投影)。
+ *
+ * 形态判据不能省:legacy Claude 导入把普通 transcript 链边(`preceding-user-uuid`
+ * 这类非 tool-use id)也存进同一个字段,无条件当子代理会把父会话自己的正文一起
+ * 吞掉。只认 SDK tool-parent 形态,与 maker-shared 的投影判据共用同一个函数。
+ */
+function isSubagentInternalMessage(message: ChatMessage): boolean {
+  const parent = message.parentToolUseId;
+  return typeof parent === 'string' && parent.length > 0 && isSubagentParentToolUseId(parent);
+}
+
 export function buildRenderItems(
-  messages: ChatMessage[],
+  allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
   opts?: {
@@ -1021,6 +1039,19 @@ export function buildRenderItems(
   items: RenderItem[];
   singleResultMap: Map<string, string>;
 } {
+  // ── Pass -1: 剔除子代理内部消息 ──
+  // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并
+  // echo 回主流(每条都带 parent_tool_use_id)。这些是**子任务内部的经过**,不是父
+  // 会话对用户说的话 —— 官方 CLI 界面从不显示它们,Cindy 逐条渲染就等于把整篇子代理
+  // 报告原样铺进聊天窗口(实测一条子代理正文 5.5k 字符直接刷屏)。
+  //
+  // 它们的去处是自己那张 AgentTaskCard(仍由 taskUpdates 正常渲染),不是主流。
+  // 过滤放在最前面:后续所有 pass(tool_result lookup、段落配对、turn 边界、work-group)
+  // 看到的都是同一份"用户可见"的消息序列,不会出现"查得到但不渲染"的半吊子状态。
+  const messages = allMessages.some(isSubagentInternalMessage)
+    ? allMessages.filter((m) => !isSubagentInternalMessage(m))
+    : allMessages;
+
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
   // Plan/task rendering and regular tool result pairing both need a stable
   // lookup by vendor toolUseId. Adjacency remains a fallback in Pass 2.
