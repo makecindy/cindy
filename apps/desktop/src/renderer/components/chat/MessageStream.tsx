@@ -860,6 +860,26 @@ export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKe
 }
 
 /**
+ * 删除补偿的落点选择:视口顶端 item 被删后,取旧序列里它之后第一条存活 item
+ * (连带删除可能越过多条);无则回退它之前最近的存活 item,再无则落到新末条。
+ * 返回 null = 旧序列里找不到被删 key(快照过旧),无从补偿。
+ */
+export function pickDeleteCompensationAnchorKey(
+  prevKeys: readonly string[],
+  curKeys: readonly string[],
+  deletedKey: string,
+): string | null {
+  const deletedIdx = prevKeys.indexOf(deletedKey);
+  if (deletedIdx < 0) return null;
+  return (
+    prevKeys.slice(deletedIdx + 1).find((k) => curKeys.includes(k)) ??
+    [...prevKeys.slice(0, deletedIdx)].reverse().find((k) => curKeys.includes(k)) ??
+    curKeys[curKeys.length - 1] ??
+    null
+  );
+}
+
+/**
  * Whether a restored viewport anchor still belongs to the bounded default tail.
  * This is intentionally limited to the restore path; user-created anchored
  * windows remain unbounded until the separate bidirectional-window change.
@@ -2475,6 +2495,21 @@ export function MessageStream({
   const prevScrollTopAtLoadRef = useRef(0);
   /** Track previous scrollTop to detect scroll direction. */
   const prevScrollTopRef = useRef(0);
+  /** 上一帧 visibleRenderItems 的 key 顺序，用于检测「数组收缩 = 删除」。
+   *  只在 shrink 时触发补偿；增长（流式 / prepend）走原有路径。 */
+  const prevVisibleKeysRef = useRef<readonly string[]>([]);
+  /** 上一帧 layout 提交时量到的视口顶端（key + offset），作为删除发生时的
+   *  「删除前快照」。不读 sessionScrollStore：后者只在用户手动滚动时落盘，
+   *  程序化跳转后会陈旧（Greptile review #2437）。 */
+  const lastViewportTopRef = useRef<{ viewportTopKey: string; offset: number } | null>(null);
+  /** 量测并写入 lastViewportTopRef 的复用入口。本体在 measureViewportTop 之后才
+   *  定义，先放稳定 ref 供更靠前的 effect（focus-jump 落定刷新）使用，定义后回填。 */
+  const refreshViewportAnchorRef = useRef<() => void>(() => {});
+  /** 删除连带毁掉窗口锚点、重建锚点后的一次性视口复位任务，由删除补偿 effect
+   *  在重建后的下一提交执行（此时新窗口 DOM 才存在）。 */
+  const pendingReanchorScrollRef = useRef<{ viewportTopKey: string; offset: number } | null>(
+    null,
+  );
   /** clientId of the last user-role message we've already observed. Used to
    *  detect a NEW user send → force pin regardless of prior scroll state. */
   const lastUserMsg = messages[messages.length - 1];
@@ -2864,6 +2899,10 @@ export function MessageStream({
     root.addEventListener('scrollend', applyHighlight, { once: true });
     focusScrollTimerRef.current = window.setTimeout(() => {
       programmaticScrollRef.current = false;
+      // 跳转落定后刷新删除锚点：跳到长会话中部时 handleScroll 的「距底<5」分支
+      // 不覆盖，此刻 lastViewportTopRef 仍是跳转前的陈旧 key。经 ref 调用——本体
+      // 在 measureViewportTop 之后才声明，本 effect 位置更靠前。
+      refreshViewportAnchorRef.current();
     }, 800);
     // 兜底:scrollend 未触发(距离为 0 / 环境不支持)时,~600ms 后强制点亮。
     focusHighlightTimerRef.current = window.setTimeout(() => {
@@ -3036,6 +3075,15 @@ export function MessageStream({
   // 流式每 token(visibleRenderItems 变)都 disconnect/reconnect。
   const applyRestoreRef = useRef(applyRestore);
   applyRestoreRef.current = applyRestore;
+
+  // 量测当前视口顶端并写入删除锚点快照。供 rAF 节流回调复用:用户滚动与程序化
+  // 跳转落定都经它刷新 lastViewportTopRef,保证删除发生时的「删除前快照」最新。
+  const refreshViewportAnchor = useCallback(() => {
+    const measured = measureViewportTop();
+    if (measured) lastViewportTopRef.current = measured;
+  }, [measureViewportTop]);
+  // 回填供声明位置更靠前的 effect（focus-jump 落定刷新）使用。
+  refreshViewportAnchorRef.current = refreshViewportAnchor;
 
   // 保存当前浏览位置到 sessionScrollStore。在用户滚动时(DOM 一定存活)持续调用,
   // 不依赖 unmount 时机。无 sessionId / 量测失败则跳过。
@@ -3644,6 +3692,144 @@ export function MessageStream({
     }
   }, [visibleRenderItems, isLoadingMore]);
 
+  // ── 删除靠前 message 后的视口保位 ──
+  // 删除路径只改 store、不碰滚动；现有滚动补偿在数组收缩时全是 no-op，只剩
+  // Chromium 原生 overflow-anchor，而它恰在锚点元素本身被删时失效 -> 视口跳变（#2289）。
+  //
+  // 判据：锚点 key 从列表消失且无法恢复为分组 key 变换（流式收尾 msg-* 折入
+  // work-summary-*）才算真实删除。删除前快照由用户滚动 / 跳转落定的 rAF 回调刷新
+  // （handleScroll / focus-jump），不在此处量测——删除+跳变后量到的是新顶端，会让
+  // 补偿失效。贴底交给 pin-to-bottom。
+  useLayoutEffect(() => {
+    const curKeys = visibleRenderItems.map((it) => it.key);
+    const prevKeys = prevVisibleKeysRef.current;
+    prevVisibleKeysRef.current = curKeys;
+    const snapshot = lastViewportTopRef.current;
+
+    // 上一提交重建了窗口锚点（见下方 windowAnchorDead 分支）：新窗口 DOM 已就绪，
+    // 把目标 item 摆回视口顶端。一次性任务，执行即清。
+    const pendingScroll = pendingReanchorScrollRef.current;
+    if (pendingScroll) {
+      pendingReanchorScrollRef.current = null;
+      const pendingIdx = curKeys.indexOf(pendingScroll.viewportTopKey);
+      const container = scrollRef.current;
+      const items = itemsRef.current;
+      const child =
+        pendingIdx >= 0 ? (items?.children[pendingIdx] as HTMLElement | undefined) : undefined;
+      if (container && child) {
+        const delta =
+          child.getBoundingClientRect().top -
+          (container.getBoundingClientRect().top - pendingScroll.offset);
+        if (Math.abs(delta) >= 1) {
+          programmaticScrollRef.current = true;
+          container.scrollTop += delta;
+          requestAnimationFrame(() => {
+            programmaticScrollRef.current = false;
+          });
+        }
+      }
+      return;
+    }
+
+    // 纯 key 比对短路，无删除的常规帧（流式 / prepend / 扩窗）不放几何读取。
+    const shrank = curKeys.length < prevKeys.length;
+    const snapshotKeyGone = snapshot !== null && !curKeys.includes(snapshot.viewportTopKey);
+    if (!shrank && !snapshotKeyGone) return;
+
+    // 快照 key 消失但能恢复回现存 item（分组变换，内容仍在）-> 交给浏览器
+    // anchoring，只把快照 rebase 到新 key，保证之后删除该 item 时补偿仍命中。
+    if (snapshot) {
+      const recoveredIdx = findRestorableViewportItemIdx(
+        visibleRenderItems,
+        snapshot.viewportTopKey,
+      );
+      if (recoveredIdx >= 0) {
+        const recoveredKey = visibleRenderItems[recoveredIdx]?.key;
+        if (recoveredKey && recoveredKey !== snapshot.viewportTopKey) {
+          lastViewportTopRef.current = { viewportTopKey: recoveredKey, offset: 0 };
+        }
+        return;
+      }
+    }
+
+    if (!sessionId) return;
+    if (programmaticScrollRef.current || isLoadingMore) {
+      // 程序化滚动 / 历史加载期间到达的删除（如远端设备推送）：早退但不消费删除前
+      // key 序列，留给条件解除后的下一提交继续补偿；平滑跳转场景若无后续提交，
+      // 落定时的快照刷新会自纠，不会用陈旧序列误补偿。
+      prevVisibleKeysRef.current = prevKeys;
+      return;
+    }
+    if (isNearBottomRef.current) return; // 贴底由 pin-to-bottom 接管
+
+    // 还原中：applyRestore 持续按还原快照定位，锚点仍可恢复时不介入。被删的
+    // 正是还原锚点时 applyRestore 已无从定位（findRestorableViewportItemIdx
+    // 返回 -1 直接放弃），改用还原快照当删除前锚点走同一套补偿，并结束还原态。
+    let anchor = snapshot;
+    if (restoringRef.current) {
+      const snap = restoreSnapshotRef.current;
+      if (
+        !snap?.viewportTopKey ||
+        findRestorableViewportItemIdx(visibleRenderItems, snap.viewportTopKey) >= 0
+      ) {
+        return;
+      }
+      anchor = { viewportTopKey: snap.viewportTopKey, offset: snap.offset };
+      restoringRef.current = false;
+    }
+    if (!anchor) return; // 首帧无「删除前」可参考
+    // 视口顶端 key 仍在 = Chromium anchoring 已稳住,无需干预。
+    if (curKeys.includes(anchor.viewportTopKey)) return;
+
+    // 窗口锚点连带失效（删的正是 firstVisibleItemKey 或其恢复链）：memo 已把
+    // visibleRenderItems 回退成默认尾窗，prev/cur 可能零交集，在尾窗上选落点会把
+    // 视口甩到会话末尾。改为从 allRenderItems 里解出存活项重建窗口锚点——快照 key
+    // 仍存活（删的只是窗口锚点）就用它保住原视口，否则按旧序列挑相邻存活项；
+    // setState 触发 pre-paint 重渲染（尾窗不上屏），复位滚动的部分留给下一提交
+    // 开头的 pendingReanchorScrollRef 分支（此时新窗口 DOM 才存在）。
+    if (
+      firstVisibleItemKey !== null &&
+      findRestorableViewportItemIdx(allRenderItems, firstVisibleItemKey) < 0
+    ) {
+      const aliveIdx = findRestorableViewportItemIdx(allRenderItems, anchor.viewportTopKey);
+      let targetKey: string | null = null;
+      let targetOffset = 0;
+      if (aliveIdx >= 0) {
+        targetKey = allRenderItems[aliveIdx]?.key ?? null;
+        if (targetKey === anchor.viewportTopKey) targetOffset = anchor.offset;
+      } else {
+        const allKeys = allRenderItems.map((it) => it.key);
+        targetKey = pickDeleteCompensationAnchorKey(prevKeys, allKeys, anchor.viewportTopKey);
+      }
+      if (!targetKey) return;
+      lastViewportTopRef.current = { viewportTopKey: targetKey, offset: targetOffset };
+      pendingReanchorScrollRef.current = { viewportTopKey: targetKey, offset: targetOffset };
+      setFirstVisibleItemKey(targetKey);
+      return;
+    }
+
+    // 视口顶端正是被删的那条：按旧序列挑存活落点（纯函数，见其注释）。
+    const survivorKey = pickDeleteCompensationAnchorKey(prevKeys, curKeys, anchor.viewportTopKey);
+    if (!survivorKey) return;
+    // 补偿完成后快照同步 rebase 到落点：补偿滚动的 scroll 事件因 programmatic
+    // 标记不会刷新快照，不 rebase 的话连续删除（中间无滚动）第二轮会失配跳过。
+    const idx = curKeys.indexOf(survivorKey);
+    lastViewportTopRef.current = { viewportTopKey: survivorKey, offset: 0 };
+    const container = scrollRef.current;
+    const items = itemsRef.current;
+    if (!container || !items) return;
+    const child = items.children[idx] as HTMLElement | undefined;
+    if (!child) return;
+    const cTop = container.getBoundingClientRect().top;
+    const delta = child.getBoundingClientRect().top - cTop;
+    if (Math.abs(delta) < 1) return;
+    programmaticScrollRef.current = true;
+    container.scrollTop += delta;
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+  }, [visibleRenderItems, allRenderItems, firstVisibleItemKey, sessionId, isLoadingMore]);
+
   // ── post-load auto-expand ──
   // 修一类已知 UX 缺口 (跟 render-window 轴换轴无关,老代码同病):
   //   用户滚到顶 → handleScroll 触发 onLoadMore → DB prepend 进 messages →
@@ -3709,11 +3895,12 @@ export function MessageStream({
     if (!programmaticScrollRef.current) {
       // 用户手动滚动 = 接管浏览,退出「还原中」,后续恢复正常 auto-follow 判定。
       restoringRef.current = false;
-      // 持续保存当前浏览位置(rAF 节流,DOM 必然存活)。不依赖 unmount 时机,
-      // 规避「React passive cleanup 在 DOM 移除后才跑、量测拿到 null」的坑。
+      // 持续保存浏览位置 + 刷新删除锚点快照，合并进同一 rAF 节流：纯滚动时
+      // lastViewportTopRef 否则停在滚动前的陈旧 key，删除视口顶端那条会早退漏补偿。
       if (saveRafRef.current === null) {
         saveRafRef.current = requestAnimationFrame(() => {
           saveRafRef.current = null;
+          refreshViewportAnchor();
           saveScrollSnapshot();
         });
       }
@@ -3791,9 +3978,11 @@ export function MessageStream({
     // F3: smooth 滚动完成后清除 programmaticScrollRef，让后续用户滚动能被正确识别。
     //   - 判据：距底 < 5px（smooth 动画收敛后的稳定值）+ 当前处于 programmatic 态
     //   - 用 rAF 推迟一帧，避免连续 smooth 滚动的尾帧事件被误判
+    // 同帧刷新删除锚点：程序化跳到底部后视口顶端已变，陈旧 key 会让删除补偿早退。
     if (programmaticScrollRef.current && distanceFromBottom < 5) {
       requestAnimationFrame(() => {
         programmaticScrollRef.current = false;
+        refreshViewportAnchor();
       });
     }
 
@@ -3832,6 +4021,7 @@ export function MessageStream({
     windowAtTop,
     expandWindow,
     saveScrollSnapshot,
+    refreshViewportAnchor,
     windowCoversEnd,
     anchoredForwardItems,
     visibleStartIdx,
