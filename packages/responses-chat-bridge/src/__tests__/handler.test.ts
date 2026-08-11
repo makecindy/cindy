@@ -73,8 +73,17 @@ describe('createResponsesChatHandler', () => {
     expect(res.ended).toBe(true);
   });
 
-  it('rejects a built-in web_search tool instead of silently dropping it', async () => {
-    const fetchImpl = vi.fn() as unknown as typeof fetch;
+  it('drops an unsupported built-in web_search tool and continues upstream', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools).toEqual([
+        { type: 'function', function: { name: 'exec', parameters: { type: 'object' } } },
+      ]);
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: { content: 'ok' } }] },
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
     const warn = vi.fn();
     const handler = createResponsesChatHandler({
       upstreamBase: 'https://provider.example/v1',
@@ -86,20 +95,23 @@ describe('createResponsesChatHandler', () => {
       parsedBody: {
         model: 'custom-model',
         input: [{ type: 'message', role: 'user', content: 'search' }],
-        tools: [{ type: 'web_search' }],
+        tools: [
+          { type: 'function', name: 'exec', parameters: { type: 'object' } },
+          { type: 'web_search' },
+        ],
       },
       res: res as never,
     });
 
-    expect(res.status).toBe(400);
-    expect(res.chunks.join('')).toContain('unsupported_feature');
-    expect(res.chunks.join('')).toContain('tools[0]');
-    expect(res.chunks.join('')).toContain('web_search');
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith('responses-chat bridge rejected unsupported feature', {
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(res.chunks.join('')).toContain('ok');
+    expect(res.ended).toBe(true);
+    expect(warn).toHaveBeenCalledWith('responses-chat bridge dropped unsupported built-in tool', {
       model: 'custom-model',
-      feature: 'tools[0].web_search',
+      tool: 'web_search',
+      index: 1,
+      action: 'continue_without_tool',
     });
   });
 
