@@ -5226,7 +5226,8 @@ export function registerGhostIpc(): void {
       config: typeof ghostId === 'string' ? readGhostToolPermissions(ghostId) : {},
     };
   });
-  ipcMain.handle('ghosts:tool-permissions:set', (_event, ghostId: unknown, config: unknown) => {
+  ipcMain.handle('ghosts:tool-permissions:set', (event, ghostId: unknown, config: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
     }
