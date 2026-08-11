@@ -237,6 +237,23 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+
+    const startArgs = sdkMock.query.mock.calls[0]?.[0] as {
+      options: { settings?: { availableModels?: string[] } };
+    };
+    expect(startArgs.options.settings?.availableModels).toEqual([
+      'claude-opus-4-6[1m]',
+      'claude-sonnet-5',
+    ]);
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+
+    await handle.close();
+  });
+
   it('passes max through when changing effort in a live Sonnet 5 session', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 

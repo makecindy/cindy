@@ -296,7 +296,7 @@ describe('interactionModel', () => {
   it('keeps every plugin setup phase, error code and action kind translated in all locales', async () => {
     const previous = i18n.language;
     try {
-      for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
         await i18n.changeLanguage(locale);
         for (const phase of REMOTE_PLUGIN_SETUP_PHASES) {
           const key = `interaction.pluginSetup.phase.${phase}`;
@@ -346,7 +346,7 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionCurrent')");
     expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionNth', { index: index + 1 })");
 
-    for (const lang of ['zh-CN', 'en', 'ja', 'ko']) {
+    for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
       for (const kind of ['permission', 'ask_user_question', 'plan_review', 'issue_confirm', 'plugin_setup', 'fallback']) {
         expect(bundle.kinds?.[kind]?.title, `${lang}/${kind}.title`).toBeTruthy();
@@ -719,7 +719,7 @@ describe('interactionModel', () => {
   it('translates the collapse affordances in every locale', async () => {
     const previous = i18n.language;
     try {
-      for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
         await i18n.changeLanguage(locale);
         for (const key of [
           'interaction.panel.collapse',
@@ -735,7 +735,7 @@ describe('interactionModel', () => {
       await i18n.changeLanguage(previous);
     }
 
-    for (const lang of ['zh-CN', 'en', 'ja', 'ko']) {
+    for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
       expect(bundle.panel?.expandPendingCard, `${lang}/panel.expandPendingCard`).toContain('{{title}}');
       // 旧的问题卡专属文案随卡内收起一起下线,不留悬空 key。

@@ -10,15 +10,12 @@ import { askHelp, markMessageFeedbackSubmitted, useHelpThread } from '@/lib/help
 import { createLogger } from '@/lib/logger';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import type { HelpFeedbackDraftInput, HelpLocale, HelpMessage } from '@/../shared/helpTypes';
+import { resolveSystemLocale } from '@/../shared/locale';
 
 const log = createLogger('HelpThreadView');
 
 function localeFromI18n(lang: string): HelpLocale {
-  // 中文(含 Hans/Hant/TW/HK/MO)一律 → zh-CN(主干 4 语,无繁体 catalog)。
-  if (lang.startsWith('zh')) return 'zh-CN';
-  if (lang.startsWith('ja')) return 'ja';
-  if (lang.startsWith('ko')) return 'ko';
-  return 'en';
+  return resolveSystemLocale(lang);
 }
 
 /**

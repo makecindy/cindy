@@ -160,6 +160,16 @@ describe('maker:event hot path ordering', () => {
       'sessionTurnActivityTracker.setSessionInTurn(sessionId, false);',
       'notifyGoalIdleAfterTurnSettled(sessionId);',
     );
+    expectOrder(
+      reconcileSource,
+      'markTurnEndedAfterPersistDrain(sessionId);',
+      'clearCodexPlanRowsForSession(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'clearCodexPlanRowsForSession(sessionId);',
+      'resetTurnPersistState(sessionId);',
+    );
 
     // ABORT_SESSION reconciles from finally, so vendor abort rejection still reaches the
     // shared idle wake-up once the exact Session/generation boundary proves idle.
@@ -441,6 +451,29 @@ describe('maker:event hot path ordering', () => {
       'agentInputCoordinatorHolder?.onSessionClosed(session.id, {',
       'gitSnapshotCoordinator?.onSessionClosed(session.id);',
     );
+  });
+
+  it('preserves only a waiting Codex reconnect-stall retry across its exact provider rebuild', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+
+    expect(source).toContain('const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();');
+    expect(source).toContain("if (signals.reason === 'codex_reconnect_stalled') {");
+    expect(source).toContain(
+      'pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);',
+    );
+    expect(source).toContain("if (closeReason !== 'unexpected') return false;");
+    expect(source).toContain(
+      'interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)',
+    );
+    expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
+    expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
+    expect(closedBlock).toContain(
+      'const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(',
+    );
+    expect(closedBlock).toContain('if (preserveAutoResumeIntent) {');
+    expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
+    expect(closedBlock).toContain('preserveAutoResumeIntent,');
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {

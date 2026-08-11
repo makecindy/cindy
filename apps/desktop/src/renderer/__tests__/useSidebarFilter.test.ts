@@ -43,6 +43,13 @@ import {
   mergeVisibleReorder,
   type FilterProjects,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
+import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
+
+const OWNER_ID = 'owner-a';
+
+function ownerKey(baseKey: string): string {
+  return sidebarOwnerStorageKey(baseKey, OWNER_ID);
+}
 
 /* ------------ in-memory localStorage shim ------------ */
 
@@ -115,45 +122,42 @@ describe('loadProjects', () => {
   afterEach(() => uninstallLocalStorage());
 
   it("defaults to 'all' when storage is empty", () => {
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("returns 'all' when persisted as the literal 'all'", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify('all'));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it('returns the persisted array', () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(['/a/b', '/c/d']));
-    expect(loadProjects()).toEqual(['local:/a/b', 'local:/c/d']);
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/a/b', 'local:/c/d']);
   });
 
   it("falls back to 'all' on empty array", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify([]));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it('cleans non-string entries from a mixed array', () => {
-    localStorage.setItem(
-      PROJECTS_KEY,
-      JSON.stringify(['/a/b', 42, null, '/c/d', '']),
-    );
-    expect(loadProjects()).toEqual(['local:/a/b', 'local:/c/d']);
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(['/a/b', 42, null, '/c/d', '']));
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/a/b', 'local:/c/d']);
   });
 
   it("falls back to 'all' on broken JSON", () => {
     localStorage.setItem(PROJECTS_KEY, '{not-json');
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("falls back to 'all' on shape mismatch (object instead of array)", () => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify({ foo: 'bar' }));
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it("returns 'all' when localStorage is unavailable", () => {
     uninstallLocalStorage();
-    expect(loadProjects()).toBe('all');
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 });
 
@@ -250,7 +254,7 @@ describe('loadManualProjectOrder', () => {
   afterEach(() => uninstallLocalStorage());
 
   it('defaults to an empty array when storage is empty', () => {
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
   });
 
   it('returns a cleaned unique order array', () => {
@@ -258,14 +262,14 @@ describe('loadManualProjectOrder', () => {
       MANUAL_PROJECT_ORDER_KEY,
       JSON.stringify(['local:/b', 42, 'local:/a', 'local:/b', '', null]),
     );
-    expect(loadManualProjectOrder()).toEqual(['local:/b', 'local:/a']);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual(['local:/b', 'local:/a']);
   });
 
   it('falls back to an empty array on broken JSON or shape mismatch', () => {
     localStorage.setItem(MANUAL_PROJECT_ORDER_KEY, '{not-json');
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
     localStorage.setItem(MANUAL_PROJECT_ORDER_KEY, JSON.stringify({ order: ['local:/a'] }));
-    expect(loadManualProjectOrder()).toEqual([]);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual([]);
   });
 });
 
@@ -285,13 +289,17 @@ describe('persist round-trip', () => {
   });
 
   it("persistProjects('all') → loadProjects() returns 'all'", () => {
-    persistProjects('all');
-    expect(loadProjects()).toBe('all');
+    persistProjects('all', OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toBe('all');
   });
 
   it('persistProjects([…]) → loadProjects() returns the array', () => {
-    persistProjects(['local:/foo', 'local:/bar']);
-    expect(loadProjects()).toEqual(['local:/foo', 'local:/bar']);
+    persistProjects(['local:/foo', 'local:/bar'], OWNER_ID);
+    expect(loadProjects(OWNER_ID)).toEqual(['local:/foo', 'local:/bar']);
+    expect(localStorage.getItem(ownerKey(PROJECTS_KEY))).toBe(
+      JSON.stringify(['local:/foo', 'local:/bar']),
+    );
+    expect(loadProjects('owner-b')).toBe('all');
   });
 
   it('persistGroupBy → loadGroupBy returns the same value', () => {
@@ -320,8 +328,11 @@ describe('persist round-trip', () => {
   });
 
   it('persistManualProjectOrder → loadManualProjectOrder returns the same order', () => {
-    persistManualProjectOrder(['local:/b', 'local:/a']);
-    expect(loadManualProjectOrder()).toEqual(['local:/b', 'local:/a']);
+    persistManualProjectOrder(['local:/b', 'local:/a'], OWNER_ID);
+    expect(loadManualProjectOrder(OWNER_ID)).toEqual(['local:/b', 'local:/a']);
+    expect(localStorage.getItem(ownerKey(MANUAL_PROJECT_ORDER_KEY))).toBe(
+      JSON.stringify(['local:/b', 'local:/a']),
+    );
   });
 });
 
@@ -340,7 +351,10 @@ describe('nextProjectsAfterToggle', () => {
 
   it('removing one of multiple keeps order of the remaining', () => {
     const prev: FilterProjects = ['local:/proj-a', 'local:/proj-b', 'local:/proj-c'];
-    expect(nextProjectsAfterToggle(prev, 'local:/proj-b')).toEqual(['local:/proj-a', 'local:/proj-c']);
+    expect(nextProjectsAfterToggle(prev, 'local:/proj-b')).toEqual([
+      'local:/proj-a',
+      'local:/proj-c',
+    ]);
   });
 
   it("removing the last entry falls back to 'all'", () => {
@@ -403,23 +417,15 @@ describe('removeProjectsFromFilter', () => {
         ]),
         'win32',
       ),
-    ).toEqual([
-      'remote:host-a:C:/Repo',
-      'device:device-a:C:/Repo',
-      'local:/Users/Lee/Repo',
-    ]);
+    ).toEqual(['remote:host-a:C:/Repo', 'device:device-a:C:/Repo', 'local:/Users/Lee/Repo']);
   });
 
   it('keeps a different-cased POSIX double-slash project in the filter', () => {
     const prev: FilterProjects = ['local://mnt/Repo', 'local://mnt/repo'];
 
-    expect(
-      removeProjectsFromFilter(
-        prev,
-        new Set(['local://mnt/Repo']),
-        'linux',
-      ),
-    ).toEqual(['local://mnt/repo']);
+    expect(removeProjectsFromFilter(prev, new Set(['local://mnt/Repo']), 'linux')).toEqual([
+      'local://mnt/repo',
+    ]);
   });
 
   it("falls back to 'all' after removing the final explicit project", () => {
@@ -429,9 +435,7 @@ describe('removeProjectsFromFilter', () => {
 
   it('is idempotent for unrelated and repeated hidden snapshots', () => {
     const unrelated: FilterProjects = ['local:/b'];
-    expect(
-      removeProjectsFromFilter(unrelated, new Set(['local:/a']), 'linux'),
-    ).toBe(unrelated);
+    expect(removeProjectsFromFilter(unrelated, new Set(['local:/a']), 'linux')).toBe(unrelated);
 
     const afterFirstRemoval = removeProjectsFromFilter(
       ['local:/a', 'local:/b'],
@@ -439,9 +443,9 @@ describe('removeProjectsFromFilter', () => {
       'linux',
     );
     expect(afterFirstRemoval).toEqual(['local:/b']);
-    expect(
-      removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']), 'linux'),
-    ).toBe(afterFirstRemoval);
+    expect(removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']), 'linux')).toBe(
+      afterFirstRemoval,
+    );
   });
 });
 
@@ -484,35 +488,42 @@ describe('gcProjectsAgainstActive', () => {
 
 describe('manual project ordering', () => {
   it('normalizes by removing stale entries and appending new active dirs', () => {
-    expect(normalizeManualProjectOrder(['local:/b', 'local:/stale', 'local:/a'], ['local:/a', 'local:/b', '/c'])).toEqual([
-      'local:/b',
-      'local:/a',
-      'local:/c',
-    ]);
+    expect(
+      normalizeManualProjectOrder(
+        ['local:/b', 'local:/stale', 'local:/a'],
+        ['local:/a', 'local:/b', '/c'],
+      ),
+    ).toEqual(['local:/b', 'local:/a', 'local:/c']);
   });
 
   it('moves a project before a target', () => {
-    expect(moveManualProjectOrder(['local:/a', 'local:/b', '/c'], ['local:/a', 'local:/b', '/c'], 'local:/c', 'local:/a', 'before')).toEqual([
-      'local:/c',
-      'local:/a',
-      'local:/b',
-    ]);
+    expect(
+      moveManualProjectOrder(
+        ['local:/a', 'local:/b', '/c'],
+        ['local:/a', 'local:/b', '/c'],
+        'local:/c',
+        'local:/a',
+        'before',
+      ),
+    ).toEqual(['local:/c', 'local:/a', 'local:/b']);
   });
 
   it('moves a project after a target, seeding from active dirs when no order exists', () => {
-    expect(moveManualProjectOrder([], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/c', 'after')).toEqual([
-      'local:/b',
-      'local:/c',
-      'local:/a',
-    ]);
+    expect(
+      moveManualProjectOrder([], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/c', 'after'),
+    ).toEqual(['local:/b', 'local:/c', 'local:/a']);
   });
 
   it('keeps the order unchanged for an adjacent no-op drop', () => {
-    expect(moveManualProjectOrder(['local:/a', 'local:/b', '/c'], ['local:/a', 'local:/b', '/c'], 'local:/a', 'local:/b', 'before')).toEqual([
-      'local:/a',
-      'local:/b',
-      'local:/c',
-    ]);
+    expect(
+      moveManualProjectOrder(
+        ['local:/a', 'local:/b', '/c'],
+        ['local:/a', 'local:/b', '/c'],
+        'local:/a',
+        'local:/b',
+        'before',
+      ),
+    ).toEqual(['local:/a', 'local:/b', 'local:/c']);
   });
 });
 

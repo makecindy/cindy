@@ -354,6 +354,7 @@ export interface AgentInputCoordinatorDeps {
   screenUserMessage?: (
     sessionId: string,
     agentFacingText: string,
+    item: AgentInputQueuedMessage,
   ) => Promise<
     | { action: 'allow' }
     | { action: 'block'; ghostId: string; ghostName: string; reason: string }
@@ -1722,7 +1723,11 @@ export class AgentInputCoordinator {
     // marker 已置位,筛查期间并发 steer / drain 被挡;stop / clearSession 竞态
     // 由筛查后的 marker 复查兜底。
     if (!item.bypassGhostHooks && this.deps.screenUserMessage) {
-      const verdict = await this.deps.screenUserMessage(sessionId, getAgentFacingText(item));
+      const verdict = await this.deps.screenUserMessage(
+        sessionId,
+        getAgentFacingText(item),
+        item,
+      );
       const cur = this.getState(sessionId);
       if (!cur.steeringQueueClientIds.includes(item.clientId)) {
         // stop/close/clearSession 赢在筛查期间:steer 事务已被取消,静默放弃。
@@ -2842,6 +2847,9 @@ export class AgentInputCoordinator {
 
   /**
    * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。
+   * @param opts.preserveAutoResumeIntent 为 true 时保留当前自动续跑接管态。
+   *   仅用于 provider rebuild 在退避 timer 触发前关闭旧 Session 的交棒窗口；
+   *   active turn / steer / drain 等旧实例运行态仍照常清理。
    *   用于 rehydrate / 凭证切换 close-rebuild 窗口:abort 会取消驱动本次重建的
    *   input signal(#1930),但**其余清理必须照常**(activeTurn / steer / queue
    *   状态不能残留,否则 rebuild 失败或 close 后不 rebuild 时 coordinator
@@ -2849,10 +2857,12 @@ export class AgentInputCoordinator {
    */
   onSessionClosed(
     sessionId: string,
-    opts?: { preserveInputBoundary?: boolean },
+    opts?: { preserveInputBoundary?: boolean; preserveAutoResumeIntent?: boolean },
   ): void {
     const state = this.getState(sessionId);
-    this.supersedePendingAutoResumeRecoveries(sessionId);
+    if (!opts?.preserveAutoResumeIntent) {
+      this.supersedePendingAutoResumeRecoveries(sessionId);
+    }
     const releasedAbortLock = state.queueAbortPending;
     this.cancelScheduledDrain(state);
     this.clearAbortReconcileRetry(state);
@@ -3153,7 +3163,11 @@ export class AgentInputCoordinator {
       // 留痕署名后照常派发。activeTurn 已置位,并发 drain 被挡住,询问期间
       // 不会抢发下一条。
       if (!head.bypassGhostHooks && this.deps.screenUserMessage) {
-        const verdict = await this.deps.screenUserMessage(sessionId, getAgentFacingText(head));
+        const verdict = await this.deps.screenUserMessage(
+          sessionId,
+          getAgentFacingText(head),
+          head,
+        );
         if (!this.isActiveTurnCurrent(sessionId, active)) return;
         if (verdict.action === 'block') {
           this.getState(sessionId).activeTurn = null;

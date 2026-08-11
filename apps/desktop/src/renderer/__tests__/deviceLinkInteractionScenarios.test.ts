@@ -1259,6 +1259,8 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain('let linkOnline = false');
     expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
     expect(src).toContain('linkStatusPushSeen = true');
+    // debounce 排队后 relay 可能已进入 connecting；执行时必须重查实时状态，不能离线重试。
+    expect(src).toContain('if (!disposed && linkOnline && eligible.has(deviceId))');
   });
 
   it('F4: extraDirs 远程跳过 sessionService.update(getSessionDeviceId 守卫,避免阻断 setExtraDirs)', () => {

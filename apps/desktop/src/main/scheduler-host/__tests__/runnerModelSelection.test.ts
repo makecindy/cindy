@@ -427,6 +427,38 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
+    it('Pi 空模型的动态来源只用于创建，不固化成 Claude 式 session 来源', async () => {
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'byom/llama-4',
+        providerId: 'local-byom',
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ agentKind: 'pi', model: undefined, providerId: undefined }),
+      );
+
+      expect(resolveDefaultModelRoute).toHaveBeenCalledWith('pi', null);
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentKind: 'pi',
+          model: 'byom/llama-4',
+          providerId: 'local-byom',
+        }),
+      );
+      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+      expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
+        expect.anything(),
+        'scheduler-session',
+        expect.objectContaining({ providerId: undefined }),
+        expect.anything(),
+      );
+    });
+
     it('Pi 空模型且没有已连接来源时在创建会话前明确失败', async () => {
       const h = createSessionHarness();
       const resolveDefaultModelRoute = vi.fn(async () => null);
@@ -977,24 +1009,69 @@ describe('MakerScheduleRunner model selection', () => {
 
   // ── per-session 来源(供应商)注入 ──────────────────────────────────────────
   // 不变量(镜像 model,但更简单——provider 走独立内存 store,与 session 是否复用无关):
-  //   - 留空 + 非 heartbeat → 不碰 store(fresh session 默认 null = 原生默认路由,no-break)。
+  //   - 留空 + 非 heartbeat Claude → 按当前连接来源物化真实路由，避免凭证 fallback。
   //   - 留空 + heartbeat → hydrate 绑定会话的 provider_id(只在内存无条目时写,不覆盖)。
   //   - 显式设置 → setSessionProvider 覆盖 + backfill 落 sessions.provider_id。
   describe('provider (来源) 注入', () => {
-    it('非 heartbeat + 留空 providerId → 不调 setSessionProvider/hydrate(原生默认,no-break)', async () => {
+    it('非 heartbeat Claude + 留空 providerId → 物化当前 Claude 订阅来源并落库', async () => {
       const h = createSessionHarness();
-      const harness = createRunnerHarness(h);
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'claude-sonnet-4-6',
+        providerId: 'anthropic',
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
 
       await fireToCompletion(harness, h, baseSchedule({ model: 'claude-sonnet-4-6' }));
 
-      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+      expect(resolveDefaultModelRoute).toHaveBeenCalledWith(
+        'claude-code',
+        null,
+        'claude-sonnet-4-6',
+      );
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: 'anthropic' }),
+      );
+      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'anthropic');
       expect(mocks.hydrateSessionProvider).not.toHaveBeenCalled();
       expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
         expect.anything(),
         'scheduler-session',
-        expect.objectContaining({ providerId: undefined }),
+        expect.objectContaining({ providerId: 'anthropic' }),
         expect.anything(),
       );
+    });
+
+    it('非 heartbeat Claude + 留空 providerId 且没有可用来源 → 创建前明确失败', async () => {
+      const h = createSessionHarness();
+      const resolveDefaultModelRoute = vi.fn(async () => null);
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
+
+      await expect(
+        harness.runner.fire(baseSchedule({ model: 'claude-sonnet-4-6' }), createFireContext()),
+      ).rejects.toThrow('Claude Code has no connected source for model "claude-sonnet-4-6"');
+      expect(harness.createSession).not.toHaveBeenCalled();
+      expect(h.send).not.toHaveBeenCalled();
+    });
+
+    it('非 heartbeat Claude + 目录未知模型 → 保留 legacy null-provider fallback', async () => {
+      const h = createSessionHarness();
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'claude-from-future',
+        providerId: null,
+        catalogKnown: false,
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({ model: 'claude-from-future' }),
+      );
+
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'claude-from-future', providerId: null }),
+      );
+      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
     });
 
     it('非 heartbeat + 显式 providerId → setSessionProvider 覆盖 + 落库', async () => {

@@ -8,6 +8,9 @@ import {
   claimLegacyOwnerNamespace,
   getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
+  hasExclusiveSharedLegacyUserDataAccess,
+  isLegacyOwnerNamespaceClaimOwnedBy,
+  isLegacyOwnerNamespaceClaimedByOtherOwner,
   listLegacyGhostTombstoneRoots,
   recoverLegacyGhostPlugins,
   __testing,
@@ -214,6 +217,30 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(resumed).toMatchObject({ status: 'migrated' });
     await expect(fs.readFile(path.join(targetRoot, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
+  });
+
+  it('keeps rollback-compatible sidebar state at the legacy path after claiming it', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const legacySidebar = path.join(root, 'sidebar-settings.json');
+    const scopedSidebar = path.join(
+      root,
+      'owners',
+      dataOwnerStorageKey(ownerId),
+      'sidebar-settings.json',
+    );
+    await fs.writeFile(legacySidebar, JSON.stringify({ pinnedOrder: ['legacy-session'] }));
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root),
+    );
+
+    expect(result).toEqual({ status: 'migrated', moved: 0, conflicts: 0 });
+    await expect(fs.readFile(legacySidebar, 'utf-8')).resolves.toContain('legacy-session');
+    await expect(fs.access(scopedSidebar)).rejects.toThrow();
+    expect(hasLegacyOwnerNamespaceClaim(ownerId, root)).toBe(true);
+    expect(isLegacyOwnerNamespaceClaimOwnedBy(ownerId, root)).toBe(true);
   });
 
   it('defers when a pre-patch packaged instance holds a live SingletonLock', async () => {
@@ -667,10 +694,19 @@ describe('legacy Ghost plugin recovery', () => {
         realFsDeps(root),
         { rejectReservedIds: true },
       ),
-    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    ).resolves.toEqual({ status: 'skipped', moved: 0, conflicts: 0 });
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+        false,
+        { rejectReservedIds: true },
+      ),
+    ).toEqual({ state: 'none', legacyPluginCount: 0, canRetry: false });
     await expect(
       fs.readFile(path.join(root, 'brain', 'cindy-untrusted', 'ghost.json'), 'utf-8'),
     ).resolves.toContain('"id":"cindy-untrusted"');
+    await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
   });
 
   it('moves builtin provisioning state with plugins before reconciliation', async () => {
@@ -1290,7 +1326,7 @@ describe('legacy Ghost plugin recovery', () => {
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(false);
   });
 
-  it('reports claimed-by-other-owner and never moves plugins across accounts', async () => {
+  it('ignores foreign-owned shared plugins and never moves them across accounts', async () => {
     const root = await tempRoot();
     await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
     await fs.writeFile(
@@ -1308,14 +1344,13 @@ describe('legacy Ghost plugin recovery', () => {
     );
 
     expect(result).toEqual({ status: 'claimed-by-other-owner', moved: 0, conflicts: 0 });
-    expect(status).toEqual({
-      state: 'claimed-by-other-owner',
-      legacyPluginCount: 1,
-      canRetry: false,
-    });
+    expect(status).toEqual({ state: 'none', legacyPluginCount: 0, canRetry: false });
     await expect(
       fs.access(path.join(root, 'owners', dataOwnerStorageKey('cloud-b'), 'cindy-brain')),
     ).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(root, 'cindy-brain', 'valid-plugin', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"valid-plugin"');
   });
 
   it('reports retryable partial status when legacy plugins appear after a completed owner claim', async () => {
@@ -1397,6 +1432,46 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
   });
 
+  it('distinguishes another owner claim even while that claim is incomplete', async () => {
+    const root = await tempRoot();
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(false);
+
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-b'), complete: false }),
+    );
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(true);
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-b', root)).toBe(false);
+
+    await fs.writeFile(path.join(root, __testing.CLAIM_MARKER), '{ invalid');
+    expect(isLegacyOwnerNamespaceClaimedByOtherOwner('cloud-a', root)).toBe(false);
+  });
+
+  it('reads a same-owner marker without granting migration permission', async () => {
+    const root = await tempRoot();
+    expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(false);
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
+    );
+    process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
+    try {
+      expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(true);
+      expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-b', root)).toBe(false);
+      expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(false);
+    } finally {
+      delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
+    }
+
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: false }),
+    );
+    expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(true);
+    await fs.writeFile(path.join(root, __testing.CLAIM_MARKER), '{ invalid');
+    expect(isLegacyOwnerNamespaceClaimOwnedBy('cloud-a', root)).toBe(false);
+  });
+
   it('answers false while another live instance shares this userData, true again after it exits', async () => {
     const root = await tempRoot();
     await fs.writeFile(
@@ -1435,6 +1510,33 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
       delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
     }
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root)).toBe(true);
+  });
+});
+
+describe('hasExclusiveSharedLegacyUserDataAccess', () => {
+  beforeEach(() => {
+    delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
+  });
+
+  it('does not require a cloud owner claim when the shared profile is exclusive', async () => {
+    const root = await tempRoot();
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root)).toBe(true);
+
+    process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
+    try {
+      expect(hasExclusiveSharedLegacyUserDataAccess(root)).toBe(false);
+    } finally {
+      delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
+    }
+  });
+
+  it('fails closed while another live instance shares the profile', async () => {
+    const root = await tempRoot();
+    await writeDevInstanceRecord(root, 4242);
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
   });
 });
 

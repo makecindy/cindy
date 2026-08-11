@@ -376,6 +376,64 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/request.userInitiated/);
   });
 
+  it('requires a provider-scoped Subagent focus and forwards the pair together', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-subagents-tab',
+          sessionId: 's1',
+          focusRunId: 'shared-native-id',
+          focusProvider: 'codex',
+          focusTab: true,
+        },
+        allowOpen: true,
+      },
+    );
+
+    expect(controller.routeCommand).toHaveBeenCalledWith({
+      command: {
+        type: 'open-subagents-tab',
+        sessionId: 's1',
+        focusRunId: 'shared-native-id',
+        focusProvider: 'codex',
+        focusTab: true,
+      },
+      allowOpen: true,
+    });
+
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-subagents-tab',
+            sessionId: 's1',
+            focusRunId: 'shared-native-id',
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/focusRunId and command.focusProvider/);
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-subagents-tab',
+            sessionId: 's1',
+            focusRunId: 'shared-native-id',
+            focusProvider: 'other-harness',
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/focusProvider/);
+  });
+
   it('open payload:缺省/空 = 用户手势;显式 false 透传;野值拒绝', async () => {
     const controller = makeController();
     registerController(controller);

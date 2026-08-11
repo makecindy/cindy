@@ -21,6 +21,10 @@ describe('Plugin Market IPC error boundary', () => {
     resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const ghostPluginPageSource = readFileSync(
+    resolve(process.cwd(), 'src/renderer/features/plugin/GhostPluginPage.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   it('preserves structured errors and normalizes unexpected failures', () => {
     const start = registerSource.indexOf('async function invokePluginMarket');
@@ -29,7 +33,22 @@ describe('Plugin Market IPC error boundary', () => {
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
-    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(12);
+    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(13);
+  });
+
+  it('validates local icon keys with the same reserved-prefix contract as the service', () => {
+    const start = registerSource.indexOf("ipcMain.handle('plugin-market:local-icons'");
+    const end = registerSource.indexOf("ipcMain.handle(\n    'plugin-market:install'", start);
+    const body = registerSource.slice(start, end);
+
+    expect(body).toContain('isPluginMarketCustomIconKey(expectedIconKey)');
+    expect(registerSource).toContain(
+      "import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';",
+    );
+    expect(body).toContain('localIconRequestGate.tryRun');
+    expect(body).toContain(
+      "throwIpcError('PRECONDITION_FAILED', 'Too many local Plugin icon requests');",
+    );
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {
@@ -75,11 +94,21 @@ describe('Plugin Market IPC error boundary', () => {
     expect(syncBody).toContain('await snapshotAndSignalRemovalNotice();');
     expect(syncBody).toContain("log.warn('default plugin startup sync failed'");
 
-    const snapshotStart = registerSource.indexOf('async function snapshotAndSignalRemovalNotice()');
+    const snapshotStart = registerSource.indexOf(
+      'async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOptions)',
+    );
     const snapshotEnd = registerSource.indexOf('\n}\n\n/**', snapshotStart);
     const snapshotBody = registerSource.slice(snapshotStart, snapshotEnd);
     expect(snapshotBody).toContain('finally {');
     expect(snapshotBody).toContain('signalRemovalNoticeAvailable();');
+    expect(snapshotBody).toContain('signalUpgradeNoticeAvailable();');
+
+    expect(registerSource).toContain('deferDefaultReconciliation: true');
+    expect(registerSource).toContain('onDeferredReconciliationSettled: () => {');
+    expect(ghostPluginPageSource).toContain(
+      'window.electronAPI.pluginMarket.onUpgradeNoticeAvailable(() => {',
+    );
+    expect(ghostPluginPageSource).toContain('void refreshMarket(true).catch(() => undefined);');
 
     const ownerSyncStart = bootstrapSource.indexOf(
       'function syncDefaultPluginsForActiveOwner(): void',

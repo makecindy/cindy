@@ -16,6 +16,8 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
@@ -146,6 +148,51 @@ function capabilitiesForSession(
       reason: 'platform-limited',
       message: '远端 Codex 会话暂不支持对话 rewind',
     },
+  };
+}
+
+function canonicalPiRuntimePath(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function mergePiRuntimeSkillStatuses(
+  result: ListAgentSkillsResult,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): ListAgentSkillsResult {
+  if (manifest?.status !== 'loaded') return result;
+  const loadedProjectSkills = new Map(
+    manifest.commands.flatMap((command) => {
+      const baseDir = command.sourceInfo.baseDir;
+      if (
+        command.source !== 'skill'
+        || command.sourceInfo.scope !== 'project'
+        || typeof baseDir !== 'string'
+        || !command.name.startsWith('skill:')
+      ) return [];
+      return [[[
+        command.name.slice('skill:'.length),
+        canonicalPiRuntimePath(baseDir),
+      ].join('\0'), command.name] as const];
+    }),
+  );
+  if (loadedProjectSkills.size === 0) return result;
+  return {
+    ...result,
+    skills: result.skills.map((skill) => {
+      const runtimeCommandName = skill.scope === 'repo' && skill.path
+        ? loadedProjectSkills.get([
+          skill.name,
+          canonicalPiRuntimePath(path.dirname(path.dirname(skill.path))),
+        ].join('\0'))
+        : undefined;
+      return runtimeCommandName
+        ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
+        : skill;
+    }),
   };
 }
 
@@ -460,6 +507,7 @@ export class Maker {
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
+          reviewMode: opts.reviewMode,
           parentSessionId: opts.parentSessionId,
           // remoteHostId: 远端 session 把目标机器持久化, 之后 resume / list 都能识别。
           // 本地 session 留 undefined (sqlite 落空), 跟历史行为兼容。
@@ -703,6 +751,17 @@ export class Maker {
   }
 
   /**
+   * Return the close cause for the exact runtime Session instance.
+   *
+   * A missing explicit cause means the vendor/Session closed itself. Keep this
+   * keyed by instance rather than business session id: a replacement can be
+   * created before a late close notification from the old instance arrives.
+   */
+  getSessionCloseReason(session: Session): MakerSessionCloseReason {
+    return this.closeReasons.get(session) ?? 'unexpected';
+  }
+
+  /**
    * Maker 进程级 shutdown — app.before-quit / 信号 / 崩溃 hook 调一次。
    *
    * **强制退出语义** (与 normal logout 路径不同): agent.dispose() 和 session.close()
@@ -729,6 +788,14 @@ export class Maker {
     const agentEntries = Object.entries(this.agents);
 
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
+
+    // shutdown() calls detach() directly instead of closeSession(), so record
+    // the explicit cause before any asynchronous close callback can run. This
+    // prevents app exit from looking like an unexpected provider rebuild and
+    // accidentally preserving an automatic retry lease.
+    for (const session of sessSnapshot) {
+      if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+    }
 
     // **agent.dispose 优先排队**: 微任务 ordering 不是强保证 (dispose 内部还有 await
     // hostPromise 等 hop), 但先排队意味着 SIGTERM 那一步至少不会被 session-close
@@ -794,9 +861,20 @@ export class Maker {
    */
   async listAgentSkills(
     agentKind: AgentKind,
-    opts: ListAgentSkillsOptions,
+    opts: ListAgentSkillsOptions & { sessionId?: string },
   ): Promise<ListAgentSkillsResult> {
-    return this.requireAgent(agentKind).listAgentSkills(opts);
+    const { sessionId, ...agentOpts } = opts;
+    const result = await this.requireAgent(agentKind).listAgentSkills(agentOpts);
+    if (agentKind !== 'pi' || !sessionId) return result;
+    const session = this.getSession(sessionId);
+    if (
+      session?.agentKind !== 'pi'
+      || !opts.workingDir
+      || canonicalPiRuntimePath(opts.workingDir) !== canonicalPiRuntimePath(session.workDir)
+    ) {
+      return result;
+    }
+    return mergePiRuntimeSkillStatuses(result, session.getRuntimeCapabilities());
   }
 
   /** ChatInput `@` palette entries, routed by agent kind. */

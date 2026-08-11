@@ -101,9 +101,7 @@ import {
   useSessionAttentionKinds,
   useSessionAttentionSnapshot,
 } from '@/lib/sessionAttentionStore';
-import {
-  patchDraft as patchNewMakerDraft,
-} from '@/state/newMakerDraft';
+import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
 import { requestConversationSearch } from '@/state/conversationSearchRequest';
 
@@ -136,6 +134,7 @@ import {
   selectProjectBulkArchiveCandidates,
 } from './lib/projectBulkArchiveAction';
 import { sessionActivityMs } from './lib/dateSessionGrouping';
+import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
@@ -216,7 +215,14 @@ import {
   prefetchDeviceGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
-import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import {
+  requestRemoteSessionStatus,
+  useRemoteArchivedFailedDeviceIds,
+  useRemoteArchivedLoadedDeviceIds,
+  useRemoteArchivedLoadingDeviceIds,
+  useRemoteDevices,
+  useRemoteProjectSessions,
+} from '@/features/device-link/remoteProjectsStore';
 import {
   selectVisibleSessions,
   setSelectedMachineIdTransient,
@@ -228,6 +234,8 @@ import {
   isRemoteSessionWriteBlocked,
 } from './lib/remoteSessionWriteGuard';
 import {
+  selectRemoteSessionBootstrapFailures,
+  selectRemoteSessionBootstrapLoadingDevices,
   useEffectiveSelectedMachineId,
   useRemoteSessionBootstrapFailures,
   useRemoteSessionBootstrapLoading,
@@ -383,8 +391,8 @@ export function CCAgentSidebarUpper() {
   usePendingAlertAttention();
   // F-PJ-10：filter.status 决定后端 fetch 时是否带 ?status=archived|all
   const hiddenProjects = useHiddenProjects();
-  const { hiddenProjectKeys } = hiddenProjects;
-  const filter = useSidebarFilter(hiddenProjectKeys);
+  const { hiddenProjectKeys, initialSnapshot: sidebarSettingsSnapshot } = hiddenProjects;
+  const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
   const { sessions: allSessionsForAttention } = useCCSessions({ includeArchived: 'all' });
@@ -395,12 +403,7 @@ export function CCAgentSidebarUpper() {
   const projectAliases = useProjectAliases();
   const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
   const visibleSearchProjects = useMemo(
-    () =>
-      visibleSidebarProjects(
-        searchProjectGroups.projects,
-        hiddenProjectKeys,
-        localPlatform,
-      ),
+    () => visibleSidebarProjects(searchProjectGroups.projects, hiddenProjectKeys, localPlatform),
     [searchProjectGroups.projects, hiddenProjectKeys, localPlatform],
   );
   const visibleSearchSessionIds = useMemo(
@@ -513,11 +516,7 @@ export function CCAgentSidebarUpper() {
     const switchableSessions = allSessionsForAttention.filter((s) => !isOrcaWorkerSession(s));
     return buildDocModeSwitchProjects(switchableSessions).filter(
       (project) =>
-        !projectKeyComparisonSetHas(
-          hiddenProjectComparisonKeys,
-          project.projectKey,
-          localPlatform,
-        ),
+        !projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform),
     );
   }, [allSessionsForAttention, hiddenProjectComparisonKeys, localPlatform]);
   const filesProjectKey = filesSession ? projectIdentityKeyForSession(filesSession) : null;
@@ -543,19 +542,39 @@ export function CCAgentSidebarUpper() {
   // 机器切换栏选中某机器后按 selectedMachineId 整体过滤(本机 → 只本地;远程 → 只该机器),
   // rail 与展开态共用同一选择态,保证 rail 折叠后仍尊重选中机器。
   const remoteProjectSessions = useRemoteProjectSessions();
+  const remoteDevices = useRemoteDevices();
   const selectedMachineId = useEffectiveSelectedMachineId();
+  useEffect(() => {
+    if (filter.status === 'active') return;
+    const selectedRemoteIds =
+      selectedMachineId === MACHINE_ALL
+        ? null
+        : new Set(selectedMachineId.filter((deviceId) => deviceId !== MACHINE_LOCAL));
+    for (const device of remoteDevices) {
+      if (!device.connected) continue;
+      if (selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)) continue;
+      requestRemoteSessionStatus(device.deviceId, 'archived');
+    }
+  }, [filter.status, remoteDevices, selectedMachineId]);
   const sessionsWithRemote = useMemo(
     () => selectVisibleSessions(sessionsHook.sessions, remoteProjectSessions, selectedMachineId),
     [sessionsHook.sessions, remoteProjectSessions, selectedMachineId],
   );
+  const statusFilteredSessionsWithRemote = useMemo(
+    () =>
+      sessionsWithRemote.filter((session) =>
+        matchesSidebarSessionStatus(session, filter.status, sessionsHook.effectiveIncludeArchived),
+      ),
+    [filter.status, sessionsHook.effectiveIncludeArchived, sessionsWithRemote],
+  );
   const visibleSessionsWithRemote = useMemo(
     () =>
       sidebarSessionsWithHiddenProjectsAsDialogues(
-        sessionsWithRemote,
+        statusFilteredSessionsWithRemote,
         hiddenProjectKeys,
         localPlatform,
       ),
-    [sessionsWithRemote, hiddenProjectKeys, localPlatform],
+    [statusFilteredSessionsWithRemote, hiddenProjectKeys, localPlatform],
   );
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
@@ -585,13 +604,14 @@ export function CCAgentSidebarUpper() {
         filter.manualPinnedOrder,
         pinnedSessionIds,
       );
-      const merged = mergeVisibleReorder(
-        normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds),
-        visibleNewOrder,
-      );
-      filter.setManualPinnedOrder(merged, fullActivePinnedIds);
+      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+        log.warn('failed to persist rail pinned order', err);
+        toast.error(t('ccAgent.sidebar.pinFailed'));
+      });
     },
-    [sessionsHook.sessions, remoteProjectSessions, filter],
+    [sessionsHook.sessions, remoteProjectSessions, filter, t],
   );
 
   return (
@@ -778,7 +798,11 @@ function ExpandedView({
   const { t, i18n } = useTranslation();
   const localPlatform = window.electronAPI.platform;
   const { sessions, refreshSessions, patchLocal, effectiveIncludeArchived } = sessionsHook;
-  const { hiddenProjectKeys, setProjectHidden } = hiddenProjects;
+  const {
+    hiddenProjectKeys,
+    setProjectHidden,
+    initialSnapshot: sidebarSettingsSnapshot,
+  } = hiddenProjects;
   const refreshWorktrees = useRefreshWorktrees();
   const projectPickerOptions = useProjectPickerOptions();
 
@@ -1085,15 +1109,9 @@ function ExpandedView({
     return next;
   }, [effectiveRunningSessionIds, backgroundActivitySessionIds, orcaLeadWorkerMap]);
 
-  // 关键：用 effectiveIncludeArchived（snapshot 实际所属桶）而非 filter.status
-  // 决定是否做客户端过滤——
-  //   · effectiveIncludeArchived === 'all'  → 桶含所有 status,
-  //                                            按 user 选中的 filter.status 收窄
-  //   · 其它(active/archived 单 status 桶) → 桶内本应全是同一 status,
-  //                                            按桶 status 收窄即可
-  // 这样 user 点 status chip 后, sidebar 列表跟着 snapshot 一起切，
-  // 不会出现「user filter 立刻变 → 旧桶按新 filter 过滤后全空 → 新桶到才回填」
-  // 的空白帧。filter.status 仍只用于 chip 高亮和 IPC 桶决策。
+  // 本地会话用 effectiveIncludeArchived（snapshot 实际所属桶）避免切桶时先闪空；
+  // device-link 远程镜像同时持有 active / archived 两桶，必须独立按 filter.status 筛选，
+  // 否则本地 archived/all 请求慢或失败时会把已加载的远程归档行持续隐藏。
   //
   // 单 status 桶为何要按桶 status 显式过滤(而不是直接信任桶内全是同 status):
   // patchLocal 是跨桶 in-place mutation —— doc 模式归档(WorkdirBrowseRoute)
@@ -1116,10 +1134,99 @@ function ExpandedView({
   const dialogueCreatePending = selectedDialogueDeviceResolution.status === 'pending';
   // 「所有」或含远程设备的作用域还要等 device-link 首次 sessions snapshot；
   // 否则本地 sessions 先完成时会把尚未知的远程空数组误报成真实空态。
-  const remoteSessionBootstrapLoading = useRemoteSessionBootstrapLoading(selectedMachineId);
-  const remoteSessionBootstrapLoadingDevices =
+  const activeRemoteSessionBootstrapLoading = useRemoteSessionBootstrapLoading(selectedMachineId);
+  const activeRemoteSessionBootstrapLoadingDevices =
     useRemoteSessionBootstrapLoadingDevices(selectedMachineId);
-  const remoteSessionBootstrapFailures = useRemoteSessionBootstrapFailures(selectedMachineId);
+  const activeRemoteSessionBootstrapFailures = useRemoteSessionBootstrapFailures(selectedMachineId);
+  const archivedLoadingDeviceIds = useRemoteArchivedLoadingDeviceIds();
+  const archivedFailedDeviceIds = useRemoteArchivedFailedDeviceIds();
+  const archivedLoadedDeviceIds = useRemoteArchivedLoadedDeviceIds();
+  const archivedRemoteSessionLoadingDevices = useMemo(
+    () =>
+      selectRemoteSessionBootstrapLoadingDevices({
+        selectedMachineId,
+        devices: switcherDevices,
+        bootstrapLoadingDeviceIds: archivedLoadingDeviceIds,
+      }),
+    [archivedLoadingDeviceIds, selectedMachineId, switcherDevices],
+  );
+  const archivedRemoteSessionFailures = useMemo(
+    () =>
+      selectRemoteSessionBootstrapFailures({
+        selectedMachineId,
+        devices: switcherDevices,
+        bootstrapFailedDeviceIds: archivedFailedDeviceIds,
+      }),
+    [archivedFailedDeviceIds, selectedMachineId, switcherDevices],
+  );
+  const activeArchivedPrerequisiteLoadingDevices = useMemo(
+    () =>
+      activeRemoteSessionBootstrapLoadingDevices.filter(
+        (device) => !archivedLoadedDeviceIds.has(device.deviceId),
+      ),
+    [activeRemoteSessionBootstrapLoadingDevices, archivedLoadedDeviceIds],
+  );
+  const activeArchivedPrerequisiteFailures = useMemo(
+    () =>
+      activeRemoteSessionBootstrapFailures.filter(
+        (device) => !archivedLoadedDeviceIds.has(device.deviceId),
+      ),
+    [activeRemoteSessionBootstrapFailures, archivedLoadedDeviceIds],
+  );
+  const remoteSessionBootstrapLoadingDevices = useMemo(() => {
+    if (filter.status === 'active') return activeRemoteSessionBootstrapLoadingDevices;
+    if (filter.status === 'archived') {
+      return [
+        ...new Map(
+          [...activeArchivedPrerequisiteLoadingDevices, ...archivedRemoteSessionLoadingDevices].map(
+            (device) => [device.deviceId, device],
+          ),
+        ).values(),
+      ];
+    }
+    return [
+      ...new Map(
+        [...activeRemoteSessionBootstrapLoadingDevices, ...archivedRemoteSessionLoadingDevices].map(
+          (device) => [device.deviceId, device],
+        ),
+      ).values(),
+    ];
+  }, [
+    activeArchivedPrerequisiteLoadingDevices,
+    activeRemoteSessionBootstrapLoadingDevices,
+    archivedRemoteSessionLoadingDevices,
+    filter.status,
+  ]);
+  const remoteSessionBootstrapFailures = useMemo(() => {
+    if (filter.status === 'active') return activeRemoteSessionBootstrapFailures;
+    if (filter.status === 'archived') {
+      return [
+        ...new Map(
+          [...activeArchivedPrerequisiteFailures, ...archivedRemoteSessionFailures].map(
+            (device) => [device.deviceId, device],
+          ),
+        ).values(),
+      ];
+    }
+    return [
+      ...new Map(
+        [...activeRemoteSessionBootstrapFailures, ...archivedRemoteSessionFailures].map(
+          (device) => [device.deviceId, device],
+        ),
+      ).values(),
+    ];
+  }, [
+    activeArchivedPrerequisiteFailures,
+    activeRemoteSessionBootstrapFailures,
+    archivedRemoteSessionFailures,
+    filter.status,
+  ]);
+  const remoteSessionBootstrapLoading =
+    filter.status === 'active'
+      ? activeRemoteSessionBootstrapLoading
+      : filter.status === 'archived'
+        ? remoteSessionBootstrapLoadingDevices.length > 0
+        : activeRemoteSessionBootstrapLoading || archivedRemoteSessionLoadingDevices.length > 0;
   const deviceListRequestState = useDeviceLinkDeviceListRequestState();
   const remoteDeviceDirectoryRelevant =
     selectedMachineId === MACHINE_ALL ||
@@ -1151,12 +1258,7 @@ function ExpandedView({
   const passesOrcaAndStatus = useCallback(
     (s: Session) => {
       if (isOrcaWorkerSession(s)) return false;
-      if (effectiveIncludeArchived === 'all') {
-        if (filter.status !== 'all' && s.status !== filter.status) return false;
-      } else if (s.status !== effectiveIncludeArchived) {
-        return false;
-      }
-      return true;
+      return matchesSidebarSessionStatus(s, filter.status, effectiveIncludeArchived);
     },
     [filter.status, effectiveIncludeArchived],
   );
@@ -1201,7 +1303,7 @@ function ExpandedView({
     () => allProjectGroups.projects.map((p) => p.projectKey),
     [allProjectGroups.projects],
   );
-  const collapse = useCollapsedProjects(activeWorkingDirs);
+  const collapse = useCollapsedProjects(activeWorkingDirs, sidebarSettingsSnapshot.dataOwnerId);
 
   // 项目过滤 GC 的「宇宙」用**全量**(不按机器过滤)项目键 —— 否则在某机器作用域下 remount,
   // gcProjectsAgainstActive 会把其它机器的项目从已保存的项目过滤里误删(它们只是被切换栏隐藏、
@@ -1215,8 +1317,7 @@ function ExpandedView({
   // Visibility is a negative overlay only. Keep the raw universe above for
   // filter/manual-order GC, and expose a separate catalogue to sidebar UI.
   const visibleProjectUniverse = useMemo(
-    () =>
-      visibleSidebarProjects(projectUniverse.projects, hiddenProjectKeys, localPlatform),
+    () => visibleSidebarProjects(projectUniverse.projects, hiddenProjectKeys, localPlatform),
     [projectUniverse.projects, hiddenProjectKeys, localPlatform],
   );
 
@@ -1375,7 +1476,9 @@ function ExpandedView({
   const visiblePinnedProjects = useMemo(() => {
     const allowedProjects = filter.projectsAsSet;
     return allProjectGroups.projects.flatMap((project) => {
-      if (projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform)) {
+      if (
+        projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform)
+      ) {
         return [];
       }
       if (!pinnedProjectKeys.has(project.projectKey)) return [];
@@ -1523,13 +1626,14 @@ function ExpandedView({
         filter.manualPinnedOrder,
         pinnedSessionIds,
       );
-      const merged = mergeVisibleReorder(
-        normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds),
-        visibleNewOrder,
-      );
-      filter.setManualPinnedOrder(merged, fullActivePinnedIds);
+      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+        log.warn('failed to persist pinned order', err);
+        toast.error(t('ccAgent.sidebar.pinFailed'));
+      });
     },
-    [sessions, remoteProjectSessions, filter],
+    [sessions, remoteProjectSessions, filter, t],
   );
 
   const visibleDateSessions = useMemo(() => {
@@ -2153,7 +2257,12 @@ function ExpandedView({
       patchLocal(sessionId, { pinnedAt: newPinnedAt });
       // pin / re-pin 时把它顶到 manualPinnedOrder 首位，否则带着老 rank 会卡回原位。
       // unpin 不主动从 order 里删（无害,下次 drag 触发的 normalize 会顺手 GC）。
-      if (!currentlyPinned) filter.promotePin(sessionId);
+      if (!currentlyPinned) {
+        void filter.promotePin(sessionId).catch((err) => {
+          log.warn('failed to persist pinned session order', err);
+          toast.error(t('ccAgent.sidebar.pinFailed'));
+        });
+      }
       try {
         // 远程会话:patch-meta → 广播 sessions:patched → applyPatch 更新远程分片(纯镜像)。
         await sessionService.patchMeta(sessionId, { pinnedAt: newPinnedAt });
@@ -2169,16 +2278,21 @@ function ExpandedView({
   );
 
   const handleToggleProjectPin = useCallback(
-    (project: ProjectNode, currentlyPinned: boolean) => {
+    async (project: ProjectNode, currentlyPinned: boolean) => {
       const entryId = pinnedProjectEntryId(project.projectKey);
-      if (currentlyPinned) {
-        filter.removePin(entryId);
-      } else {
-        // New and re-pinned projects lead the unified project/conversation list.
-        filter.promotePin(entryId);
+      try {
+        if (currentlyPinned) {
+          await filter.removePin(entryId);
+        } else {
+          // New and re-pinned projects lead the unified project/conversation list.
+          await filter.promotePin(entryId);
+        }
+      } catch (err) {
+        log.warn('failed to persist project pin', err);
+        toast.error(t('ccAgent.sidebar.pinFailed'));
       }
     },
-    [filter],
+    [filter, t],
   );
 
   const handleMoveSession = useCallback(
@@ -3783,9 +3897,7 @@ function RailPanels({
 
   const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
-      <span className="min-w-0 flex-1 truncate text-12 font-semibold text-foreground">
-        {title}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-12 font-semibold text-foreground">{title}</span>
       <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
         {t('ccAgent.sidebar.railNavCount', { count })}
       </span>

@@ -1,6 +1,8 @@
 import {
   getAutoReviewActionTextLength,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  type AutoReviewTimeoutPolicy,
   type AutoReviewDecision,
   type AutoReviewRequest,
 } from '@cindy/maker-core';
@@ -20,7 +22,6 @@ const MAX_REVIEW_OUTPUT_CHARS = 1_024;
 const MAX_USER_INTENT_CHARS = 2_000;
 const MAX_WORKSPACE_ROOTS = 8;
 const MAX_WORKSPACE_ROOT_CHARS = 512;
-const REVIEW_TIMEOUT_MS = 8_000;
 const REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 function compactText(value: string, maxChars: number): string {
@@ -119,6 +120,7 @@ export function parseAutoPermissionReviewDecision(text: string): AutoReviewDecis
 
 export function createAutoPermissionReviewer(
   deps: AutoPermissionReviewerDeps,
+  timeoutPolicy: Readonly<AutoReviewTimeoutPolicy> = DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
 ): (request: AutoReviewRequest) => Promise<AutoReviewDecision | null> {
   return async (request) => {
     const actionTextChars = getAutoReviewActionTextLength(request.action);
@@ -139,7 +141,7 @@ export function createAutoPermissionReviewer(
       const text = await Promise.race([
         deps.requestText(request, buildAutoPermissionReviewPrompt(request)),
         new Promise<typeof REVIEW_TIMEOUT>((resolve) => {
-          timeout = setTimeout(() => resolve(REVIEW_TIMEOUT), REVIEW_TIMEOUT_MS);
+          timeout = setTimeout(() => resolve(REVIEW_TIMEOUT), timeoutPolicy.requestTimeoutMs);
         }),
       ]);
       if (text === REVIEW_TIMEOUT) {

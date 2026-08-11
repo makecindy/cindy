@@ -34,6 +34,7 @@ import {
   PanelLeft,
   PanelRight,
   Radio,
+  Smartphone,
   Sparkles,
   Terminal,
   Trash2,
@@ -78,7 +79,7 @@ interface GhostPluginDetailViewProps {
   enabledOverride?: boolean;
   onBack: () => void;
   onToggle: (enabled: boolean) => void;
-  /** 主动作:面板型「使用」(打开面板)/ 指令型「对话」;纯工具型不渲染主按钮。 */
+  /** 主动作:面板型「使用」/ 指令或 Host 能力型「对话」;纯工具型不渲染主按钮。 */
   onUse: () => void;
   /** 头部更新 CTA:市场有新版本时走市场更新确认流。 */
   onUpdate: () => void;
@@ -112,6 +113,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   pick: FolderOpen,
   preview: AppWindow,
   skill: GraduationCap,
+  'ios-simulator': Smartphone,
   workspace: FolderPlus,
 };
 
@@ -164,7 +166,10 @@ export function GhostPluginDetailView({
   const enabled = enabledOverride ?? detail.enabled;
   const primaryAction = ghostPrimaryAction(detail);
   const primaryEnabled =
-    enabled && (primaryAction === 'panel' || (primaryAction === 'command' && detail.canUse));
+    enabled &&
+    (primaryAction === 'panel' ||
+      primaryAction === 'capability' ||
+      (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
   const hasConfiguration = detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
@@ -291,7 +296,7 @@ export function GhostPluginDetailView({
                     'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
                   )}
                 >
-                  {primaryAction === 'command' ? (
+                  {primaryAction === 'command' || primaryAction === 'capability' ? (
                     <MessageCircle size={14} aria-hidden="true" />
                   ) : null}
                   {t(

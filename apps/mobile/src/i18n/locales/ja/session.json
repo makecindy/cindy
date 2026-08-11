@@ -44,6 +44,7 @@
     "locateMessageNotFound": "移動先のメッセージが見つかりませんでした。",
     "shareNoLocalImage": "ローカルの画像ファイルを取得できませんでした",
     "shareFailedTitle": "共有に失敗しました",
+    "shareImageFailed": "共有画像を生成または開けませんでした。もう一度お試しください。",
     "shareUnsupported": "このバージョンはまだ共有に対応していません。最新版に更新してから再試行してください。",
     "downloadFailed": "ダウンロードに失敗しました",
     "voiceNoRemoteDevice": "リモートデバイスがないため、音声入力を開始できません。",
@@ -105,6 +106,17 @@
     "forkConfirmDescription": "この時点の会話コンテキストを使って、独立した新しいセッションを作成します。元のセッションは変更されず、以後のメッセージは互いに影響しません。",
     "forkConfirm": "新しいセッションを始める",
     "forkCancel": "キャンセル"
+  },
+  "shareImage": {
+    "title": "会話を共有",
+    "selectedCount": "{{count}} 件を選択中",
+    "selectAll": "すべて選択",
+    "clearAll": "選択を解除",
+    "cancel": "共有をキャンセル",
+    "share": "画像を共有",
+    "generating": "準備中…",
+    "checkboxLabel": "共有するメッセージを選択",
+    "shareMessage": "このメッセージを共有"
   },
   "new": {
     "selectDevice": "デバイスを選択",

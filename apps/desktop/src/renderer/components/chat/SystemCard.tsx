@@ -6,16 +6,47 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import { ArrowLeftRight, Check, ChevronDown, ChevronRight, Layers, RefreshCw, Target, X } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Layers,
+  RefreshCw,
+  Target,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import { LearnStatusCard } from '@/features/learn/LearnStatusCard';
+import {
+  readReviewFailureCode,
+  reviewFailureCodeFromLegacyError,
+  type ReviewFailureCode,
+} from '../../../shared/reviewRun';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface SystemCardProps {
-  cardType: 'help' | 'cost' | 'context' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'learn' | 'auto-resume' | 'auto-resume-pending' | 'agent-switch';
+  cardType:
+    | 'help'
+    | 'cost'
+    | 'context'
+    | 'pwd'
+    | 'status'
+    | 'compact'
+    | 'cmd'
+    | 'goal-complete'
+    | 'goal-resumed'
+    | 'learn'
+    | 'review'
+    | 'auto-resume'
+    | 'auto-resume-pending'
+    | 'agent-switch';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -26,6 +57,7 @@ interface SystemCardProps {
    *  归属会话 —— 嵌入式视图(Orca split pane)里 URL 参数是 lead 而非本 pane,
    *  不能用 useParams(Codex review #548)。 */
   sessionId?: string;
+  workingDir?: string;
 }
 
 const cardClass = cn(
@@ -1099,7 +1131,80 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
-export function SystemCard({ cardType, data, sessionId, autoResumeInFlight }: SystemCardProps) {
+const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
+  'no-visible-result': 'chat.systemCard.review.noResult',
+  'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
+  'cancelled-before-start': 'chat.systemCard.review.failure.cancelledBeforeStart',
+  interrupted: 'chat.systemCard.review.failure.interrupted',
+  'source-workspace-changed': 'chat.systemCard.review.failure.sourceWorkspaceChanged',
+  'source-conversation-changed': 'chat.systemCard.review.failure.sourceConversationChanged',
+  'source-files-changed': 'chat.systemCard.review.failure.sourceFilesChanged',
+  'artifact-changed': 'chat.systemCard.review.failure.artifactChanged',
+  'artifact-unavailable': 'chat.systemCard.review.failure.artifactUnavailable',
+  'provider-failed': 'chat.systemCard.review.failure.providerFailed',
+};
+
+function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; workingDir?: string }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const status =
+    data?.status === 'completed' || data?.status === 'failed' ? data.status : 'running';
+  const reviewerSessionId =
+    typeof data?.reviewerSessionId === 'string' ? data.reviewerSessionId : '';
+  const result = typeof data?.result === 'string' ? data.result : '';
+  const error = typeof data?.error === 'string' ? data.error : '';
+  const failureCode =
+    readReviewFailureCode(data?.failureCode) ?? reviewFailureCodeFromLegacyError(error);
+  const failureMessage = failureCode
+    ? t(REVIEW_FAILURE_I18N_KEY[failureCode])
+    : error || t('chat.systemCard.review.noResult');
+
+  return (
+    <div className="my-2 rounded-lg border border-border bg-[var(--surface-chip)] px-3.5 py-3 text-sm">
+      <div className="flex items-center gap-2">
+        {status === 'running' ? (
+          <Spinner size={15} className="text-muted-foreground" />
+        ) : status === 'completed' ? (
+          <Check size={15} className="shrink-0 text-muted-foreground" />
+        ) : (
+          <X size={15} className="shrink-0 text-[var(--error-fg)]" />
+        )}
+        <span className="min-w-0 flex-1 font-medium">{t(`chat.systemCard.review.${status}`)}</span>
+        {reviewerSessionId && (
+          <button
+            type="button"
+            onClick={() => navigate(`/cc-agent/${reviewerSessionId}`)}
+            className="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted/50"
+          >
+            {t('chat.systemCard.review.openTask')}
+            <ArrowRight size={12} />
+          </button>
+        )}
+      </div>
+      {status === 'running' && (
+        <p className="mt-1 pl-[23px] text-xs text-muted-foreground">
+          {t('chat.systemCard.review.readOnlyHint')}
+        </p>
+      )}
+      {status === 'failed' && (
+        <p className="mt-1.5 pl-[23px] text-xs text-[var(--error-fg)]">{failureMessage}</p>
+      )}
+      {status === 'completed' && result && (
+        <div className="mt-3 border-t border-border pt-3">
+          <MarkdownRenderer content={result} workingDir={workingDir ?? ''} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function SystemCard({
+  cardType,
+  data,
+  sessionId,
+  workingDir,
+  autoResumeInFlight,
+}: SystemCardProps) {
   switch (cardType) {
     case 'help':
       return <HelpCard data={data} />;
@@ -1135,6 +1240,8 @@ export function SystemCard({ cardType, data, sessionId, autoResumeInFlight }: Sy
       return <AgentSwitchCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
+    case 'review':
+      return <ReviewCard data={data} workingDir={workingDir} />;
     default:
       return null;
   }

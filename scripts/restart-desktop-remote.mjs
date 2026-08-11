@@ -519,6 +519,8 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
     ['XDT_CDP_PORT', env.XDT_CDP_PORT],
+    ['CINDY_IOS_SIMULATOR_NATIVE_H264', env.CINDY_IOS_SIMULATOR_NATIVE_H264],
+    ['CINDY_IOS_SIMULATOR_NATIVE_HID', env.CINDY_IOS_SIMULATOR_NATIVE_HID],
     ['XDT_TAPDB_DEV', env.XDT_TAPDB_DEV],
     // 端点清单来源覆写:--endpoints-cdn(dev 走线上 CDN)/ local 模式的
     // endpoint.local.json 文件路径,均由主进程 clientEndpointsService 消费。
@@ -534,6 +536,8 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['OPEN_DEVTOOLS', env.OPEN_DEVTOOLS],
     // --wait-ready 的一次性状态文件：runner 写失败，Electron main ready-to-show 写成功。
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
+    // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
+    ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
   ].filter(([, value]) => value);
   if (envEntries.length === 0) return '';
 

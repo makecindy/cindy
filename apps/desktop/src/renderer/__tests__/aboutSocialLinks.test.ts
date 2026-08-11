@@ -12,6 +12,7 @@ const themeColorsSource = readFileSync(
 );
 const expectedXiaohongshuDescriptions: Record<string, string> = {
   'zh-CN': '关注中文内容',
+  'zh-TW': '關注中文內容',
   en: 'Follow Chinese content',
   ja: '中国語コンテンツをフォロー',
   ko: '중국어 콘텐츠 팔로우',
@@ -53,7 +54,7 @@ describe('Settings About social links', () => {
     expect(aboutSource).not.toContain('fill="var(--settings-theme-card-bg)"');
   });
 
-  it.each(['zh-CN', 'en', 'ja', 'ko'])('provides social copy for %s', (locale) => {
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('provides social copy for %s', (locale) => {
     const messages = JSON.parse(
       readFileSync(
         resolve(process.cwd(), `src/renderer/i18n/locales/${locale}/common.json`),

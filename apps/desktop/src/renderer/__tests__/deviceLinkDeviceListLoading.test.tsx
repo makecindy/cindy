@@ -461,8 +461,9 @@ describe('useDeviceLinkDeviceList initial request', () => {
     window.localStorage.setItem('cc-agent.sidebar.selectedMachines', JSON.stringify(['dev-a']));
 
     const { useMachineSwitcher } = await import('@/features/device-link/useMachineSwitcher');
-    const { MACHINE_ALL, MACHINE_LOCAL } =
+    const { MACHINE_ALL, MACHINE_LOCAL, setSelectedMachineOwner } =
       await import('@/features/device-link/selectedMachineStore');
+    setSelectedMachineOwner('device-list-test-owner');
     const { result } = renderHook(useMachineSwitcher);
 
     await waitFor(() => expect(result.current.devices).toHaveLength(1));

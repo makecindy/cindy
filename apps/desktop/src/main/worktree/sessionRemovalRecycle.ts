@@ -20,6 +20,7 @@ import { hasLiveSessionReference, pathKey } from './liveSessionRefs';
 import { removeWorktreeForSession } from './WorktreeManager';
 import * as store from './worktreeStore';
 import { getDbClient } from '../localDb/client/current';
+import type { DbClient } from '../localDb/client/DbClient';
 import { sessions } from '../localDb/schema';
 import { createLogger } from '../logger';
 
@@ -36,7 +37,9 @@ const log = createLogger('sessionRemovalRecycle');
  * 调用方约定:先确保该会话的 CLI 子进程已关闭(Windows 下子进程 cwd 在
  * worktree 内会锁目录,git worktree remove 必败),再调本函数。
  */
-interface RecycleWorktreeOptions {
+export interface RecycleWorktreeForRemovedSessionOptions {
+  db?: DbClient['drizzle'];
+  isOwnerCurrent?: () => boolean;
   /** Internal guard: owner retries reuse this entry point without starting another owner scan. */
   scanOwners?: boolean;
   /** Runtime truth used by the live-reference guard for archived/deleted borrowers. */
@@ -51,7 +54,7 @@ interface RecycleWorktreeOptions {
 
 export async function recycleWorktreeForRemovedSession(
   sessionId: string,
-  options: RecycleWorktreeOptions = {},
+  options: RecycleWorktreeForRemovedSessionOptions = {},
 ): Promise<void> {
   try {
     await recycleOwnWorktreeForRemovedSession(sessionId, options);
@@ -77,7 +80,7 @@ export async function recycleWorktreeForRemovedSession(
  */
 async function recycleOwnWorktreeForRemovedSession(
   sessionId: string,
-  options: Pick<RecycleWorktreeOptions, 'isSessionRuntimeAlive'>,
+  options: Pick<RecycleWorktreeForRemovedSessionOptions, 'db' | 'isOwnerCurrent' | 'isSessionRuntimeAlive'>,
 ): Promise<void> {
   const meta = store.get(sessionId);
   if (!meta) return;
@@ -87,7 +90,10 @@ async function recycleOwnWorktreeForRemovedSession(
     );
     return;
   }
-  const status = await readCurrentSessionStatus(sessionId);
+  const db = options.db ?? getDbClient().drizzle;
+  const isOwnerCurrent = options.isOwnerCurrent ?? (() => true);
+  if (!isOwnerCurrent()) return;
+  const status = await readCurrentSessionStatus(sessionId, db);
   if (status !== 'deleted' && status !== 'archived') {
     log.info(
       `[sessionRemovalRecycle] skip worktree recycle for session ${sessionId}: current status=${status ?? 'missing'}`,
@@ -97,7 +103,8 @@ async function recycleOwnWorktreeForRemovedSession(
   await removeWorktreeForSession(sessionId, {
     isSessionRuntimeAlive: options.isSessionRuntimeAlive,
     canRemove: async () => {
-      const currentStatus = await readCurrentSessionStatus(sessionId);
+      if (!isOwnerCurrent()) return false;
+      const currentStatus = await readCurrentSessionStatus(sessionId, db);
       return currentStatus === 'deleted' || currentStatus === 'archived';
     },
   });
@@ -163,14 +170,19 @@ async function readSessionRecycleSnapshot(
  * 动态回收任务在关闭 CLI / 删除 worktree 前共用的实时状态守卫。
  * 查询失败按不可回收处理，宁可保留也不误关已恢复为 active 的会话。
  */
-export async function isSessionStillRemovable(sessionId: string): Promise<boolean> {
-  const status = await readCurrentSessionStatus(sessionId);
+export async function isSessionStillRemovable(
+  sessionId: string,
+  db: DbClient['drizzle'] = getDbClient().drizzle,
+): Promise<boolean> {
+  const status = await readCurrentSessionStatus(sessionId, db);
   return status === 'deleted' || status === 'archived';
 }
 
-async function readCurrentSessionStatus(sessionId: string): Promise<string | null> {
+async function readCurrentSessionStatus(
+  sessionId: string,
+  db: DbClient['drizzle'],
+): Promise<string | null> {
   try {
-    const db = getDbClient().drizzle;
     const [row] = await db
       .select({ status: sessions.status })
       .from(sessions)

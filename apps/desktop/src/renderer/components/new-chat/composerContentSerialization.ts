@@ -38,6 +38,12 @@ export interface SerializedComposerContent {
   agentReferences: AgentInputReference[];
   pastedTextRanges: PastedTextRange[];
   slashCommandRanges: SlashCommandRange[];
+  /** Host capability atoms are routing metadata, not visible prompt text. */
+  hostCapability?: {
+    capability: string;
+    ghostId: string;
+    name: string;
+  };
 }
 
 type OrderedMarker = '.' | ')' | '、';
@@ -103,18 +109,21 @@ function serializeComposerDocument(
   const mentions: MentionedResource[] = [];
   const seenMentions = new Set<string>();
   let hasQuotes = false;
+  let hostCapability: SerializedComposerContent['hostCapability'];
 
   const addMention = (attrs: MentionChipAttrs) => {
     // Slash commands and deep links are represented in the wire text but are
     // not filesystem resources.
     if (
-      attrs.kind === 'slash'
-      || attrs.kind === 'session'
-      || attrs.kind === 'project'
-      || attrs.kind === 'browser-tab'
-      || attrs.kind === 'desktop-window'
-      || attrs.kind === 'plugin-resource'
-    ) return;
+      attrs.kind === 'slash' ||
+      attrs.kind === 'session' ||
+      attrs.kind === 'project' ||
+      attrs.kind === 'browser-tab' ||
+      attrs.kind === 'desktop-window' ||
+      attrs.kind === 'plugin-resource' ||
+      attrs.kind === 'plugin-capability'
+    )
+      return;
     const key = `${attrs.kind}:${attrs.path}`;
     if (seenMentions.has(key)) return;
     seenMentions.add(key);
@@ -178,12 +187,10 @@ function serializeComposerDocument(
           // in the current text block preserves the list marker. Put the
           // encoded quote on its own continuation lines so history parsing
           // can still recognize the private marker and source metadata.
-          const continuationPrefix =
-            continuationIndent || ' '.repeat(expandedIndentWidth(prefix));
+          const continuationPrefix = continuationIndent || ' '.repeat(expandedIndentWidth(prefix));
           const quoteLines = quoteText.split('\n');
           const hasContinuationLine =
-            continuationAfterQuote === null &&
-            buffer.endsWith(`\n${continuationPrefix}`);
+            continuationAfterQuote === null && buffer.endsWith(`\n${continuationPrefix}`);
           const quoteSeparator =
             continuationAfterQuote !== null ? '\n\n' : hasContinuationLine ? '' : '\n';
           buffer += `${quoteSeparator}${quoteLines
@@ -215,8 +222,7 @@ function serializeComposerDocument(
           : child.type.name === 'pastedTextChip'
             ? String((child.attrs as PastedTextChipAttrs).text ?? '')
             : '';
-        const alreadyIndented =
-          child.isText && childText.startsWith(continuationAfterQuote);
+        const alreadyIndented = child.isText && childText.startsWith(continuationAfterQuote);
         const textAfterIndent = alreadyIndented
           ? childText.slice(continuationAfterQuote.length)
           : childText;
@@ -280,7 +286,10 @@ function serializeComposerDocument(
           return;
         }
         if (attrs.kind === 'browser-tab') {
-          const label = attrs.label.replace(/\s+/g, ' ').trim().replace(/([\\\[\]])/g, '\\$1');
+          const label = attrs.label
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/([[\]\\])/g, '\\$1');
           const wire = `[${label || 'Browser tab'}](${attrs.path})`;
           const start = buffer.length;
           buffer += wire;
@@ -299,7 +308,10 @@ function serializeComposerDocument(
           return;
         }
         if (attrs.kind === 'desktop-window') {
-          const label = attrs.label.replace(/\s+/g, ' ').trim().replace(/([\\\[\]])/g, '\\$1');
+          const label = attrs.label
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/([[\]\\])/g, '\\$1');
           const wire = `[${label || 'Desktop window'}](${attrs.path})`;
           const start = buffer.length;
           buffer += wire;
@@ -318,8 +330,23 @@ function serializeComposerDocument(
           }
           return;
         }
+        if (attrs.kind === 'plugin-capability') {
+          // The chip is a structured routing atom. Keeping it out of the
+          // visible body prevents an automatic start sentence from being
+          // duplicated when the user types their own request after the chip.
+          // ChatInput adds a localized default only for chip-only sends.
+          hostCapability ??= {
+            capability: attrs.path,
+            ghostId: attrs.pluginId || attrs.path,
+            name: attrs.sourceLabel || attrs.label,
+          };
+          return;
+        }
         if (attrs.kind === 'plugin-resource') {
-          const label = attrs.label.replace(/\s+/g, ' ').trim().replace(/([\\\[\]])/g, '\\$1');
+          const label = attrs.label
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/([[\]\\])/g, '\\$1');
           const wire = `[${label || 'Plugin resource'}](${attrs.path})`;
           const start = buffer.length;
           buffer += wire;
@@ -468,9 +495,7 @@ function serializeComposerDocument(
       })();
       const inlineLiteralContinuation =
         inlineQuoteOffset !== null
-          ? literalListContinuationPrefix(
-              node.textBetween(0, inlineQuoteOffset, '\n', '\uFFFC'),
-            )
+          ? literalListContinuationPrefix(node.textBetween(0, inlineQuoteOffset, '\n', '\uFFFC'))
           : null;
       if (inlineLiteralContinuation) {
         serializeParagraph(node, nodeOffset, '', inlineLiteralContinuation);
@@ -491,6 +516,7 @@ function serializeComposerDocument(
     ...serializeComposerContentBlocksWithRanges(blocks, { preserveTrailingWhitespace }),
     mentions,
     hasQuotes,
+    ...(hostCapability ? { hostCapability } : {}),
   };
 }
 
@@ -559,9 +585,7 @@ export function serializeEditorSlice(editor: Editor | null, slice: Slice): strin
     // A partial selection keeps the source list's attrs but may omit earlier
     // siblings. Shift the copied ordered-list start to the selected item.
     const copiedStart =
-      sourceList && sourceIndex !== null
-        ? Number(sourceList.attrs.start) + sourceIndex
-        : null;
+      sourceList && sourceIndex !== null ? Number(sourceList.attrs.start) + sourceIndex : null;
     if (copiedStart !== null) {
       let firstContentPosition: number | null = null;
       replaced.descendants((node, position) => {
@@ -571,9 +595,8 @@ export function serializeEditorSlice(editor: Editor | null, slice: Slice): strin
         }
         return firstContentPosition === null;
       });
-      let orderedListPosition: number | null = firstContentPosition === null
-        ? firstOrderedList?.position ?? null
-        : null;
+      let orderedListPosition: number | null =
+        firstContentPosition === null ? (firstOrderedList?.position ?? null) : null;
       if (firstContentPosition !== null) {
         const $firstContent = replaced.resolve(firstContentPosition);
         for (let depth = $firstContent.depth; depth > 0; depth -= 1) {
@@ -586,12 +609,10 @@ export function serializeEditorSlice(editor: Editor | null, slice: Slice): strin
         const node = replaced.nodeAt(orderedListPosition);
         if (node) {
           const replacedState = EditorState.create({ schema: editor.state.schema, doc: replaced });
-          replaced = replacedState.tr
-            .setNodeMarkup(orderedListPosition, node.type, {
-              ...node.attrs,
-              start: copiedStart,
-            })
-            .doc;
+          replaced = replacedState.tr.setNodeMarkup(orderedListPosition, node.type, {
+            ...node.attrs,
+            start: copiedStart,
+          }).doc;
         }
       }
     }

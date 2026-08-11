@@ -1,6 +1,6 @@
 /**
- * rightSidebarTabs IPC handler unit tests —— 验证 5 个 channel(list / upsert / close /
- * setActive / reorder)的正路径 + 关键错误码(RIGHT_SIDEBAR_TOO_MANY_TABS /
+ * rightSidebarTabs IPC handler unit tests —— 验证 list / ensure-singleton / upsert / close /
+ * setActive / reorder 的正路径 + 关键错误码(RIGHT_SIDEBAR_TOO_MANY_TABS /
  * RIGHT_SIDEBAR_STATE_TOO_LARGE / NOT_FOUND / INVALID_PARAMS)。规则 14:main 业务必带测。
  *
  * 用 in-memory better-sqlite3 + drizzle 驱动真 SQL,避免 mock 整套 drizzle 链路。
@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { rightSidebarTabs, sessions } from '../../schema';
+import { rightSidebarTabs, sessions } from '../../schema.js';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -25,17 +25,18 @@ vi.mock('electron', () => ({
   },
   BrowserWindow: { getAllWindows: () => [] },
 }));
-vi.mock('../../../logger', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../client/current', () => ({
+vi.mock('../../../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
+}));
+vi.mock('../../client/current.js', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
 
-import { registerRightSidebarTabsIpc } from '../rightSidebarTabs';
+import { registerRightSidebarTabsIpc } from '../rightSidebarTabs.js';
+import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
 function createDb(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -54,6 +55,8 @@ function createDb(): Database.Database {
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     );
     CREATE INDEX right_sidebar_tabs_session_idx ON right_sidebar_tabs (session_id, position);
+    CREATE UNIQUE INDEX right_sidebar_tabs_subagents_singleton_idx
+      ON right_sidebar_tabs (session_id) WHERE kind = 'subagents';
   `);
   sqlite.prepare(`INSERT INTO sessions (id) VALUES (?)`).run('s1');
   sqlite.prepare(`INSERT INTO sessions (id) VALUES (?)`).run('s2');
@@ -62,7 +65,14 @@ function createDb(): Database.Database {
 }
 
 interface ListResp {
-  tabs: Array<{ id: string; sessionId: string; kind: string; position: number; state: unknown; isActive: boolean }>;
+  tabs: Array<{
+    id: string;
+    sessionId: string;
+    kind: string;
+    position: number;
+    state: unknown;
+    isActive: boolean;
+  }>;
   activeTabId: string | null;
   persistable?: boolean;
 }
@@ -75,21 +85,45 @@ async function invoke<T>(channel: string, payload: unknown): Promise<T> {
 
 describe('rightSidebarTabs IPC', () => {
   beforeEach(() => {
+    vi.mocked(assertTrustedAppRendererEvent).mockReset();
     h.handlers.clear();
     createDb();
     registerRightSidebarTabsIpc();
   });
 
+  it('rejects every read and write handler before parsing untrusted payloads', async () => {
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => {
+      throw new Error('UNTRUSTED_RENDERER');
+    });
+    const channels = [
+      'local-db:right-sidebar-tabs:list',
+      'local-db:right-sidebar-tabs:ensure-singleton',
+      'local-db:right-sidebar-tabs:upsert',
+      'local-db:right-sidebar-tabs:close',
+      'local-db:right-sidebar-tabs:setActive',
+      'local-db:right-sidebar-tabs:reorder',
+    ];
+
+    for (const channel of channels) {
+      await expect(invoke(channel, undefined)).rejects.toThrow('UNTRUSTED_RENDERER');
+    }
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(channels.length);
+  });
+
   describe(':list', () => {
     it('empty session returns empty tabs + null activeTabId', async () => {
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 's1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
       expect(result.tabs).toEqual([]);
       expect(result.activeTabId).toBeNull();
       expect(result.persistable).toBe(true);
     });
 
     it('unknown session returns a non-persistable empty bucket for remote sessions', async () => {
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 'remote-s1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 'remote-s1',
+      });
       expect(result.tabs).toEqual([]);
       expect(result.activeTabId).toBeNull();
       expect(result.persistable).toBe(false);
@@ -110,7 +144,9 @@ describe('rightSidebarTabs IPC', () => {
         position: 0,
         state: { selectedFilePath: 'a.ts' },
       });
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 's1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
       expect(result.tabs.map((t) => t.id)).toEqual(['t1', 't2']);
       expect(result.tabs[0].state).toEqual({ selectedFilePath: 'a.ts' });
       expect(result.tabs[1].state).toEqual({ url: 'https://example.com' });
@@ -147,7 +183,9 @@ describe('rightSidebarTabs IPC', () => {
         position: 0,
         state: { foo: 'bar' },
       });
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 's1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
       expect(result.tabs).toHaveLength(1);
       expect(result.tabs[0].state).toEqual({ foo: 'bar' });
     });
@@ -167,7 +205,9 @@ describe('rightSidebarTabs IPC', () => {
         position: 5,
         state: { v: 2 },
       });
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 's1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
       expect(result.tabs).toHaveLength(1);
       expect(result.tabs[0].position).toBe(5);
       expect(result.tabs[0].state).toEqual({ v: 2 });
@@ -216,6 +256,63 @@ describe('rightSidebarTabs IPC', () => {
     });
   });
 
+  describe(':ensure-singleton', () => {
+    it('rejects an untrusted renderer before accepting persistent state', async () => {
+      vi.mocked(assertTrustedAppRendererEvent).mockImplementationOnce(() => {
+        throw new Error('UNTRUSTED_RENDERER');
+      });
+
+      await expect(
+        invoke('local-db:right-sidebar-tabs:ensure-singleton', {
+          sessionId: 's1',
+          kind: 'subagents',
+          state: { selectedRunId: 'must-not-persist' },
+        }),
+      ).rejects.toThrow('UNTRUSTED_RENDERER');
+      const listed = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
+      expect(listed.tabs).toEqual([]);
+    });
+
+    it('returns one canonical Subagents tab across concurrent callers without activating it', async () => {
+      const [first, second] = await Promise.all([
+        invoke<{ tab: ListResp['tabs'][number]; created: boolean }>(
+          'local-db:right-sidebar-tabs:ensure-singleton',
+          { sessionId: 's1', kind: 'subagents', state: { selectedRunId: null } },
+        ),
+        invoke<{ tab: ListResp['tabs'][number]; created: boolean }>(
+          'local-db:right-sidebar-tabs:ensure-singleton',
+          { sessionId: 's1', kind: 'subagents', state: { selectedRunId: 'ignored-race' } },
+        ),
+      ]);
+
+      expect(first.tab.id).toBe(second.tab.id);
+      expect([first.created, second.created].filter(Boolean)).toHaveLength(1);
+      const listed = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
+      expect(listed.tabs).toHaveLength(1);
+      expect(listed.tabs[0]).toMatchObject({ kind: 'subagents', isActive: false });
+      expect(listed.activeTabId).toBeNull();
+    });
+
+    it('fails closed for unknown sessions and non-singleton kinds', async () => {
+      await expect(
+        invoke('local-db:right-sidebar-tabs:ensure-singleton', {
+          sessionId: 'remote-s1',
+          kind: 'subagents',
+        }),
+      ).resolves.toMatchObject({ tab: null, persistable: false });
+      await expect(
+        invoke('local-db:right-sidebar-tabs:ensure-singleton', {
+          sessionId: 's1',
+          kind: 'web-browser',
+        }),
+      ).rejects.toThrow(/INVALID_PARAMS/);
+    });
+  });
+
   describe(':close', () => {
     it('deletes tab', async () => {
       await invoke('local-db:right-sidebar-tabs:upsert', {
@@ -225,7 +322,9 @@ describe('rightSidebarTabs IPC', () => {
         position: 0,
       });
       await invoke('local-db:right-sidebar-tabs:close', { id: 't1' });
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 's1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
       expect(result.tabs).toHaveLength(0);
     });
 
@@ -266,7 +365,9 @@ describe('rightSidebarTabs IPC', () => {
     it('id=null clears active', async () => {
       await invoke('local-db:right-sidebar-tabs:setActive', { sessionId: 's1', id: 't1' });
       await invoke('local-db:right-sidebar-tabs:setActive', { sessionId: 's1', id: null });
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 's1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
       expect(result.activeTabId).toBeNull();
       expect(result.tabs.filter((t) => t.isActive)).toHaveLength(0);
     });
@@ -280,14 +381,31 @@ describe('rightSidebarTabs IPC', () => {
 
   describe(':reorder', () => {
     it('rewrites positions per orderedIds', async () => {
-      await invoke('local-db:right-sidebar-tabs:upsert', { id: 'a', sessionId: 's1', kind: 'file-browser', position: 0 });
-      await invoke('local-db:right-sidebar-tabs:upsert', { id: 'b', sessionId: 's1', kind: 'file-browser', position: 1 });
-      await invoke('local-db:right-sidebar-tabs:upsert', { id: 'c', sessionId: 's1', kind: 'file-browser', position: 2 });
+      await invoke('local-db:right-sidebar-tabs:upsert', {
+        id: 'a',
+        sessionId: 's1',
+        kind: 'file-browser',
+        position: 0,
+      });
+      await invoke('local-db:right-sidebar-tabs:upsert', {
+        id: 'b',
+        sessionId: 's1',
+        kind: 'file-browser',
+        position: 1,
+      });
+      await invoke('local-db:right-sidebar-tabs:upsert', {
+        id: 'c',
+        sessionId: 's1',
+        kind: 'file-browser',
+        position: 2,
+      });
       await invoke('local-db:right-sidebar-tabs:reorder', {
         sessionId: 's1',
         orderedIds: ['c', 'a', 'b'],
       });
-      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', { sessionId: 's1' });
+      const result = await invoke<ListResp>('local-db:right-sidebar-tabs:list', {
+        sessionId: 's1',
+      });
       expect(result.tabs.map((t) => t.id)).toEqual(['c', 'a', 'b']);
       expect(result.tabs.map((t) => t.position)).toEqual([0, 1, 2]);
     });
@@ -304,9 +422,24 @@ describe('rightSidebarTabs IPC', () => {
 
   describe('cross-session isolation', () => {
     it('reorder one session does not affect another', async () => {
-      await invoke('local-db:right-sidebar-tabs:upsert', { id: 's1-a', sessionId: 's1', kind: 'file-browser', position: 0 });
-      await invoke('local-db:right-sidebar-tabs:upsert', { id: 's1-b', sessionId: 's1', kind: 'file-browser', position: 1 });
-      await invoke('local-db:right-sidebar-tabs:upsert', { id: 's2-a', sessionId: 's2', kind: 'web-browser', position: 0 });
+      await invoke('local-db:right-sidebar-tabs:upsert', {
+        id: 's1-a',
+        sessionId: 's1',
+        kind: 'file-browser',
+        position: 0,
+      });
+      await invoke('local-db:right-sidebar-tabs:upsert', {
+        id: 's1-b',
+        sessionId: 's1',
+        kind: 'file-browser',
+        position: 1,
+      });
+      await invoke('local-db:right-sidebar-tabs:upsert', {
+        id: 's2-a',
+        sessionId: 's2',
+        kind: 'web-browser',
+        position: 0,
+      });
       await invoke('local-db:right-sidebar-tabs:reorder', {
         sessionId: 's1',
         orderedIds: ['s1-b', 's1-a'],

@@ -9,6 +9,10 @@
  * installQuitHandler 只覆盖不触发真实退出的异常分支；真实 process / app 信号路径仍走集成验证。
  */
 
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
@@ -55,11 +59,26 @@ vi.mock('../logger', async () => {
   };
 });
 
+// 每个用例独立的 watchdog 脚本落盘目录 (mkdtemp 唯一路径, 用完即删)。既满足
+// 测试资源规则, 也让 win32 宿主上 installQuitHandler 的启动期预生成不会写入
+// 真实 os.tmpdir (freshLifecycle 里用本目录预 seed 缓存)。
+let watchdogTmpDir: string;
+beforeEach(() => {
+  watchdogTmpDir = mkdtempSync(join(tmpdir(), 'lifecycle-wd-'));
+});
+afterEach(() => {
+  rmSync(watchdogTmpDir, { recursive: true, force: true });
+});
+
 // 因为 registry 是 module-level state, 每个用例需要 reset。简单做法: 用
 // vi.resetModules + 动态 import, 拿一份全新的 module 实例。
 async function freshLifecycle() {
   vi.resetModules();
-  return import('../lifecycle');
+  const lifecycle = await import('../lifecycle');
+  // win32 宿主上把 watchdog 脚本缓存 seed 到本用例的 mkdtemp 目录; 非 win32
+  // 宿主上是 no-op (需要 win32 路径的用例自己显式传 platform + tmpDir)。
+  lifecycle.prepareShutdownWatchdogScript({ tmpDir: watchdogTmpDir });
+  return lifecycle;
 }
 
 type ProcessEventName =
@@ -244,16 +263,18 @@ describe('armShutdownHardKillWatchdog', () => {
     );
   });
 
-  it('win32: PowerShell 捕获 StartTime → Start-Sleep → StartTime+Path 双校验后 Stop-Process — windowsHide + unref', async () => {
-    const { armShutdownHardKillWatchdog, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
+  it('win32: wscript 单进程 watchdog — CreationDate+ExecutablePath 双校验, 无 PowerShell、无子进程', async () => {
+    const { armShutdownHardKillWatchdog, prepareShutdownWatchdogScript, SHUTDOWN_HARD_KILL_GRACE_SECONDS } =
       await freshLifecycle();
     const { spawn, child } = fakeSpawn();
+    const scriptPath = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir })!;
 
     armShutdownHardKillWatchdog({
       spawn,
       pid: 67890,
       platform: 'win32',
       execPath: 'C:\\Cindy\\Cindy.exe',
+      tmpDir: watchdogTmpDir,
     });
 
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -262,34 +283,95 @@ describe('armShutdownHardKillWatchdog', () => {
       string[],
       Record<string, unknown>,
     ];
-    // cmd/tasklist 只能比映像名, 区分不了两次运行;换 Windows PowerShell 5.1
-    // (SystemRoot 绝对路径, 不依赖 PATH) 以进程创建时间为身份锚点。
+    // wscript 是 GUI 子系统程序: 天生无控制台、无窗口, detached 逃出 libuv 的
+    // kill-on-close job 才能活过父进程。SystemRoot 绝对路径, 不依赖 PATH。
     expect(cmd).toBe(
-      `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+      `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\wscript.exe`,
     );
-    expect(args.slice(0, 5)).toEqual([
-      '-NoProfile',
-      '-NonInteractive',
-      '-WindowStyle',
-      'Hidden',
-      '-Command',
+    // 路径在 mkdtemp 唯一目录下, 不可被同 tmpdir 下其他进程预测或篡改。
+    expect(scriptPath).toMatch(/cindy-wd-/);
+    expect(scriptPath).toMatch(/watchdog\.js$/);
+    expect(args).toEqual([
+      '//B',
+      '//E:JScript',
+      scriptPath,
+      '67890',
+      String(SHUTDOWN_HARD_KILL_GRACE_SECONDS * 1000),
+      'C:\\Cindy\\Cindy.exe',
     ]);
-    const script = args[5];
-    // 布防时捕获创建时间;取不到 (进程已死) 则直接退出, 失败方向永远是"少杀"。
-    expect(script).toContain(
-      '$started = Get-Process -Id 67890 | Select-Object -ExpandProperty StartTime; if (-not $started) { exit }; ',
-    );
-    expect(script).toContain(`Start-Sleep -Seconds ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; `);
-    // 补刀前 StartTime + Path 双校验;属性读取走 Select-Object -ExpandProperty
-    // 兼容 Constrained Language Mode。
-    expect(script).toContain(
-      '$p = Get-Process -Id 67890; '
-      + 'if ($p -and ($p | Select-Object -ExpandProperty StartTime) -eq $started '
-      + "-and ($p | Select-Object -ExpandProperty Path) -eq 'C:\\Cindy\\Cindy.exe') "
-      + '{ Stop-Process -Id 67890 -Force }',
-    );
     expect(opts).toEqual({ detached: true, windowsHide: true, stdio: 'ignore' });
     expect(child.unref).toHaveBeenCalledTimes(1);
+
+    // 脚本已预生成落盘, 且保留原 PowerShell 实现同强度的身份校验 (review P1
+    // 两轮的 PID 复用防线): 布防时捕获 CreationDate, 杀前重取比对 + execPath。
+    expect(existsSync(scriptPath)).toBe(true);
+    const content = readFileSync(scriptPath, 'utf8');
+    expect(content).toContain('CreationDate');
+    expect(content).toContain('ExecutablePath');
+    expect(content).toContain('WScript.Sleep(graceMs)');
+    expect(content).toContain('.Terminate()');
+    // 回归锁 (2026-08 实证): 隐藏拉起 PowerShell 会被 360 等安全软件当高危动作
+    // 拦截, 每次正常退出都弹风控 —— 这条路径永远不许再出现 powershell。
+    expect(content.toLowerCase()).not.toContain('powershell');
+    // WSH 按系统 ANSI 代码页读文件 + JScript 只有 ES3: 必须纯 ASCII, 且不能有
+    // const/let/箭头函数 (踩坑实证: 尾逗号/新语法在 //B 下静默失败, 兜底形同虚设)。
+    expect(content).toMatch(/^[\x00-\x7f]*$/);
+    expect(content).not.toMatch(/\b(const|let)\b|=>/);
+  });
+
+  it('prepareShutdownWatchdogScript: 非 win32 no-op; win32 幂等复用同一路径 (mkdtemp 唯一目录)', async () => {
+    const { prepareShutdownWatchdogScript } = await freshLifecycle();
+
+    expect(
+      prepareShutdownWatchdogScript({ platform: 'darwin', tmpDir: watchdogTmpDir }),
+    ).toBeNull();
+
+    const first = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir });
+    expect(first).not.toBeNull();
+    expect(first!).toMatch(/cindy-wd-/);
+    expect(first!).toMatch(/watchdog\.js$/);
+    expect(existsSync(first!)).toBe(true);
+    // 幂等: 第二次 (即使传别的目录) 复用已生成的路径, 不重复写盘
+    expect(
+      prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: join(watchdogTmpDir, 'other') }),
+    ).toBe(first);
+  });
+
+  it('win32: 缓存路径被外部删除后重新生成到新目录', async () => {
+    const { prepareShutdownWatchdogScript } = await freshLifecycle();
+    const first = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir })!;
+    expect(existsSync(first)).toBe(true);
+    rmSync(first);
+    const second = prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir })!;
+    expect(second).not.toBe(first);
+    expect(existsSync(second)).toBe(true);
+    expect(second).toMatch(/watchdog\.js$/);
+  });
+
+  it('win32: watchdog 脚本写盘失败 → 共享 spawn 失败预算, 耗尽打缺席标记, 不 throw', async () => {
+    // 不走 freshLifecycle: 那里会预 seed 脚本缓存, 而本用例要的就是"prepare
+    // 一直失败"(目标目录不存在) 的路径。
+    vi.resetModules();
+    const { armShutdownHardKillWatchdog } = await import('../lifecycle');
+    const child = { once: vi.fn(), unref: vi.fn() };
+    const spawn = vi.fn(() => child);
+
+    expect(() =>
+      armShutdownHardKillWatchdog({
+        spawn,
+        pid: 1,
+        platform: 'win32',
+        execPath: 'C:\\Cindy\\Cindy.exe',
+        tmpDir: join(watchdogTmpDir, 'missing', 'deep'),
+      }),
+    ).not.toThrow();
+
+    // 写盘失败发生在 spawn 之前: spawn 从未被调用, 预算耗尽后打缺席标记
+    expect(spawn).not.toHaveBeenCalled();
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('external kill backstop ABSENT'),
+      expect.any(Error),
+    );
   });
 
   it('is idempotent — a second arm does not spawn again', async () => {

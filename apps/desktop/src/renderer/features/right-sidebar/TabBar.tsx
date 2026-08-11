@@ -21,8 +21,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  Bot,
   FolderTree,
   Globe,
+  Smartphone,
   Terminal,
   GitPullRequestArrow,
   UsersRound,
@@ -85,6 +87,8 @@ interface TabBarProps {
    *  "拖面板"手势面(窗口拖拽区收不到鼠标事件,二者物理互斥;拖窗走左栏顶行);
    *  detached 子窗口等其它宿主不传,默认 true 维持经典拖窗行为。 */
   chromeWindowDrag?: boolean;
+  /** Whether the installed product plugin currently exposes the Host viewer. */
+  iosSimulatorAvailable?: boolean;
 }
 
 interface TabStripProps {
@@ -114,14 +118,18 @@ interface TabStripProps {
    */
   addButtonWrapperClassName?: string;
   addButtonClassName?: string;
+  /** Whether the installed product plugin currently exposes the Host viewer. */
+  iosSimulatorAvailable?: boolean;
 }
 
 const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'file-browser': FolderTree,
   'web-browser': Globe,
+  'ios-simulator': Smartphone,
   terminal: Terminal,
   review: GitPullRequestArrow,
   'orca-workers': UsersRound,
+  subagents: Bot,
   'background-tasks': ListTodo,
   'resource-usage': Activity,
 };
@@ -129,9 +137,11 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'file-browser': 'rightSidebar.tabs.kinds.fileBrowser',
   'web-browser': 'rightSidebar.tabs.kinds.browser',
+  'ios-simulator': 'rightSidebar.tabs.kinds.iosSimulator',
   terminal: 'rightSidebar.tabs.kinds.terminal',
   review: 'rightSidebar.tabs.kinds.review',
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
+  subagents: 'rightSidebar.tabs.kinds.subagents',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
 };
@@ -153,8 +163,7 @@ function labelKeyForTabKind(kind: TabKindId): string {
   // 而非「未知标签页」——kind 前缀本身就能识别它是谁的地盘。
   if (kind.startsWith('ghost:')) return 'rightSidebar.tabs.kinds.ghostPanel';
   return (
-    (KIND_LABEL_KEY as Partial<Record<string, string>>)[kind] ??
-    'rightSidebar.tabs.kinds.unknown'
+    (KIND_LABEL_KEY as Partial<Record<string, string>>)[kind] ?? 'rightSidebar.tabs.kinds.unknown'
   );
 }
 
@@ -195,6 +204,7 @@ export function TabBar({
   onCloseAll,
   onDetach,
   chromeWindowDrag = true,
+  iosSimulatorAvailable = false,
 }: TabBarProps) {
   const { t } = useTranslation();
 
@@ -219,6 +229,7 @@ export function TabBar({
         onCloseAll={onCloseAll}
         addButtonWrapperClassName="h-[36px]"
         addButtonClassName="mt-[3px]"
+        iosSimulatorAvailable={iosSimulatorAvailable}
       />
 
       {/* Right: window controls. 仅 showWindowControls=true(Win 端)时渲染;
@@ -278,6 +289,7 @@ export function TabStrip({
   pillVariant = 'flush',
   addButtonWrapperClassName,
   addButtonClassName,
+  iosSimulatorAvailable = false,
 }: TabStripProps) {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
@@ -433,6 +445,7 @@ export function TabStrip({
               setDropdownOpen(false);
             }}
             existingKinds={existingKinds}
+            iosSimulatorAvailable={iosSimulatorAvailable}
           />
         )}
       </div>

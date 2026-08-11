@@ -23,8 +23,20 @@ const read = (...seg: string[]) => readFileSync(resolve(__dirname, '..', ...seg)
 
 const sidebarUpperSource = read('features', 'cc-agent', 'CCAgentSidebarUpper.tsx');
 const topNavSource = read('components', 'sidebar', 'SidebarTopNav.tsx');
-const projectsSectionSource = read('features', 'cc-agent', 'sidebar', 'sections', 'ProjectsSection.tsx');
-const dateSectionSource = read('features', 'cc-agent', 'sidebar', 'sections', 'DateGroupedSessionsSection.tsx');
+const projectsSectionSource = read(
+  'features',
+  'cc-agent',
+  'sidebar',
+  'sections',
+  'ProjectsSection.tsx',
+);
+const dateSectionSource = read(
+  'features',
+  'cc-agent',
+  'sidebar',
+  'sections',
+  'DateGroupedSessionsSection.tsx',
+);
 const menuSource = read('features', 'cc-agent', 'sidebar', 'MachineSwitcherMenu.tsx');
 
 describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不滚动)', () => {
@@ -121,9 +133,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).not.toContain('--chat-input-chip-bg');
   });
 
-  it('allMachinesLabel 孤儿 key 已从 4 个语言包删除(规则 18)', () => {
+  it('allMachinesLabel 孤儿 key 已从全部语言包删除(规则 18)', () => {
     // trigger 改回复用 allMachines 后,专用的 allMachinesLabel 不再被消费,不留孤儿 key。
-    for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+    for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const json = JSON.parse(read('i18n', 'locales', locale, 'common.json')) as {
         ccAgent: { sidebar: { machineSwitcher: Record<string, string> } };
       };
@@ -147,7 +159,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('onSelect={() => applySelect([MACHINE_LOCAL])}');
     expect(menuSource).toContain('applySelect([device.deviceId])');
     expect(menuSource).toContain('onToggle={() => applyToggle(MACHINE_LOCAL)}');
-    expect(menuSource).toContain('onToggle={rejected ? undefined : () => applyToggle(device.deviceId)}');
+    expect(menuSource).toContain(
+      'onToggle={rejected ? undefined : () => applyToggle(device.deviceId)}',
+    );
     // 多选框只在行高亮(hover / 键盘)时浮现;Radix item select 由 pointerup 驱动,
     // down / up / click 三段都要拦截,toggle 挂 pointerup(挂 click 会因 pointerdown
     // 被 preventDefault 而"点了没反应",整行单选还会把菜单收掉)。
@@ -178,14 +192,16 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('modifierHeldRef');
     expect(menuSource).toContain('event.isTrusted');
     expect(menuSource).toMatch(/event\.metaKey \|\| event\.ctrlKey/);
-    expect(menuSource).toMatch(/if \(withModifier && onToggle\) \{\s*event\.preventDefault\(\);\s*onToggle\(\);/);
+    expect(menuSource).toMatch(
+      /if \(withModifier && onToggle\) \{\s*event\.preventDefault\(\);\s*onToggle\(\);/,
+    );
     // 复选框是纯指针快捷目标,对 a11y 树隐藏(键盘路径在行级),留 title 提示。
     expect(menuSource).toContain('aria-hidden="true"');
-    expect(menuSource).not.toContain("role=\"checkbox\"");
+    expect(menuSource).not.toContain('role="checkbox"');
   });
 
-  it('multiSelect / deselect 在 4 个语言包都存在(规则 18:不留英文回退)', () => {
-    for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
+  it('multiSelect / deselect 在全部语言包都存在(规则 18:不留英文回退)', () => {
+    for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const json = JSON.parse(read('i18n', 'locales', locale, 'common.json')) as {
         ccAgent: { sidebar: { machineSwitcher: Record<string, string> } };
       };

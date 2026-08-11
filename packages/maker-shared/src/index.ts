@@ -41,6 +41,8 @@ export * from './sessionListCollapse.js';
 export * from './sessionOperation.js';
 export * from './sessionSelection.js';
 export * from './syntheticTrigger.js';
+export * from './subagentObservation.js';
+export * from './subagentWorkspace.js';
 export * from './systemCard.js';
 export * from './toolUseDescriptor.js';
 export * from './thinkingText.js';

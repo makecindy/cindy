@@ -36,7 +36,7 @@ const HALF_WIDTH_UNITS_PER_VISUAL_LINE = 34;
  * (≈243pt / 10.2pt ≈ 24 个半宽单位)。粗筛只负责排除"任何宽度下都排不满
  * 阈值"的短消息,是否收起一律由测量 Text 按真实排版实测。
  */
-const MIN_HALF_WIDTH_UNITS_PER_VISUAL_LINE = 24;
+export const MIN_HALF_WIDTH_UNITS_PER_VISUAL_LINE = 24;
 
 // 全宽字符范围:CJK 统一表意 / 假名 / 谚文 / 全宽标点与符号等。
 // 仅用于宽度估算,不追求 Unicode East Asian Width 的完整精度。
@@ -45,11 +45,63 @@ const WIDE_CHAR_RE =
 
 const LINE_BREAK_RE = /\r\n|\r|\n/;
 
-function estimateVisualLineCount(line: string): number {
+function estimateVisualLineCount(
+  line: string,
+  halfWidthUnitsPerLine: number = HALF_WIDTH_UNITS_PER_VISUAL_LINE,
+): number {
   if (!line) return 1;
   const wideCount = line.match(WIDE_CHAR_RE)?.length ?? 0;
   const units = line.length + wideCount;
-  return Math.max(1, Math.ceil(units / HALF_WIDTH_UNITS_PER_VISUAL_LINE));
+  return Math.max(1, Math.ceil(units / halfWidthUnitsPerLine));
+}
+
+export function estimateTextVisualLineCount(
+  content: string,
+  halfWidthUnitsPerLine: number = HALF_WIDTH_UNITS_PER_VISUAL_LINE,
+): number {
+  if (!content) return 0;
+  return content
+    .split(LINE_BREAK_RE)
+    .reduce((total, line) => total + estimateVisualLineCount(line, halfWidthUnitsPerLine), 0);
+}
+
+/** 截取与消息收起态同量级的纯文本前缀，避免分享图带出未显示正文。 */
+export function truncateTextToVisualLines(
+  content: string,
+  maxLines: number,
+  halfWidthUnitsPerLine: number = HALF_WIDTH_UNITS_PER_VISUAL_LINE,
+): string {
+  if (maxLines <= 0 || !content) return '';
+  let visualLine = 1;
+  let lineUnits = 0;
+  let truncated = false;
+  let result = '';
+  for (const character of content) {
+    if (character === '\n') {
+      if (visualLine >= maxLines) {
+        truncated = true;
+        break;
+      }
+      result += character;
+      visualLine += 1;
+      lineUnits = 0;
+      continue;
+    }
+    WIDE_CHAR_RE.lastIndex = 0;
+    const units = WIDE_CHAR_RE.test(character) ? 2 : 1;
+    WIDE_CHAR_RE.lastIndex = 0;
+    if (lineUnits > 0 && lineUnits + units > halfWidthUnitsPerLine) {
+      if (visualLine >= maxLines) {
+        truncated = true;
+        break;
+      }
+      visualLine += 1;
+      lineUnits = 0;
+    }
+    result += character;
+    lineUnits += units;
+  }
+  return truncated ? result.trimEnd() : result;
 }
 
 /** 纯文本估算版收起判定:仅作为测量回调到达前的首帧猜测。 */

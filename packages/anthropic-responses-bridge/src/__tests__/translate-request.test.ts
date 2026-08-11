@@ -14,10 +14,22 @@ describe('translateRequest', () => {
     expect(out.model).toBe('gpt-5.5');
     expect(out.instructions).toBe('You are terse.');
     expect(out.store).toBe(false);
+    expect(out.stream).toBe(true);
     expect(out.include).toContain('reasoning.encrypted_content');
     expect(out.input).toEqual([
       { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
     ]);
+  });
+
+  it('上游恒流式:调用方 stream:false 也发 stream:true(codex 对 stream:false 返 400)', () => {
+    // chatgpt.com/backend-api/codex 实测:stream:false → 400
+    // `{"detail":"Stream must be set to true"}`。非流式调用方由 handler 在下游缓冲满足。
+    const req: AnthropicMessagesRequest = {
+      model: 'chatgpt/gpt-5.5',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+    };
+    expect(translateRequest(req, { model: 'gpt-5.5' }).stream).toBe(true);
   });
 
   it('joins array-form system blocks', () => {
