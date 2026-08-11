@@ -17,7 +17,12 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { buildRenderItems } from '../components/chat/MessageStream';
+import {
+  buildRenderItems,
+  findLastUserMessageClientId,
+  findLastUserInputClientId,
+  selectVisibleMessages,
+} from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 const asst = (clientId: string, content: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -116,6 +121,41 @@ describe('buildRenderItems — subagent internal messages', () => {
     expect(messageIds(items)).toEqual(['u1', 'a1', 'u2']);
   });
 
+  it('still surfaces media produced by filtered subagent tool results', () => {
+    // 子代理调出图 / 出片工具时,tool_use 与 tool_result 都被隐藏,段级媒体收集拿不到;
+    // AgentTaskUpdate 也没有承载媒体的字段。不单独补这一路,产物卡会随内部工具行一起
+    // 消失(review: codex P2)。实测本机库里子代理 tool_result 确有图片/视频/音频。
+    const msgs: ChatMessage[] = [
+      { clientId: 'u1', role: 'user', content: '画一张图' },
+      {
+        clientId: 'sub-img-call',
+        role: 'tool_use',
+        content: '',
+        toolName: 'mcp__cindy__ghost_call',
+        toolUseId: 'toolu_img',
+        parentToolUseId: 'toolu_AGENT',
+      },
+      {
+        clientId: 'sub-img-result',
+        role: 'tool_result',
+        content: JSON.stringify({ xdt_image_url: 'cindy-media://blobs/abc.png' }),
+        toolUseId: 'toolu_img',
+        parentToolUseId: 'toolu_AGENT',
+      },
+      { clientId: 'a1', role: 'assistant', content: '画好了' },
+      { clientId: 'u2', role: 'user', content: '谢谢' },
+    ];
+
+    const items = buildRenderItems(msgs).items;
+    const media = items.filter((it) => it.type === 'tool_media');
+    expect(media).toHaveLength(1);
+    expect(media[0].type === 'tool_media' ? media[0].items.map((m) => m.url) : []).toEqual([
+      'cindy-media://blobs/abc.png',
+    ]);
+    // 承载媒体的子代理工具行本身仍然不渲染。
+    expect(messageIds(items)).toEqual(['u1', 'a1', 'u2']);
+  });
+
   it('keeps the parent Agent tool call itself (only its children are internal)', () => {
     const msgs: ChatMessage[] = [
       {
@@ -132,5 +172,44 @@ describe('buildRenderItems — subagent internal messages', () => {
     // Agent 调用渲染成 agent_task 卡,子代理正文不出现在任何 message 条目里。
     expect(items.some((it) => it.type === 'agent_task')).toBe(true);
     expect(messageIds(items)).toEqual([]);
+  });
+});
+
+describe('selectVisibleMessages — 可见 UI 派生共用的序列', () => {
+  it('剔除子代理内部行,保留主线程与 legacy 链边', () => {
+    const msgs: ChatMessage[] = [
+      asst('main', '父会话正文'),
+      asst('sub', '子代理正文', { parentToolUseId: 'toolu_ABC' }),
+      asst('legacy', '老导入正文', { parentToolUseId: 'preceding-user-uuid' }),
+    ];
+
+    expect(selectVisibleMessages(msgs).map((m) => m.clientId)).toEqual(['main', 'legacy']);
+  });
+
+  it('没有子代理消息时返回同一个引用(useMemo 下游不重算)', () => {
+    const msgs: ChatMessage[] = [asst('a', '正文')];
+    expect(selectVisibleMessages(msgs)).toBe(msgs);
+  });
+});
+
+describe('可见 UI 派生不把隐藏的子代理 user 行当成最后一条', () => {
+  // 同族先例:isSyntheticTrigger 行渲染成 null,却曾把「最后一条 user」抢走,
+  // 让真实的最后一条可见气泡丢掉编辑入口(见 findLastUserMessageClientId 注释)。
+  // 子代理内部的 user 行是第二类不可见 user 行(review: codex P2)。
+  const msgs: ChatMessage[] = [
+    { clientId: 'real-user', role: 'user', content: '帮我查一下' },
+    { clientId: 'a1', role: 'assistant', content: '好的' },
+    { clientId: 'sub-user', role: 'user', content: '子任务输入', parentToolUseId: 'toolu_AGENT' },
+  ];
+
+  it('findLastUserMessageClientId:编辑入口留在真实的最后一条可见 user 上', () => {
+    // 直接喂原始数组会命中隐藏行 —— 这正是缺陷本身。
+    expect(findLastUserMessageClientId(msgs)).toBe('sub-user');
+    // 组件侧统一喂 selectVisibleMessages 的结果后恢复正确。
+    expect(findLastUserMessageClientId(selectVisibleMessages(msgs))).toBe('real-user');
+  });
+
+  it('findLastUserInputClientId:在飞的自愈重连行不被子代理行夺走归属', () => {
+    expect(findLastUserInputClientId(selectVisibleMessages(msgs))).toBe('real-user');
   });
 });
