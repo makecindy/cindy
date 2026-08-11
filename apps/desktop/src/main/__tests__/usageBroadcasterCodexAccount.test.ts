@@ -504,6 +504,26 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(persisted.primary?.usedPercent).toBe(82);
   });
 
+  // owner 缺失时 IIFE 在首个 await 之前同步走完 —— 句柄若在它的 finally 里清, 会被
+  // 外层赋值写回, 之后 ensure 永远复用这个已 resolve 的 Promise, 再也不查库, 于是
+  // hydrated 永远为 false, 本进程之后所有落库都被守卫跳过。
+  it('reads the database once the owner becomes available', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.getCurrentUserId.mockReturnValue(null as unknown as string);
+
+    await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+    expect(mocks.queryOne).not.toHaveBeenCalled();
+    expect(mocks.exec).not.toHaveBeenCalled();
+
+    // 用户登录后必须重新查库, 并恢复正常落库。
+    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.queryOne.mockResolvedValue(null);
+    await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+
+    expect(mocks.queryOne).toHaveBeenCalled();
+    expect(mocks.exec).toHaveBeenCalled();
+  });
+
   it('skips persistence when the owner is not initialized yet', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // 启动早期 getCurrentUserId 尚不可用 → hydration 被跳过, 内存为空。

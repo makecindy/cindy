@@ -152,6 +152,33 @@ describe('claude subscription snapshot hydration race', () => {
     expect(current?.scoped?.[0]?.modelDisplayName).toBe('Opus');
   });
 
+  // 与 codex 侧同款: owner 缺失时 IIFE 同步走完, 句柄不能在它的 finally 里清 ——
+  // 否则会被外层赋值写回, 之后永远复用这个已 resolve 的 Promise, 再也不查库。
+  it('reads the database once the owner becomes available', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.getCurrentUserId.mockReturnValue(null as unknown as string);
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: { utilization: 10 }, source: 'unified-headers', updatedAt: 1,
+    });
+    expect(mocks.queryOne).not.toHaveBeenCalled();
+    expect(mocks.exec).not.toHaveBeenCalled();
+
+    // 登录后必须重新查库。跨 owner 变化的那一笔按既有世代语义会被丢弃(它属于换号前
+    // 的上下文), 下一笔恢复正常落库。
+    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.queryOne.mockResolvedValue(null);
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: { utilization: 20 }, source: 'unified-headers', updatedAt: 2,
+    });
+    expect(mocks.queryOne).toHaveBeenCalled();
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: { utilization: 30 }, source: 'unified-headers', updatedAt: 3,
+    });
+    expect(mocks.exec).toHaveBeenCalled();
+  });
+
   it('persists a rejected status even without windows (与 codex 侧 reached 标记同口径)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // rejected 是权威的「请求已被拒」信号(isClaudeSubscriptionAlerting 直接据此告警),

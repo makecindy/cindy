@@ -560,6 +560,10 @@ async function ensureCodexAccountUsageLoaded(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
   if (codexAccountUsageHydrated) return;
   if (!codexAccountUsageLoadPromise) {
+    // 句柄的清理必须放在 await 之后, 不能放进下面 IIFE 的 finally —— owner 缺失时
+    // IIFE 会在首个 await 之前同步走完, 它 finally 里清掉的句柄随即被本行的赋值写回,
+    // 之后 ensure 永远复用这个已 resolve 的 Promise, 再也不查库(hydrated 也就永远
+    // 是 false, 本进程之后所有落库都被守卫跳过)。
     codexAccountUsageLoadPromise = (async () => {
       try {
         if (!codexAccountUsageOwner) return;
@@ -599,13 +603,15 @@ async function ensureCodexAccountUsageLoaded(): Promise<void> {
           'readCodexAccountUsageSnapshot failed:',
           err instanceof Error ? err.message : String(err),
         );
-      } finally {
-        // 只清 in-flight 句柄。hydrated 仅在读成功时置位 —— 失败留给下一次重试。
-        codexAccountUsageLoadPromise = null;
       }
     })();
   }
-  await codexAccountUsageLoadPromise;
+  try {
+    await codexAccountUsageLoadPromise;
+  } finally {
+    // hydrated 仅在读成功时置位 —— 读失败清掉句柄即留下重试机会。
+    codexAccountUsageLoadPromise = null;
+  }
 }
 
 export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promise<void> {
@@ -792,13 +798,16 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
           'readClaudeSubscriptionUsageSnapshot failed:',
           err instanceof Error ? err.message : String(err),
         );
-      } finally {
-        // 只清 in-flight 句柄, 理由同 codex 侧(读失败必须留重试机会)。
-        claudeSubscriptionUsageLoadPromise = null;
       }
     })();
   }
-  await claudeSubscriptionUsageLoadPromise;
+  try {
+    await claudeSubscriptionUsageLoadPromise;
+  } finally {
+    // 清理放在 await 之后, 理由同 codex 侧: owner 缺失时 IIFE 同步走完, 放进它的
+    // finally 会被外层赋值写回, 之后永远复用这个已 resolve 的 Promise。
+    claudeSubscriptionUsageLoadPromise = null;
+  }
 }
 
 export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): Promise<void> {
