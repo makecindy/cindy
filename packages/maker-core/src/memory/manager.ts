@@ -171,6 +171,18 @@ export class MakerMemoryManager {
         this.activeScopeKey = key;
         this.rebindEnabled();
       }
+      // 换根/首次锚定后新 owner 若关闭了 maker memory (enabled=false), 调用方
+      // 可能已持过期的 isEnabled()=true 通过检查 (withStore / session opts 快照)
+      // — 这里必须 fail-closed, 不得继续打开新 owner 的 store (review #2388
+      // Codex 5th P1: rebind 到 disabled owner 后应立即停止)。
+      // 仅在 host 提供 reloadEnabled (desktop) 时判定: 静态宿主/测试无 rebind
+      // 语义, initialEnabled=false 属正常 disabled 态, 由调用方 isEnabled 拦截。
+      if (this.deps.reloadEnabled && !this.enabled) {
+        throw new MemoryError(
+          'not-ready',
+          'maker memory disabled for current owner scope; refusing to open store',
+        );
+      }
     }
     if (this.resolvedBasePath === null) {
       this.logger.warn('maker memory owner scope unavailable — refusing ephemeral fallback', {
@@ -367,6 +379,13 @@ export class MakerMemoryManager {
       db,
       logger: this.logger.child(`memory:${sanitized}`),
       ...(this.deps.config ? { config: this.deps.config } : {}),
+      // store 级 mutation 前置守卫 (review #2388 Codex 5th P1): 裸 store 在
+      // manager 守卫之外被调用方使用 (withStore fn / agent prompt 注入路径),
+      // 后置复核无法撤销已发生的写操作 —— 锚定 store 创建时 scope, 每次
+      // write/delete/consolidate 前复核, scope 已变即抛 not-ready。
+      ...(this.deps.ownerScopeKey
+        ? { scopeCheck: () => this.assertScopeUnchanged(scopeAtEntry) }
+        : {}),
     });
     await store.init();
     // 跨 await 复核: 期间 owner 已切换 → 丢弃刚建的旧 owner store, fail-closed,

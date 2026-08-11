@@ -291,4 +291,51 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(sqlite.closes.length).toBeGreaterThan(0);
     manager.dispose();
   });
+
+  it('store 级 mutation 前置守卫: scope 变化后 write 抛 not-ready (review Codex 5th P1)', async () => {
+    let currentScope = 'cloud:old:1';
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => currentScope,
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+    const store = await manager.getStore(WORKDIR);
+    // 调用方拿到裸 store 后, owner 切换发生在 write 之前 — mutation 前置守卫拦截
+    currentScope = 'cloud:new:2';
+    await expect(
+      store.write({
+        type: 'project', name: 'x', title: 'X', description: 'd', body: 'b',
+      }),
+    ).rejects.toThrow(/memory:not-ready/);
+    manager.dispose();
+  });
+
+  it('rebind 到 disabled owner 后 getStore fail-closed (review Codex 5th P1)', async () => {
+    let currentScope = 'cloud:enabled:1';
+    let enabledForOwner = true;
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => currentScope,
+      reloadEnabled: () => enabledForOwner, // desktop: 按新 owner 根读 settings
+      initialEnabled: true,
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+    // owner A: enabled → 正常拿到 store
+    const storeA = await manager.getStore(WORKDIR);
+    expect(storeA).toBeDefined();
+    // 切到关闭 maker memory 的 owner B: 调用方可能已持过期 enabled=true 快照,
+    // getStore 必须 fail-closed, 不得打开 B 的 store
+    currentScope = 'cloud:disabled:2';
+    enabledForOwner = false;
+    await expect(manager.getStore(WORKDIR)).rejects.toThrow(/memory:not-ready/);
+    manager.dispose();
+  });
 });
