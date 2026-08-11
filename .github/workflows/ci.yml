@@ -31,45 +31,11 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      # 主仓与公开 submodule 都使用 GitHub 默认的只读访问路径。
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           lfs: true
-
-      # .gitmodules 来自 PR 分支,fork PR 可以把 cindy-protocol 的 url / path 改成
-      # 任意仓库。先钉死来源再 sync/update,避免 CI 拉取并 pnpm install 第三方仓库
-      # 内容。gitlink 的 commit 同样来自 PR,但只能从 makecindy/cindy-protocol 拉取,
-      # 外部无法向该仓库推送,所以来源钉死后取到的一定是本组织的历史。
-      - name: Verify cindy-protocol submodule source
-        run: |
-          set -euo pipefail
-          expected_url='https://github.com/makecindy/cindy-protocol.git'
-          expected_path='cindy-protocol'
-          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
-          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
-          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
-            echo "::error file=.gitmodules::cindy-protocol submodule 来源不符: url='$actual_url' path='$actual_path'(期望 url='$expected_url' path='$expected_path')"
-            exit 1
-          fi
-          echo "cindy-protocol submodule 来源校验通过: $actual_url"
-
-      # 本 job 只做本仓 typecheck / runner 自测 / 各类 guard。cindy-protocol 是公开的
-      # workspace 依赖,需要 checkout 以供 pnpm install 解析,但不在本 job 运行
-      # 协议仓自己的 CI。
-      # 公开客户端不包含内建插件种子；相关单测只在 os.tmpdir 里自造夹具。
-      # 公开仓不提供官方发布流程。
-      - name: Fetch cindy-protocol submodule
-        run: |
-          git submodule sync -- cindy-protocol
-          git submodule update --init --force --recursive -- cindy-protocol
-
-      - name: Reject cindy-protocol rollback or divergence
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          CINDY_PROTOCOL_BASE_REF: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/check-submodule-forward.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -85,12 +51,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      # @cindy/model-access-protocol exposes only generated dist artifacts.
-      # Build it before any consumer typecheck or test collection resolves the
-      # workspace package.
-      - name: Build model-access protocol
-        run: pnpm --filter @cindy/model-access-protocol build
 
       # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
       # 两个 Linux 单测分片只负责 workspace unit tier。
@@ -156,32 +116,6 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      - name: Verify cindy-protocol submodule source
-        run: |
-          set -euo pipefail
-          expected_url='https://github.com/makecindy/cindy-protocol.git'
-          expected_path='cindy-protocol'
-          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
-          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
-          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
-            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
-            exit 1
-          fi
-          echo "cindy-protocol submodule source verified: $actual_url"
-
-      - name: Fetch cindy-protocol submodule
-        run: |
-          git submodule sync -- cindy-protocol
-          git submodule update --init --force --recursive -- cindy-protocol
-
-      # 分片会安装并执行 submodule 代码，不能只依赖并行的 verify-checks 最终阻断；
-      # 每个分片都必须在安装依赖前独立拒绝回滚、分叉或未发布的 gitlink。
-      - name: Reject cindy-protocol rollback or divergence
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          CINDY_PROTOCOL_BASE_REF: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/check-submodule-forward.mjs
-
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
@@ -197,9 +131,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build model-access protocol
-        run: pnpm --filter @cindy/model-access-protocol build
-
       # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
       # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
       # 会让 apps/desktop 单测在收集阶段全挂——每个分片都必须单独装回来。
@@ -209,8 +140,7 @@ jobs:
         run: pnpm install:ripgrep
 
       - name: Run client and package unit test shard
-        # 通过 pnpm 启动 runner，保留当前 pnpm 入口；否则嵌套的 protocol
-        # workspace 无法从主仓根 node_modules 解析 Vitest。
+        # 通过 pnpm 启动 runner，保留当前 pnpm 入口与 workspace 解析语义。
         run: pnpm exec node scripts/test-workspaces.mjs --tier unit
 
   # 保留原 required check 名 verify；检查 job 或任一 Linux 分片失败、取消都阻断。
@@ -250,28 +180,6 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      # GitHub-hosted Windows 带 Git Bash；复用 Linux job 的 fail-closed 来源校验，
-      # 同时保留 win32 Node / 文件系统语义供后续单测覆盖。
-      - name: Verify cindy-protocol submodule source
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_url='https://github.com/makecindy/cindy-protocol.git'
-          expected_path='cindy-protocol'
-          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
-          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
-          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
-            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
-            exit 1
-          fi
-          echo "cindy-protocol submodule source verified: $actual_url"
-
-      - name: Fetch cindy-protocol submodule
-        shell: bash
-        run: |
-          git submodule sync -- cindy-protocol
-          git submodule update --init --force --recursive -- cindy-protocol
-
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
@@ -286,9 +194,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Build model-access protocol
-        run: pnpm --filter @cindy/model-access-protocol build
 
       - name: Install bundled ripgrep
         env:
@@ -321,26 +226,6 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-
-      # `.gitmodules` comes from the PR branch. Pin the public protocol source
-      # before recursively initializing it, matching the verify job boundary.
-      - name: Verify cindy-protocol submodule source
-        run: |
-          set -euo pipefail
-          expected_url='https://github.com/makecindy/cindy-protocol.git'
-          expected_path='cindy-protocol'
-          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
-          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
-          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
-            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
-            exit 1
-          fi
-          echo "cindy-protocol submodule source verified: $actual_url"
-
-      - name: Fetch cindy-protocol submodule
-        run: |
-          git submodule sync -- cindy-protocol
-          git submodule update --init --force --recursive -- cindy-protocol
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6

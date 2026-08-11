@@ -507,3 +507,16 @@ test("devEnvPrefix passes explicit model catalog test controls to Desktop", () =
 			"XDT_MODELS_PATH='/tmp/model catalog.json' XDT_DISABLE_MODELS_FETCH='1' ",
 	);
 });
+
+test("devEnvPrefix passes native iOS dev switches to Electron", () => {
+	assert.equal(
+		devEnvPrefix(
+			{
+				CINDY_IOS_SIMULATOR_NATIVE_H264: "1",
+				CINDY_IOS_SIMULATOR_NATIVE_HID: "1",
+			},
+			"darwin",
+		),
+		"CINDY_IOS_SIMULATOR_NATIVE_H264='1' CINDY_IOS_SIMULATOR_NATIVE_HID='1' ",
+	);
+});

@@ -44,10 +44,10 @@ describe('pinned project sidebar integration', () => {
   });
 
   it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
-    expect(filterHookSource).toContain(
-      'window.electronAPI.sidebarSettingsOnPinnedOrderChanged((next) => {',
-    );
-    expect(filterHookSource).toContain('setManualPinnedOrderState((prev) =>');
+    expect(filterHookSource).toContain('window.electronAPI.sidebarSettings.onPinnedOrderChanged(');
+    expect(filterHookSource).toContain('isExactOwnerStampCurrent(nextOwnerStamp, ownerStamp)');
+    expect(filterHookSource).toContain('isDataOwnerPushStampCurrent(actual)');
+    expect(filterHookSource).toContain('durablePinnedOrderRef.current = snapshot;');
   });
 
   it('omits sessions belonging to pinned projects from date groups', () => {
@@ -88,7 +88,9 @@ describe('pinned project sidebar integration', () => {
   });
 
   it('restores against the latest project catalogue and re-admits the active filter', () => {
-    expect(sidebarSource).toContain('const filter = useSidebarFilter(hiddenProjectKeys);');
+    expect(sidebarSource).toContain(
+      'const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);',
+    );
     expect(sidebarSource).toContain('collectRestorableProjectKeys({');
     expect(sidebarSource).toContain('sessions: scopedSidebarSessions,');
     expect(sidebarSource).toContain('const restored = await restoreHiddenProjectIfPresent({');
@@ -102,6 +104,8 @@ describe('pinned project sidebar integration', () => {
 
   it('prunes hidden projects from filters in every renderer hook', () => {
     expect(filterHookSource).toContain('const next = removeProjectsFromFilter(');
-    expect(filterHookSource).toContain('window.electronAPI.platform,');
+    expect(filterHookSource).toContain(
+      'removeProjectsFromFilter(prev, hiddenProjectKeys, window.electronAPI.platform)',
+    );
   });
 });

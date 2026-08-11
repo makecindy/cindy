@@ -13,7 +13,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: { name?: string }) =>
       (key === 'settings.ghosts.market.detailsAria' ||
-        key === 'settings.ghosts.market.conflictAria') &&
+        key === 'settings.ghosts.market.replaceAria') &&
       options?.name
         ? `${key}:${options.name}`
         : key,
@@ -55,6 +55,7 @@ const commandPlugin: GhostPluginListItem = {
   enabled: true,
   canUse: true,
   tabPanel: false,
+  hostCapability: null,
 };
 
 const panelPlugin: GhostPluginListItem = {
@@ -69,6 +70,13 @@ const toolPlugin: GhostPluginListItem = {
   id: 'pure-tool',
   name: 'Pure Tool',
   canUse: false,
+};
+
+const simulatorPlugin: GhostPluginListItem = {
+  ...toolPlugin,
+  id: 'ios-simulator',
+  name: 'iOS Simulator',
+  hostCapability: 'ios-simulator',
 };
 
 const marketPlugin: PluginMarketItem = {
@@ -112,6 +120,15 @@ describe('GhostPluginCard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
     expect(onPrimary).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a conversation entry for a Host capability plugin', () => {
+    const onPrimary = vi.fn();
+    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
   });
 
   it('routes the manage icon to detail without firing the primary action', () => {
@@ -371,7 +388,7 @@ describe('MarketPluginCard', () => {
     ).toBeTruthy();
     expect(
       screen.getByRole('button', {
-        name: 'settings.ghosts.market.conflictAria:GitHub',
+        name: 'settings.ghosts.market.detailsAria:GitHub',
       }),
     ).toBeTruthy();
   });
@@ -397,32 +414,33 @@ describe('MarketPluginCard', () => {
     expect(screen.getByText('Cindy').className).toContain('truncate');
   });
 
-  it('distinguishes unavailable conflicts from busy market operations', () => {
+  it('offers explicit replacement while still blocking actions during busy operations', () => {
+    const onInstall = vi.fn();
     const { rerender } = render(
       <MarketPluginCard
         item={{ ...marketPlugin, installState: 'conflict' }}
         busy={false}
         onSelect={vi.fn()}
-        onInstall={vi.fn()}
+        onInstall={onInstall}
         onIconLoadError={vi.fn()}
       />,
     );
 
     const cardBody = screen.getByRole('button', { name: 'Google Calendar' });
-    expect((cardBody as HTMLButtonElement).disabled).toBe(true);
-    expect(cardBody.className).toContain('cursor-not-allowed');
+    expect((cardBody as HTMLButtonElement).disabled).toBe(false);
+    expect(cardBody.className).toContain('cursor-pointer');
     expect(cardBody.className).not.toContain('cursor-wait');
-    const conflictDescription = screen.getByText(
-      'settings.ghosts.market.conflictDescription',
-    );
-    expect(conflictDescription.id).toBeTruthy();
-    expect(cardBody.getAttribute('aria-describedby')).toBe(conflictDescription.id);
-    const conflictAction = screen.getByRole('button', {
-      name: 'settings.ghosts.market.conflictAria:Google Calendar',
+    const replacementDescription = screen.getByText('settings.ghosts.market.replaceDescription');
+    expect(replacementDescription.id).toBeTruthy();
+    expect(cardBody.getAttribute('aria-describedby')).toBe(replacementDescription.id);
+    const replaceAction = screen.getByRole('button', {
+      name: 'settings.ghosts.market.replaceAria:Google Calendar',
     });
-    expect((conflictAction as HTMLButtonElement).disabled).toBe(true);
-    expect(conflictAction.getAttribute('aria-describedby')).toBe(conflictDescription.id);
-    expect(screen.getByRole('status').textContent).toBe('settings.ghosts.market.conflict');
+    expect((replaceAction as HTMLButtonElement).disabled).toBe(false);
+    expect(replaceAction.getAttribute('aria-describedby')).toBe(replacementDescription.id);
+    expect(replaceAction.textContent).toBe('settings.ghosts.market.replace');
+    fireEvent.click(replaceAction);
+    expect(onInstall).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.page.installAria' })).toBeNull();
     expect(screen.queryByText(marketPlugin.description ?? '')).toBeNull();
 

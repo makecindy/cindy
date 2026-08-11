@@ -300,8 +300,8 @@ export function SessionContentHeader({
       showRemoteWriteBlockedToast();
       return;
     }
-    void window.electronAPI.maker.openSessionInNewWindow(session.id);
-  }, [remoteWritesBlocked, session.id, showRemoteWriteBlockedToast]);
+    void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
+  }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, showRemoteWriteBlockedToast]);
 
   /* ---- 移动到项目 / 对话 ----
    * 与 CCAgentSidebarUpper.handleMoveSession 同款守卫(远程不支持 / 执行中 /

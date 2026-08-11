@@ -807,6 +807,7 @@ function GhostCardCanvas({
           <DropdownMenuTrigger asChild>
             <span
               aria-hidden
+              data-fixed-menu-anchor
               style={{
                 position: 'fixed',
                 left: imgMenu.x,
@@ -836,6 +837,7 @@ function GhostCardCanvas({
           <DropdownMenuTrigger asChild>
             <span
               aria-hidden
+              data-fixed-menu-anchor
               style={{
                 position: 'fixed',
                 left: audioMenu.x,

@@ -29,6 +29,7 @@ import {
   PanelRight,
   Sparkles,
   ShieldAlert,
+  Smartphone,
   Terminal,
   Wrench,
   type LucideIcon,
@@ -37,11 +38,7 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import type {
-  GhostPermissionDiff,
-  GhostPermissionItem,
-  GhostTrustInfo,
-} from '../../shared/ghost';
+import type { GhostPermissionDiff, GhostPermissionItem, GhostTrustInfo } from '../../shared/ghost';
 
 const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   cindy: Sparkles, // 与详情页「Cindy 能力」区同款图标
@@ -62,6 +59,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   preview: AppWindow,
   skill: GraduationCap,
   workspace: FolderPlus,
+  'ios-simulator': Smartphone,
 };
 
 function itemIcon(item: GhostPermissionItem): LucideIcon {

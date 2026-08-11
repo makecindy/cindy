@@ -4,7 +4,7 @@
     "pr": 908,
     "summary": {
       "what": "全端(桌面/移动 phone·pad)全状态登录 demo,追平当前产品:移动端无「跳过登录」入口(该功能未进 main,桌面 SKIP_ENTRY 仍在)、面板回 440/组 560、功能区落位取 figma 新稿标注值(短屏 622 / 长屏 827)且窄屏分支钳到 622 不压盖字标、键盘停靠锚回面板底、桌面区域徽标翻转为「global 不标 / cn·dev 才标」且宽度由 paddingX 撑开。",
-      "how": "truth 全部由 extract.mjs 从产品源码机械提取(布局常量/四语文案/色 token/协议链接/SVG path/品牌位图 sha);布局 oracle = 产品公式本体(loginScale / resolveLoginSurface / computeLoginKeyboardShift)编译后预计算;demo 侧用镜像公式独立算一遍,由门 D/F 比对。",
+      "how": "truth 全部由 extract.mjs 从产品源码机械提取(布局常量/五语文案/色 token/协议链接/SVG path/品牌位图 sha);布局 oracle = 产品公式本体(loginScale / resolveLoginSurface / computeLoginKeyboardShift)编译后预计算;demo 侧用镜像公式独立算一遍,由门 D/F 比对。",
       "accept": "A-D/F 门自动验收:extractor 零漂移 / 状态覆盖 100% / 交互鲁棒(截断·输入·持久化) / 渲染绑定(含区域徽标 hug 宽、移动四形态几何、键盘位移与模式) / 适配采样(10 个尺寸,含断点两侧)。像素层无基准,如实标注未比对。"
     }
   },
@@ -29,6 +29,7 @@
     ],
     "langs": [
       "zh-CN",
+      "zh-TW",
       "en",
       "ja",
       "ko"
@@ -897,10 +898,16 @@
           "click": ".lp-skip-entry"
         },
         {
+          "expect": "desk.consent.dialog"
+        },
+        {
+          "click": ".lp-dialog-agree"
+        },
+        {
           "expect": "desk.main.skip"
         }
       ],
-      "note": "跳过登录链路终点:点面板内「跳过登录」→ 无协议弹窗、radio 未勾选 → 直达主界面(2026-07-27 拍板)"
+      "note": "跳过登录链路终点:点面板内「跳过登录」→ 未同意时先过协议门 → 进入本地模式(2026-07-29 产品调整)"
     },
     {
       "id": "desk.skip.hitzone",
@@ -2079,13 +2086,13 @@
         }
       },
       {
-        "id": "pad-global-android-light-en",
+        "id": "pad-global-android-light-zh-TW",
         "prefs": {
           "plat": "pad",
           "region": "global",
           "os": "android",
           "mode": "light",
-          "lang": "en"
+          "lang": "zh-TW"
         }
       },
       {

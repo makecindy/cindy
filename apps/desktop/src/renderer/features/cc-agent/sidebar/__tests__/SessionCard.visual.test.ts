@@ -277,6 +277,23 @@ describe('SessionCard visual cases', () => {
       expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(visualCase.session.id);
       expect(dataTransfer.effectAllowed).toBe('copyMove');
 
+      const openOutside = vi.fn().mockResolvedValue(false);
+      const electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: { maker: { openSessionInNewWindowIfDroppedOutside: openOutside } },
+      });
+      fireEvent.dragEnd(card!, { dataTransfer });
+      expect(openOutside).toHaveBeenCalledWith(
+        visualCase.session.id,
+        visualCase.session.deviceLinkDeviceId,
+      );
+      if (electronApiDescriptor) {
+        Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'electronAPI');
+      }
+
       values.clear();
       dataTransfer.effectAllowed = 'none';
       fireEvent.pointerDown(actionButton!, { button: 0, pointerType: 'mouse' });

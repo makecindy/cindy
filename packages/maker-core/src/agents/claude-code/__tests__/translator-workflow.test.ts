@@ -50,7 +50,173 @@ async function translateOne(msg: Record<string, unknown>): Promise<AgentEvent[]>
   return events;
 }
 
+async function translateSequence(messages: Record<string, unknown>[]): Promise<AgentEvent[]> {
+  const queue = createAsyncQueue<AgentEvent>();
+  const ctx = {
+    rt: newRuntimeState(),
+    turn: createTurnState(),
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    getModel: () => 'claude-sonnet-4-5',
+    getEffort: () => 'high',
+    getPermissionMode: () => 'auto',
+    onSessionId: vi.fn(),
+    getSdkSessionId: () => undefined,
+    getLogTitle: () => undefined,
+    getSubagentTaskUsage: (taskId: string) =>
+      taskId.endsWith('remote') ? { totalTokens: 900 } : { totalTokens: 700 },
+    tracker: new UsageTracker(),
+  };
+  for (const message of messages) {
+    translateSdkMessage(message as never, queue, ctx as never);
+  }
+  queue.end();
+  const events: AgentEvent[] = [];
+  for await (const event of queue) events.push(event);
+  return events;
+}
+
 describe('Claude Code translator — workflow / task_updated', () => {
+  it.each(['local_agent', 'remote_agent'] as const)(
+    'locks a parentless %s identity through sparse progress and terminal frames',
+    async (taskType) => {
+      const taskId = taskType === 'remote_agent' ? 'task-remote' : 'task-local';
+      const events = await translateSequence([
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: taskId,
+          task_type: taskType,
+          description: `Run ${taskType}`,
+        },
+        {
+          type: 'system',
+          subtype: 'task_progress',
+          task_id: taskId,
+          summary: 'Halfway',
+        },
+        {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: taskId,
+          status: 'completed',
+          summary: 'Finished',
+          usage: { total_tokens: 0, tool_uses: 4, duration_ms: 1200 },
+        },
+      ]);
+
+      expect(events.map((event) => event.data)).toEqual([
+        expect.objectContaining({
+          taskId,
+          taskType,
+          status: 'running',
+          subagentObservation: { kind: 'spawn', logicalSubagentId: taskId },
+        }),
+        expect.objectContaining({
+          taskId,
+          status: 'running',
+          summary: 'Halfway',
+          subagentObservation: { kind: 'progress', logicalSubagentId: taskId },
+        }),
+        expect.objectContaining({
+          taskId,
+          status: 'completed',
+          summary: 'Finished',
+          usage: {
+            totalTokens: taskType === 'remote_agent' ? 900 : 700,
+            toolUses: 4,
+            durationMs: 1200,
+          },
+          subagentObservation: { kind: 'terminal', logicalSubagentId: taskId },
+        }),
+      ]);
+      for (const event of events) {
+        expect((event.data as Record<string, unknown>).parentToolUseId).toBeUndefined();
+      }
+    },
+  );
+
+  it('keeps the latched parentless identity on duplicate and out-of-order terminal updates', async () => {
+    const events = await translateSequence([
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'task-local',
+        task_type: 'local_agent',
+      },
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'task-local',
+        status: 'completed',
+        summary: 'Done',
+      },
+      {
+        type: 'system',
+        subtype: 'task_progress',
+        task_id: 'task-local',
+        summary: 'Late progress',
+      },
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'task-local',
+        status: 'completed',
+        summary: 'Done',
+      },
+      {
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'task-local',
+        patch: { status: 'killed' },
+      },
+    ]);
+
+    expect(events.map((event) => (event.data as Record<string, unknown>).subagentObservation)).toEqual([
+      { kind: 'spawn', logicalSubagentId: 'task-local' },
+      { kind: 'terminal', logicalSubagentId: 'task-local' },
+      { kind: 'progress', logicalSubagentId: 'task-local' },
+      { kind: 'terminal', logicalSubagentId: 'task-local' },
+      { kind: 'terminal', logicalSubagentId: 'task-local' },
+    ]);
+  });
+
+  it('does not latch unconfirmed tasks or excluded bash/workflow tasks as Subagents', async () => {
+    const events = await translateSequence([
+      { type: 'system', subtype: 'task_started', task_id: 'unknown-task' },
+      { type: 'system', subtype: 'task_notification', task_id: 'unknown-task', status: 'completed' },
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'bash-task',
+        task_type: 'local_bash',
+        tool_use_id: 'toolu-bash',
+      },
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'bash-task',
+        status: 'completed',
+      },
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'workflow-task',
+        task_type: 'local_workflow',
+        tool_use_id: 'toolu-workflow',
+      },
+      {
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'workflow-task',
+        patch: { status: 'completed' },
+      },
+    ]);
+
+    for (const event of events) {
+      expect((event.data as Record<string, unknown>).subagentObservation).toBeUndefined();
+    }
+  });
+
   it('maps task_updated patch.status=completed → completed (merge by taskId, no parentToolUseId)', async () => {
     const events = await translateOne({
       type: 'system',

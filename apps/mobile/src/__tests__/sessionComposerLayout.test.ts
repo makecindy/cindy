@@ -111,15 +111,15 @@ describe('sessionComposerLayout', () => {
     });
   });
 
-  it('keeps text editable while a restored draft cannot be sent offline', () => {
+  it('keeps text editable while a deterministic remote error blocks sending', () => {
     const layout = buildSessionComposerLayout({
       attachmentBusy: false,
       attachmentCount: 0,
       attachmentPickerOpen: false,
       canStop: false,
-      draftText: '等电脑恢复后发送',
+      draftText: '等待重新授权后发送',
       queueBusy: false,
-      sendUnavailableReason: '网络或被控端暂时不可用，可以稍后重新同步。',
+      sendUnavailableReason: '这台电脑已撤销手机访问权限。',
       sending: false,
       voiceState: 'idle',
     });
@@ -130,11 +130,11 @@ describe('sessionComposerLayout', () => {
     });
     expect(layout.send).toEqual({
       disabled: true,
-      disabledReason: '网络或被控端暂时不可用，可以稍后重新同步。',
+      disabledReason: '这台电脑已撤销手机访问权限。',
       label: '发送',
       visible: true,
     });
-    expect(layout.guidanceText).toBe('网络或被控端暂时不可用，可以稍后重新同步。');
+    expect(layout.guidanceText).toBe('这台电脑已撤销手机访问权限。');
   });
 
   it('summarizes attachment and voice tool state for the compact mobile composer', () => {

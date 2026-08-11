@@ -73,6 +73,36 @@ describe('createResponsesChatHandler', () => {
     expect(res.ended).toBe(true);
   });
 
+  it('rejects a built-in web_search tool instead of silently dropping it', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const warn = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl, logger: { warn } });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'search' }],
+        tools: [{ type: 'web_search' }],
+      },
+      res: res as never,
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.chunks.join('')).toContain('unsupported_feature');
+    expect(res.chunks.join('')).toContain('tools[0]');
+    expect(res.chunks.join('')).toContain('web_search');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('responses-chat bridge rejected unsupported feature', {
+      model: 'custom-model',
+      feature: 'tools[0].web_search',
+    });
+  });
+
   it('preserves the upstream base query when applying the chat path', async () => {
     const fetchImpl = vi.fn(async () =>
       streamResponse([

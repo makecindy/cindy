@@ -15,6 +15,7 @@ import {
   session,
   shell,
   Tray,
+  type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
@@ -242,7 +243,6 @@ import {
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
-import { removeSessionRefs as removeSessionMediaRefs } from './cindy-media/ledger';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   getAllRegisteredDraftUrls,
@@ -270,6 +270,7 @@ import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
 import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
+import { getSessionRowSnapshot } from './localDb/ipc/sessions';
 import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
@@ -304,6 +305,27 @@ import { readClaudeApiKey } from './maker-host/auth-adapters';
 import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import { onQuit, installQuitHandler } from './lifecycle';
+import {
+  cancelIOSSimulatorSessionOperations,
+  cleanupIOSSimulatorRemovedSession,
+  disposeIOSSimulatorHost,
+  flushIOSSimulatorOwnershipRegistry,
+  getIOSSimulatorSessionStatus,
+  reconcilePersistedIOSSimulatorOwnership,
+} from './mcp-integrations/ios-simulator';
+import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
+import {
+  clearIOSSimulatorRendererAccess,
+  configureIOSSimulatorAgentControlConfirmation,
+  configureIOSSimulatorRendererAccessConfirmation,
+  configureIOSSimulatorRendererTargets,
+  inheritIOSSimulatorRendererSessionAccess,
+} from './mcp-integrations/ios-simulator-renderer-access';
+import {
+  parseIOSSimulatorReleaseGateArgs,
+  runIOSSimulatorReleaseGate,
+  type IOSSimulatorReleaseGateMode,
+} from './mcp-integrations/ios-simulator-release-gate';
 import { initStartupDiagnostics } from './startup-diagnostics';
 import {
   installPowerEventDiagnostics,
@@ -325,7 +347,13 @@ import {
   isFocusedAppContentWindow,
   markAppContentWindow,
 } from './windowFocusClassifier.js';
-import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from './security/trustedAppRenderer.js';
+import { isMainShellWindowUrl } from './cindy-brain/scheduleSlot.js';
+import { sanitizeGhostNoticeText } from './cindy-brain/notifySlot.js';
 import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
@@ -363,7 +391,7 @@ import {
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
 import { registerGitContextIpc, disposeGitContext } from './git-context';
-import { registerGitReviewIpc } from './git-review';
+import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
@@ -383,6 +411,7 @@ import {
 } from './hook-control';
 import { startAccountIntegrationsAfterOwnerDbReady } from './accountIntegrationStartup';
 import { registerSkillhubIpc } from './skillhub/registerIpc';
+import { listAllowedSkillhubProjectRoots } from './skillhub/allowedProjectRoots';
 import { SkillhubMarketService } from './skillhub/marketService';
 import { skillhubAutoSyncService } from './skillhub/autoSyncService';
 import { rehydrateCloseSuppression } from './maker-host/rehydrateCloseSuppression.js';
@@ -468,8 +497,10 @@ import {
   setGoalIdleObserver,
   setGoalStopObserver,
   setGoalAskAnswerObserver,
+  withSendToSessionLock,
 } from './maker-ipc/register.js';
-import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH } from './maker-ipc/channels.js';
+import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
+import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
   preserveLegacyMakerMemoryDisabled,
   readMemorySettings,
@@ -519,6 +550,7 @@ import {
   type BuiltinApiKeyBridgeDeps,
 } from './secrets/builtinApiKeyBridge.js';
 import {
+  isCustomProviderRuntimeKeyStorageKey,
   isRendererAccessibleSafeStorageKey,
   type ProviderSecretId,
 } from '../shared/providerSecrets.js';
@@ -575,7 +607,22 @@ import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
-import { isSecondaryAppWindow, openSessionInNewWindow } from './secondary-windows.js';
+import {
+  isSecondaryAppWindow,
+  openSessionInNewWindow,
+  openSessionInNewWindowIfDroppedOutside,
+} from './secondary-windows.js';
+import {
+  beginSessionDragPreview,
+  consumeNativeSessionDragOpenResult,
+  disposeSessionDragPreview,
+  endSessionDragPreview,
+  prewarmSessionDragReleaseHelper,
+} from './session-drag-preview.js';
+import {
+  parseSessionDragPreviewPalette,
+  truncateSessionDragPreviewLabel,
+} from './sessionDragPreviewHtml.js';
 import {
   isGlobalVoiceInputOverlayVisible,
   registerGlobalVoiceInputIpc,
@@ -1000,6 +1047,7 @@ const safeStorageReadLog = createLogger('safe-storage:read');
 const rendererConsoleLog = createLogger('renderer-console');
 const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
+const sessionDragPreviewLog = createLogger('session-drag-preview');
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
@@ -1240,7 +1288,17 @@ installWebviewHardener();
 // 调用时机远晚于此处构造),状态机本体见 right-sidebar-window/controller.ts。
 const rsbWindowController = new RsbWindowController({
   settings: { read: readRsbWindowSettings, writePatch: writeRsbWindowSettingsPatch },
-  createWindow: (opts) => createRightSidebarWindow(opts),
+  createWindow: (opts) => {
+    const window = createRightSidebarWindow(opts);
+    const mainTarget =
+      mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
+        ? mainWindowRef.webContents
+        : null;
+    if (mainTarget) {
+      inheritIOSSimulatorRendererSessionAccess(mainTarget, window.webContents);
+    }
+    return window;
+  },
   getMainWindow: () => mainWindowRef,
   broadcastState: (state) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -1264,6 +1322,128 @@ const rsbWindowController = new RsbWindowController({
   isQuitting: () => isQuitting,
   canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
   log: createLogger('right-sidebar-window-controller'),
+});
+
+function isIOSSimulatorPluginActive(ghosts = getGhostManager().list()): boolean {
+  return ghosts.some(
+    (ghost) =>
+      ghost.enabled === true &&
+      ghost.manifest.slots.includes('ios-simulator') &&
+      isGhostAvailableForActiveSession(ghost.manifest.id),
+  );
+}
+
+function resolveIOSSimulatorRendererWindow(
+  target: Parameters<typeof BrowserWindow.fromWebContents>[0],
+): BrowserWindow | null {
+  const owner = BrowserWindow.fromWebContents(target);
+  if (!owner || !isTrustedAppRendererWindow(owner)) return null;
+  const sidebarTarget = rsbWindowController.getSidebarWebContents();
+  const isSidebar = sidebarTarget === target;
+  if (!isSidebar && !isMainShellWindowUrl(owner.webContents.getURL())) return null;
+  return owner;
+}
+
+configureIOSSimulatorRendererTargets((preferredTarget) => {
+  if (!isIOSSimulatorPluginActive()) return null;
+  const mainTarget =
+    mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
+      ? mainWindowRef.webContents
+      : null;
+  const sidebarTarget = rsbWindowController.getSidebarWebContents();
+  const belongsToMainFamily =
+    !preferredTarget || preferredTarget === mainTarget || preferredTarget === sidebarTarget;
+  if (!belongsToMainFamily) {
+    if (!preferredTarget || !resolveIOSSimulatorRendererWindow(preferredTarget as WebContents)) {
+      return null;
+    }
+    return {
+      grantTargets: [preferredTarget],
+      focusTarget: preferredTarget,
+    };
+  }
+  const grantTargets = [mainTarget, sidebarTarget].filter(
+    (target): target is NonNullable<typeof target> => Boolean(target),
+  );
+  const focusTarget = rsbWindowController.getHostWebContents() ?? preferredTarget ?? mainTarget;
+  return focusTarget ? { grantTargets, focusTarget } : null;
+});
+configureIOSSimulatorRendererAccessConfirmation(async (target, sessionId) => {
+  if (!isIOSSimulatorPluginActive()) return false;
+  const owner = resolveIOSSimulatorRendererWindow(target as WebContents);
+  if (!owner) return false;
+  const row = await getSessionRowSnapshot(sessionId);
+  if (!row || row.status !== 'active' || row.remoteHostId) return false;
+
+  const taskLabel =
+    sanitizeGhostNoticeText(row.title ?? '')
+      .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 120) || t('rightSidebar.iosSimulator.accessDialogUntitledTask');
+  const result = await dialog.showMessageBox(owner, {
+    type: 'question',
+    title: t('rightSidebar.iosSimulator.accessDialogTitle'),
+    message: t('rightSidebar.iosSimulator.accessDialogMessage').replaceAll('{{task}}', taskLabel),
+    detail: t('rightSidebar.iosSimulator.accessDialogDetail'),
+    buttons: [
+      t('rightSidebar.iosSimulator.accessDialogAllow'),
+      t('rightSidebar.iosSimulator.accessDialogCancel'),
+    ],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (result.response !== 0 || owner.isDestroyed() || target.isDestroyed()) return false;
+  const current = await getSessionRowSnapshot(sessionId);
+  return Boolean(
+    current && current.status === 'active' && !current.remoteHostId && isIOSSimulatorPluginActive(),
+  );
+});
+configureIOSSimulatorAgentControlConfirmation(async (target, sessionId, instanceId) => {
+  if (!isIOSSimulatorPluginActive()) return false;
+  const owner = resolveIOSSimulatorRendererWindow(target as WebContents);
+  if (!owner) return false;
+  const row = await getSessionRowSnapshot(sessionId);
+  if (!row || row.status !== 'active' || row.remoteHostId) return false;
+  const status = await getIOSSimulatorSessionStatus(sessionId);
+  const instance = status.ok
+    ? status.instances.find((candidate) => candidate.instanceId === instanceId)
+    : undefined;
+  if (!instance) return false;
+
+  const taskLabel =
+    sanitizeGhostNoticeText(row.title ?? '')
+      .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 120) || t('rightSidebar.iosSimulator.accessDialogUntitledTask');
+  const simulatorLabel = sanitizeGhostNoticeText(instance.simulatorName)
+    .replace(/[\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 120);
+  const result = await dialog.showMessageBox(owner, {
+    type: 'warning',
+    title: t('rightSidebar.iosSimulator.agentControlDialogTitle'),
+    message: t('rightSidebar.iosSimulator.agentControlDialogMessage').replaceAll(
+      '{{simulator}}',
+      simulatorLabel,
+    ),
+    detail: t('rightSidebar.iosSimulator.agentControlDialogDetail').replaceAll(
+      '{{task}}',
+      taskLabel,
+    ),
+    buttons: [
+      t('rightSidebar.iosSimulator.agentControlDialogAllow'),
+      t('rightSidebar.iosSimulator.agentControlDialogCancel'),
+    ],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (result.response !== 0 || owner.isDestroyed() || target.isDestroyed()) return false;
+  const current = await getSessionRowSnapshot(sessionId);
+  return Boolean(
+    current && current.status === 'active' && !current.remoteHostId && isIOSSimulatorPluginActive(),
+  );
 });
 registerRsbWindowIpc({
   controller: rsbWindowController,
@@ -1314,7 +1494,10 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
   log: createLogger('ghost-panel-window-controller'),
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
-setGhostsChangedObserver((ghosts) => ghostPanelWindowsController.reconcile(ghosts));
+setGhostsChangedObserver((ghosts) => {
+  ghostPanelWindowsController.reconcile(ghosts);
+  if (!isIOSSimulatorPluginActive(ghosts)) clearIOSSimulatorRendererAccess();
+});
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
 registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
@@ -2767,6 +2950,19 @@ function syncDefaultPluginsForActiveOwner(): void {
   });
 }
 
+function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (trimmed.length === 0 || trimmed.length > 256 || value !== trimmed) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      'deviceLinkDeviceId must be a non-empty, trimmed string of at most 256 characters or null',
+    );
+  }
+  return trimmed;
+}
+
 const registerIpcHandlers = () => {
   // Find the primary app window, skipping transient utility BrowserWindows like
   // the voice-input overlay (minimizable:false, maximizable:false). Electron's
@@ -2827,11 +3023,94 @@ const registerIpcHandlers = () => {
   });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
-  ipcMain.handle(MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW, (_e, sessionId: unknown) => {
-    if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      throwIpcError('INVALID_PARAMS', 'sessionId required');
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW,
+    (event, sessionId: unknown, deviceIdRaw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'sessionId required');
+      }
+      const deviceId = parseOptionalDeviceLinkDeviceId(deviceIdRaw);
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      openSessionInNewWindow(sessionId, sourceWindow ?? mainWindowRef, deviceId);
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW_IF_DROPPED_OUTSIDE,
+    (event, sessionId: unknown, deviceIdRaw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'sessionId required');
+      }
+      const deviceId = parseOptionalDeviceLinkDeviceId(deviceIdRaw);
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      // The renderer normally ends the preview immediately before invoking
+      // this check. Stop again here so a delayed dragend/IPC cannot leave the
+      // transient card visible after the drop has already been classified.
+      // Keep the owner check so a delayed IPC from one window cannot stop a
+      // newer drag that already started in another window.
+      if (sourceWindow) endSessionDragPreview(sourceWindow);
+      const nativeResult = sourceWindow
+        ? consumeNativeSessionDragOpenResult(sourceWindow, sessionId, deviceId)
+        : null;
+      if (nativeResult !== null) return nativeResult;
+      return openSessionInNewWindowIfDroppedOutside(
+        sessionId,
+        mainWindowRef,
+        sourceWindow,
+        deviceId,
+      );
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.SESSION_DRAG_PREVIEW_START,
+    (event, labelRaw: unknown, sessionId: unknown, deviceIdRaw: unknown, paletteRaw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof labelRaw !== 'string' || typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'label and sessionId required');
+      }
+      const deviceId = parseOptionalDeviceLinkDeviceId(deviceIdRaw);
+      const palette = parseSessionDragPreviewPalette(paletteRaw);
+      if (!palette) {
+        throwIpcError('INVALID_PARAMS', 'invalid session drag preview palette');
+      }
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!sourceWindow || sourceWindow.isDestroyed()) return;
+      beginSessionDragPreview(
+        sourceWindow,
+        truncateSessionDragPreviewLabel(labelRaw),
+        sessionId,
+        deviceId,
+        palette,
+      );
+    },
+  );
+
+  ipcMain.on(MAKER_SEND.SESSION_DRAG_PREVIEW_END, (event, dragEndAtMsRaw: unknown) => {
+    // Fire-and-forget callers cannot receive an IPC error. Drop stale or
+    // untrusted senders instead of throwing through Electron's EventEmitter.
+    if (!isTrustedAppRendererEvent(event)) return;
+    const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!sourceWindow || sourceWindow.isDestroyed()) return;
+    const receivedAtMs = Date.now();
+    endSessionDragPreview(sourceWindow);
+    if (!app.isPackaged) {
+      const dragEndAtMs =
+        typeof dragEndAtMsRaw === 'number' &&
+        Number.isFinite(dragEndAtMsRaw) &&
+        Math.abs(receivedAtMs - dragEndAtMsRaw) <= 60_000
+          ? dragEndAtMsRaw
+          : null;
+      sessionDragPreviewLog.info(
+        JSON.stringify({
+          event: 'sessionDragPreview.end.dispatched',
+          rendererToMainMs: dragEndAtMs === null ? null : Math.max(0, receivedAtMs - dragEndAtMs),
+          hideApiDispatchMs: Date.now() - receivedAtMs,
+        }),
+      );
     }
-    openSessionInNewWindow(sessionId, mainWindowRef);
   });
 
   // E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):仅 CINDY family 启用毛玻璃透壁纸;
@@ -3734,12 +4013,18 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     'safe-storage-read',
     async (event: Electron.IpcMainInvokeEvent, key: string): Promise<string | null> => {
+      const strictCustomProviderRead = isCustomProviderRuntimeKeyStorageKey(key);
       try {
         assertTrustedAppRendererEvent(event);
         if (!isValidRendererKey(key)) return null;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return null;
-        if (!safeStorage.isEncryptionAvailable()) return null;
+        if (!safeStorage.isEncryptionAvailable()) {
+          if (strictCustomProviderRead) {
+            throwIpcError('INTERNAL', 'custom provider credential is unavailable');
+          }
+          return null;
+        }
         if (!fs.existsSync(filepath)) return null;
         const content = fs.readFileSync(filepath, 'utf-8');
         const buffer = Buffer.from(content, 'base64');
@@ -3754,6 +4039,9 @@ const registerIpcHandlers = () => {
           safeStorageReadLog.error('read failed', {
             error: isIpcError(err) ? err.code : err instanceof Error ? err.name : 'unknown',
           });
+          if (strictCustomProviderRead) {
+            throwIpcError('INTERNAL', 'custom provider credential is unreadable');
+          }
         }
         return null;
       }
@@ -4788,7 +5076,10 @@ const registerIpcHandlers = () => {
     },
   );
 
-  registerSkillhubIpc({ getMaker: getMakerCore });
+  registerSkillhubIpc({
+    getMaker: getMakerCore,
+    getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
+  });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;
     void skillhubAutoSyncService.runOnceAfterLogin();
@@ -5350,7 +5641,8 @@ const registerIpcHandlers = () => {
             'reg.exe',
             ['query', keyPath, ...args],
             { windowsHide: true, timeout: 5000, encoding: 'buffer' },
-            (err, stdout) => resolve(err ? '' : decodeRegOutput(stdout ?? Buffer.alloc(0), codepage)),
+            (err, stdout) =>
+              resolve(err ? '' : decodeRegOutput(stdout ?? Buffer.alloc(0), codepage)),
           );
         });
       },
@@ -5903,17 +6195,9 @@ const registerIpcHandlers = () => {
     'image-cache:cleanup-session',
     async (_event: Electron.IpcMainInvokeEvent, sessionId: string): Promise<void> => {
       await imageCacheStore.removeSession(sessionId);
-      // 媒体总仓对应清理:删本会话名下的媒体引用行(附件/导入/
-      // 消息出生引用;画廊等持久引用不动)。失败只警告——引用行残留是
-      // 无害的保守方向(blob 多活一阵),由对账工具兜底,不阻塞会话删除。
-      try {
-        await removeSessionMediaRefs(sessionId);
-      } catch (err) {
-        createLogger('image-cache').warn('session media ref cleanup failed', {
-          sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // cindy-media refs are removed only by the Main-owned, quiesced session
+      // deletion chain. This legacy IPC intentionally cleans xdt-image files
+      // only; deleting ledger refs here could race a late Simulator ingest.
     },
   );
 
@@ -5995,19 +6279,17 @@ async function runSmokeTest(
     const metaCount = (
       db.prepare('SELECT COUNT(*) AS c FROM migration_meta').get() as { c: number }
     ).c;
-    const pluginStorageResult = pluginStorage
-      ? await runPluginStorageSmoke(userId)
-      : undefined;
+    const pluginStorageResult = pluginStorage ? await runPluginStorageSmoke(userId) : undefined;
     const payload = {
-        ok: true,
-        schema_version: schemaVersion,
-        tables: {
-          sessions: sessionsCount,
-          messages: messagesCount,
-          migration_meta: metaCount,
-        },
-        ...(pluginStorageResult ? { plugin_storage: pluginStorageResult } : {}),
-      };
+      ok: true,
+      schema_version: schemaVersion,
+      tables: {
+        sessions: sessionsCount,
+        messages: messagesCount,
+        migration_meta: metaCount,
+      },
+      ...(pluginStorageResult ? { plugin_storage: pluginStorageResult } : {}),
+    };
     const serialized = `${JSON.stringify(payload)}\n`;
     if (resultFile) fs.writeFileSync(resultFile, serialized, { mode: 0o600 });
     process.stdout.write(serialized);
@@ -6021,6 +6303,33 @@ async function runSmokeTest(
     } catch {
       /* noop */
     }
+    app.exit(1);
+  }
+}
+
+async function runPackagedIOSSimulatorReleaseGate(
+  mode: IOSSimulatorReleaseGateMode,
+): Promise<void> {
+  try {
+    const report = await runIOSSimulatorReleaseGate({
+      mode,
+      packaged: app.isPackaged,
+      platform: process.platform,
+      architecture: process.arch,
+      hostOsRelease: os.release(),
+      resourcesPath: process.resourcesPath,
+      version: app.getVersion(),
+    });
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    app.quit();
+  } catch {
+    process.stderr.write(
+      `${JSON.stringify({
+        schemaVersion: 1,
+        ok: false,
+        errorCode: 'IOS_SIMULATOR_RELEASE_GATE_FAILED',
+      })}\n`,
+    );
     app.exit(1);
   }
 }
@@ -6105,6 +6414,24 @@ function cleanupLegacyDevShortcut(): Promise<void> {
 }
 
 app.on('ready', async () => {
+  try {
+    const releaseGate = parseIOSSimulatorReleaseGateArgs(process.argv);
+    if (releaseGate.enabled) {
+      await runPackagedIOSSimulatorReleaseGate(releaseGate.mode);
+      return;
+    }
+  } catch {
+    process.stderr.write(
+      `${JSON.stringify({
+        schemaVersion: 1,
+        ok: false,
+        errorCode: 'IOS_SIMULATOR_RELEASE_GATE_ARGUMENT_INVALID',
+      })}\n`,
+    );
+    app.exit(1);
+    return;
+  }
+
   // Smoke-test flag short-circuit: skip all normal init paths.
   const smoke = parseSmokeArgs();
   if (smoke.enabled) {
@@ -6247,6 +6574,10 @@ app.on('ready', async () => {
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
   registerLocalDbIpc({
+    cancelSessionOperations: cancelIOSSimulatorSessionOperations,
+    cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
+    reconcilePersistedSessionRuntimes: reconcilePersistedIOSSimulatorOwnership,
+    withSessionLock: withSendToSessionLock,
     isOwnerCurrent: (userId) =>
       isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending()),
     discardStaleOwner: (userId) =>
@@ -6298,6 +6629,19 @@ app.on('ready', async () => {
           userId,
           mode: dbClientTakeover.mode,
         });
+        return;
+      }
+      if (dbClientTakeover.mode === 'unchanged') {
+        // 副窗口会再次走 localDb.ensureReady；同 owner 的 lifecycle client 已由首个
+        // onReady 完整启动，因此这里只保留 DB 连接交接，不重复执行账号级启动维护。
+        // worker takeover 会让 ensureReady 为本次副窗口重新打开 main DB，交接完成后立即
+        // 释放该短暂连接，避免它长期占用文件句柄和 optimize 定时器。
+        if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
+          localDbCloseDb({ preserveSchemaMigrationLease: true });
+          dbClientLog.info('[DbClient] duplicate owner ensure released reopened main db', {
+            userId,
+          });
+        }
         return;
       }
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
@@ -6508,6 +6852,9 @@ app.on('ready', async () => {
       }
     },
   });
+  // device-link 远程 git 审查(只读):git-review:remote-op handler(被控端角色;
+  // invoke-registry 捕获后供控制端隧道调用,本机 renderer 不调用)。
+  registerGitReviewDeviceOp();
   registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
@@ -6589,6 +6936,10 @@ app.on('ready', async () => {
   initLogUploadService();
   startupWindowCreationAllowed = true;
   createWindow();
+  // The macOS release watcher stays disarmed until a task drag begins. Start
+  // its tiny helper after the first window exists so drag latency never pays
+  // a dev swiftc compile or process-spawn cost.
+  prewarmSessionDragReleaseHelper();
   // 预热仅服务 dev macOS，延迟执行避免和启动关键路径争用 CPU；失败由入口内部吞掉。
   setTimeout(() => {
     prewarmMacComputerPermissionGuideHelper();
@@ -6708,6 +7059,7 @@ onQuit(
 );
 onQuit('auth-manager', () => authManager.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
+onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
 // 不阻塞)。不收会一直锁安装目录里的 adb.exe,弄挂增量更新(os error 32)。
 onQuit('android-adb-kill-server', () => disposeAndroidAdb(), 'sync');
@@ -6748,6 +7100,7 @@ onQuit(
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
 onQuit('shutdown-maker', shutdownMaker, 'async');
+onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
 onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
@@ -6769,11 +7122,17 @@ onQuit('codex-proxy', () => disposeCodexProxy(), 'async');
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
 // Remote SSH pool: 主动断开所有活动连接, 防止 ssh2 子句柄阻塞 Node 进程退出。
 onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'async');
+// WDA deleteSession may consume longer than the shared async quit budget. Kill
+// detached WDA/Sidecar process groups synchronously before that budget starts;
+// the lightweight seam is a no-op when Simulator was never initialized.
+onQuit('ios-simulator-exit-abort', abortIOSSimulatorOperationsForExit, 'sync');
 // Hook 连接: 停掉全部 WS transport(含重连 timer), 防句柄阻塞退出。
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
 onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
+onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
+onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
@@ -6871,6 +7230,12 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
       throwIpcError('INVALID_PARAMS', 'subagent codexSubagentsEnabled must be boolean');
     }
     patch.codexSubagentsEnabled = input.codexSubagentsEnabled;
+  }
+  if ('codexUseCindySubagentPolicy' in input) {
+    if (typeof input.codexUseCindySubagentPolicy !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexUseCindySubagentPolicy must be boolean');
+    }
+    patch.codexUseCindySubagentPolicy = input.codexUseCindySubagentPolicy;
   }
   if ('codexMaxConcurrentSubagents' in input) {
     if (!isValidCodexSubagentConcurrencyInput(input.codexMaxConcurrentSubagents)) {

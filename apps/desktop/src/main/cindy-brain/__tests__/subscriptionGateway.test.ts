@@ -18,6 +18,9 @@ import {
   isGhostEligibleSessionRow,
   normalizeTurnUsage,
   readStatusIsRunning,
+  resolveGhostUserHookModel,
+  withGhostAssistantHookModel,
+  withGhostUserHookModel,
   type GhostSubscriptionGatewayDeps,
 } from '../subscriptionGateway';
 import {
@@ -64,6 +67,7 @@ function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
     },
     now: () => 1_000,
     newHookId: () => `hook-${++hookSeq}`,
+    resolveMessageHookContext: () => ({}),
     ...overrides,
   };
   return { gw: new GhostSubscriptionGateway(deps), sent, running, deps };
@@ -286,15 +290,22 @@ describe('will- 拦截', () => {
   });
 
   it('allow 继续问下一个;全 allow 放行', async () => {
-    const { gw, sent, running } = makeGateway({ listGhosts: () => HOOK_GHOSTS });
+    const context = { model: 'gpt-5.6' };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => HOOK_GHOSTS,
+      resolveMessageHookContext: () => context,
+    });
     running.add('h1').add('h2');
     const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    expect(sent[0]?.payload).toMatchObject({ name: 'will-user-message', data: context });
     gw.handleVerdict('h1', {
       type: 'event-verdict',
       hookId: (sent[0].payload as { hookId: string }).hookId,
       action: 'allow',
     });
     await vi.waitFor(() => expect(sent).toHaveLength(2));
+    const secondData = (sent[1]?.payload as { data: Record<string, unknown> }).data;
+    expect(secondData).toEqual({ sessionId: 's1', text: 'hi', model: 'gpt-5.6' });
     gw.handleVerdict('h2', {
       type: 'event-verdict',
       hookId: (sent[1].payload as { hookId: string }).hookId,
@@ -397,6 +408,38 @@ describe('will- 拦截', () => {
     expect(sent).toHaveLength(3);
   });
 
+  it('无匹配钩子时不读取上下文', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'gpt-5.6' }));
+    const { gw } = makeGateway({ listGhosts: () => [], resolveMessageHookContext });
+    expect(await gw.screenUserMessage({ sessionId: 's1', text: 'hi' })).toEqual({ action: 'allow' });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
+  });
+
+  it('同轮插话使用运行中会话的模型快照', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'next-model' }));
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      resolveMessageHookContext,
+    });
+    running.add('h1');
+    const p = withGhostUserHookModel('live-model', () =>
+      gw.screenUserMessage({ sessionId: 's1', text: 'steer' }),
+    );
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'live-model' } });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'allow',
+    });
+    expect(await p).toEqual({ action: 'allow' });
+  });
+
+  it('排队轮次使用入队时捕获的模型', () => {
+    expect(resolveGhostUserHookModel(false, 'new-selection', 'queued-model')).toBe('queued-model');
+    expect(resolveGhostUserHookModel(true, 'live-model', 'queued-model')).toBe('live-model');
+  });
+
   it('verdict 归属校验:冒名/未知 hookId 静默丢;迟到 verdict 无副作用', async () => {
     const { gw, sent, running } = makeGateway({ listGhosts: () => [HOOK_GHOSTS[0]] });
     running.add('h1');
@@ -409,8 +452,8 @@ describe('will- 拦截', () => {
     gw.handleVerdict('h1', { type: 'event-verdict', hookId, action: 'block' }); // 迟到
   });
 
-  it('wake 挂死(load 永不完成):3s 整体上界照样放行,不卡发送', async () => {
-    const { gw } = makeGateway({
+  it('wake 挂死(load 永不完成):超时后终止投递续体,不卡发送', async () => {
+    const { gw, sent } = makeGateway({
       listGhosts: () => [HOOK_GHOSTS[0]],
       isRunning: () => false,
       wake: vi.fn(() => new Promise<never>(() => {})), // 永不 settle
@@ -418,6 +461,50 @@ describe('will- 拦截', () => {
     const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
     await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS + 10);
     expect(await p).toEqual({ action: 'allow' });
+    expect(sent).toEqual([]);
+  });
+
+  it('入口钩子的唤醒与裁决共享同一个整体超时', async () => {
+    let finishWake!: () => void;
+    const wake = vi.fn(() => new Promise<void>((resolve) => {
+      finishWake = resolve;
+    }));
+    const { gw, sent } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      isRunning: () => false,
+      wake,
+    });
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS - 100);
+    finishWake();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await p).toEqual({ action: 'allow' });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'block',
+    });
+  });
+
+  it('上下文读取挂死:无上下文投递后仍受整体超时约束', async () => {
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [HOOK_GHOSTS[0]],
+      resolveMessageHookContext: () => new Promise<never>(() => {}),
+    });
+    running.add('h1');
+    const p = gw.screenUserMessage({ sessionId: 's1', text: 'hi' });
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2);
+    expect((sent[0].payload as { data: unknown }).data).toEqual({ sessionId: 's1', text: 'hi' });
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS / 2 + 1);
+    expect(await p).toEqual({ action: 'allow' });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId,
+      action: 'block',
+    });
   });
 
   it('投递失败计入熔断并放行;成功裁决清零失败计数', async () => {
@@ -458,10 +545,19 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
     ghost('h2', { hooks: ['will-assistant-message'] }),
   ];
 
-  it('全 allow → 放行', async () => {
-    const { gw, sent, running } = makeGateway({ listGhosts: () => OUT_GHOSTS });
+  it('使用本轮模型快照而不是下一轮选择', async () => {
+    const resolveMessageHookContext = vi.fn(() => ({ model: 'next-model' }));
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => OUT_GHOSTS,
+      resolveMessageHookContext,
+    });
     running.add('h1').add('h2');
-    const p = gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' });
+    const p = withGhostAssistantHookModel(Promise.resolve('claude-opus-5'), () =>
+      gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' }),
+    );
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'claude-opus-5' } });
+    expect(resolveMessageHookContext).not.toHaveBeenCalled();
     gw.handleVerdict('h1', {
       type: 'event-verdict',
       hookId: (sent[0].payload as { hookId: string }).hookId,
@@ -476,6 +572,30 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
     expect(await p).toEqual({ action: 'allow' });
     // 下发的事件名是出口钩子名。
     expect((sent[0].payload as { name: string }).name).toBe('will-assistant-message');
+  });
+
+  it('出口钩子按自身预算等待较慢的本轮模型快照', async () => {
+    let resolveModel!: (model: string) => void;
+    const model = new Promise<string>((resolve) => {
+      resolveModel = resolve;
+    });
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [OUT_GHOSTS[0]] });
+    running.add('h1');
+    const p = withGhostAssistantHookModel(model, () =>
+      gw.screenAssistantMessage({ sessionId: 's1', text: 'AI 回复' }),
+    );
+
+    await vi.advanceTimersByTimeAsync(GHOST_HOOK_TIMEOUT_MS);
+    expect(sent).toHaveLength(0);
+    resolveModel('claude-opus-5');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.payload).toMatchObject({ data: { model: 'claude-opus-5' } });
+    gw.handleVerdict('h1', {
+      type: 'event-verdict',
+      hookId: (sent[0].payload as { hookId: string }).hookId,
+      action: 'allow',
+    });
+    expect(await p).toEqual({ action: 'allow' });
   });
 
   it('rewrite 链式叠加:h2 看到 h1 改写后的文本,末个署名', async () => {

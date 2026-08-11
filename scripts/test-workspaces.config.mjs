@@ -223,6 +223,7 @@ export default {
     noCollectableWorkspace('@cindy/heartbeat-client', 'packages/heartbeat-client'),
     requiredUnitWorkspace('@cindy/im', 'packages/lizi-im'),
     requiredUnitWorkspace('@cindy/mcps', 'packages/lizi-mcps'),
+    requiredUnitWorkspace('@cindy/ios-simulator-runtime', 'packages/ios-simulator-runtime'),
     requiredUnitWorkspace('@cindy/maker-cc-manager', 'packages/maker-cc-manager'),
     // Stays on forks: palette-scanner's tests stub HOME and the scanner resolves
     // it through os.homedir(), which a worker thread cannot see (see
@@ -248,11 +249,8 @@ export default {
     requiredUnitWorkspace('@cindy/remote-file-service', 'packages/remote-file-service'),
     requiredUnitWorkspace('@cindy/voice-input-core', 'packages/voice-input-core'),
     requiredUnitWorkspace('@cindy/wechat-ilink', 'packages/wechat-ilink'),
-    noCollectableWorkspace('@cindy/device-link-protocol', 'cindy-protocol/packages/device-link-protocol'),
-    requiredUnitWorkspace('@cindy/model-access-protocol', 'cindy-protocol/packages/model-access-protocol'),
-    requiredUnitWorkspace('@cindy/plugin-protocol', 'cindy-protocol/packages/plugin-protocol'),
-    requiredUnitWorkspace('@cindy/skill-protocol', 'cindy-protocol/packages/skill-protocol'),
-    requiredUnitWorkspace('@cindy/slack-hook-protocol', 'cindy-protocol/packages/slack-hook-protocol'),
-    requiredUnitWorkspace('@cindy/voice-protocol', 'cindy-protocol/packages/voice-protocol'),
+    noCollectableWorkspace('@cindy/device-link-protocol', 'packages/device-link-protocol'),
+    requiredUnitWorkspace('@cindy/plugin-protocol', 'packages/plugin-protocol'),
+    requiredUnitWorkspace('@cindy/slack-hook-protocol', 'packages/slack-hook-protocol'),
   ],
 };

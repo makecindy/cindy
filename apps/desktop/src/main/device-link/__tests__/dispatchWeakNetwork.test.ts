@@ -460,3 +460,15 @@ describe('[3] outbox 保留时长按 channel 收窄', () => {
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(0); // 121s:worktree 也到期
   });
 });
+
+describe('[5] orphan 截止时间按 channel 收窄', () => {
+  it('默认 invoke 保持 60s，只有 compact 使用 22min 长预算', () => {
+    const compactBudget = INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session'];
+    expect(compactBudget).toBe(11 * 60_000);
+    expect(__testing.remoteInvokeOrphanTimeoutForChannelMs(undefined)).toBe(60_000);
+    expect(__testing.remoteInvokeOrphanTimeoutForChannelMs('maker:list-active')).toBe(60_000);
+    expect(__testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session')).toBe(
+      compactBudget * 2,
+    );
+  });
+});

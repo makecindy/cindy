@@ -43,8 +43,8 @@
 - [`log-upload-and-redaction.md`](log-upload-and-redaction.md)：客户端日志采集／脱敏／上报的
   三条不变量（记录边界、白名单方向 deny-by-default、标记代次 + 原子清除）、四层收窄管道、
   授权闸、区域绑定与崩溃时序。
-- [`protocol-and-submodules.md`](protocol-and-submodules.md)：`cindy-protocol` 协议权威源、
-  device-link relay 层、内建插件来源与 wire protocol 兼容。
+- [`protocol-compatibility.md`](protocol-compatibility.md)：两仓本地协议实现、device-link
+  relay 层、插件来源与 wire protocol 兼容。
 - [`architecture-invariants.md`](architecture-invariants.md)：package 与 render／main 解耦、
   main 进程静态依赖，以及主界面布局树不变量。
 - [`configuration-and-overrides.md`](configuration-and-overrides.md)：配置可见性分层、默认值

@@ -791,7 +791,9 @@ export function PublishDialog({
     let publishAbsolutePath = eff.absolutePath;
     if (autoCleanName && !renamedToRef.current && submitName !== eff.name) {
       const renameRes = await window.electronAPI.skillhub.renameLocal({
-        absolutePath: eff.absolutePath,
+        // Keep the lexical discovery path for lstat: canonical absolutePath may
+        // point at a symlink target and would bypass the rename safety gate.
+        absolutePath: skill.discoveredPath ?? eff.absolutePath,
         newName: submitName,
       });
       if (!renameRes.success) {
@@ -812,7 +814,18 @@ export function PublishDialog({
     // 应该走专门的入口,不应混在"发新版本"里默默动。
     const params = buildCurrentPublishParams(publishAbsolutePath, submitName);
     runPublish(params);
-  }, [canSubmit, form, effectiveSkill, effectiveFirstPublish, autoCleanName, confirm, t, buildCurrentPublishParams, runPublish]);
+  }, [
+    canSubmit,
+    form,
+    effectiveSkill,
+    effectiveFirstPublish,
+    autoCleanName,
+    confirm,
+    t,
+    buildCurrentPublishParams,
+    runPublish,
+    skill.discoveredPath,
+  ]);
 
   // ── Cancel publish in progress (working / failure 都可调) ────────────────
   const handleCancelWorking = useCallback(async () => {

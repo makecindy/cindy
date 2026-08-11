@@ -1,0 +1,665 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+
+import { isReviewSensitiveCredentialPath } from '@cindy/maker-core';
+import { and, desc, eq, inArray, isNull, lt, ne, notLike, or } from 'drizzle-orm';
+
+import { getDbClient } from '../localDb/client/current.js';
+import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
+import { messages } from '../localDb/schema.js';
+import * as imageCacheStore from '../imageCacheStore.js';
+import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
+import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
+import { readReviewData } from '../git-review/ipc.js';
+import { getTurnChangeSets, listTurnChangeSets } from '../turn-change-set/store.js';
+import type { TurnChangeSetDetail } from '../../shared/turnChangeSet.js';
+import { readReviewRunFromAgentMeta } from '../../shared/reviewRun.js';
+import type {
+  ReviewArtifactLabel,
+  ReviewContextMessage,
+  ReviewWorkspaceEvidence,
+} from './reviewPrompt.js';
+import {
+  sanitizeReviewChangeSet,
+  sanitizeReviewDiffBucket,
+  sanitizeReviewStatusFiles,
+} from './reviewEvidenceSafety.js';
+import {
+  classifyReviewArtifact,
+  extractReviewArtifactContent,
+  type ReviewArtifactExcerpt,
+  type ReviewArtifactWarning,
+} from './reviewArtifactContent.js';
+import {
+  assertReviewInlineAttachmentGranted,
+  assertReviewExplicitPathGranted,
+  type ResolvedReviewArtifactPath,
+  type ReviewExplicitArtifactGrant,
+} from './reviewArtifactAuthorization.js';
+import {
+  fingerprintReviewCappedWorkspaceFiles,
+  ReviewCappedWorkspaceChangedError,
+} from './reviewCappedWorkspaceFingerprint.js';
+
+export interface ReviewAttachmentInput {
+  name: string;
+  path?: string;
+  url?: string;
+  category?: 'image' | 'pdf' | 'text' | 'office' | 'file';
+  mimeType?: string;
+  originalName?: string;
+  base64?: string;
+}
+
+export interface ReviewAttachmentBlock {
+  [key: string]: unknown;
+  type: 'image' | 'file';
+  path?: string;
+  base64?: string;
+  mimeType?: string;
+  originalName?: string;
+}
+
+export interface LoadedReviewEvidence {
+  context: ReviewContextMessage[];
+  contextFingerprint: string;
+  workspace: ReviewWorkspaceEvidence | null;
+  workspaceFingerprint: string | null;
+  changeSet: TurnChangeSetDetail | null;
+  artifacts: ReviewArtifactLabel[];
+  artifactExcerpts: ReviewArtifactExcerpt[];
+  artifactWarnings: ReviewArtifactWarning[];
+  attachmentBlocks: ReviewAttachmentBlock[];
+  readRoots: string[];
+  reviewReadPaths: string[];
+  focusPath: string | null;
+  artifactsOmitted: boolean;
+}
+
+const MAX_CONTEXT_ROWS = 20;
+const CONTEXT_QUERY_PAGE_SIZE = 64;
+// A single invocation accepts at most 20 explicit attachments plus one focus
+// path. Keep a small margin for task-history artifacts before declaring the
+// evidence list partial.
+const MAX_ARTIFACTS = 24;
+const MAX_ARTIFACT_EXCERPT_CHARS = 24_000;
+const MAX_TOTAL_ARTIFACT_EXCERPT_CHARS = 72_000;
+const MAX_EXTRACTED_PDFS = 4;
+
+function mapReviewWorkspace(
+  reviewData: Awaited<ReturnType<typeof readReviewData>>,
+): ReviewWorkspaceEvidence {
+  const sanitized = sanitizeReviewDiffBucket(reviewData.diffs);
+  return {
+    dirty: reviewData.summary.dirty,
+    totalFiles: reviewData.summary.totalFiles,
+    stagedFiles: reviewData.summary.stagedFiles,
+    unstagedFiles: reviewData.summary.unstagedFiles,
+    untrackedFiles: reviewData.summary.untrackedFiles,
+    disabledReason: reviewData.summary.disabledReason,
+    diffs: sanitized.value,
+    sensitiveFilesOmitted: sanitized.omittedSensitiveFiles,
+  };
+}
+
+interface ReviewWorkspaceSnapshot {
+  workspace: ReviewWorkspaceEvidence;
+  fingerprint: string | null;
+  hasCappedDiff: boolean;
+}
+
+interface ReviewWorkspaceSnapshotDeps {
+  readReviewData: typeof readReviewData;
+  fingerprintCappedWorkspaceFiles: typeof fingerprintReviewCappedWorkspaceFiles;
+}
+
+const defaultReviewWorkspaceSnapshotDeps: ReviewWorkspaceSnapshotDeps = {
+  readReviewData,
+  fingerprintCappedWorkspaceFiles: fingerprintReviewCappedWorkspaceFiles,
+};
+
+function cappedWorkspacePaths(workspace: ReviewWorkspaceEvidence): string[] {
+  return [workspace.diffs.capped?.staged, workspace.diffs.capped?.unstaged].flatMap((capped) =>
+    capped
+      ? capped.files.flatMap((file) => [file.path, file.oldPath].filter(Boolean) as string[])
+      : [],
+  );
+}
+
+async function buildReviewWorkspaceSnapshot(
+  reviewData: Awaited<ReturnType<typeof readReviewData>>,
+  fingerprintCappedWorkspaceFiles: typeof fingerprintReviewCappedWorkspaceFiles,
+): Promise<ReviewWorkspaceSnapshot> {
+  const workspace = mapReviewWorkspace(reviewData);
+  const hasCappedDiff = Boolean(workspace.diffs.capped?.staged || workspace.diffs.capped?.unstaged);
+  const cappedContentFingerprint =
+    hasCappedDiff && reviewData.scope.repoRoot
+      ? await fingerprintCappedWorkspaceFiles(
+          reviewData.scope.repoRoot,
+          cappedWorkspacePaths(workspace),
+        )
+      : null;
+  return {
+    workspace,
+    // A clean tree is not proof that the reviewer saw the same code: changing
+    // branches or committing during Review can leave the tree clean at both
+    // ends. Include the Git identity and porcelain status as well as patches.
+    // Explicit artifacts receive their own bounded content fingerprint at the
+    // review runner boundary; this identity covers only sanitized Git evidence.
+    fingerprint: reviewData.scope.repoRoot
+      ? createHash('sha256')
+          .update(
+            JSON.stringify({
+              repoRoot: reviewData.scope.repoRoot,
+              worktreePath: reviewData.scope.worktreePath,
+              workingDir: reviewData.scope.workingDir,
+              branch: reviewData.scope.branch,
+              headOid: reviewData.scope.headOid,
+              isDetached: reviewData.scope.isDetached,
+              isUnborn: reviewData.scope.isUnborn,
+              statusFiles: sanitizeReviewStatusFiles(reviewData.status?.files ?? []),
+              inProgress: reviewData.status?.inProgress ?? [],
+              summary: reviewData.summary,
+              workspace,
+              cappedContentFingerprint,
+            }),
+          )
+          .digest('hex')
+      : null,
+    hasCappedDiff,
+  };
+}
+
+export async function readReviewWorkspaceSnapshot(
+  sourceSessionId: string,
+  depsInput: Partial<ReviewWorkspaceSnapshotDeps> = {},
+): Promise<{ workspace: ReviewWorkspaceEvidence; fingerprint: string | null } | null> {
+  const deps = { ...defaultReviewWorkspaceSnapshotDeps, ...depsInput };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    // A normal non-Git task is represented by ReviewData with a disabled scope.
+    // An exception means Git evidence could not be read and must abort Review;
+    // turning it into null would incorrectly publish a completed, evidence-free
+    // result for a task that may in fact be a Git workspace.
+    const reviewData = await deps.readReviewData(sourceSessionId);
+    try {
+      const current = await buildReviewWorkspaceSnapshot(
+        reviewData,
+        deps.fingerprintCappedWorkspaceFiles,
+      );
+      if (!current.hasCappedDiff) return current;
+
+      // A capped summary and its full-content digest must describe one stable
+      // workspace window. Require a second matching snapshot; a transient edit
+      // during either full-file hash restarts the whole Git + content read.
+      const confirmationData = await deps.readReviewData(sourceSessionId);
+      const confirmation = await buildReviewWorkspaceSnapshot(
+        confirmationData,
+        deps.fingerprintCappedWorkspaceFiles,
+      );
+      if (!confirmation.hasCappedDiff) return confirmation;
+      if (confirmation.fingerprint === current.fingerprint) return confirmation;
+    } catch (error) {
+      if (!(error instanceof ReviewCappedWorkspaceChangedError) || attempt === 2) throw error;
+    }
+  }
+  throw new ReviewCappedWorkspaceChangedError(
+    'The capped Review workspace kept changing while its content baseline was prepared',
+  );
+}
+
+/** Re-read the Git evidence and compare it with the snapshot used to build the prompt. */
+export async function reviewWorkspaceFingerprintIsCurrent(
+  sourceSessionId: string,
+  expectedFingerprint: string | null,
+  depsInput: Partial<ReviewWorkspaceSnapshotDeps> = {},
+): Promise<boolean> {
+  if (!expectedFingerprint) return true;
+  const current = await readReviewWorkspaceSnapshot(sourceSessionId, depsInput);
+  return current?.fingerprint === expectedFingerprint;
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | null {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    const trimmed = parsed.trim();
+    if (!trimmed.startsWith('{')) return null;
+    try {
+      parsed = JSON.parse(trimmed) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
+}
+
+function hasReviewRunMeta(raw: unknown): boolean {
+  return readReviewRunFromAgentMeta(raw) !== null;
+}
+
+type ReviewVisibleRow = {
+  role: 'user' | 'assistant';
+  content: string;
+  agentMeta: string | null;
+  createdAt: number;
+  id: string;
+};
+
+async function readReviewVisibleRows(sourceSessionId: string): Promise<ReviewVisibleRow[]> {
+  const db = getDbClient().drizzle;
+  const rows: ReviewVisibleRow[] = [];
+  let cursor: { createdAt: number; id: string } | null = null;
+
+  while (rows.length < MAX_CONTEXT_ROWS) {
+    const page = (await db
+      .select({
+        role: messages.role,
+        content: messages.content,
+        agentMeta: messages.agentMeta,
+        createdAt: messages.createdAt,
+        id: messages.id,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, sourceSessionId),
+          inArray(messages.role, ['user', 'assistant']),
+          isNull(messages.rewindAt),
+          ne(messages.content, ''),
+          // Exclude Review status cards in SQL so they cannot consume query
+          // pages. The JS parser below remains the fail-closed authority.
+          or(isNull(messages.agentMeta), notLike(messages.agentMeta, '%"reviewRun"%')),
+          cursor
+            ? or(
+                lt(messages.createdAt, cursor.createdAt),
+                and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(CONTEXT_QUERY_PAGE_SIZE)) as ReviewVisibleRow[];
+    if (page.length === 0) break;
+
+    const last: ReviewVisibleRow = page[page.length - 1]!;
+    cursor = { createdAt: last.createdAt, id: last.id };
+    for (const row of page) {
+      const visibleRow = row;
+      if (hasReviewRunMeta(visibleRow.agentMeta)) continue;
+      const hasVisibleText =
+        visibleMessageTextForConversationSearch(visibleRow.role, visibleRow.content).length > 0;
+      const hasHistoricalArtifact = historicalAttachmentsFromRows([visibleRow]).length > 0;
+      if (!hasVisibleText && !hasHistoricalArtifact) continue;
+      rows.push(visibleRow);
+      if (rows.length === MAX_CONTEXT_ROWS) break;
+    }
+    if (page.length < CONTEXT_QUERY_PAGE_SIZE) break;
+  }
+
+  return rows.reverse();
+}
+
+function fingerprintReviewContextRows(rows: readonly ReviewVisibleRow[]): string {
+  const visibleMessages = rows.flatMap((row) => {
+    const text = visibleMessageTextForConversationSearch(row.role, row.content);
+    return text
+      ? [
+          {
+            id: row.id,
+            createdAt: row.createdAt,
+            role: row.role,
+            text,
+          },
+        ]
+      : [];
+  });
+  const historicalArtifacts = historicalAttachmentsFromRows(rows).map((attachment) => ({
+    name: attachment.name,
+    path: attachment.path,
+    url: attachment.url,
+    category: attachment.category,
+    mimeType: attachment.mimeType,
+    originalName: attachment.originalName,
+  }));
+  return createHash('sha256')
+    .update(JSON.stringify({ visibleMessages, historicalArtifacts }))
+    .digest('hex');
+}
+
+/**
+ * Fingerprint the bounded visible text and historical artifact references
+ * supplied to a reviewer. Hidden row fields and Review status cards are
+ * deliberately absent, so lifecycle updates cannot invalidate their own run
+ * while genuine task activity does.
+ */
+export async function readReviewContextFingerprint(sourceSessionId: string): Promise<string> {
+  return fingerprintReviewContextRows(await readReviewVisibleRows(sourceSessionId));
+}
+
+function persistedFileRefs(content: unknown): Array<{ path: string; name?: string }> {
+  const record = parseJsonRecord(content);
+  if (!record || !Array.isArray(record.files)) return [];
+  const refs: Array<{ path: string; name?: string }> = [];
+  for (const item of record.files) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const ref = item as Record<string, unknown>;
+    if (typeof ref.path !== 'string' || !ref.path) continue;
+    refs.push({
+      path: ref.path,
+      ...(typeof ref.name === 'string' && ref.name ? { name: ref.name } : {}),
+    });
+  }
+  return refs;
+}
+
+function historicalAttachmentsFromRows(rows: readonly ReviewVisibleRow[]): ReviewAttachmentInput[] {
+  const attachments: ReviewAttachmentInput[] = [];
+  for (const row of rows) {
+    for (const url of imageCacheStore.collectSessionImageUrls(row.content)) {
+      attachments.push({ name: path.basename(url) || 'image', url, category: 'image' });
+    }
+    for (const url of cindyChatAttachments.collectCindyMediaUrls(row.content)) {
+      attachments.push({ name: path.basename(url) || 'attachment', url });
+    }
+    for (const ref of persistedFileRefs(row.content)) {
+      attachments.push({
+        name: ref.name || path.basename(ref.path) || 'attachment',
+        path: ref.path,
+      });
+    }
+  }
+  return attachments;
+}
+
+/**
+ * Main uses the same bounded history snapshot for native authorization before
+ * loading any historical local path into reviewer evidence. A second read in
+ * loadReviewEvidence is intentional: newly appearing paths then fail the exact
+ * one-run grant instead of being silently included.
+ */
+export async function listReviewHistoricalAttachments(
+  sourceSessionId: string,
+): Promise<ReviewAttachmentInput[]> {
+  return historicalAttachmentsFromRows(await readReviewVisibleRows(sourceSessionId));
+}
+
+function stripMatchingQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+export class SensitiveReviewPathError extends Error {}
+
+export async function resolveReviewArtifactPath(
+  rawPath: string,
+  workingDir: string,
+): Promise<(ResolvedReviewArtifactPath & { mimeType?: string }) | null> {
+  try {
+    let candidate: { absPath: string; mimeType?: string; managed: boolean };
+    if (rawPath.startsWith('xdt-image://')) {
+      const resolved = imageCacheStore.resolveSafe(rawPath);
+      candidate = { absPath: resolved.absPath, mimeType: resolved.mimeType, managed: true };
+    } else if (rawPath.startsWith('cindy-media://')) {
+      const resolved = cindyMediaBlobStore.resolveSafe(rawPath);
+      candidate = { absPath: resolved.absPath, mimeType: resolved.mimeType, managed: true };
+    } else {
+      if (rawPath.startsWith('clipboard://')) return null;
+      candidate = {
+        absPath: path.isAbsolute(rawPath)
+          ? path.normalize(rawPath)
+          : path.resolve(workingDir, rawPath),
+        managed: false,
+      };
+    }
+    const realPath = await fs.realpath(candidate.absPath);
+    if (
+      isReviewSensitiveCredentialPath(rawPath) ||
+      isReviewSensitiveCredentialPath(candidate.absPath) ||
+      isReviewSensitiveCredentialPath(realPath)
+    ) {
+      throw new SensitiveReviewPathError('Review refused a credential or key path');
+    }
+    await fs.stat(realPath);
+    return {
+      absPath: realPath,
+      managed: candidate.managed,
+      ...(candidate.mimeType ? { mimeType: candidate.mimeType } : {}),
+    };
+  } catch (error) {
+    if (error instanceof SensitiveReviewPathError) throw error;
+    return null;
+  }
+}
+
+export async function loadReviewEvidence(input: {
+  sourceSessionId: string;
+  workingDir: string;
+  focus?: string;
+  attachments: ReviewAttachmentInput[];
+  explicitArtifactGrant: ReviewExplicitArtifactGrant;
+}): Promise<LoadedReviewEvidence> {
+  const visibleRows = await readReviewVisibleRows(input.sourceSessionId);
+  const context: ReviewContextMessage[] = visibleRows
+    .map((row) => ({
+      role: row.role as 'user' | 'assistant',
+      text: visibleMessageTextForConversationSearch(row.role, row.content),
+    }))
+    .filter((message) => message.text.length > 0);
+
+  const summaries = await listTurnChangeSets(input.sourceSessionId);
+  const latestSummary =
+    summaries.length > 0 ? [...summaries].sort((a, b) => b.completedAt - a.completedAt)[0] : null;
+  const rawChangeSet = latestSummary
+    ? ((await getTurnChangeSets(input.sourceSessionId, [latestSummary.id]))[0] ?? null)
+    : null;
+  const changeSet = sanitizeReviewChangeSet(rawChangeSet).value;
+  const workspaceSnapshot = await readReviewWorkspaceSnapshot(input.sourceSessionId);
+  const workspace = workspaceSnapshot?.workspace ?? null;
+
+  const artifacts: ReviewArtifactLabel[] = [];
+  const artifactExcerpts: ReviewArtifactExcerpt[] = [];
+  const artifactWarnings: ReviewArtifactWarning[] = [];
+  const attachmentBlocks: ReviewAttachmentBlock[] = [];
+  const readRoots = new Set<string>();
+  const reviewReadPaths = new Set<string>();
+  const seen = new Set<string>();
+  let focusPath: string | null = null;
+  let artifactsOmitted = false;
+  let artifactExcerptChars = 0;
+  let extractedPdfCount = 0;
+
+  const addExtractedContent = async (params: {
+    label: string;
+    category?: ReviewAttachmentInput['category'];
+    mimeType?: string;
+    filePath?: string;
+    data?: Uint8Array;
+  }): Promise<void> => {
+    const artifactKind = classifyReviewArtifact(params);
+    if (artifactKind === 'pdf') {
+      if (extractedPdfCount >= MAX_EXTRACTED_PDFS) {
+        artifactWarnings.push({
+          label: params.label,
+          message: `本轮最多本地解析 ${MAX_EXTRACTED_PDFS} 份 PDF；此文件只保留给当前 reviewer harness 尝试读取。`,
+        });
+        return;
+      }
+      extractedPdfCount += 1;
+    }
+    const remaining = Math.max(0, MAX_TOTAL_ARTIFACT_EXCERPT_CHARS - artifactExcerptChars);
+    const result = await extractReviewArtifactContent({
+      ...params,
+      maxChars: Math.min(MAX_ARTIFACT_EXCERPT_CHARS, remaining),
+    });
+    if (result.excerpt) {
+      artifactExcerpts.push(result.excerpt);
+      artifactExcerptChars += result.excerpt.content.length;
+    }
+    artifactWarnings.push(...result.warnings);
+  };
+
+  const addResolvedPath = async (params: {
+    rawPath: string;
+    label?: string;
+    category?: ReviewAttachmentInput['category'];
+    mimeType?: string;
+    fromFocus?: boolean;
+    explicit?: boolean;
+  }): Promise<boolean> => {
+    if (artifacts.length >= MAX_ARTIFACTS) {
+      artifactsOmitted = true;
+      return false;
+    }
+    const resolved = await resolveReviewArtifactPath(params.rawPath, input.workingDir);
+    if (!resolved) return false;
+    const evidencePath = params.explicit
+      ? assertReviewExplicitPathGranted(resolved.absPath, input.explicitArtifactGrant)
+      : resolved.absPath;
+    if (seen.has(resolved.absPath)) return true;
+    seen.add(resolved.absPath);
+    const stat = await fs.stat(evidencePath).catch(() => null);
+    if (!stat) return false;
+    if (stat.isDirectory()) {
+      readRoots.add(evidencePath);
+      reviewReadPaths.add(evidencePath);
+      artifacts.push({ kind: 'directory', label: params.label || path.basename(resolved.absPath) });
+      if (params.fromFocus) focusPath = resolved.absPath;
+      return true;
+    }
+    if (!stat.isFile()) return false;
+    const mimeType = params.mimeType || resolved.mimeType;
+    const isImage =
+      classifyReviewArtifact({
+        label: params.label || path.basename(resolved.absPath),
+        category: params.category,
+        mimeType,
+        filePath: evidencePath,
+      }) === 'image';
+    readRoots.add(path.dirname(evidencePath));
+    reviewReadPaths.add(evidencePath);
+    attachmentBlocks.push({
+      type: isImage ? 'image' : 'file',
+      path: evidencePath,
+      ...(mimeType ? { mimeType } : {}),
+      originalName: params.label || path.basename(resolved.absPath),
+    });
+    artifacts.push({
+      kind: isImage ? 'image' : 'file',
+      label: params.label || path.basename(resolved.absPath),
+    });
+    if (!isImage) {
+      await addExtractedContent({
+        label: params.label || path.basename(resolved.absPath),
+        category: params.category,
+        mimeType,
+        filePath: evidencePath,
+      });
+    }
+    if (params.fromFocus) focusPath = resolved.absPath;
+    return true;
+  };
+
+  const focusCandidate = input.focus ? stripMatchingQuotes(input.focus) : '';
+  if (focusCandidate && !focusCandidate.includes('\n')) {
+    await addResolvedPath({ rawPath: focusCandidate, fromFocus: true, explicit: true });
+  }
+
+  for (const attachment of input.attachments) {
+    if (artifacts.length >= MAX_ARTIFACTS) {
+      artifactsOmitted = true;
+      break;
+    }
+    const attachmentLabel = attachment.originalName || attachment.name;
+    if (attachmentLabel && isReviewSensitiveCredentialPath(attachmentLabel)) {
+      throw new SensitiveReviewPathError('Review refused a credential or key attachment');
+    }
+    let resolvedAttachment = false;
+    for (const rawPath of new Set([attachment.url, attachment.path].filter(Boolean) as string[])) {
+      resolvedAttachment = await addResolvedPath({
+        rawPath,
+        label: attachment.originalName || attachment.name,
+        category: attachment.category,
+        mimeType: attachment.mimeType,
+        explicit: true,
+      });
+      if (resolvedAttachment) break;
+    }
+    if (resolvedAttachment) continue;
+    if (attachment.base64) {
+      const inlineGrantKey = assertReviewInlineAttachmentGranted(
+        attachment,
+        input.explicitArtifactGrant,
+      );
+      if (seen.has(`base64:${inlineGrantKey}`)) continue;
+      seen.add(`base64:${inlineGrantKey}`);
+      const isImage = attachment.category === 'image';
+      attachmentBlocks.push({
+        type: isImage ? 'image' : 'file',
+        base64: attachment.base64,
+        mimeType: attachment.mimeType,
+        originalName: attachment.originalName || attachment.name,
+      });
+      artifacts.push({
+        kind: isImage ? 'image' : 'file',
+        label: attachment.originalName || attachment.name,
+      });
+      if (!isImage) {
+        const estimatedBytes = Math.floor((attachment.base64.length * 3) / 4);
+        if (estimatedBytes > 20 * 1024 * 1024) {
+          artifactWarnings.push({
+            label: attachmentLabel,
+            message: '内嵌成果超过 20 MB，本地 reviewer 未解析正文。',
+          });
+        } else {
+          await addExtractedContent({
+            label: attachmentLabel,
+            category: attachment.category,
+            mimeType: attachment.mimeType,
+            data: Buffer.from(attachment.base64, 'base64'),
+          });
+        }
+      }
+    }
+  }
+
+  for (const attachment of historicalAttachmentsFromRows(visibleRows)) {
+    if (artifacts.length >= MAX_ARTIFACTS) {
+      artifactsOmitted = true;
+      break;
+    }
+    const rawPath = attachment.url || attachment.path;
+    if (!rawPath) continue;
+    await addResolvedPath({
+      rawPath,
+      label: attachment.originalName || attachment.name,
+      category: attachment.category,
+      mimeType: attachment.mimeType,
+      explicit: true,
+    });
+  }
+
+  return {
+    context,
+    contextFingerprint: fingerprintReviewContextRows(visibleRows),
+    workspace,
+    workspaceFingerprint: workspaceSnapshot?.fingerprint ?? null,
+    changeSet,
+    artifacts,
+    artifactExcerpts,
+    artifactWarnings,
+    attachmentBlocks,
+    readRoots: [...readRoots],
+    reviewReadPaths: [...reviewReadPaths],
+    focusPath,
+    artifactsOmitted,
+  };
+}

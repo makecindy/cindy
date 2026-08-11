@@ -70,24 +70,27 @@ function localizedActionLabel(
   selectionText: string,
 ): string {
   const preview = compactSelectionLabel(selectionText);
-  const language = locale.toLowerCase();
+  const resolvedLocale = resolveSystemLocale(locale);
   if (action === 'addToChat') {
-    if (language.startsWith('zh')) return '添加到对话';
-    if (language.startsWith('ja')) return 'チャットに追加';
-    if (language.startsWith('ko')) return '대화에 추가';
+    if (resolvedLocale === 'zh-CN') return '添加到对话';
+    if (resolvedLocale === 'zh-TW') return '新增到對話';
+    if (resolvedLocale === 'ja') return 'チャットに追加';
+    if (resolvedLocale === 'ko') return '대화에 추가';
     return 'Add to chat';
   }
   // Copy 是两套菜单共用的同一条命令,标签只保留 catalog 一处正本。
   if (action === 'copy') return editableMenuLabels(locale).copy;
   if (action === 'lookUp') {
-    if (language.startsWith('zh')) return `查询“${preview}”`;
-    if (language.startsWith('ja')) return `「${preview}」を調べる`;
-    if (language.startsWith('ko')) return `“${preview}” 찾아보기`;
+    if (resolvedLocale === 'zh-CN') return `查询“${preview}”`;
+    if (resolvedLocale === 'zh-TW') return `查詢「${preview}」`;
+    if (resolvedLocale === 'ja') return `「${preview}」を調べる`;
+    if (resolvedLocale === 'ko') return `“${preview}” 찾아보기`;
     return `Look Up “${preview}”`;
   }
-  if (language.startsWith('zh')) return `在网页中搜索“${preview}”`;
-  if (language.startsWith('ja')) return `「${preview}」をウェブで検索`;
-  if (language.startsWith('ko')) return `웹에서 “${preview}” 검색`;
+  if (resolvedLocale === 'zh-CN') return `在网页中搜索“${preview}”`;
+  if (resolvedLocale === 'zh-TW') return `在網頁中搜尋「${preview}」`;
+  if (resolvedLocale === 'ja') return `「${preview}」をウェブで検索`;
+  if (resolvedLocale === 'ko') return `웹에서 “${preview}” 검색`;
   return `Search the web for “${preview}”`;
 }
 
@@ -111,11 +114,11 @@ export function buildSelectionContextMenuTemplate(
   };
   const productActions: MenuItemConstructorOptions[] = params.canAddToChat
     ? [
-      {
-        label: localizedActionLabel('addToChat', locale, params.selectionText),
-        click: actions.addToChat,
-      },
-    ]
+        {
+          label: localizedActionLabel('addToChat', locale, params.selectionText),
+          click: actions.addToChat,
+        },
+      ]
     : [];
   if (platform === 'darwin') {
     return [
@@ -180,15 +183,17 @@ export function buildEditableContextMenuTemplate(
   const selectionText = params.selectionText.trim();
   if (selectionText) {
     template.push({ type: 'separator' });
-    template.push(platform === 'darwin'
-      ? {
-        label: localizedActionLabel('lookUp', locale, selectionText),
-        click: actions.lookUp,
-      }
-      : {
-        label: localizedActionLabel('searchWeb', locale, selectionText),
-        click: actions.searchWeb,
-      });
+    template.push(
+      platform === 'darwin'
+        ? {
+            label: localizedActionLabel('lookUp', locale, selectionText),
+            click: actions.lookUp,
+          }
+        : {
+            label: localizedActionLabel('searchWeb', locale, selectionText),
+            click: actions.searchWeb,
+          },
+    );
   }
   return template;
 }
@@ -210,7 +215,7 @@ export async function frameSelectionSupportsAddToChat(
 ): Promise<boolean> {
   if (!frame || frame.isDestroyed()) return false;
   try {
-    return await frame.executeJavaScript(QUOTE_CONTEXT_QUERY) === true;
+    return (await frame.executeJavaScript(QUOTE_CONTEXT_QUERY)) === true;
   } catch {
     return false;
   }

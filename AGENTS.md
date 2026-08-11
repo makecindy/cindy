@@ -44,6 +44,8 @@
   提的，提交者身份不构成例外。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
+- 新增或修改 `/review`、Reviewer 任务、成果快照、Finding 协议、复核入口、结果呈现或
+  复核生命周期前，必须先读 `docs/product-rules/review-product-direction.md`。
 - 新增或修改按区域（`cn` / `global`）分支的逻辑、构建身份与命名、端点选择、区域相关
   UI 标注，或涉及两个版本关系的对外文案前，必须先读
   `docs/product-rules/region-and-editions.md`：**无限定词身份归 Global，未显式指定
@@ -101,9 +103,9 @@
   （deny-by-default，不得改成黑名单——调试级别的功能日志是用户内容的主要泄漏源）、
   **标记代次 + 原子清除**（并发实例下仅靠时间戳会误删另一实例刚写的新崩溃标记）。
   脱敏规则**只增不减**，放宽任一条视为隐私变更、需重新评审。
-- 升级 `cindy-protocol`、修改插件分发来源边界或 device-link 协议／relay／隧道
+- 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
-  `docs/dev-rules/protocol-and-submodules.md`。
+  `docs/dev-rules/protocol-compatibility.md`。
 - 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider

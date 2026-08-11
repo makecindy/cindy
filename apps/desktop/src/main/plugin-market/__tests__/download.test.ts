@@ -48,7 +48,11 @@ describe('downloadVerifiedPlugin', () => {
     expect(fs.readFileSync(file)).toEqual(bytes);
     expect(fetchMock).toHaveBeenCalledWith(
       'https://downloads.example.test/a',
-      expect.objectContaining({ redirect: 'error', cache: 'no-store' }),
+      expect.objectContaining({
+        redirect: 'error',
+        cache: 'no-store',
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 

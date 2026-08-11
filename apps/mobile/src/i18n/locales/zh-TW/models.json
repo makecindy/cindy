@@ -1,0 +1,36 @@
+{
+  "picker": {
+    "title": "模型",
+    "permissionTitle": "權限",
+    "searchAccessibility": "搜尋模型",
+    "searchPlaceholder": "搜尋模型…",
+    "noResults": "沒有匹配的模型",
+    "emptyDefault": "暫無可用模型",
+    "loadingDefault": "正在載入模型…",
+    "subscriptionBadge": "訂閱",
+    "backToModels": "返回模型列表",
+    "agentSwitchHint": "選擇模型後，下一條訊息將切換到 {{agent}}",
+    "crossAgentEmptyHint": "請先在被控裝置連線 {{agent}} 的模型來源",
+    "permissionModeAccessibility": "權限模式：{{mode}}",
+    "selectProviderModelAccessibility": "選擇來源 {{provider}} 的模型 {{model}}",
+    "selectModelAccessibility": "選擇模型 {{model}}",
+    "configureAccessibility": "配置 {{model}}",
+    "budgetDisabledHint": "該模型需先在被控裝置配置 API key 才能使用",
+    "priceLine": "輸入 {{input}} · 輸出 {{output}} / 百萬 token",
+    "contextSuffix": "{{size}} 上下文",
+    "fastTag": "快速"
+  },
+  "options": {
+    "fastMode": "快速模式",
+    "fastModeAccessibility": "快速模式 {{model}}",
+    "reasoningEffort": "推理強度",
+    "reasoningEffortAccessibility": "推理強度 {{label}}"
+  },
+  "agentSwitch": {
+    "browseAccessibility": "瀏覽 {{agent}} 模型",
+    "confirmTitle": "切換到 {{agent}}？",
+    "confirmMessage": "下一條訊息傳送時，{{appName}} 會把當前任務交接給 {{agent}}。兩個 Agent 對上下文和工具的理解可能不同，請確認後再選擇目標模型。",
+    "cancel": "取消",
+    "confirm": "繼續選擇"
+  }
+}
