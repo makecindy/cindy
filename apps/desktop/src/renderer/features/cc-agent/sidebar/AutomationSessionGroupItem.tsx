@@ -31,6 +31,7 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
+import { useSidebarSessionTimeVisibility } from '@/hooks/useSidebarSessionTimeVisibility';
 
 export interface AutomationSessionGroupItemProps {
   group: AutomationSessionGroup;
@@ -79,6 +80,7 @@ export function AutomationSessionGroupItem({
   sessionVariant = 'text',
 }: AutomationSessionGroupItemProps) {
   const { t } = useTranslation();
+  const { showSessionTime } = useSidebarSessionTimeVisibility();
   const navigate = useNavigate();
   // 轴 1:文件夹开/关,持久化、记忆上次(默认展开),像项目分组一样。
   const [collapsed, toggleCollapsed] = useAutomationGroupCollapsed(group.id);
@@ -250,10 +252,11 @@ export function AutomationSessionGroupItem({
   // 状态改由右侧状态图标(showRightStatus)统一表达,不再走文字。仅当 groupRightStatusKind
   // === 'time' 时 meta 才会被读到。
   const meta = useMemo(() => {
+    if (!showSessionTime) return t('ccAgent.sidebar.automationGroup.runCount', { count: group.sessions.length });
     const lastRunText = formatSidebarTime(primaryActivityIso, t);
     if (lastRunText) return lastRunText;
     return t('ccAgent.sidebar.automationGroup.runCount', { count: group.sessions.length });
-  }, [group.sessions.length, primaryActivityIso, t]);
+  }, [group.sessions.length, primaryActivityIso, showSessionTime, t]);
 
   // 行 hover tooltip 内容:active 状态下的下次运行倒计时(如「5分钟后」)/ paused|expired
   // 时的「已停止」+ 累计运行次数(取 group.sessions.length,一次调度产生一条会话)。全为
