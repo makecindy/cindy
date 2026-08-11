@@ -585,6 +585,8 @@ EOF`,
     `bash <<< 'echo hello'`,
     `cat <<< 'x' | grep -q y <<< 'z'`,
     `cat <<< 'x' | bash <<< 'echo hi'`,
+    `python3 <<< 'print(1)' | cat <<< 'xcrun simctl shutdown DEVICE'`,
+    `python3 <<< 'print(1)' | grep x <<< 'xcrun simctl shutdown DEVICE'`,
     `echo 'echo hello' | sh`,
     `cat <<'EOF' | sh
 printf '%s' "$var"

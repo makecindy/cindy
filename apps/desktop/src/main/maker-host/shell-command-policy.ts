@@ -1711,7 +1711,11 @@ function containsInterpreterHereStringBypass(command: string): boolean {
       }
       if (quote || clause.slice(index, index + 3) !== '<<<') continue;
       const consumer = clause.slice(0, index).trim();
-      const payload = clause.slice(index + 3);
+      // The payload ends at the next pipeline boundary: a later here-string
+      // belongs to a different consumer (`python3 <<< code | cat <<< data`).
+      const rest = clause.slice(index + 3);
+      const pipeIndex = rest.indexOf('|');
+      const payload = pipeIndex === -1 ? rest : rest.slice(0, pipeIndex);
       if (
         shellSegments(consumer).some((segment) =>
           consumesStdinAsProgram(tokenizeShellSegment(segment)),
