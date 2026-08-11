@@ -125,6 +125,16 @@ interface IOSSimulatorSessionSnapshot {
   status?: 'active' | 'archived' | 'deleted' | null;
 }
 
+interface IOSSimulatorPersistedInstanceReconcileResult {
+  /** False when this binding still needs another reconcile pass. */
+  complete: boolean;
+  /**
+   * True once this pass either reconciled the binding or removed it, meaning a
+   * later pass must no longer treat its persisted `viewerState` as inherited.
+   */
+  viewerStateHandled: boolean;
+}
+
 interface IOSSimulatorPluginStatusReadOptions {
   /** Test seam; production uses the active Main-owned task database. */
   getSession?: (sessionId: string) => Promise<IOSSimulatorSessionSnapshot | null>;
@@ -1098,9 +1108,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
     options.isOwnerBoundaryPending ?? isAppSessionBoundaryPending;
   const pendingCreateEvidence = options.pendingCreateEvidence ?? null;
   let ownershipReconciledScopeKey: string | null = null;
-  // Persisted `viewerState` can only be stale on the first sweep of an owner
-  // generation; after that a detached value would be this process's own truth.
+  // Persisted `viewerState` can only be stale on the first sweep that actually
+  // reaches a binding; after that a detached value would be this process's own
+  // truth. Tracked per binding, because an incomplete sweep can skip one
+  // binding entirely while normalizing the rest.
   let viewerStateNormalizedScopeKey: string | null = null;
+  const viewerStateNormalizedInstanceIds = new Set<string>();
   let ownershipReconcilePromise: { scopeKey: string; promise: Promise<void> } | null = null;
   let pendingCreateReconcileController: AbortController | null = null;
   let pendingCreateReconcilePromise: Promise<unknown> | null = null;
@@ -2366,11 +2379,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
     snapshot: IOSSimulatorInstance,
     devices: ReadonlyMap<string, IOSSimulatorEnvironmentReport['devices'][number]>,
     normalizeViewerState: boolean,
-  ): Promise<boolean> {
+  ): Promise<IOSSimulatorPersistedInstanceReconcileResult> {
     const instance = actor
       .list(snapshot.sessionId)
       .find((candidate) => candidate.instanceId === snapshot.instanceId);
-    if (!instance) return true;
+    // A binding that no longer exists has no inherited viewer state to correct.
+    if (!instance) return { complete: true, viewerStateHandled: true };
 
     let complete = true;
     let driverRuntimeRecovered = await cleanupOrphanedDriverRuntime(instance);
@@ -2394,7 +2408,9 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         instanceId: instance.instanceId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return false;
+      // This binding was skipped before any reconcile, so its inherited viewer
+      // state is still unhandled and the retry must normalize it.
+      return { complete: false, viewerStateHandled: false };
     }
     if (!session || session.status === 'deleted' || session.status === 'archived') {
       const released = await actor.runOwnershipCleanup(
@@ -2402,7 +2418,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         instance.sessionId,
         (owned, signal) => releaseStaleBinding(owned, device, true, signal),
       );
-      return released && complete;
+      return { complete: released && complete, viewerStateHandled: released };
     }
     if (session.remoteHostId || !device) {
       const runtimeReleased = await releaseInstanceRuntime(instance);
@@ -2418,7 +2434,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         session.remoteHostId ? 'UNSUPPORTED_SESSION_KIND' : 'ORPHANED_DEVICE',
         { normalizeViewerState },
       );
-      return complete;
+      return { complete, viewerStateHandled: true };
     }
     const reconciledDeviceState = deviceState ?? 'unknown';
     if (reconciledDeviceState === 'shutdown') {
@@ -2463,7 +2479,36 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
         resourceScheduler.markStopped(reconciled.instanceId),
       );
     }
-    return complete;
+    return { complete, viewerStateHandled: true };
+  }
+
+  function isViewerStateNormalized(scopeKey: string, instanceId: string): boolean {
+    return (
+      viewerStateNormalizedScopeKey === scopeKey &&
+      viewerStateNormalizedInstanceIds.has(instanceId)
+    );
+  }
+
+  function markViewerStateNormalized(scopeKey: string, instanceId: string): void {
+    // An old in-flight pass must not suppress the new owner's normalization.
+    if (isOwnerBoundaryPending() || getOwnerScopeKey() !== scopeKey) return;
+    if (viewerStateNormalizedScopeKey !== scopeKey) {
+      viewerStateNormalizedInstanceIds.clear();
+      viewerStateNormalizedScopeKey = scopeKey;
+    }
+    viewerStateNormalizedInstanceIds.add(instanceId);
+  }
+
+  /** Keep the per-binding latch bounded by the bindings that still exist. */
+  function retainViewerStateNormalized(
+    scopeKey: string,
+    persisted: readonly IOSSimulatorInstance[],
+  ): void {
+    if (viewerStateNormalizedScopeKey !== scopeKey) return;
+    const live = new Set(persisted.map((instance) => instance.instanceId));
+    for (const instanceId of viewerStateNormalizedInstanceIds) {
+      if (!live.has(instanceId)) viewerStateNormalizedInstanceIds.delete(instanceId);
+    }
   }
 
   async function reconcilePersistedOwnership(): Promise<void> {
@@ -2567,22 +2612,28 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       const devices = new Map(
         environment.devices.map((device) => [device.udid.toUpperCase(), device]),
       );
-      const normalizeViewerState = viewerStateNormalizedScopeKey !== scopeKey;
-      for (const snapshot of actor.listAll()) {
-        const instanceComplete = await withSessionLock(snapshot.sessionId, () =>
+      const persisted = actor.listAll();
+      retainViewerStateNormalized(scopeKey, persisted);
+      for (const snapshot of persisted) {
+        const normalizeViewerState = !isViewerStateNormalized(scopeKey, snapshot.instanceId);
+        const instanceResult = await withSessionLock(snapshot.sessionId, () =>
           reconcilePersistedInstance(snapshot, devices, normalizeViewerState),
         );
-        if (!instanceComplete) complete = false;
+        if (!instanceResult.complete) complete = false;
+        // Latch per binding, not per pass: a binding skipped before its reconcile
+        // (e.g. its session row was unreadable) still carries viewer state
+        // inherited from a dead process, and the retry has to correct it. A
+        // binding that was reconciled must not be normalized again, or the retry
+        // would kick a viewer that attached in the meantime.
+        if (instanceResult.viewerStateHandled) {
+          markViewerStateNormalized(scopeKey, snapshot.instanceId);
+        }
       }
       // Every DB/session read above belongs to the captured owner generation.
       // Never latch it across an account boundary or let an old in-flight pass
       // suppress the new owner's required cleanup and scheduler reconciliation.
       if (!isOwnerBoundaryPending() && getOwnerScopeKey() === scopeKey) {
         ownershipReconciledScopeKey = complete ? scopeKey : null;
-        // Inherited viewer state is corrected even when the pass was incomplete:
-        // this sweep already observed every binding, and a retry must not kick a
-        // viewer that attached in the meantime.
-        viewerStateNormalizedScopeKey = scopeKey;
       }
     })().finally(() => {
       if (ownershipReconcilePromise?.promise === reconciliation) {

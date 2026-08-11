@@ -10,7 +10,13 @@ const EVIDENCE_VERSION = 1;
  * create marker.
  */
 export interface IOSSimulatorPendingCreateEvidence {
-  arm(): void;
+  /** Arms the breadcrumb and returns the generation that armed it. */
+  arm(): number;
+  /**
+   * Retires the breadcrumb, but only when no later create armed it. Callers may
+   * only invoke this from a path that proves their own marker no longer exists.
+   */
+  clearIfUnchanged(generation: number): void;
 }
 
 /**
@@ -27,7 +33,6 @@ export interface IOSSimulatorPendingCreateEvidenceStore
    * never has its evidence retired by that sweep.
    */
   generation(): number;
-  clearIfUnchanged(generation: number): void;
 }
 
 export interface IOSSimulatorPendingCreateEvidenceFileOptions {
@@ -63,7 +68,7 @@ export class IOSSimulatorPendingCreateEvidenceFile
     return this.#filePath;
   }
 
-  arm(): void {
+  arm(): number {
     this.#generation += 1;
     try {
       mkdirSync(path.dirname(this.#filePath), { recursive: true });
@@ -80,6 +85,7 @@ export class IOSSimulatorPendingCreateEvidenceFile
       // use. Failing the create the user actually asked for would be worse.
       this.#onError?.(error);
     }
+    return this.#generation;
   }
 
   isArmed(): boolean {

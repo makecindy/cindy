@@ -434,7 +434,7 @@ describe('iOS Simulator host', () => {
     };
     const inspect = vi.fn(async () => READY_REPORT);
     const pendingCreateEvidence = {
-      arm: vi.fn(),
+      arm: vi.fn(() => 7),
       isArmed: vi.fn(() => true),
       generation: vi.fn(() => 7),
       clearIfUnchanged: vi.fn(),
@@ -1309,6 +1309,77 @@ describe('iOS Simulator host', () => {
         }),
       ).not.toThrow();
     } finally {
+      await host.dispose();
+    }
+  });
+
+  it('normalizes inherited viewer state per binding, not per sweep', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    const reconciledFirst = actor.attach({
+      sessionId: 'readable-session',
+      worktreeRoot: '/tmp/readable-session',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+    });
+    const skippedFirst = actor.attach({
+      sessionId: 'late-session',
+      worktreeRoot: '/tmp/late-session',
+      sourceFingerprint: 'fingerprint-b',
+      device: { ...READY_REPORT.devices[0]!, udid: 'E4DED148-43B9-4193-9D80-399976A43E08' },
+    });
+    const normalizeRequests: { instanceId: string; normalizeViewerState: boolean }[] = [];
+    const reconcile = actor.reconcile.bind(actor);
+    vi.spyOn(actor, 'reconcile').mockImplementation((...args) => {
+      normalizeRequests.push({
+        instanceId: args[0],
+        normalizeViewerState: args[5]?.normalizeViewerState === true,
+      });
+      return reconcile(...args);
+    });
+    let lateSessionReadable = false;
+    const inspect = vi.fn(async () => READY_REPORT);
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect },
+      getSession: vi.fn(async (id: string) => {
+        if (id === 'late-session' && !lateSessionReadable) {
+          throw new Error('session row is unreadable');
+        }
+        return localSession(id);
+      }),
+    });
+
+    try {
+      await host.reconcileOwnership();
+      // The skipped binding never reached a reconcile, so nothing corrected the
+      // viewer state it inherited from the previous process.
+      expect(normalizeRequests).toEqual([
+        { instanceId: reconciledFirst.instanceId, normalizeViewerState: true },
+      ]);
+
+      lateSessionReadable = true;
+      normalizeRequests.length = 0;
+      await host.reconcileOwnership();
+      expect(inspect).toHaveBeenCalledTimes(2);
+      // The retry must still normalize the binding it skipped, while leaving the
+      // already-reconciled one alone so a viewer that attached meanwhile survives.
+      expect(normalizeRequests).toEqual([
+        { instanceId: reconciledFirst.instanceId, normalizeViewerState: false },
+        { instanceId: skippedFirst.instanceId, normalizeViewerState: true },
+      ]);
+    } finally {
+      vi.restoreAllMocks();
       await host.dispose();
     }
   });

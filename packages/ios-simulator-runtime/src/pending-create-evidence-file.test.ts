@@ -16,7 +16,9 @@ describe("IOSSimulatorPendingCreateEvidenceFile", () => {
       expect(evidence.isArmed()).toBe(false);
       expect(evidence.generation()).toBe(0);
 
-      evidence.arm();
+      // The armed generation goes back to the caller so it can retire exactly
+      // its own evidence later.
+      expect(evidence.arm()).toBe(1);
       expect(evidence.isArmed()).toBe(true);
       expect(evidence.generation()).toBe(1);
       if (process.platform !== "win32") {
