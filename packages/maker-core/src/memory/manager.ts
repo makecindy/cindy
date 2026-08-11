@@ -457,6 +457,10 @@ export class MakerMemoryManager {
 
     // mkdir 在 storage.init() 里也会做, 但 db open 时父目录必须存在 — 提前 mkdir
     const fs = await import('node:fs');
+    // await import 窗口后、mkdir/SQLite 打开前复核 (review #2388 Codex 22nd P2):
+    // rootAtEntry 捕获后边界可能发生 — 不得用旧 root 创建目录/打开 fts.db
+    // (首个守卫在 store.init 内, 对 mkdir/open 副作用来说太晚)。
+    this.assertScopeUnchanged(scopeAtEntry);
     fs.mkdirSync(storageDir, { recursive: true });
 
     const db = this.deps.sqliteFactory(dbPath);
