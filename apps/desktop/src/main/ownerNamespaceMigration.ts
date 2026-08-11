@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -107,10 +107,13 @@ const log = createLogger('ownerNamespaceMigration');
 // shortly after the record was written as the old Cindy process.
 const PID_REUSE_TOLERANCE_MS = 2_000;
 const PROCESS_IDENTITY_QUERY_TIMEOUT_MS = 1_500;
+const STALE_PROCESS_PROOF_TTL_MS = 10_000;
 const legacyGhostMigrationResults = new Map<
   string,
   OwnerNamespaceMigrationResult['status']
 >();
+const staleProcessProofs = new Map<string, number>();
+const staleProcessProofRefreshes = new Map<string, Promise<void>>();
 
 const productionDeps: MigrationDeps = {
   userDataDir: () => app.getPath('userData'),
@@ -136,7 +139,7 @@ const productionDeps: MigrationDeps = {
       return (error as NodeJS.ErrnoException).code === 'EPERM';
     }
   },
-  readProcessIdentity: readProcessIdentityDefault,
+  readProcessIdentity: undefined,
 };
 
 function verifiedCloudOwner(state: MigrationSessionState): string | null {
@@ -187,64 +190,43 @@ function parseProcessIdentityOutput(raw: string): ProcessIdentitySnapshot | null
   return { startedAtMs, command };
 }
 
-/**
- * Read enough OS provenance to distinguish a live registration from a stale
- * file whose PID has since been reused. Failure is represented as null so the
- * migration guard can keep its fail-closed posture.
- */
-function readProcessIdentityDefault(pid: number): ProcessIdentitySnapshot | null {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  try {
-    if (process.platform === 'win32') {
-      const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-      const output = execFileSync(
-        powershell,
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `$p = Get-Process -Id ${pid} -ErrorAction Stop; ` +
-            '$command = if ($p.Path) { $p.Path } else { $p.ProcessName }; ' +
-            '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ' +
-            "[Console]::WriteLine($p.StartTime.ToUniversalTime().ToString('O')); " +
-            '[Console]::Write($command)',
-        ],
-        {
-          encoding: 'utf-8',
-          timeout: PROCESS_IDENTITY_QUERY_TIMEOUT_MS,
-          maxBuffer: 4_096,
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        },
-      );
-      return parseProcessIdentityOutput(output);
-    }
-
-    const output = execFileSync('ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'command='], {
-      encoding: 'utf-8',
-      timeout: PROCESS_IDENTITY_QUERY_TIMEOUT_MS,
-      maxBuffer: 16_384,
-      env: { ...process.env, LC_ALL: 'C' },
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const match = /^(.{24})\s+([\s\S]+)$/.exec(output.trim());
-    return match ? parseProcessIdentityOutput(`${match[1]}\n${match[2]}`) : null;
-  } catch {
-    return null;
-  }
+function execFileUtf8(
+  file: string,
+  args: readonly string[],
+  options: {
+    maxBuffer: number;
+    env?: NodeJS.ProcessEnv;
+    windowsHide?: boolean;
+  },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      [...args],
+      {
+        ...options,
+        encoding: 'utf-8',
+        timeout: PROCESS_IDENTITY_QUERY_TIMEOUT_MS,
+      },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout);
+      },
+    );
+  });
 }
 
-/** Read all candidate process identities with one OS query per scan. */
-function readProcessIdentitiesDefault(
+/** Read all candidate process identities asynchronously with one OS query per scan. */
+async function readProcessIdentitiesDefault(
   pids: readonly number[],
-): ReadonlyMap<number, ProcessIdentitySnapshot | null> {
+): Promise<ReadonlyMap<number, ProcessIdentitySnapshot | null>> {
   const uniquePids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
   const result = new Map<number, ProcessIdentitySnapshot | null>();
   if (uniquePids.length === 0) return result;
   try {
     if (process.platform === 'win32') {
       const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-      const output = execFileSync(
+      const output = await execFileUtf8(
         powershell,
         [
           '-NoProfile',
@@ -258,11 +240,8 @@ function readProcessIdentitiesDefault(
             '$rows | ConvertTo-Json -Compress',
         ],
         {
-          encoding: 'utf-8',
-          timeout: PROCESS_IDENTITY_QUERY_TIMEOUT_MS,
           maxBuffer: 16_384,
           windowsHide: true,
-          stdio: ['ignore', 'pipe', 'ignore'],
         },
       );
       const parsed = JSON.parse(output) as unknown;
@@ -287,15 +266,12 @@ function readProcessIdentitiesDefault(
       return result;
     }
 
-    const output = execFileSync(
+    const output = await execFileUtf8(
       'ps',
       ['-p', uniquePids.join(','), '-o', 'pid=', '-o', 'lstart=', '-o', 'command='],
       {
-        encoding: 'utf-8',
-        timeout: PROCESS_IDENTITY_QUERY_TIMEOUT_MS,
         maxBuffer: 16_384,
         env: { ...process.env, LC_ALL: 'C' },
-        stdio: ['ignore', 'pipe', 'ignore'],
       },
     );
     for (const line of output.split('\n')) {
@@ -345,12 +321,50 @@ function readProcessIdentitySafely(
   }
 }
 
-function readProcessIdentitiesForPids(
+async function readProcessIdentitiesForPids(
   pids: readonly number[],
-  reader: ProcessIdentityReader,
-): ReadonlyMap<number, ProcessIdentitySnapshot | null> {
-  if (reader === readProcessIdentityDefault) return readProcessIdentitiesDefault(pids);
+  reader?: ProcessIdentityReader,
+): Promise<ReadonlyMap<number, ProcessIdentitySnapshot | null>> {
+  if (!reader) return readProcessIdentitiesDefault(pids);
   return new Map(pids.map((pid) => [pid, readProcessIdentitySafely(reader, pid)] as const));
+}
+
+function processProofKey(
+  userDataDir: string,
+  kind: 'registry' | 'singleton-lock',
+  fingerprint: string,
+): string {
+  return `${path.resolve(userDataDir)}\u0000${kind}\u0000${fingerprint}`;
+}
+
+function rememberStaleProcessProof(key: string): void {
+  staleProcessProofs.set(key, Date.now() + STALE_PROCESS_PROOF_TTL_MS);
+}
+
+function hasFreshStaleProcessProof(key: string): boolean {
+  const expiresAt = staleProcessProofs.get(key);
+  if (expiresAt === undefined) return false;
+  if (expiresAt <= Date.now()) {
+    staleProcessProofs.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function refreshStaleProcessProofs(userDataDir: string): void {
+  const key = path.resolve(userDataDir);
+  if (staleProcessProofRefreshes.has(key)) return;
+  const refresh: Promise<void> = findConcurrentLiveInstancePids(productionDeps, userDataDir)
+    .then(() => undefined)
+    .catch((error) => {
+      log.debug('stale process provenance refresh failed closed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  staleProcessProofRefreshes.set(key, refresh);
+  void refresh.then(() => {
+    if (staleProcessProofRefreshes.get(key) === refresh) staleProcessProofRefreshes.delete(key);
+  });
 }
 
 /**
@@ -377,16 +391,16 @@ function recordedPidMayStillBeLive(
 }
 
 /**
- * Synchronous twin of findConcurrentLiveInstancePids for the importer gate
- * (hasLegacyOwnerNamespaceClaim runs in sync call sites). Fail-closed: any
- * unreadable registry state counts as "a peer may be live". Same signals —
- * `.dev-instances/<pid>.json` records plus the packaged SingletonLock
- * symlink (retroactive signal for pre-registry packaged builds).
+ * Synchronous twin of findConcurrentLiveInstancePids for importer and sidebar
+ * guards. It never launches an OS inspection command from these reusable main
+ * thread paths. A live PID is ignored only when a recent asynchronous scan
+ * proved this exact immutable registry/lock fingerprint stale; changes and
+ * unreadable state keep the fail-closed behavior.
  */
 function hasConcurrentLiveInstanceSync(
   userDataDir: string,
   isPidAlive: (pid: number) => boolean,
-  readProcessIdentity: ProcessIdentityReader,
+  readProcessIdentity?: ProcessIdentityReader,
 ): boolean {
   const selfPid = process.pid;
   const registryDir = path.join(userDataDir, '.dev-instances');
@@ -397,6 +411,8 @@ function hasConcurrentLiveInstanceSync(
     if (!isMissing(error)) return true;
   }
   const candidates: Array<{
+    raw: string;
+    fileName: string;
     pid: number;
     recordedAtMs: number | undefined;
     rootDir: string | undefined;
@@ -427,13 +443,32 @@ function hasConcurrentLiveInstanceSync(
       continue;
     }
     if (!isPidAlive(pid)) continue;
-    candidates.push({ pid, recordedAtMs: record.startedAtMs, rootDir: record.rootDir });
+    candidates.push({
+      raw,
+      fileName: name,
+      pid,
+      recordedAtMs: record.startedAtMs,
+      rootDir: record.rootDir,
+    });
   }
-  const identities = readProcessIdentitiesForPids(candidates.map(({ pid }) => pid), readProcessIdentity);
-  for (const candidate of candidates) {
-    const identity = identities.get(candidate.pid) ?? null;
-    if (recordedPidMayStillBeLive(candidate.recordedAtMs, candidate.rootDir, identity)) return true;
-    log.info('ignoring stale instance registry record after PID reuse', { pid: candidate.pid });
+  if (readProcessIdentity) {
+    for (const candidate of candidates) {
+      const identity = readProcessIdentitySafely(readProcessIdentity, candidate.pid);
+      if (recordedPidMayStillBeLive(candidate.recordedAtMs, candidate.rootDir, identity)) {
+        return true;
+      }
+    }
+  } else {
+    for (const candidate of candidates) {
+      if (
+        !hasFreshStaleProcessProof(
+          processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`),
+        )
+      ) {
+        if (isPidAlive === isPidAliveDefault) refreshStaleProcessProofs(userDataDir);
+        return true;
+      }
+    }
   }
   try {
     const lockPath = path.join(userDataDir, 'SingletonLock');
@@ -447,16 +482,22 @@ function hasConcurrentLiveInstanceSync(
       lockPid !== selfPid &&
       isPidAlive(lockPid)
     ) {
-      let lockMtimeMs: number | undefined;
+      let lockMtimeMs: number;
       try {
         lockMtimeMs = fsSync.lstatSync(lockPath).mtimeMs;
       } catch {
-        // Missing provenance keeps the old fail-closed live-PID behavior.
+        return true;
       }
-      const identity =
-        readProcessIdentitiesForPids([lockPid], readProcessIdentity).get(lockPid) ?? null;
-      if (recordedPidMayStillBeLive(lockMtimeMs, undefined, identity)) return true;
-      log.info('ignoring stale SingletonLock after PID reuse', { pid: lockPid });
+      if (readProcessIdentity) {
+        const identity = readProcessIdentitySafely(readProcessIdentity, lockPid);
+        if (recordedPidMayStillBeLive(lockMtimeMs, undefined, identity)) return true;
+      } else {
+        const fingerprint = `${lockTarget}\u0000${lockMtimeMs}`;
+        if (!hasFreshStaleProcessProof(processProofKey(userDataDir, 'singleton-lock', fingerprint))) {
+          if (isPidAlive === isPidAliveDefault) refreshStaleProcessProofs(userDataDir);
+          return true;
+        }
+      }
     }
   } catch {
     // ENOENT(无 packaged 实例)/EINVAL(非 symlink)——无信号。
@@ -473,7 +514,7 @@ function hasConcurrentLiveInstanceSync(
 export function hasExclusiveSharedLegacyUserDataAccess(
   userDataDir = app.getPath('userData'),
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
-  readProcessIdentity: ProcessIdentityReader = readProcessIdentityDefault,
+  readProcessIdentity?: ProcessIdentityReader,
 ): boolean {
   return (
     process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1' &&
@@ -502,7 +543,7 @@ export function hasLegacyOwnerNamespaceClaim(
   ownerId: string,
   userDataDir = app.getPath('userData'),
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
-  readProcessIdentity: ProcessIdentityReader = readProcessIdentityDefault,
+  readProcessIdentity?: ProcessIdentityReader,
 ): boolean {
   if (!hasExclusiveSharedLegacyUserDataAccess(userDataDir, isPidAlive, readProcessIdentity)) {
     return false;
@@ -793,7 +834,7 @@ export function getLegacyGhostRecoveryStatus(
     rejectReservedIds?: boolean;
   } = {},
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
-  readProcessIdentity: ProcessIdentityReader = readProcessIdentityDefault,
+  readProcessIdentity?: ProcessIdentityReader,
 ): LegacyGhostRecoveryStatus {
   if (boundaryPending || session.mode !== 'cloud' || !session.dataOwnerId || !session.user) {
     return NO_LEGACY_GHOST_RECOVERY;
@@ -1442,6 +1483,8 @@ async function findConcurrentLiveInstancePids(
   }
   const selfPid = deps.selfPid();
   const candidates: Array<{
+    raw: string;
+    fileName: string;
     pid: number;
     recordedAtMs: number | undefined;
     rootDir: string | undefined;
@@ -1473,11 +1516,17 @@ async function findConcurrentLiveInstancePids(
       continue;
     }
     if (!deps.isPidAlive(pid)) continue;
-    candidates.push({ pid, recordedAtMs: record.startedAtMs, rootDir: record.rootDir });
+    candidates.push({
+      raw,
+      fileName: name,
+      pid,
+      recordedAtMs: record.startedAtMs,
+      rootDir: record.rootDir,
+    });
   }
 
-  const readProcessIdentity = deps.readProcessIdentity ?? readProcessIdentityDefault;
-  const identities = readProcessIdentitiesForPids(
+  const readProcessIdentity = deps.readProcessIdentity;
+  const identities = await readProcessIdentitiesForPids(
     candidates.map(({ pid }) => pid),
     readProcessIdentity,
   );
@@ -1487,6 +1536,9 @@ async function findConcurrentLiveInstancePids(
     if (recordedPidMayStillBeLive(candidate.recordedAtMs, candidate.rootDir, identity)) {
       pids.push(candidate.pid);
     } else {
+      rememberStaleProcessProof(
+        processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`),
+      );
       log.info('ignoring stale instance registry record after PID reuse', { pid: candidate.pid });
     }
   }
@@ -1518,10 +1570,13 @@ async function findConcurrentLiveInstancePids(
         // Missing provenance keeps the old fail-closed live-PID behavior.
       }
       const identity =
-        readProcessIdentitiesForPids([lockPid], readProcessIdentity).get(lockPid) ?? null;
+        (await readProcessIdentitiesForPids([lockPid], readProcessIdentity)).get(lockPid) ?? null;
       if (recordedPidMayStillBeLive(lockMtimeMs, undefined, identity)) {
         pids.push(lockPid);
       } else {
+        rememberStaleProcessProof(
+          processProofKey(userDataDir, 'singleton-lock', `${lockTarget}\u0000${lockMtimeMs}`),
+        );
         log.info('ignoring stale SingletonLock after PID reuse', { pid: lockPid });
       }
     }

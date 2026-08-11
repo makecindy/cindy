@@ -1702,6 +1702,30 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
       ),
     ).toBe(true);
   });
+
+  it('reuses async stale-pid proof in sync guards and invalidates it when the record changes', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
+
+    await writeDevInstanceRecord(root, 4242, root, {
+      startedAtMs: startedAtMs + 1,
+    });
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+  });
 });
 
 describe('isSameUserDataDir', () => {
