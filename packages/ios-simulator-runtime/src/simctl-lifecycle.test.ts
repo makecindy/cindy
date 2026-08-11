@@ -16,7 +16,8 @@ function devicesJson(
     udid: string;
     name: string;
     state?: string;
-    deviceTypeIdentifier?: string;
+    /** `null` reproduces a listing that omits the device type. */
+    deviceTypeIdentifier?: string | null;
   }>,
 ): string {
   return JSON.stringify({
@@ -33,7 +34,11 @@ function devicesJson(
         ...device,
         state: device.state ?? "Shutdown",
         isAvailable: true,
-        deviceTypeIdentifier: device.deviceTypeIdentifier ?? DEVICE_TYPE,
+        ...(device.deviceTypeIdentifier === null
+          ? {}
+          : {
+              deviceTypeIdentifier: device.deviceTypeIdentifier ?? DEVICE_TYPE,
+            }),
       })),
     },
   });
@@ -1047,6 +1052,53 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
 
     expect(evidence.armed).toBe(1);
     expect(evidence.cleared).toEqual([]);
+  });
+
+  it("keeps evidence when a marker device exists but cannot be attributed", async () => {
+    let markerName = "";
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(async (_command, args) => {
+      if (args[1] === "create") {
+        markerName = args[2]!;
+        return { stdout: "", stderr: "interrupted", exitCode: 1 };
+      }
+      if (args[1] === "list") {
+        // The device really was committed under this exact random marker, but the
+        // listing omits its device type, so it cannot be uniquely recovered.
+        return {
+          stdout: devicesJson([
+            { udid: UDID, name: markerName, deviceTypeIdentifier: null },
+          ]),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: evidence,
+    });
+
+    await expect(
+      lifecycle.createExact({
+        name: "Cindy iPhone",
+        deviceTypeIdentifier: DEVICE_TYPE,
+        runtimeIdentifier: RUNTIME,
+      }),
+    ).rejects.toMatchObject({ code: "SIMULATOR_CREATE_FAILED" });
+
+    // Retiring here would strand a hidden simulator: empty registry plus no
+    // evidence means the next startup skips recovery entirely.
+    expect(evidence.armed).toBe(1);
+    expect(evidence.cleared).toEqual([]);
+    // Attribution stayed strict, so nothing was deleted on a guess.
+    expect(run).not.toHaveBeenCalledWith(
+      "/usr/bin/xcrun",
+      ["simctl", "delete", UDID],
+      expect.anything(),
+    );
   });
 
   it("retires evidence when a failed create is rolled back", async () => {

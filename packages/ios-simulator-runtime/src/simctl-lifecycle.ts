@@ -615,17 +615,24 @@ export function createIOSSimulatorSimctlLifecycle(
     if (result.exitCode !== 0 || signal.aborted) {
       return { device: null, verified: false };
     }
-    const candidates = parseSimctlListJson(result.stdout).devices.filter(
+    // The marker name is random and profile-scoped, so its presence alone proves
+    // CoreSimulator committed something for this operation. Verification must key
+    // on that name only: `deviceTypeIdentifier` is nullable in a listing, so a
+    // metadata mismatch would otherwise be read as "nothing was created" and
+    // retire the recovery evidence for a device that really exists.
+    const named = parseSimctlListJson(result.stdout).devices.filter(
+      (device) => device.name === markerName,
+    );
+    const candidates = named.filter(
       (device) =>
-        device.name === markerName &&
         device.runtimeIdentifier === runtimeIdentifier &&
         device.deviceTypeIdentifier === deviceTypeIdentifier &&
         UUID_PATTERN.test(device.udid.toUpperCase()),
     );
+    // Deletion keeps the stricter identity rule; only a listing without this
+    // exact name proves nothing needs recovering.
     if (candidates.length === 1) return { device: candidates[0]!, verified: true };
-    // Zero candidates proves nothing was committed under this exact marker.
-    // Multiple candidates cannot be attributed to this operation.
-    return { device: null, verified: candidates.length === 0 };
+    return { device: null, verified: named.length === 0 };
   }
 
   async function list(signal?: AbortSignal): Promise<IOSSimulatorDevice[]> {
