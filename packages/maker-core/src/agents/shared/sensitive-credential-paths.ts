@@ -100,8 +100,21 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   // `updates/<semver>/<platform>-<arch>/` payloads. These globs also act as a
   // second, result-level filter for directory search, so anything broader than
   // the regex would silently drop reviewable source the regex already allowed.
-  // Each version component starts with a digit, so a dotted non-version
-  // directory such as `release.candidate.final` stays reviewable.
+  //
+  // These stay a close approximation of the regex, not an exact one, and that
+  // is deliberate. Glob has no repetition syntax for character classes, so
+  // `[0-9]*` constrains only the first character of each version component. A
+  // reviewed repository whose directory is `1x.2y.3z` — digit-led, dotted into
+  // three parts, and sitting directly above a `darwin-`/`linux-`/`win32-`
+  // directory — would still be denied here while the regex allows it. Such a
+  // file stays readable by explicit path; only directory search omits it.
+  //
+  // Closing that last gap needs the path predicate itself at the filtering
+  // step. Pi already runs it before these globs, but Claude and Codex hand
+  // this list to their own permission engines, which never call it — so the
+  // fix is a change to that shared permission plumbing, not a longer glob.
+  // Tracked separately; do not add another pattern variant here, because each
+  // one only moves the counterexample rather than removing it.
   "**/tools/claude/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
   "**/tools/codex/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
   "**/tools/pi/updates/[0-9]*.[0-9]*.[0-9]*/{darwin,linux,win32}-*/**",
