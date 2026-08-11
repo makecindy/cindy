@@ -710,7 +710,13 @@ function hasRetainedTool(
       continue;
     }
     if (!isPlainObject(tool)) continue;
-    if (tool.type === kind && tool.name === name && namespace === undefined) return true;
+    const nested = isPlainObject(tool.function) ? tool.function : undefined;
+    const toolName = typeof tool.name === 'string'
+      ? tool.name
+      : typeof nested?.name === 'string'
+        ? nested.name
+        : undefined;
+    if (tool.type === kind && toolName === name && namespace === undefined) return true;
     if (tool.type === 'namespace' && tool.name === namespace) {
       const children = Array.isArray(tool.tools) ? tool.tools : tool.children;
       if (Array.isArray(children) && children.some((child) => (
