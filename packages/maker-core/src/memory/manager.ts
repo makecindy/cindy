@@ -154,30 +154,38 @@ export class MakerMemoryManager {
    * 抛出的 MemoryError 会被 MCP 层 classifyMemoryError 翻译成
    * MAKER_MEMORY_NOT_READY, 与「空库返回 ok+[]」可区分。
    */
-  private ensureOwnerScope(): void {
-    if (this.deps.ownerScopeKey) {
-      const key = this.deps.ownerScopeKey();
-      if (this.activeScopeKey === null) {
-        // 首次解析 — 构造期 owner 可能尚未就绪 (initialEnabled 是全局默认),
-        // 这里锚定 scope 的同时按当前 owner 重绑定 enabled。
-        this.activeScopeKey = key;
-        this.rebindEnabled();
-      } else if (key !== this.activeScopeKey) {
-        this.logger.warn('maker memory owner scope changed — closing stores and rebinding root', {
-          fromScope: this.activeScopeKey,
-          toScope: key,
-        });
-        this.closeAllStores();
-        this.activeScopeKey = key;
-        this.rebindEnabled();
-      }
-      // 换根/首次锚定后新 owner 若关闭了 maker memory (enabled=false), 调用方
-      // 可能已持过期的 isEnabled()=true 通过检查 — 打开 store 路径必须
-      // fail-closed (见 getStore 的 disabled 检查)。
-      // 注意 disabled 检查**不**放在这里: resetAll/resetDigests 等清理路径也走
-      // ensureOwnerScope, 用户关闭 memory 后仍需能清空已有记忆 — 重置入口按
-      // 「不论 makerEnabled 值都能清」语义工作 (review #2388 Codex 10th P2)。
+  /**
+   * 纯 scope 同步 (不抛): 首次锚定 / ownerScopeKey 变化时关闭旧 store 池、
+   * 换根并重绑定 enabled。供 ensureOwnerScope (fail-closed 前) 与 isEnabled()
+   * (纯查询, 不能抛) 共用 — review #2388 Codex 11th P1: rebindEnabled 此前
+   * 只在 ensureOwnerScope 里跑, 先读 isEnabled() 的路径 (withStore 短路、
+   * session/remote option backfills) 会停留在旧 owner 的 flag 上。
+   */
+  private syncOwnerScope(): void {
+    if (!this.deps.ownerScopeKey) return;
+    const key = this.deps.ownerScopeKey();
+    if (this.activeScopeKey === null) {
+      // 首次解析 — 构造期 owner 可能尚未就绪 (initialEnabled 是全局默认),
+      // 这里锚定 scope 的同时按当前 owner 重绑定 enabled。
+      this.activeScopeKey = key;
+      this.rebindEnabled();
+    } else if (key !== this.activeScopeKey) {
+      this.logger.warn('maker memory owner scope changed — closing stores and rebinding root', {
+        fromScope: this.activeScopeKey,
+        toScope: key,
+      });
+      this.closeAllStores();
+      this.activeScopeKey = key;
+      this.rebindEnabled();
     }
+  }
+
+  private ensureOwnerScope(): void {
+    // scope 同步 + fail-closed: 缺 owner 直接拒绝 (不建临时库), scope 变化则换根。
+    this.syncOwnerScope();
+    // 注意 disabled 检查**不**放在这里: resetAll/resetDigests 等清理路径也走
+    // ensureOwnerScope, 用户关闭 memory 后仍需能清空已有记忆 — 重置入口按
+    // 「不论 makerEnabled 值都能清」语义工作 (review #2388 Codex 10th P2)。
     if (this.resolvedBasePath === null) {
       this.logger.warn('maker memory owner scope unavailable — refusing ephemeral fallback', {
         scopeKey: this.activeScopeKey,
@@ -260,6 +268,12 @@ export class MakerMemoryManager {
   }
 
   isEnabled(): boolean {
+    // 读取前同步 scope (review #2388 Codex 11th P1): rebindEnabled 只在
+    // ensureOwnerScope/syncOwnerScope 里跑, 先读 isEnabled() 的路径 (withStore
+    // 短路、session/remote option backfills) 会停留在旧 owner 的 flag —
+    // owner A false→B true 时不得继续短路, B false→A true 时不得漏暴露。
+    // 纯查询语义, 不抛 (owner 缺失由 getStore fail-closed)。
+    this.syncOwnerScope();
     return this.enabled;
   }
 

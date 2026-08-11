@@ -119,25 +119,37 @@ export class MakerMemoryStore {
   async list(): Promise<MemoryRecord[]> {
     this.assertScopeOk();
     await this.init();
-    return this.storage.list();
+    const records = await this.storage.list();
+    // await 后复核 (review #2388 Codex 11th P1): 读取在途时边界可能发生,
+    // 不得把旧 owner 数据返回给新会话。
+    this.assertScopeOk();
+    return records;
   }
 
   async read(filename: string): Promise<MemoryRecord> {
     this.assertScopeOk();
     await this.init();
-    return this.storage.read(filename);
+    const rec = await this.storage.read(filename);
+    this.assertScopeOk();
+    return rec;
   }
 
   async getIndex(): Promise<string> {
     this.assertScopeOk();
     await this.init();
-    return this.storage.getIndex();
+    const index = await this.storage.getIndex();
+    // session 启动路径 getStore().getIndex() 无 withStore 后置检查 — 返回前
+    // 复核, 边界窗口不得把旧 owner 的 MEMORY.md 赋给 makerMemoryIndex。
+    this.assertScopeOk();
+    return index;
   }
 
   async getIndexSize(): Promise<number> {
     this.assertScopeOk();
     await this.init();
-    return this.storage.getIndexSize();
+    const size = await this.storage.getIndexSize();
+    this.assertScopeOk();
+    return size;
   }
 
   // ── 写入类 (storage + fts 两侧同步) ─────────────────────────────────────
@@ -191,7 +203,9 @@ export class MakerMemoryStore {
     // 边界不得把旧 owner 的 FTS 检索结果返回给新会话。
     this.assertScopeOk();
     await this.init();
-    return this.fts.search(query, opts);
+    const hits = await this.fts.search(query, opts);
+    this.assertScopeOk();
+    return hits;
   }
 
   // ── 合并 (LLM 在 size warning 后调) ─────────────────────────────────────
@@ -229,6 +243,8 @@ export class MakerMemoryStore {
       try {
         this.assertScopeOk();
         await this.storage.delete(src);
+        // 删除后复核 — storage.delete 跨越 fs.unlink, 边界不得在其后继续 (review #2388)
+        this.assertScopeOk();
         deleted.push(src);
       } catch (e) {
         if (e instanceof MemoryError && e.code === 'not-ready') throw e;
@@ -278,6 +294,10 @@ export class MakerMemoryStore {
       try {
         this.assertScopeOk();
         await this.storage.delete(r.filename);
+        // 删除后复核 (review #2388 Greptile 9th P1): storage.delete 跨越
+        // fs.unlink 与 rebuildIndex, 最后一次删除等待期间切换则删除+索引重建
+        // 不得跨边界完成 — 立即中止, 不返回成功 removedCount。
+        this.assertScopeOk();
       } catch (e) {
         if (e instanceof MemoryError && e.code === 'not-ready') throw e;
         /* swallow */

@@ -381,4 +381,31 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(viaWorkdir.removedCount).toBe(0);
     manager.dispose();
   });
+
+  it('isEnabled 读取前同步 scope, 不残留旧 owner flag (review Codex 11th P1)', async () => {
+    let currentScope = 'cloud:disabled:1'; // owner A: maker:false
+    let enabledForOwner = false;
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => currentScope,
+      reloadEnabled: () => enabledForOwner,
+      initialEnabled: false,
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+    // 冷启动: owner 未就绪时 isEnabled 读的是初始值 (false) — withStore 会短路
+    expect(manager.isEnabled()).toBe(false);
+    // owner B 就绪且 maker:true: 无需任何 getStore, isEnabled 必须刷新
+    currentScope = 'cloud:enabled:2';
+    enabledForOwner = true;
+    expect(manager.isEnabled()).toBe(true);
+    // 反向: 切回 disabled owner, 再次同步
+    currentScope = 'cloud:disabled:3';
+    enabledForOwner = false;
+    expect(manager.isEnabled()).toBe(false);
+    manager.dispose();
+  });
 });
