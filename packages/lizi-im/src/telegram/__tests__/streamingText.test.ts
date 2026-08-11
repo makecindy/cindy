@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { startTelegramStreaming, type TelegramStreamingDeps } from '../streamingText.js';
+import {
+  startTelegramStreaming,
+  TelegramFinalUnconfirmedError,
+  type TelegramStreamingDeps,
+} from '../streamingText.js';
 
 /**
  * 终稿永远使用新消息(2026-08): 过程载体不再承担答案，避免最后一次编辑撞 flood
@@ -198,10 +202,13 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.reposted).toEqual(['第一段']);
 
     failTail = false;
-    await handle.finalize('第一段|第二段|第三段');
+    // 第二段回执不确定 → 不重发(可能已落地), 只补第三段; 但这一轮没完整确认,
+    // 所以 finalize 以 TelegramFinalUnconfirmedError 收尾而非静默成功。
+    await expect(handle.finalize('第一段|第二段|第三段')).rejects.toBeInstanceOf(
+      TelegramFinalUnconfirmedError,
+    );
 
-    // 首段与第二段都不再重发(第二段回执不确定, 按已出站处理), 只补第三段。
-    // 重复内容用户一眼可见, 不确定回执下宁可不重复。
+    // 首段与第二段都不再重发, 第三段照常补上。
     expect(h.reposted).toEqual(['第一段']);
     expect(h.sent).toEqual(['⚙️ 工作中 · 8m', '第二段', '第三段']);
   });
@@ -273,7 +280,9 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
 
     await expect(handle.finalize('第一段|第二段|第三段')).rejects.toThrow(/ECONNRESET/);
     broken = false;
-    await handle.finalize('第一段|第二段|第三段');
+    await expect(handle.finalize('第一段|第二段|第三段')).rejects.toBeInstanceOf(
+      TelegramFinalUnconfirmedError,
+    );
 
     expect(h.sent).toEqual(['⚙️ 工作中 · 7m', '第二段', '第三段']);
   });
@@ -293,9 +302,12 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
 
     await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/socket hang up/);
     broken = false;
-    await handle.finalize('第一段|第二段');
+    // 首段按已送达记账(不重铸整篇), 但它从未确认 —— 这一轮以未确认收尾。
+    const err = await handle.finalize('第一段|第二段').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TelegramFinalUnconfirmedError);
+    expect((err as TelegramFinalUnconfirmedError).firstChunkConfirmed).toBe(false);
 
-    // 首段按已送达记账 → 不重发; 只补第二段。
+    // 首段不重发; 只补第二段。
     expect(h.reposted).toEqual(['第一段']);
     expect(h.sent).toEqual(['⚙️ 工作中 · 6m', '第二段']);
   });
@@ -335,10 +347,12 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
 
     await expect(handle.finalize('唯一的答案')).rejects.toThrow(/ENOTFOUND/);
 
-    // 重试: deliveredChunks 已被推满(防重复), 于是全部分段被跳过、不再有 I/O,
-    // 这次 finalize 正常返回。但从未确认过任何一次送达 —— 绝不能删载体, 否则
-    // 用户既看不到答案也看不到"工作中"的故障现场。
-    await handle.finalize('唯一的答案');
+    // 重试: deliveredChunks 已被推满(防重复), 于是全部分段被跳过、不再有 I/O。
+    // 但从未确认过任何一次送达 —— 不能删载体(否则既没答案也没现场), 也不能静默
+    // 成功(上游会当成收口)。
+    const err = await handle.finalize('唯一的答案').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TelegramFinalUnconfirmedError);
+    expect((err as TelegramFinalUnconfirmedError).firstChunkConfirmed).toBe(false);
     expect(h.deleted).toEqual([]);
     // 载体还在, 上游仍可凭它判断这一轮没收口。
     expect(h.sent).toEqual(['⚙️ 工作中 · 4m']);
@@ -362,8 +376,11 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
 
     await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/ENOTFOUND/);
     firstBroken = false;
-    // 重试: 首段被跳过(计数已推进), 第二段发出并成功。
-    await handle.finalize('第一段|第二段');
+    // 重试: 首段被跳过(计数已推进), 第二段发出并成功 —— 但尾段的成功回执证明
+    // 不了首段被接受, 所以这一轮仍以未确认收尾。
+    const err = await handle.finalize('第一段|第二段').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TelegramFinalUnconfirmedError);
+    expect((err as TelegramFinalUnconfirmedError).firstChunkConfirmed).toBe(false);
 
     expect(h.sent).toContain('第二段');
     // 首段从未确认 → 载体必须留着。
@@ -406,8 +423,12 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/socket hang up/);
     tailBroken = false;
 
-    // 第二段回执未知 → 不重投(可能已落地), 但也不宣布收口。
-    await handle.finalize('第一段|第二段');
+    // 第二段回执未知 → 不重投(可能已落地), 也不宣布收口, 且必须让调用方看见:
+    // 静默 resolve 会被上游当成收口成功。
+    const err = await handle.finalize('第一段|第二段').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TelegramFinalUnconfirmedError);
+    expect((err as TelegramFinalUnconfirmedError).firstChunkConfirmed).toBe(true);
+    expect((err as TelegramFinalUnconfirmedError).unconfirmedChunks).toEqual([1]);
     expect(h.deleted).toEqual([]);
 
     // 未收口 ⇒ 状态没被锁死, 后续 finalize 仍会真正执行(而非被 final-sent 挡在
@@ -498,8 +519,10 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
 
     await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/500/);
     failTail = false;
-    // 重试: 第二段已计数(防重复)故被跳过, 但它始终没拿到回执。
-    await handle.finalize('第一段|第二段');
+    // 重试: 第二段已计数(防重复)故被跳过, 但它始终没拿到回执 —— 以未确认收尾。
+    const err = await handle.finalize('第一段|第二段').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TelegramFinalUnconfirmedError);
+    expect((err as TelegramFinalUnconfirmedError).unconfirmedChunks).toEqual([1]);
 
     // 第二段只发过一次(没有重投), 且因未确认而保留现场。
     expect(h.sent.filter((t) => t === '第二段')).toHaveLength(1);

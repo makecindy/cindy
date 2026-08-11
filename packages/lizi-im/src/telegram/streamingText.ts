@@ -61,6 +61,33 @@ function isNoReply(text: string): boolean {
  * 用结构判定而非 `instanceof`: 本模块是不做 I/O 的纯生命周期层, 不应反向依赖
  * api.ts 的具体错误类; deps 的实现方(index.ts)抛的正是带 errorCode 的那一种。
  */
+/**
+ * 终稿**没有完整确认**就收口时抛出。
+ *
+ * 与普通发送失败的区别: 内容**可能已经落地**, 只是拿不到回执证明。所以调用方
+ * 既不该重投(会重复), 也不该把这一轮当成功 —— 该轮的过程载体保留, 生命周期停在
+ * 可恢复态, 后续同 delivery key 的 finalize 仍能进来对账。
+ *
+ * 单独立类是因为 `finalize()` 静默 resolve 会让上游把未完整确认的终稿当成功
+ * (2026-08-12 review): `TelegramStreamingTextHandle` 不暴露内部 phase, 生产包装器
+ * 只看 resolve/reject。
+ */
+export class TelegramFinalUnconfirmedError extends Error {
+  readonly name = 'TelegramFinalUnconfirmedError';
+  constructor(
+    /** 首段(答案主体、图片锚点)是否已确认。 */
+    readonly firstChunkConfirmed: boolean,
+    /** 回执未知的分段序号(0-based, 升序)。 */
+    readonly unconfirmedChunks: readonly number[],
+  ) {
+    super(
+      `telegram final delivery unconfirmed: firstChunk=${firstChunkConfirmed ? 'confirmed' : 'unconfirmed'}` +
+        `${unconfirmedChunks.length > 0 ? `, chunks=[${unconfirmedChunks.join(',')}]` : ''}` +
+        ' (content may already be delivered; do not resend)',
+    );
+  }
+}
+
 function isDefiniteRejection(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const code = (err as { errorCode?: unknown }).errorCode;
@@ -420,17 +447,22 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       // 正文**完整确认**才收口成 final-sent。
       //
       // 有未确认分段时不能标已送达: `finalize()` 开头会让 final-sent / complete
-      // 状态直接 return, 于是这一轮再也无法对账或补投, 而调用方还以为成功了
-      // (2026-08-11 review)。保持 final-failed 让生命周期停在可恢复状态 —— 同一
-      // delivery key 的后续 finalize 仍能进来, 只补真正缺的部分。
+      // 状态直接 return, 于是这一轮再也无法对账或补投(2026-08-11 review)。
       //
-      // 这不是"发送失败": 未确认段可能已经落地, 所以既不重投也不谎报成功, 只是
-      // 不宣布收口。过程载体同样保留(见下方清理判据), 用户看得到现场。
-      if (this.firstChunkConfirmed && this.unconfirmedChunks.size === 0) {
-        this.lifecycle.markFinalSent(intent);
-      } else {
-        this.lifecycle.markFinalFailed(intent);
+      // 而且**必须抛出**, 不能只改内部 phase 就静默 resolve —— handle 不暴露
+      // phase, 生产包装器只看 resolve/reject, 静默返回等于告诉上游"收口成功"
+      // (2026-08-12 review)。抛 TelegramFinalUnconfirmedError 让上游能区分它与
+      // 普通发送失败: 内容可能已落地, 不该重投, 但这一轮也没收全。
+      //
+      // 抛出后 catch 分支会 markFinalFailed —— 生命周期停在可恢复态, 同一
+      // delivery key 的后续 finalize 仍能进来对账; 过程载体也一并保留。
+      if (!this.firstChunkConfirmed || this.unconfirmedChunks.size > 0) {
+        throw new TelegramFinalUnconfirmedError(
+          this.firstChunkConfirmed,
+          [...this.unconfirmedChunks].sort((a, b) => a - b),
+        );
       }
+      this.lifecycle.markFinalSent(intent);
     } catch (err) {
       // The process carrier remains visible and no cleanup runs. A later
       // explicit finalize may retry the same delivery key, resuming from
@@ -440,17 +472,12 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     }
 
     if (!staleMessageId) return;
-    // 正文**完整确认**才动过程载体 —— 两个条件都要:
+    // 走到这里意味着正文**完整确认**(未确认已在上面抛出), 才允许动过程载体。
     //
-    //   1. 首段确认(拿到过真实 messageId): 它承载答案主体。尾段的成功回执证明
-    //      不了首段被接受, 用一个全局布尔会让"首段 DNS 失败 + 尾段重试成功"的
-    //      轮次误删现场, 用户只剩尾段;
-    //   2. 没有未确认的后续分段: 有缺口就说明这一轮没收全。
-    //
-    // deliveredChunks 在未知回执下也会推进(防重复), 所以它到达 chunks.length
-    // 并不等于内容真的出现在聊天里。留着载体最坏是多一条"工作中", 上游仍持有
-    // 完整正文可再收口; 删错了则既没答案也没现场(2026-08-11 review)。
-    if (!this.firstChunkConfirmed || this.unconfirmedChunks.size > 0) return;
+    // 判据是两条: 首段确认(拿到过真实 messageId —— 它承载答案主体, 尾段回执证明
+    // 不了它被接受)、且没有未确认的后续分段。deliveredChunks 在未知回执下也会
+    // 推进(防重复), 所以它到达 chunks.length 并不等于内容真的出现在聊天里。
+    // 留着载体最坏是多一条"工作中"; 删错了则既没答案也没现场(2026-08-11 review)。
     // Answer is already accepted; cleanup is best-effort and cannot make the
     // final delivery fail. If delete fails, both messages may remain.
     if (!this.lifecycle.beginCleanup()) return;
