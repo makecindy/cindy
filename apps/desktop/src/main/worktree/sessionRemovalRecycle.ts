@@ -16,6 +16,7 @@
 
 import { eq, inArray } from 'drizzle-orm';
 
+import { hasLiveSessionReference, pathKey } from './liveSessionRefs';
 import { removeWorktreeForSession } from './WorktreeManager';
 import * as store from './worktreeStore';
 import { getDbClient } from '../localDb/client/current';
@@ -39,11 +40,47 @@ const log = createLogger('sessionRemovalRecycle');
 export interface RecycleWorktreeForRemovedSessionOptions {
   db?: DbClient['drizzle'];
   isOwnerCurrent?: () => boolean;
+  /** Internal guard: owner retries reuse this entry point without starting another owner scan. */
+  scanOwners?: boolean;
+  /** Runtime truth used by the live-reference guard for archived/deleted borrowers. */
+  isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
+  /**
+   * Owner retries must go back through the caller's route lock + CLI close chain before
+   * entering this low-level remover. Omitted callers preserve the owner rather than
+   * deleting it without the required runtime shutdown.
+   */
+  recycleOwner?: (sessionId: string) => Promise<void>;
 }
 
 export async function recycleWorktreeForRemovedSession(
   sessionId: string,
   options: RecycleWorktreeForRemovedSessionOptions = {},
+): Promise<void> {
+  try {
+    await recycleOwnWorktreeForRemovedSession(sessionId, options);
+  } finally {
+    if (options.scanOwners !== false) {
+      const ownerSessionIds = await findOwningWorktreeSessionIds(sessionId);
+      for (const ownerSessionId of ownerSessionIds) {
+        if (options.recycleOwner) {
+          await options.recycleOwner(ownerSessionId);
+        } else {
+          log.warn(
+            `[sessionRemovalRecycle] preserving owner ${ownerSessionId}: no runtime-close callback`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 只处理 session 自身登记的 worktree。是否存在自身 meta、是否为 ephemeral，均不影响
+ * 顶层入口随后扫描共享 owner。
+ */
+async function recycleOwnWorktreeForRemovedSession(
+  sessionId: string,
+  options: Pick<RecycleWorktreeForRemovedSessionOptions, 'db' | 'isOwnerCurrent' | 'isSessionRuntimeAlive'>,
 ): Promise<void> {
   const meta = store.get(sessionId);
   if (!meta) return;
@@ -64,12 +101,69 @@ export async function recycleWorktreeForRemovedSession(
     return;
   }
   await removeWorktreeForSession(sessionId, {
+    isSessionRuntimeAlive: options.isSessionRuntimeAlive,
     canRemove: async () => {
       if (!isOwnerCurrent()) return false;
       const currentStatus = await readCurrentSessionStatus(sessionId, db);
       return currentStatus === 'deleted' || currentStatus === 'archived';
     },
   });
+}
+
+/**
+ * 读取终态共享 session 的路径，并从 store 中找精确匹配或安全父子路径关系的 owner。
+ * 这个 helper 只负责一次扫描，不递归触发其它 session 的扫描；owner 回收由调用方
+ * 重新经过 recycleWorktreeForRemovedSession 与 removeWorktreeForSession 安全门。
+ */
+async function findOwningWorktreeSessionIds(sessionId: string): Promise<string[]> {
+  const row = await readSessionRecycleSnapshot(sessionId);
+  if (!row || (row.status !== 'deleted' && row.status !== 'archived')) return [];
+
+  const sharedPathKeys = new Set<string>();
+  const workingDirKey = pathKey(row.workingDir);
+  const worktreePathKey = pathKey(row.worktreePath);
+  if (workingDirKey) sharedPathKeys.add(workingDirKey);
+  if (worktreePathKey) sharedPathKeys.add(worktreePathKey);
+  if (sharedPathKeys.size === 0) return [];
+
+  return store
+    .getAll()
+    .filter(
+      (owner) =>
+        !owner.ephemeral &&
+        owner.sessionId !== sessionId &&
+        hasLiveSessionReference(owner, sharedPathKeys),
+    )
+    .map((owner) => owner.sessionId);
+}
+
+interface SessionRecycleSnapshot {
+  status: string | null | undefined;
+  workingDir: string | null;
+  worktreePath: string | null;
+}
+
+async function readSessionRecycleSnapshot(
+  sessionId: string,
+): Promise<SessionRecycleSnapshot | null> {
+  try {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select({
+        status: sessions.status,
+        workingDir: sessions.workingDir,
+        worktreePath: sessions.worktreePath,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId));
+    return row ?? null;
+  } catch (err) {
+    log.warn(
+      `[sessionRemovalRecycle] session recycle snapshot lookup failed for ${sessionId}; preserving worktree`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
 }
 
 /**

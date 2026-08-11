@@ -246,41 +246,48 @@ export async function recycleSessionWorktreeForStatusChange(
     const ownerIsCurrent = (): boolean => isOwnerScopeCurrent(ownerScope);
     const isStillRemovable = async (id: string): Promise<boolean> =>
       ownerIsCurrent() && recycle.isSessionStillRemovable(id, mediaDb);
-    if (!(await isStillRemovable(sessionId))) return;
-    await withSessionRouteLock(sessionId, async () => {
-      const shouldRecycle = await quiesceSessionBeforeWorktreeRecycle(sessionId, {
-        isOwnerCurrent: ownerIsCurrent,
-        isSessionStillRemovable: isStillRemovable,
-        cancelSessionOperations: cancelOperations,
-        cleanupRemovedSession,
-        closeSession: async (id) => {
-          await mh
-            .getMakerIfReady()
-            ?.closeSession(id)
-            .catch(() => undefined);
-        },
-      });
-      if (!shouldRecycle || !ownerIsCurrent()) return;
-
-      // Keep irreversible cleanup under the same task route lock as the final
-      // status check. A concurrent restore/start/send must not slip between
-      // quiescence and ref/worktree deletion.
-      await removeDeletedSessionMediaRefs(sessionId, mediaDb)
-        .then((count) => {
-          if (count > 0) log.info('session media refs removed', { sessionId, count });
-        })
-        .catch((err) => {
-          log.warn('session media ref cleanup failed', {
-            sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
+    const closeAndRecycle = async (targetSessionId: string, scanOwners: boolean): Promise<void> => {
+      if (!(await isStillRemovable(targetSessionId))) return;
+      await withSessionRouteLock(targetSessionId, async () => {
+        const shouldRecycle = await quiesceSessionBeforeWorktreeRecycle(targetSessionId, {
+          isOwnerCurrent: ownerIsCurrent,
+          isSessionStillRemovable: isStillRemovable,
+          cancelSessionOperations: cancelOperations,
+          cleanupRemovedSession,
+          closeSession: async (id) => {
+            await mh
+              .getMakerIfReady()
+              ?.closeSession(id)
+              .catch(() => undefined);
+          },
         });
-      if (!ownerIsCurrent()) return;
-      await recycle.recycleWorktreeForRemovedSession(sessionId, {
-        db: mediaDb,
-        isOwnerCurrent: ownerIsCurrent,
+        if (!shouldRecycle || !ownerIsCurrent()) return;
+
+        // Keep irreversible cleanup under the same task route lock as the final
+        // status check. A concurrent restore/start/send must not slip between
+        // quiescence and ref/worktree deletion.
+        await removeDeletedSessionMediaRefs(targetSessionId, mediaDb)
+          .then((count) => {
+            if (count > 0) log.info('session media refs removed', { sessionId: targetSessionId, count });
+          })
+          .catch((err) => {
+            log.warn('session media ref cleanup failed', {
+              sessionId: targetSessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          });
+        if (!ownerIsCurrent()) return;
+        await recycle.recycleWorktreeForRemovedSession(targetSessionId, {
+          scanOwners,
+          db: mediaDb,
+          isOwnerCurrent: ownerIsCurrent,
+          isSessionRuntimeAlive: (candidateSessionId) =>
+            mh.getMakerIfReady()?.isSessionAlive(candidateSessionId),
+          recycleOwner: (ownerSessionId) => closeAndRecycle(ownerSessionId, false),
+        });
       });
-    });
+    };
+    await closeAndRecycle(sessionId, true);
   } catch (err) {
     log.warn('worktree recycle after session status change failed', {
       sessionId,

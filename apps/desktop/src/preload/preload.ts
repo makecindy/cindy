@@ -47,6 +47,9 @@ import {
   type TerminateAgentProcessRequest,
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
+import {
+  RESOURCE_USAGE_WINDOW_OPEN_CHANNEL,
+} from '../shared/resourceUsageWindow';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
@@ -1553,6 +1556,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<Record<string, { detached: boolean; lastOpen: boolean; open: boolean }>> =>
       ipcRenderer.invoke('maker:ghost-panel-window:set-detached', ghostId, detached),
     onStateChanged: fanOutGhostPanelWindowStateChanged,
+  },
+
+  // ── 资源用量独立子窗口 ──────────────────────────────────────────────
+  // 主窗口只持有打开能力；资源窗口的关闭与就绪能力在专用 preload 中暴露。
+  resourceUsageWindow: {
+    open: (): Promise<void> => ipcRenderer.invoke(RESOURCE_USAGE_WINDOW_OPEN_CHANNEL),
   },
 
   agentIsland: {

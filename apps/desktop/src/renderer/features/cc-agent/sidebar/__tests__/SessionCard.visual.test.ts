@@ -10,6 +10,7 @@ import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  dropdownMenuOpen: false,
   boundSchedulesBySession: new Map<string, readonly unknown[]>(),
   worktreeSessionIds: new Set<string>(),
   runningDetailBySession: new Map<string, string>(),
@@ -73,10 +74,15 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: ReactNode }) => children,
+  DropdownMenu: ({ children, open }: { children: ReactNode; open?: boolean }) => {
+    mocks.dropdownMenuOpen = Boolean(open);
+    return children;
+  },
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => children,
-  DropdownMenuContent: () => null,
-  DropdownMenuItem: ({ children }: { children: ReactNode }) => children,
+  DropdownMenuContent: ({ children }: { children: ReactNode }) =>
+    mocks.dropdownMenuOpen ? createElement('div', { role: 'menu' }, children) : null,
+  DropdownMenuItem: ({ children }: { children: ReactNode }) =>
+    createElement('div', { role: 'menuitem' }, children),
   DropdownMenuSeparator: () => null,
   DropdownMenuSub: ({ children }: { children: ReactNode }) => children,
   DropdownMenuSubContent: () => null,
@@ -185,6 +191,7 @@ function renderCase(caseId: string) {
 describe('SessionCard visual cases', () => {
   beforeEach(() => {
     mocks.navigate.mockReset();
+    mocks.dropdownMenuOpen = false;
     mocks.boundSchedulesBySession.clear();
     mocks.worktreeSessionIds.clear();
     mocks.runningDetailBySession.clear();
@@ -225,6 +232,24 @@ describe('SessionCard visual cases', () => {
 
     expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1);
     expect(mocks.ensureInitialMessages).toHaveBeenCalledWith('short-idle-cc');
+  });
+
+  it('does not expose split creation in the card task menu', () => {
+    renderCase('short-idle-cc');
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /^(?:更多操作|ccAgent\.sidebar\.sessionMenu\.moreActions)$/,
+      }),
+    );
+
+    const menu = screen.getByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: '重命名' })).toBeTruthy();
+    expect(
+      within(menu).queryByRole('menuitem', {
+        name: /(?:splitGroup\.openInSplit|在分栏中打开)/,
+      }),
+    ).toBeNull();
   });
 
   it.each(['card', 'list'] as const)(

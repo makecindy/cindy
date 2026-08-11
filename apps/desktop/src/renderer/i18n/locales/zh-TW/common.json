@@ -4423,6 +4423,7 @@
     "close": "關閉",
     "menuItems": {
       "settings": "設定",
+      "resourceUsage": "資源用量",
       "help": "幫助",
       "issues": "問題反饋",
       "checkForUpdates": "檢查更新"
@@ -8996,17 +8997,9 @@
     "dropHint": "鬆開以在此分欄開啟任務",
     "loadingTask": "正在載入任務…",
     "resizeAria": "調整任務分欄大小",
-    "openInSplit": "在分欄中開啟",
-    "openSide": {
-      "left": "在左側開啟任務",
-      "right": "在右側開啟任務",
-      "top": "在上方開啟任務",
-      "bottom": "在下方開啟任務"
-    },
     "alreadyOpen": "該任務已在當前分欄中開啟，請選擇其他任務",
     "limitReached": "一個分欄最多可開啟 {{count}} 個任務，請先關閉一個任務分欄再重試",
-    "addUnavailable": "當前無法在分欄中開啟該任務，請先在主區域開啟一個任務再重試",
-    "workerUnavailable": "Worker 任務不能單獨在分欄中開啟，請改為開啟所屬 Lead 任務"
+    "addUnavailable": "當前無法在分欄中開啟該任務，請先在主區域開啟一個任務再重試"
   },
   "extraDirs": {
     "menuAria": "操作選單",

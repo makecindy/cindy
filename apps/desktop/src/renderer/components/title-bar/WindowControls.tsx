@@ -9,6 +9,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
+import { isResourceUsageWindow } from '@/lib/resourceUsageWindow';
 import type { WindowsCloseBehavior } from '../../../shared/windowBehavior';
 
 interface WindowControlsProps {
@@ -46,7 +47,8 @@ export function WindowControls({
       window.electronAPI.platform !== 'win32' ||
       isSecondaryWindow() ||
       isSidebarWindow() ||
-      isGhostPanelWindow()
+      isGhostPanelWindow() ||
+      isResourceUsageWindow()
     )
       return;
     return window.electronAPI.windowBehavior.onWindowsCloseBehaviorRequested(() => {
@@ -131,7 +133,12 @@ export function WindowControls({
     // (会话活在主进程,不受影响),不退出 app,也没有 disposer chain,所以跳过
     // in-flight 确认框 + 全屏 closing overlay,直接调 windowClose(main 端按
     // sender 解析为 win.close())。
-    if (isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow()) {
+    if (
+      isSecondaryWindow() ||
+      isSidebarWindow() ||
+      isGhostPanelWindow() ||
+      isResourceUsageWindow()
+    ) {
       window.electronAPI.windowClose();
       return;
     }

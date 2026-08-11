@@ -4424,6 +4424,7 @@
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
+      "resourceUsage": "リソース使用量",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
@@ -8997,17 +8998,9 @@
     "dropHint": "ここにセッションをドロップして開く",
     "loadingTask": "セッションを読み込み中…",
     "resizeAria": "セッションペインのサイズを変更",
-    "openInSplit": "分割で開く",
-    "openSide": {
-      "left": "セッションを左側で開く",
-      "right": "セッションを右側で開く",
-      "top": "セッションを上側で開く",
-      "bottom": "セッションを下側で開く"
-    },
     "alreadyOpen": "このセッションはすでに分割内で開いています。別のセッションを選択してください。",
     "limitReached": "1 つの分割で開けるセッションは最大 {{count}} 件です。ペインを 1 つ閉じてから、もう一度お試しください。",
-    "addUnavailable": "このセッションは現在の分割で開けません。メイン領域でセッションを開いてから、もう一度お試しください。",
-    "workerUnavailable": "Worker は個別のペインで開けません。所属する Lead セッションを開いてください。"
+    "addUnavailable": "このセッションは現在の分割で開けません。メイン領域でセッションを開いてから、もう一度お試しください。"
   },
   "extraDirs": {
     "menuAria": "操作メニュー",

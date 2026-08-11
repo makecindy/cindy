@@ -79,7 +79,6 @@ import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleS
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { OpenInSplitMenu } from './OpenInSplitMenu';
 import {
   finishSessionDrag,
   isSplitGroupDragSource,
@@ -472,14 +471,6 @@ export function SessionCard({
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
-  const openInSplitMenu = (
-    <OpenInSplitMenu
-      sessionId={session.id}
-      orcaRole={session.orcaRole}
-      onOpenSession={() => onClick(session.id)}
-    />
-  );
-
   // Orca lead 可导出(整个协同随包);Worker 不进 sidebar,双保险仍排除。
   const canExportShare =
     !isEmpty &&
@@ -1020,7 +1011,6 @@ export function SessionCard({
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1040,7 +1030,6 @@ export function SessionCard({
                 >
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1069,7 +1058,6 @@ export function SessionCard({
                 </DropdownMenuItem>
                 {moveToProjectSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}

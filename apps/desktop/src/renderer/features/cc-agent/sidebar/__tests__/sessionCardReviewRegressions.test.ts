@@ -287,11 +287,6 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).toContain('startSessionDrag');
   });
 
-  it('wires split creation into both sidebar rendering modes', () => {
-    expect(sessionItemSource).toContain('<OpenInSplitMenu');
-    expect(sessionCardSource).toContain('<OpenInSplitMenu');
-  });
-
   it('PR-123 greptile: card 路径的绑定徽章与 Timer 进反白体系', () => {
     // P1:renderAutomationMeta 卡片/列表两路都要把选中态透传给 ScheduleBindingBadge,
     // 否则红胶囊上 Timer 仍是 meta 灰;普通自动化分支也必须透传 activeForeground。

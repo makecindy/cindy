@@ -29,6 +29,10 @@
 - 启动、调试或验证 Desktop 时，必须先读 `docs/dev-rules/desktop-development.md`。
 - 修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、导航或 Electron
   特权能力前，必须先读 `docs/dev-rules/electron-security-and-process-boundaries.md`。
+- 新增或修改 Desktop 独立窗口、辅助窗口或弹出型 `BrowserWindow` 前，必须遵守
+  `docs/dev-rules/electron-security-and-process-boundaries.md` 的「独立辅助窗口统一生命周期
+  基线」：复用既有控制器／基础设施，不得另造平行的预热、就绪握手、隐藏复用与崩溃恢复
+  状态机。
 - 修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件或测试目录前，必须
   先读 `docs/dev-rules/credentials-and-local-storage.md`。
 - 新增或修改媒体生成、导入、缓存、附件、持久化、协议解析或回收逻辑前，必须先读

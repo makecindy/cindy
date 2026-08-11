@@ -471,6 +471,10 @@ import {
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
+import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
+import { createResourceUsageWindow } from './resource-usage-window/window.js';
+import { registerResourceUsageWindowIpc } from './resource-usage-window/ipc.js';
+import { isResourceUsageOpenSender } from './resource-usage-window/open-sender.js';
 import { GhostPanelWindowsController } from './ghost-panel-window/controller.js';
 import { createGhostPanelWindow } from './ghost-panel-window/window.js';
 import { registerGhostPanelWindowIpc } from './ghost-panel-window/ipc.js';
@@ -1494,6 +1498,22 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
   log: createLogger('ghost-panel-window-controller'),
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
+
+// ── 资源用量独立子窗口 ──────────────────────────────────────────────
+// 单实例轻量子窗口:顶部菜单「资源用量」→ open()。不需要 detach/attach 偏好、
+// 不需要 session 上下文转发。后台预热后常驻复用，普通关窗只隐藏。
+const resourceUsageWindowController = new ResourceUsageWindowController({
+  createWindow: () => createResourceUsageWindow(mainWindowRef),
+  isOpenSender: (sender) =>
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
+});
+registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
+
 setGhostsChangedObserver((ghosts) => {
   ghostPanelWindowsController.reconcile(ghosts);
   if (!isIOSSimulatorPluginActive(ghosts)) clearIOSSimulatorRendererAccess();
@@ -1976,6 +1996,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
   refreshGhostLocalization();
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
@@ -2599,6 +2620,7 @@ if (app.isPackaged) {
 }
 
 const createWindow = () => {
+  let resourceUsagePrewarmTimer: ReturnType<typeof setTimeout> | null = null;
   const platformOptions =
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
@@ -2695,6 +2717,11 @@ const createWindow = () => {
   // 的 BrowserWindow 发 IPC 触发 'Object has been destroyed'。
   setDeepLinkMainWindow(mainWindow);
   mainWindow.once('closed', () => {
+    if (resourceUsagePrewarmTimer) {
+      clearTimeout(resourceUsagePrewarmTimer);
+      resourceUsagePrewarmTimer = null;
+    }
+    resourceUsageWindowController.destroyWindow();
     if (mainWindowRef === mainWindow) mainWindowRef = null;
     setDeepLinkMainWindow(null);
   });
@@ -2761,6 +2788,17 @@ const createWindow = () => {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     if (!app.isPackaged) markDesktopDevWindowReady();
+    // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
+    // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
+    resourceUsagePrewarmTimer = setTimeout(() => {
+      resourceUsagePrewarmTimer = null;
+      if (isQuitting || mainWindowRef !== mainWindow || mainWindow.isDestroyed()) return;
+      resourceUsageWindowController.setLocale(
+        currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
+      );
+      resourceUsageWindowController.prewarm();
+    }, 1_500);
+    resourceUsagePrewarmTimer.unref?.();
     // 日志上报的启动补传:采集 + 脱敏是同步的重活,必须让主窗口先出来(内部再延迟 15s,
     // 避开首帧的 IO 争用)。没有待补传标记时是零成本 no-op。
     scheduleStartupBackfill();
@@ -7058,6 +7096,7 @@ onQuit(
   'sync',
 );
 onQuit('auth-manager', () => authManager.dispose(), 'sync');
+onQuit('resource-usage-window', () => resourceUsageWindowController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,

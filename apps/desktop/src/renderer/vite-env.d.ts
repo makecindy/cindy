@@ -1813,6 +1813,16 @@ interface ElectronAPI {
     onCommand: (cb: (cmd: RsbWindowCommand) => void) => () => void;
   };
 
+  /** 资源用量独立子窗口(单实例;入口在顶部菜单)。 */
+  resourceUsageWindow: {
+    open: () => Promise<void>;
+    close: () => Promise<void>;
+    rendererReady: () => Promise<void>;
+    presentationReady: () => Promise<void>;
+    onSamplingActiveChanged: (cb: (active: boolean) => void) => () => void;
+    onLocaleChanged: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+  };
+
   /** 插件停靠面板独立窗口(每 ghostId 一扇窗;状态机在 main)。 */
   ghostPanelWindow: {
     /** 首帧同步读全量状态(ghostId → entry)。 */
