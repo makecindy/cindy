@@ -130,14 +130,15 @@ export class MakerMemoryManager {
    */
   private poolGeneration = 0;
   /**
-   * resetAll 进行中标志: 期间并发 getStore 一律拒绝 (not-ready)。
-   * 两个目的:
+   * resetAll 进行中**计数** (review #2388 Greptile 17th: 布尔标志在多并发
+   * resetAll 下会提前解除屏障): >0 期间并发 getStore 与 store 操作一律
+   * 拒绝 (not-ready)。用途:
    *  - 删除目录时池中 db 若仍打开 (better-sqlite3 占用 fts.db) 会 EBUSY —
    *    resetAll 开头 closeAllStores 清池, 期间拒绝新入池, 删除无占用;
-   *  - 消除 resetAll 与并发 getStore 同 workdir 的固有竞态 (Greptile 13th/16th
-   *    反复追的「清理实时池 vs 误关在用 store」在无并发时不再存在)。
+   *  - 在途 store 操作在下一复核点 (assertStoreOperable) 抛 not-ready 中止,
+   *    不再访问已被 closeAllStores 关闭的 db 句柄。
    */
-  private resetInFlight = false;
+  private resetInFlight = 0;
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -232,6 +233,22 @@ export class MakerMemoryManager {
       this.logger.info('maker memory enabled rebound after owner scope change', { enabled: next });
       this.enabled = next;
     }
+  }
+
+  /**
+   * store 操作复核点 (注入 store 的 scopeCheck, 每次公开操作/写盘前调用):
+   * 1. resetAll 进行中 → 抛 not-ready (review #2388 Greptile 17th): 在途操作
+   *    在下一复核点中止, 不再访问已被 closeAllStores 关闭的 db 句柄;
+   * 2. owner scope 变化 → 抛 not-ready (assertScopeUnchanged)。
+   */
+  private assertStoreOperable(scopeAtEntry: string | null): void {
+    if (this.resetInFlight > 0) {
+      throw new MemoryError(
+        'not-ready',
+        'memory reset in progress; store operation aborted',
+      );
+    }
+    this.assertScopeUnchanged(scopeAtEntry);
   }
 
   /** 关闭池内全部 db (作用域切换 / dispose / resetAll 共用)。幂等。 */
@@ -396,9 +413,9 @@ export class MakerMemoryManager {
         'maker memory disabled for current owner scope; refusing to open store',
       );
     }
-    // resetAll 进行中 (review #2388 Greptile 16th): 删除期间入池会导致目录被删后
-    // 残留失效条目 / EBUSY — 并发 getStore 一律拒绝, 调用方重试。
-    if (this.resetInFlight) {
+    // resetAll 进行中 (review #2388 Greptile 16th/17th): 删除期间入池会导致目录
+    // 被删后残留失效条目 / EBUSY — 并发 getStore 一律拒绝, 调用方重试。
+    if (this.resetInFlight > 0) {
       throw new MemoryError('not-ready', 'memory reset in progress; retry shortly');
     }
     const cached = this.stores.get(absWorkdir);
@@ -441,7 +458,7 @@ export class MakerMemoryManager {
       // 后置复核无法撤销已发生的写操作 —— 锚定 store 创建时 scope, 每次
       // write/delete/consolidate 前复核, scope 已变即抛 not-ready。
       ...(this.deps.ownerScopeKey
-        ? { scopeCheck: () => this.assertScopeUnchanged(scopeAtEntry) }
+        ? { scopeCheck: () => this.assertStoreOperable(scopeAtEntry) }
         : {}),
     });
     try {
@@ -591,8 +608,9 @@ export class MakerMemoryManager {
     // 竞态锚点 (review #2388 P1): 捕获 scope + root, 跨 await 不再 re-read 动态根;
     // 每次目录删除前复核, owner 已切换则中止, 绝不递归删新 owner 的 maker-memory。
     const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
-    // 置位并发拒绝 (review #2388 Greptile 16th): 删除期间不得有新 store 入池。
-    this.resetInFlight = true;
+    // 置位并发拒绝计数 (review #2388 Greptile 17th): 并发 resetAll 各自 +1,
+    // 较早结束的 -1 后仍 >0, 不会提前解除屏障。
+    this.resetInFlight += 1;
     try {
       // 先关闭并清空池 — 池中 db 打开着会占 fts.db 导致 fs.rm EBUSY;
       // 入口时已存在的 store 在清空语义下关闭合理 (已返回实例在 reset 后本就失效)。
@@ -641,7 +659,7 @@ export class MakerMemoryManager {
       this.poolGeneration += 1;
       return { removedCount: total };
     } finally {
-      this.resetInFlight = false;
+      this.resetInFlight -= 1;
     }
   }
 
