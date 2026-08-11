@@ -377,6 +377,9 @@ EOF
 sh /tmp/x.sh`,
     `bash <<< '"xcr" + "un" + " sim" + "ctl shutdown DEVICE"'`,
     `bash <<< '"xcr" "un" " sim" "ctl shutdown DEVICE"'`,
+    `cat <<< 'x' | python3 <<< '"xcr" "un" " sim" "ctl shutdown DEVICE"'`,
+    `cat <<< 'x' | python3 <<< 'xcrun simctl shutdown DEVICE'`,
+    `cat <<< 'x' | bash <<< 'xcrun simctl shutdown DEVICE'`,
     `echo '"xcr" "un" " sim" "ctl shutdown DEVICE"' | sh`,
     `osascript -e 'set cmd to "/usr/bin/xcrun simctl shutdown DEVICE"' -e 'do shell script cmd'`,
     `osascript -l JavaScript -e 'ObjC.import("Foundation"); const task = $.NSTask.alloc.init; task.launchPath = "/usr/bin/xcrun"; task.arguments = ["simctl", "shutdown", "DEVICE"]; task.launch'`,
@@ -580,6 +583,8 @@ EOF`,
 echo hello
 EOF`,
     `bash <<< 'echo hello'`,
+    `cat <<< 'x' | grep -q y <<< 'z'`,
+    `cat <<< 'x' | bash <<< 'echo hi'`,
     `echo 'echo hello' | sh`,
     `cat <<'EOF' | sh
 printf '%s' "$var"

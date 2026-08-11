@@ -1720,7 +1720,8 @@ function containsInterpreterHereStringBypass(command: string): boolean {
       ) {
         return true;
       }
-      break;
+      // A pipeline may carry several here-strings with different consumers
+      // (`cat <<< a | python3 <<< b`); keep scanning for the next one.
     }
   }
   return false;
