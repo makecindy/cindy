@@ -88,6 +88,34 @@ describe('buildRenderItems — subagent internal messages', () => {
     expect(messageIds(buildRenderItems(msgs).items)).toEqual(['legacy-1', 'legacy-2']);
   });
 
+  it('still derives generated-file chips from filtered subagent Write calls', () => {
+    // 子代理用 Write 建的文件是**真实产物**,只是它的 tool_use 行不该渲染。产物收集
+    // 必须回到原始序列取 turn 切片,否则文件 chip 静默消失(review: codex P2)。
+    const msgs: ChatMessage[] = [
+      { clientId: 'u1', role: 'user', content: '帮我生成报告' },
+      {
+        clientId: 'sub-write',
+        role: 'tool_use',
+        content: '',
+        toolName: 'Write',
+        toolUseId: 'toolu_write',
+        toolInput: { file_path: '/repo/report.md', content: '…' },
+        parentToolUseId: 'toolu_AGENT',
+      },
+      { clientId: 'a1', role: 'assistant', content: '写好了' },
+      { clientId: 'u2', role: 'user', content: '谢谢' },
+    ];
+
+    const items = buildRenderItems(msgs, undefined, undefined, { workingDir: '/repo' }).items;
+    const genfiles = items.filter((it) => it.type === 'generated_files');
+    expect(genfiles).toHaveLength(1);
+    expect(
+      genfiles[0].type === 'generated_files' ? genfiles[0].files.map((f) => f.path) : [],
+    ).toEqual(['/repo/report.md']);
+    // 子代理的 Write 行本身仍然不渲染。
+    expect(messageIds(items)).toEqual(['u1', 'a1', 'u2']);
+  });
+
   it('keeps the parent Agent tool call itself (only its children are internal)', () => {
     const msgs: ChatMessage[] = [
       {

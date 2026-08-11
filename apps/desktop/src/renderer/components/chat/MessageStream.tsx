@@ -1048,9 +1048,33 @@ export function buildRenderItems(
   // 它们的去处是自己那张 AgentTaskCard(仍由 taskUpdates 正常渲染),不是主流。
   // 过滤放在最前面:后续所有 pass(tool_result lookup、段落配对、turn 边界、work-group)
   // 看到的都是同一份"用户可见"的消息序列,不会出现"查得到但不渲染"的半吊子状态。
-  const messages = allMessages.some(isSubagentInternalMessage)
-    ? allMessages.filter((m) => !isSubagentInternalMessage(m))
+  const hasSubagentInternalMessages = allMessages.some(isSubagentInternalMessage);
+  // 过滤后下标 → 原始下标。产物文件卡(collectGeneratedFiles)必须回到**原始**序列
+  // 取 turn 切片:子代理用 Write / Bash 建的文件是真实产物,只是它的 tool_use 行不该
+  // 渲染;只喂过滤后的切片会让这些文件 chip 静默消失(review: codex P2)。
+  const originalIndexByVisible: number[] = [];
+  const messages = hasSubagentInternalMessages
+    ? allMessages.filter((m, idx) => {
+        if (isSubagentInternalMessage(m)) return false;
+        originalIndexByVisible.push(idx);
+        return true;
+      })
     : allMessages;
+
+  /**
+   * 把过滤后的 turn 区间 `[lo, hi)` 映射回原始序列的区间,使产物收集能看到被隐藏的
+   * 子代理工具调用。`hi` 落在末尾时右端取 `allMessages.length`,保证最后一个 turn
+   * 也覆盖到它后面的子代理尾巴。
+   */
+  const originalTurnSlice = (lo: number, hi: number): readonly ChatMessage[] => {
+    if (!hasSubagentInternalMessages) return messages.slice(lo, hi);
+    const start = originalIndexByVisible[lo];
+    if (start === undefined) return messages.slice(lo, hi);
+    const end = hi < originalIndexByVisible.length
+      ? originalIndexByVisible[hi]
+      : allMessages.length;
+    return allMessages.slice(start, end);
+  };
 
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
   // Plan/task rendering and regular tool result pairing both need a stable
@@ -1223,7 +1247,7 @@ export function buildRenderItems(
     }
     const workingDir = opts?.workingDir ?? '';
     if (!workingDir || hi <= lo) return;
-    const slice = messages.slice(lo, hi);
+    const slice = originalTurnSlice(lo, hi);
     const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
       const normalized = pathKey(file.path);
       return !exactPaths.has(normalized) || changeSets.length === 0;
