@@ -705,6 +705,10 @@ function hasRetainedTool(
   namespace?: string,
 ): boolean {
   for (const tool of tools ?? []) {
+    if (typeof tool === 'string') {
+      if (kind === 'custom' && namespace === undefined && tool === name) return true;
+      continue;
+    }
     if (!isPlainObject(tool)) continue;
     if (tool.type === kind && tool.name === name && namespace === undefined) return true;
     if (tool.type === 'namespace' && tool.name === namespace) {
