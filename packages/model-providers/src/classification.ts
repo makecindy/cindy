@@ -279,12 +279,33 @@ export function categorize(rawId: string): ModelCategory {
 const KNOWN_CATEGORIES = new Set<string>(CATEGORY_ORDER);
 
 /**
+ * **目录 `group` 是 wire 值,不能单端改语义**(docs/dev-rules/protocol-compatibility.md §1)。
+ *
+ * `other` 在 2026-08 改名前表示「不能对话的其它端点」(现 `non-chat`),而本地把 `other`
+ * 这个名字让给了「认不出厂商的对话模型」。服务端若下发这个旧值,按新含义解读会把一条
+ * 能力端点条目从"硬拒"变成"可选"—— 尤其是 `seedream-5` 这类 id 不含任何类型关键词、
+ * 只能靠 group 判定的合成模型(见 isChatEligible)。所以**收到的 `other` 一律按旧含义
+ * 读成 `non-chat`**,旧端行为逐字保持。
+ *
+ * 只作用于从数据读入的 group;categorize 本地算出的 `other` 不经过这里。服务端将来要表达
+ * 「认不出厂商」不应复用这个值,非对话能力请用 `mode` 或具体能力分组。
+ */
+const LEGACY_WIRE_GROUPS: Record<string, ModelCategory> = { other: 'non-chat' };
+
+function normalizeWireGroup(group: string): string {
+  return LEGACY_WIRE_GROUPS[group] ?? group;
+}
+
+/**
  * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `group` 就用它,
  * 否则回退到 id 前缀归类(categorize)。未知的 group 值(渲染层没有对应标签)也回退,
  * 避免出现没有 i18n 标签的空分组。不感知 `mode`——mode 优先分类见 classifyModel。
  */
 export function groupOf(model: { id: string; group?: string }): ModelCategory {
-  if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group as ModelCategory;
+  if (model.group) {
+    const group = normalizeWireGroup(model.group);
+    if (KNOWN_CATEGORIES.has(group)) return group as ModelCategory;
+  }
   return categorize(model.id);
 }
 
@@ -323,11 +344,10 @@ export function classifyModel(model: { id: string; group?: string; mode?: string
  */
 export function isChatEligible(model: { id: string; group?: string; mode?: string }): boolean {
   if (model.mode !== undefined) return CHAT_CAPABLE_MODES.has(model.mode);
-  if (
-    model.group &&
-    KNOWN_CATEGORIES.has(model.group) &&
-    !CHAT_VENDOR_CATEGORIES.has(model.group as ModelCategory)
-  ) {
+  // 与 groupOf 共用同一个 wire 归一:目录里存量的 `group:'other'` 仍按旧含义
+  // (= 现在的 `non-chat`)硬拒,改名不得把既有 wire 值的准入结论翻过来。
+  const group = model.group ? normalizeWireGroup(model.group) : undefined;
+  if (group && KNOWN_CATEGORIES.has(group) && !CHAT_VENDOR_CATEGORIES.has(group as ModelCategory)) {
     return false;
   }
   return CHAT_VENDOR_CATEGORIES.has(categorize(model.id));

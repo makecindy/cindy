@@ -17,6 +17,7 @@ import {
   formatContextWindow,
   groupModelsForDisplay,
   groupOf,
+  isAgentSelectableModel,
   isBudgetModel,
   isChatEligible,
   isModelSelectableForNewRoute,
@@ -233,6 +234,19 @@ describe('categorize', () => {
     expect(categorize('o4-mini')).toBe('other');
     expect(categorize('chatgpt-4o-latest')).toBe('other');
     expect(categorize('openai/o3')).toBe('other');
+  });
+
+  it('目录里存量的 group:"other" 仍按旧含义(非对话端点)解读 —— 改名不得单端翻转 wire 语义', () => {
+    // 改名前 `other` = 「不能对话的其它端点」。若按新含义(认不出厂商的对话模型)解读,
+    // seedream-5 这类 id 不含任何类型关键词、只能靠 group 判定的合成模型会从"硬拒"
+    // 变成"可选"(docs/dev-rules/protocol-compatibility.md §1:禁止单端改既有字段语义)。
+    expect(groupOf({ id: 'seedream-5', group: 'other' })).toBe('non-chat');
+    expect(classifyModel({ id: 'seedream-5', group: 'other' })).toBe('non-chat');
+    expect(isChatEligible({ id: 'seedream-5', group: 'other' })).toBe(false);
+    expect(isAgentSelectableModel({ id: 'seedream-5', group: 'other' })).toBe(false);
+    // 本地 categorize 算出的 `other` 不走归一,兜底组照常可选(两条路径不能混)。
+    expect(categorize('seedream-5')).toBe('other');
+    expect(isChatEligible({ id: 'mistral-large-latest' })).toBe(true);
   });
 
   it('兜底组仍是对话厂商组:认不出厂商 ≠ 不能对话,不得从 availableModels 消失(2026-08 回归锁)', () => {
