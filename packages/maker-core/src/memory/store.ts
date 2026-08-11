@@ -164,8 +164,12 @@ export class MakerMemoryStore {
     // FTS 同步 — 失败只 warn, 文件已落盘
     try {
       const rec = await this.storage.read(result.filename);
+      // reread await 后、upsert 前复核 (review #2388 Codex 16th P1): 边界
+      // 不得让 FTS 写入旧 owner 的 fts.db; not-ready 透传 (fail-closed)。
+      this.assertScopeOk();
       this.fts.upsert(rec);
     } catch (e) {
+      if (e instanceof MemoryError && e.code === 'not-ready') throw e;
       this.logger.warn('memory fts upsert failed (file written ok, will rebuild on next sanity)', {
         filename: result.filename,
         error: String(e),

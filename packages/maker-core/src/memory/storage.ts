@@ -187,6 +187,9 @@ export class MemoryStorage {
     try {
       await fs.access(metaPath);
     } catch {
+      // 首次打开副作用也 fail-closed (review #2388 Codex 16th P1): 异步初始化
+      // 期间边界发生, 不得在旧 owner 下创建 meta.json。
+      this.beforeFileWrite?.();
       const meta: MemoryStorageMeta = {
         absPath: absWorkdir,
         createdAt: new Date().toISOString(),

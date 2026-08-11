@@ -412,7 +412,18 @@ export class MakerMemoryManager {
         ? { scopeCheck: () => this.assertScopeUnchanged(scopeAtEntry) }
         : {}),
     });
-    await store.init();
+    try {
+      await store.init();
+    } catch (e) {
+      // init 内 (storage.init 写 meta.json 前守卫 / fts 初始化) 可能已因 scope
+      // 变化抛 not-ready — 关闭刚开的 db 防止句柄泄漏, 再重新抛出。
+      try {
+        db.close();
+      } catch {
+        /* swallow */
+      }
+      throw e;
+    }
     // 跨 await 复核: 期间 owner 已切换 → 丢弃刚建的旧 owner store, fail-closed,
     // 绝不入池。用实时 ownerScopeKey() 比较 (不依赖 activeScopeKey 被刷新)。
     if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
@@ -567,6 +578,10 @@ export class MakerMemoryManager {
         // 删除 await 期间同 owner 的并发 getStore 可能打开该 workdir 入池,
         // 快照清理碰不到它, 这里按 sanitized 目录名匹配实时池移除, 防止后续
         // getStore 复用指向已删目录的条目。
+        // 先复核 scope (review #2388 Greptile 14th): fs.rm 的 await 窗口后若
+        // owner 已切换 (换根清池, 新 owner 的并发 getStore 可能同 workdir 入池),
+        // 不得按目录名关闭/移除新 owner 正在使用的 store — 立即中止 fail-closed。
+        this.assertScopeUnchanged(scopeAtEntry);
         for (const [workdirKey, { db: staleDb }] of [...this.stores]) {
           if (memoryScopeDirName(workdirKey) !== entry) continue;
           try {
