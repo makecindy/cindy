@@ -87,12 +87,15 @@ export class MakerMemoryStore {
   }
 
   /**
-   * mutation 前置守卫: owner scope 已变则抛 memory:not-ready (manager 注入,
-   * 锚定 store 创建时 scope)。任何写操作 (write/delete/consolidate/resetType/
-   * resetAll) 开始前调用 —— 文件系统变更发生前拦截, 后置复核无法撤销已发生的
-   * 变更 (review #2388 Codex 5th P1)。
+   * scope 前置守卫: owner scope 已变则抛 memory:not-ready (manager 注入,
+   * 锚定 store 创建时 scope)。所有公开操作 (读 + 写) 开始前调用:
+   *  - 写操作: 文件系统变更发生前拦截, 后置复核无法撤销已发生的变更
+   *    (review #2388 Codex 5th P1);
+   *  - 只读操作: session 启动时 Claude/Codex 直接 getStore().getIndex() 拼
+   *    system prompt (在 withStore 后置检查之外), 边界窗口不得把旧 owner 的
+   *    MEMORY.md 注入新 session (review #2388 Codex 6th P1)。
    */
-  private assertMutable(): void {
+  private assertScopeOk(): void {
     this.deps.scopeCheck?.();
   }
 
@@ -108,21 +111,25 @@ export class MakerMemoryStore {
   // ── 直通 storage 的方法 (read 类) ────────────────────────────────────────
 
   async list(): Promise<MemoryRecord[]> {
+    this.assertScopeOk();
     await this.init();
     return this.storage.list();
   }
 
   async read(filename: string): Promise<MemoryRecord> {
+    this.assertScopeOk();
     await this.init();
     return this.storage.read(filename);
   }
 
   async getIndex(): Promise<string> {
+    this.assertScopeOk();
     await this.init();
     return this.storage.getIndex();
   }
 
   async getIndexSize(): Promise<number> {
+    this.assertScopeOk();
     await this.init();
     return this.storage.getIndexSize();
   }
@@ -130,7 +137,7 @@ export class MakerMemoryStore {
   // ── 写入类 (storage + fts 两侧同步) ─────────────────────────────────────
 
   async write(opts: WriteOptions): Promise<WriteResult> {
-    this.assertMutable();
+    this.assertScopeOk();
     await this.init();
     const result = await this.storage.write(opts);
     // FTS 同步 — 失败只 warn, 文件已落盘
@@ -147,7 +154,7 @@ export class MakerMemoryStore {
   }
 
   async delete(filename: string): Promise<void> {
-    this.assertMutable();
+    this.assertScopeOk();
     await this.init();
     await this.storage.delete(filename);
     try {
@@ -162,7 +169,7 @@ export class MakerMemoryStore {
 
   /** 仅清空一种 memory；给 agent 私有的系统记忆（如 Pi digest）使用。 */
   async resetType(type: MemoryType): Promise<{ removedCount: number }> {
-    this.assertMutable();
+    this.assertScopeOk();
     await this.init();
     const matching = (await this.storage.list()).filter((record) => record.frontmatter.type === type);
     for (const record of matching) {
@@ -186,7 +193,7 @@ export class MakerMemoryStore {
    * 失败时尽力恢复: 若新条目写失败直接抛; 若删除中途失败已删的不回滚 (文件系统不支持)。
    */
   async consolidate(opts: ConsolidateOptions): Promise<ConsolidateResult> {
-    this.assertMutable();
+    this.assertScopeOk();
     await this.init();
     // 防呆: 不允许把 target 写到正要被删的 source 里 (否则会自删)
     const targetFilename = buildFilename(opts.target.type, opts.target.name);
@@ -246,7 +253,7 @@ export class MakerMemoryStore {
 
   /** 清空当前 workdir 全部 memory (manager.resetWorkdir 调). 慎用 */
   async resetAll(): Promise<{ removedCount: number }> {
-    this.assertMutable();
+    this.assertScopeOk();
     await this.init();
     const all = await this.storage.list();
     for (const r of all) {

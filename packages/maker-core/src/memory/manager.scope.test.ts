@@ -314,6 +314,25 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     manager.dispose();
   });
 
+  it('store 级只读守卫: scope 变化后 getIndex 抛 not-ready (review Codex 6th P1)', async () => {
+    let currentScope = 'cloud:old:1';
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => currentScope,
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+    const store = await manager.getStore(WORKDIR);
+    // session 启动路径: getStore().getIndex() 直接拼 prompt, 边界窗口不得注入旧 owner 索引
+    currentScope = 'cloud:new:2';
+    await expect(store.getIndex()).rejects.toThrow(/memory:not-ready/);
+    await expect(store.list()).rejects.toThrow(/memory:not-ready/);
+    manager.dispose();
+  });
+
   it('rebind 到 disabled owner 后 getStore fail-closed (review Codex 5th P1)', async () => {
     let currentScope = 'cloud:enabled:1';
     let enabledForOwner = true;
