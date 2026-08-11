@@ -85,4 +85,18 @@ describe('findCatalogModel', () => {
     expect(findCatalogModel(providers, 'xd', 'pi', 'nope')).toBeUndefined();
     expect(findCatalogModel(providers, 'xd', 'pi', '   ')).toBeUndefined();
   });
+
+  it('never borrows another provider capability when a provider is named', () => {
+    // 回归 PR #2474 review:同一个模型 id 在两家目录下能力不同时,跨家借用会把
+    // 强制思考的路由误判成"能关思考",于是又拿回��凑额度 —— 正是本 PR 要修的故障。
+    const crossProvider = [
+      { id: 'xd', models: { 'claude-code': [model({ id: 'dual', efforts: ['high'] })] } },
+      { id: 'other', models: { 'claude-code': [model({ id: 'dual', efforts: ['low', 'high'] })] } },
+    ];
+    // 点名 'nowhere' 这家没有该模型 → 返回 undefined,由调用方走保守宽裕档;
+    // 绝不落到 'other' 的 low 档。
+    expect(findCatalogModel(crossProvider, 'nowhere', 'claude-code', 'dual')).toBeUndefined();
+    // 点名 'xd' 时只认 xd 自己的声明。
+    expect(findCatalogModel(crossProvider, 'xd', 'claude-code', 'dual')?.efforts).toEqual(['high']);
+  });
 });

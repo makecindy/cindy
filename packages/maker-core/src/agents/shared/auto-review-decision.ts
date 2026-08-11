@@ -131,13 +131,42 @@ export const DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY: Readonly<AutoReviewTimeoutPolic
   delegateTimeoutMs: 13_000,
 });
 
+/** 宿主侧的重试次数与退避。核心侧据此推总预算,两边必须同源,否则守卫会截断重试。 */
+export const AUTO_REVIEW_RETRY_ATTEMPTS = 3;
+export const AUTO_REVIEW_RETRY_BACKOFF_MS: readonly number[] = Object.freeze([100, 200]);
+
+/** 宿主侧单次请求的最宽一档(强制思考模型),核心侧守卫按它推上界。 */
+export const AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS = 30_000;
+
 /**
- * 核心侧守卫的绝对上界。宿主侧对强制思考的模型会放宽到 30s 单次;加上重试与
- * 退避,最坏情况约 30s + 余量 —— 外层守卫必须容得下,否则宽裕额度形同虚设。
+ * 一轮审阅(含全部重试与退避)的总预算。
+ *
+ * 宿主用它决定"还够不够再跑一次",核心用它推外层守卫的上界 —— **必须同一个算法**,
+ * 否则守卫会在重试跑完前触发,宽裕额度形同虚设(PR #2474 review:固定 35s 盖不住
+ * 30s 档的三次尝试,第二次约 5s 就被丢弃且请求未取消、继续消耗额度)。
+ */
+export function autoReviewRetryBudgetMs(
+  requestTimeoutMs: number,
+  attempts: number = AUTO_REVIEW_RETRY_ATTEMPTS,
+): number {
+  const backoffTotal = AUTO_REVIEW_RETRY_BACKOFF_MS
+    .slice(0, Math.max(0, attempts - 1))
+    .reduce((sum, ms) => sum + ms, 0);
+  return requestTimeoutMs * attempts + backoffTotal;
+}
+
+/**
+ * 核心侧守卫的绝对上界:按最宽一档 + 全部重试与退避推出,再留一点调度余量。
  *
  * 这是**兜底**不是常态:绝大多数请求 2s 内返回(实测 p95 ≈ 2.5s)。
  */
-const AUTO_REVIEW_DELEGATE_HARD_CEILING_MS = 35_000;
+const AUTO_REVIEW_DELEGATE_HARD_CEILING_MS =
+  autoReviewRetryBudgetMs(AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS) + 2_000;
+
+/** 暴露给测试:守卫必须容得下最宽一档的全部重试,常量漂移时要红。 */
+export function getAutoReviewDelegateHardCeilingMs(): number {
+  return AUTO_REVIEW_DELEGATE_HARD_CEILING_MS;
+}
 const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 export function getAutoReviewActionTextLength(action: ReviewableAction): number {

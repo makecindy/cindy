@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
+  AUTO_REVIEW_RETRY_ATTEMPTS,
+  AUTO_REVIEW_RETRY_BACKOFF_MS,
+  autoReviewRetryBudgetMs,
+  getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   classifyLocalAutoReviewTier,
   isAutoReviewUnavailableNotice,
@@ -173,8 +178,8 @@ describe('resolveAutoReviewDecision', () => {
       async () => new Promise<never>(() => {}),
     );
 
-    // 守卫上界要容得下宿主侧最慢一档 + 重试,故推进量大于紧凑档的 delegateTimeoutMs。
-    await vi.advanceTimersByTimeAsync(40_000);
+    // 守卫上界要容得下宿主侧最慢一档 + 全部重试与退避;按常量推进,避免参数变化时失配。
+    await vi.advanceTimersByTimeAsync(getAutoReviewDelegateHardCeilingMs() + 1_000);
 
     await expect(pending).resolves.toMatchObject({
       verdict: 'ask',
@@ -212,7 +217,8 @@ describe('resolveAutoReviewDecision', () => {
     it('flags a reviewer timeout as unavailable', async () => {
       vi.useFakeTimers();
       const pending = resolveAutoReviewDecision(gray, async () => new Promise<never>(() => {}));
-      await vi.advanceTimersByTimeAsync(40_000);
+      // 按守卫的实际上界推进 —— 它由重试参数推出,写死数字会在参数变化时静默失配。
+      await vi.advanceTimersByTimeAsync(getAutoReviewDelegateHardCeilingMs() + 1_000);
       await expect(pending).resolves.toMatchObject({ verdict: 'ask', unavailable: true });
     });
 
@@ -374,5 +380,34 @@ describe('composeAutoReviewIntentWithClarification', () => {
       { question: 'q'.repeat(200), answer: 'a'.repeat(200) },
     ]);
     expect(long.length).toBeLessThanOrEqual(2_000);
+  });
+});
+
+describe('重试预算', () => {
+  it('总预算含每次超时与全部退避', () => {
+    // 3 次 × 12s + (100 + 200)ms 退避。
+    expect(autoReviewRetryBudgetMs(12_000, 3)).toBe(36_300);
+    // 次数减少时只算实际发生的退避。
+    expect(autoReviewRetryBudgetMs(12_000, 2)).toBe(24_100);
+    expect(autoReviewRetryBudgetMs(12_000, 1)).toBe(12_000);
+  });
+
+  it('核心守卫容得下最宽一档的全部重试(否则宽裕额度形同虚设)', () => {
+    // 回归 PR #2474 review:固定 35s 盖不住 30s 档 × 3 次 + 退避(=90.3s),
+    // 第二次尝试约 5s 就被外层守卫丢弃,且请求未取消、继续消耗额度。
+    const needed = autoReviewRetryBudgetMs(
+      AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
+      AUTO_REVIEW_RETRY_ATTEMPTS,
+    );
+    expect(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs).toBeLessThan(needed);
+    // 守卫本身由同一算法推出,不再是写死的常量 —— 改重试次数/退避会自动跟随。
+    expect(getAutoReviewDelegateHardCeilingMs()).toBeGreaterThanOrEqual(needed);
+  });
+
+  it('退避表长度与声明的重试次数自洽', () => {
+    // 退避发生在每次重试之前,所以需要 attempts - 1 个。少了会让后面的重试没有退避。
+    expect(AUTO_REVIEW_RETRY_BACKOFF_MS.length).toBeGreaterThanOrEqual(
+      AUTO_REVIEW_RETRY_ATTEMPTS - 1,
+    );
   });
 });

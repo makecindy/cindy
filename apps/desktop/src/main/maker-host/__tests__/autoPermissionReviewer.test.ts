@@ -211,6 +211,42 @@ describe('createAutoPermissionReviewer', () => {
     );
   });
 
+  it('still runs every declared retry when each attempt burns its full timeout', async () => {
+    // 回归 PR #2474 review:总预算只按 requestTimeoutMs × attempts 算(漏了退避)时,
+    // 前两次各耗满超时后第三次必然被自己的护栏挡掉 —— "声明两次重试、实际只跑一次"。
+    vi.useFakeTimers();
+    try {
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const requestTimeoutMs = 12_000;
+      // 每次都挂到超时(永不 settle),让 attemptReview 的超时分支接管。
+      const requestText = vi.fn(() => new Promise<string | null>(() => {}));
+      const reviewer = createAutoPermissionReviewer({
+        requestText,
+        logger,
+        resolveRequestTimeoutMs: () => requestTimeoutMs,
+      });
+
+      const pending = reviewer(request());
+      // 三次完整超时 + 两次退避,全部推完。
+      await vi.advanceTimersByTimeAsync(requestTimeoutMs * 3 + 100 + 200 + 10);
+      await expect(pending).resolves.toBeNull();
+
+      expect(requestText).toHaveBeenCalledTimes(3);
+      // 第 3 次尝试确实发生在两次退避之后(12s + 100ms + 12s + 200ms),证明预算没被
+      // 自己的护栏提前截断。
+      expect(logger.warn).toHaveBeenCalledWith(
+        'auto permission reviewer attempt failed',
+        expect.objectContaining({ attempt: 3, failure: 'timeout', durationMs: 36_300 }),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        'auto permission reviewer exhausted attempts',
+        expect.objectContaining({ failure: 'timeout' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('honours a per-request timeout so slow reasoning models are not cut short', async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
     const requestText = vi.fn(async () => '{"verdict":"allow"}');

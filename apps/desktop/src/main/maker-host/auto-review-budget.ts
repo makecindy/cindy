@@ -94,9 +94,12 @@ export function findCatalogModel(
   if (!normalizedModel) return undefined;
   const normalizedProvider = providerId?.trim();
   if (normalizedProvider) {
+    // 点名了供应商就**只**在它的目录里找:同一个模型 id 在不同供应商下可能声明不同
+    // 的 efforts,跨家借用会把强制思考的路由误判成"能关思考",于是又拿回 384/12s 的
+    // 紧凑额度 —— 正是本 PR 要修的那个空正文故障(PR #2474 review)。
+    // 未命中返回 undefined,由调用方走保守宽裕档。
     const provider = providers.find((item) => item.id === normalizedProvider);
-    const hit = (provider?.models[agentKind] ?? []).find((m) => m.id === normalizedModel);
-    if (hit) return hit;
+    return (provider?.models[agentKind] ?? []).find((m) => m.id === normalizedModel);
   }
   // 没有 providerId(Pi 的 null = 走默认网关路由)时按模型 id 全目录找第一个命中。
   // 只用于读能力元数据,不参与路由决策,所以首见即可。

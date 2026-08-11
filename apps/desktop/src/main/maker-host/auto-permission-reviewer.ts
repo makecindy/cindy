@@ -2,6 +2,9 @@ import {
   getAutoReviewActionTextLength,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  AUTO_REVIEW_RETRY_ATTEMPTS,
+  AUTO_REVIEW_RETRY_BACKOFF_MS,
+  autoReviewRetryBudgetMs,
   type AutoReviewTimeoutPolicy,
   type AutoReviewDecision,
   type AutoReviewRequest,
@@ -43,10 +46,14 @@ const REVIEW_TIMEOUT = Symbol('auto-review-timeout');
  * 不重试的情形见 isRetriableFailure:模型给出了合法但不可解析的输出属于稳定
  * 行为,重试只是重复烧钱。
  */
-const REVIEW_RETRIES = 2;
+const REVIEW_RETRIES = AUTO_REVIEW_RETRY_ATTEMPTS - 1;
 
-/** 重试前的退避,给瞬时网络/限流一点恢复时间;总开销上界 300ms。 */
-const RETRY_BACKOFF_MS = [100, 200] as const;
+/**
+ * 重试前的退避,给瞬时网络/限流一点恢复时间;总开销上界 300ms。
+ *
+ * 与核心侧同源:核心的外层守卫按同一组常量推上界,分开维护会让守卫悄悄截断重试。
+ */
+const RETRY_BACKOFF_MS = AUTO_REVIEW_RETRY_BACKOFF_MS;
 
 /** 单次尝试的失败形态。区分它们决定了「该不该再试一次」。 */
 type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error';
@@ -258,7 +265,11 @@ export function createAutoPermissionReviewer(
       ?? timeoutPolicy.requestTimeoutMs;
     // 总预算护栏:剩余时间不够再跑一次完整尝试时就不再重试,避免最后一次必然
     // 被外层守卫截断(那次调用纯属浪费)。
-    const totalBudgetMs = requestTimeoutMs * attempts;
+    //
+    // 预算必须把**退避**也算进去 —— 只按 requestTimeoutMs × attempts 会让最后一次
+    // 重试恒定被自己的护栏挡掉(前两次各耗满超时后,elapsed + backoff 已经越界),
+    // 于是"声明两次重试、实际只跑一次"(PR #2474 review)。
+    const totalBudgetMs = autoReviewRetryBudgetMs(requestTimeoutMs, attempts);
 
     let lastFailure: AttemptFailure = 'error';
     for (let attempt = 0; attempt < attempts; attempt++) {

@@ -2811,12 +2811,18 @@ export class PiAgent extends BaseAgent {
             // policy turn + auto 的灰区语义对齐 Codex:只有渠道 policy 明确命中的调用
             // 才打扰 owner；普通 Auto-Review ask 直接 fail-closed，不再额外弹微信确认。
             // 无 policy 的 Desktop auto 会话维持既有逐次确认行为。
+            //
+            // **故障降级(unavailable)例外**:上面刚告诉用户"已转由你确认",若这里仍按
+            // policy 静默拒绝,提示与行为就自相矛盾 —— 用户看到可接管的说明却没有确认
+            // 入口,操作照样被拒(PR #2474 review)。故障不是"模型判定该问",而是基础
+            // 设施失灵,用户有权亲自决定,所以走真实确认。
+            const askNeedsUserDecision = decision.unavailable || !turnPermissionPolicy;
             proc.send({
               type: 'extension_ui_response',
               id,
-              confirmed: turnPermissionPolicy
-                ? false
-                : await requestUserConfirmation({ forcePrompt: true }),
+              confirmed: askNeedsUserDecision
+                ? await requestUserConfirmation({ forcePrompt: true })
+                : false,
             });
             return;
           }
