@@ -6,7 +6,11 @@
  */
 
 import type { BrowserWindow, WebContents } from 'electron';
-import { RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL } from '../../shared/resourceUsageWindow.js';
+import type { SupportedLocale } from '../../shared/locale.js';
+import {
+  RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL,
+  RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+} from '../../shared/resourceUsageWindow.js';
 
 import { createLogger } from '../logger.js';
 
@@ -37,6 +41,7 @@ export class ResourceUsageWindowController {
   private automaticRecoveryAttempts = 0;
   private destroyingWindow = false;
   private disposed = false;
+  private locale: SupportedLocale | null = null;
 
   constructor(private readonly deps: ResourceUsageWindowControllerDeps) {}
 
@@ -80,6 +85,7 @@ export class ResourceUsageWindowController {
     const win = this.windowForSender(sender);
     if (!win) return false;
     this.rendererReady = true;
+    if (this.locale) this.sendLocale(win, this.locale);
     this.setSamplingActive(win, this.samplingActive);
     return true;
   }
@@ -105,6 +111,23 @@ export class ResourceUsageWindowController {
     if (!win) return false;
     this.hideWindow(win);
     return true;
+  }
+
+  /** 主窗口语言偏好变化时同步隐藏或可见的资源窗口。 */
+  setLocale(locale: SupportedLocale): void {
+    this.locale = locale;
+    const win = this.winRef;
+    if (!win || win.isDestroyed()) return;
+    this.sendLocale(win, locale);
+  }
+
+  private sendLocale(win: BrowserWindow, locale: SupportedLocale): void {
+    if (win.webContents.isDestroyed()) return;
+    try {
+      win.webContents.send(RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL, locale);
+    } catch {
+      // 窗口可能在 isDestroyed 检查与 send 之间被系统销毁。
+    }
   }
 
   /** 主窗口真实销毁时回收其子窗口；controller 仍可随下一扇主窗口重新预热。 */
@@ -149,6 +172,7 @@ export class ResourceUsageWindowController {
     this.visible = false;
     this.samplingActive = true;
     this.destroyingWindow = false;
+    if (this.locale) this.sendLocale(win, this.locale);
     win.on('close', (event) => {
       if (this.destroyingWindow || this.disposed) return;
       event.preventDefault();

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContents } from 'electron';
 
-import { RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL } from '../../../shared/resourceUsageWindow.js';
+import {
+  RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL,
+  RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+} from '../../../shared/resourceUsageWindow.js';
 import { ResourceUsageWindowController } from '../controller.js';
 
 interface FakeWindow {
@@ -141,6 +144,44 @@ describe('ResourceUsageWindowController', () => {
     );
     expect(windows[0]?.show).toHaveBeenCalledOnce();
     expect(windows[0]?.focus).toHaveBeenCalledOnce();
+  });
+
+  it('sends locale changes to an already prewarmed window', () => {
+    const { controller, windows } = makeHarness();
+    controller.prewarm();
+
+    controller.setLocale('zh-CN');
+
+    expect(windows[0]?.send).toHaveBeenCalledWith(
+      RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL,
+      'zh-CN',
+    );
+  });
+
+  it('replays the latest locale after the renderer becomes ready', () => {
+    const { controller, windows } = makeHarness();
+    controller.setLocale('ja');
+    controller.prewarm();
+    vi.clearAllMocks();
+
+    controller.markRendererReady(windows[0]!.webContents);
+
+    expect(windows[0]?.send).toHaveBeenCalledWith(
+      RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL,
+      'ja',
+    );
+  });
+
+  it('applies the last locale when prewarming starts after the preference change', () => {
+    const { controller, windows } = makeHarness();
+    controller.setLocale('ja');
+
+    controller.prewarm();
+
+    expect(windows[0]?.send).toHaveBeenCalledWith(
+      RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL,
+      'ja',
+    );
   });
 
   it('waits for the first committed presentation before showing a cold window', () => {

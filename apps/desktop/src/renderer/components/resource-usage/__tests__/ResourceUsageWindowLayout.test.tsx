@@ -21,7 +21,11 @@ vi.mock('@/components/title-bar/WindowControls', () => ({
 
 vi.mock('@/hooks/useTheme', () => ({ ThemeProvider: ({ children }: React.PropsWithChildren) => children }));
 vi.mock('@/hooks/useFontSettings', () => ({ FontSettingsProvider: ({ children }: React.PropsWithChildren) => children }));
-vi.mock('@/hooks/useLocale', () => ({ LocaleProvider: ({ children }: React.PropsWithChildren) => children }));
+const { setLocale } = vi.hoisted(() => ({ setLocale: vi.fn() }));
+vi.mock('@/hooks/useLocale', () => ({
+  LocaleProvider: ({ children }: React.PropsWithChildren) => children,
+  useLocale: () => ({ effectiveLocale: 'en', setLocale }),
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ ConfirmDialogProvider: ({ children }: React.PropsWithChildren) => children }));
 vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut: vi.fn() }));
@@ -41,10 +45,13 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
   const rendererReady = vi.fn(() => Promise.resolve());
   const presentationReady = vi.fn(() => Promise.resolve());
   let samplingListener: ((active: boolean) => void) | null = null;
+  let localeListener: ((locale: 'zh-CN' | 'en') => void) | null = null;
 
   beforeEach(() => {
     resourceBodyProps = null;
     samplingListener = null;
+    localeListener = null;
+    setLocale.mockClear();
     rendererReady.mockClear();
     presentationReady.mockClear();
     Object.defineProperty(window, 'electronAPI', {
@@ -57,6 +64,10 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
           presentationReady,
           onSamplingActiveChanged: (cb: (active: boolean) => void) => {
             samplingListener = cb;
+            return vi.fn();
+          },
+          onLocaleChanged: (cb: (locale: 'zh-CN' | 'en') => void) => {
+            localeListener = cb;
             return vi.fn();
           },
         },
@@ -75,6 +86,22 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
 
     await act(async () => samplingListener?.(true));
     expect(resourceBodyProps).toMatchObject({ active: true, shellVisible: true });
+  });
+
+  it('applies locale changes received while the window is prewarmed', async () => {
+    render(<ResourceUsageWindowRoot />);
+
+    await act(async () => localeListener?.('zh-CN'));
+
+    expect(setLocale).toHaveBeenCalledWith('zh-CN');
+  });
+
+  it('ignores a same-locale broadcast to avoid an IPC feedback loop', async () => {
+    render(<ResourceUsageWindowRoot />);
+
+    await act(async () => localeListener?.('en'));
+
+    expect(setLocale).not.toHaveBeenCalled();
   });
 
   it('clears and remounts window controls when the reusable window is hidden', async () => {

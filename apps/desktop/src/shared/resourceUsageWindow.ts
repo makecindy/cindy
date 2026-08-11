@@ -19,3 +19,6 @@ export const RESOURCE_USAGE_WINDOW_PRESENTATION_READY_CHANNEL =
 /** main → renderer(send)：控制资源采样；隐藏窗口只保留最后一份快照，不持续轮询。 */
 export const RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL =
   'resource-usage-window:sampling-active';
+/** main → renderer(send)：主窗口语言偏好变化时同步已预热的资源窗口。 */
+export const RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL =
+  'resource-usage-window:locale-changed';

@@ -20,7 +20,7 @@ import type { TabKindHostContext } from '@/features/right-sidebar/types';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
-import { LocaleProvider } from '@/hooks/useLocale';
+import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { ToastContainer } from '@/components/ui/toast';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -43,6 +43,7 @@ const EMPTY_STATE: ResourceUsageState = {};
 
 export function ResourceUsageWindowLayout() {
   const { t } = useTranslation();
+  const { effectiveLocale, setLocale } = useLocale();
   const isMac = window.electronAPI?.platform === 'darwin';
   const presentationReadySentRef = useRef(false);
   const presentationReadyInFlightRef = useRef(false);
@@ -65,18 +66,24 @@ export function ResourceUsageWindowLayout() {
         setWindowChromeRevision((revision) => revision + 1);
       },
     );
+    const offLocaleChanged = window.electronAPI.resourceUsageWindow.onLocaleChanged((locale) => {
+      // Main 广播来自任一 renderer 的语言设置；忽略同值回广播，避免资源窗口
+      // 收到通知后再次 invoke app-menu:set-locale 形成 IPC 回环。
+      if (locale !== effectiveLocale) setLocale(locale);
+    });
     void window.electronAPI.resourceUsageWindow.rendererReady().catch((err) => {
       log.warn('report renderer ready failed', err);
     });
     return () => {
       presentationReadyDisposedRef.current = true;
       offSamplingActive();
+      offLocaleChanged();
       if (presentationReadyRetryRef.current) {
         clearTimeout(presentationReadyRetryRef.current);
         presentationReadyRetryRef.current = null;
       }
     };
-  }, []);
+  }, [effectiveLocale, setLocale]);
 
   const handleFirstSample = useCallback(() => {
     if (

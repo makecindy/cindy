@@ -18,6 +18,7 @@ import {
   RESOURCE_USAGE_WINDOW_CLOSE_CHANNEL,
   RESOURCE_USAGE_WINDOW_PRESENTATION_READY_CHANNEL,
   RESOURCE_USAGE_WINDOW_RENDERER_READY_CHANNEL,
+  RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL,
   RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
 } from '../shared/resourceUsageWindow';
 
@@ -88,6 +89,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(RESOURCE_USAGE_WINDOW_PRESENTATION_READY_CHANNEL),
     onSamplingActiveChanged: (cb: (active: boolean) => void): (() => void) =>
       onPayload(RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL, cb),
+    onLocaleChanged: (cb: (locale: SupportedLocale) => void): (() => void) =>
+      onPayload(RESOURCE_USAGE_WINDOW_LOCALE_CHANGED_CHANNEL, cb),
   },
   processMonitor: {
     subscribe: (): Promise<void> => ipcRenderer.invoke(PROCESS_MONITOR_SUBSCRIBE_CHANNEL),
