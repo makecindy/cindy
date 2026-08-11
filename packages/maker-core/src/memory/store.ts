@@ -109,16 +109,21 @@ export class MakerMemoryStore {
   async init(): Promise<void> {
     if (this.initialized) return;
     await this.storage.init(this.deps.absWorkdir);
-    // 修复上次变更被 owner 边界中止的派生索引 (review #2388 Codex 23rd P1/P2):
-    // shard 已写/删但 MEMORY.md 未更新 — 打开时惰性重建, 防止同 owner 后续
-    // session 把 stale 索引读进 system prompt。
-    await this.storage.repairIndexIfDirty();
+    // 派生索引 (MEMORY.md) 无条件重建 (review #2388 Codex 24th P1): dirty 标记
+    // 是实例内存态 — 写/删被边界中止后 store 会被 close/重建, 标记丢失;
+    // 安全打开时直接重建, 不依赖实例状态, 同 owner 后续 session 不再读 stale 索引。
+    await this.storage.rebuildIndex();
     // storage.init await 后、FTS 副作用前复核 (review #2388 Codex 18th P1):
     // 首次打开的 getStore 无 withStore 后置检查, 边界不得在此创建旧 owner 的 fts.db。
     this.assertScopeOk();
     this.fts.init();
     await this.sanityCheck();
-    // sanityCheck 内部多次 await (storage.list + fts.rebuild) 后复核。
+    // FTS 无条件重建 (review #2388 Codex 24th P2): update/append 被边界中止时
+    // 文件数不变, sanityCheck 的 count 检查永不触发 — open 时全量重建保证
+    // memory_search 不返回 stale 结果。
+    const all = await this.storage.list();
+    this.fts.rebuild(all);
+    // sanityCheck/list 内部多次 await 后复核。
     this.assertScopeOk();
     this.initialized = true;
   }

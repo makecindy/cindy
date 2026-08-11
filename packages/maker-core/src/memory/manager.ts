@@ -458,9 +458,17 @@ export class MakerMemoryManager {
     // mkdir 在 storage.init() 里也会做, 但 db open 时父目录必须存在 — 提前 mkdir
     const fs = await import('node:fs');
     // await import 窗口后、mkdir/SQLite 打开前复核 (review #2388 Codex 22nd P2):
-    // rootAtEntry 捕获后边界可能发生 — 不得用旧 root 创建目录/打开 fts.db
-    // (首个守卫在 store.init 内, 对 mkdir/open 副作用来说太晚)。
+    // rootAtEntry 捕获后边界可能发生 — 不得用旧 root 创建目录/打开 fts.db。
+    // 同时复核 reset 屏障 (review #2388 Codex 24th P1): resetAll 可能在本调用
+    // 挂起于 import 时开始 — resetInFlight 在先前检查之后变正, scope-only 检查
+    // 会放行 mkdir/open, Windows 上阻塞并发 fs.rm / POSIX 返回被删目录的 store。
     this.assertScopeUnchanged(scopeAtEntry);
+    if (this.resetInFlight > 0) {
+      throw new MemoryError('not-ready', 'memory reset started; retry shortly');
+    }
+    if (this.poolGeneration !== generationAtEntry) {
+      throw new MemoryError('not-ready', 'memory reset completed; retry against current state');
+    }
     fs.mkdirSync(storageDir, { recursive: true });
 
     const db = this.deps.sqliteFactory(dbPath);
