@@ -82,25 +82,18 @@ function textResponse(
  */
 export function createIOSSimulatorCodexDynamicToolProvider(options: {
   deps: IOSSimulatorMcpDeps;
-  isEnabled: (workingDir: string) => boolean;
 }): CodexHostDynamicToolProvider {
   return {
-    listTools: (context) =>
-      process.platform === 'darwin' && options.isEnabled(context.workingDir)
-        ? TOOLS
-        : [],
+    listTools: () => (process.platform === 'darwin' ? TOOLS : []),
     callTool: async (params, context) => {
       const toolName = innerToolName(params);
       if (!toolName) return undefined;
-      if (
-        process.platform !== 'darwin' ||
-        !options.isEnabled(context.workingDir)
-      ) {
+      if (process.platform !== 'darwin') {
         return textResponse(
           {
             ok: false,
             errorCode: 'IOS_SIMULATOR_DISABLED',
-            data: { message: 'iOS Simulator tools are disabled for this project.' },
+            data: { message: 'The embedded iOS Simulator is available only on macOS.' },
           },
           false,
         );
@@ -119,6 +112,7 @@ export function createIOSSimulatorCodexDynamicToolProvider(options: {
       const registry = new IOSSimulatorToolRegistry();
       registerIOSSimulatorTools(registry, options.deps, () => ({
         sessionId: context.sessionId!,
+        workingDir: context.workingDir,
         origin: 'agent',
       }));
 
@@ -143,6 +137,7 @@ export function createIOSSimulatorCodexDynamicToolProvider(options: {
         }
         const availability = await options.deps.describeTools?.({
           sessionId: context.sessionId,
+          workingDir: context.workingDir,
           origin: 'agent',
         });
         return textResponse({

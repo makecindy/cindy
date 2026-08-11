@@ -4823,7 +4823,8 @@
         "in-progress": "git 操作進行中",
         "agent-running": "Agent 正在執行",
         "disabled": "審查不可用",
-        "remote-device": "遠端設備任務僅支援檢視"
+        "remote-device": "遠端設備任務僅支援檢視",
+        "remote-ssh": "SSH 工作區審查僅支援檢視"
       },
       "remote": {
         "deviceTooOldTitle": "對方設備版本過舊",
@@ -5967,6 +5968,7 @@
     "verificationFailed": "暫時無法確認 ChatGPT 登入是否已恢復，請重新檢測。"
   },
   "chat": {
+    "sessionLoading": "正在載入任務",
     "askUserQuestion": {
       "skippedAnswer": "已跳過"
     },

@@ -33,7 +33,7 @@ export interface ReviewScope {
   headOid: string | null;
   isDetached: boolean;
   isUnborn: boolean;
-  source: 'telemetry' | 'worktree' | 'workingDir' | null;
+  source: 'telemetry' | 'worktree' | 'workingDir' | 'remote' | null;
   aheadBehind: AheadBehind;
   disabledReason: ReviewDisableReason | null;
   disabledMessage: string | null;

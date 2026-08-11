@@ -1637,7 +1637,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // parse 直接还原纯文本 —— 结构性 remount 也无从重播(双保险,详见插件头注释)。
   // isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS —— 终版渲染无
   // 任何 span 包装,插件、state 与监听一起被回收,静态路径零开销。
-  // 用户开关(Settings → 个性化 → 流式动效,默认关)与 reduced-motion 取 AND:
+  // 用户开关(Settings → 个性化 → 流式动效,默认开)与 reduced-motion 取 AND:
   // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
   const reducedMotion = useReducedMotion();
   const streamFadeEnabled = useStreamFadeEnabled();

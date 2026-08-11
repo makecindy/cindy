@@ -80,6 +80,9 @@ describe('market Ghost session boundary', () => {
       'const detachMarketRecord = Boolean(marketRecord?.installed)',
     );
     const runtimeStopIndex = body.indexOf('runtime.stop(inspected.manifest.id)');
+    const stopAndWaitIndex = body.indexOf(
+      'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
+    );
     const managerUpdateIndex = body.indexOf('result = await manager.update(');
     const detachIndex = body.indexOf(
       'marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject)',
@@ -91,9 +94,12 @@ describe('market Ghost session boundary', () => {
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
     expect(ledgerReadIndex).toBeGreaterThan(leaseIndex);
     expect(detachDecisionIndex).toBeGreaterThan(ledgerReadIndex);
-    expect(detachIndex).toBeGreaterThan(detachDecisionIndex);
-    expect(runtimeStopIndex).toBeGreaterThan(detachIndex);
-    expect(managerUpdateIndex).toBeGreaterThan(runtimeStopIndex);
+    expect(runtimeStopIndex).toBeGreaterThan(leaseIndex);
+    expect(stopAndWaitIndex).toBeGreaterThan(runtimeStopIndex);
+    // 只有确认旧进程退出，才切断旧市场的自动更新路由；等待失败时保留原路由，
+    // 也不会尝试恢复第二份 resident 进程。
+    expect(detachIndex).toBeGreaterThan(stopAndWaitIndex);
+    expect(managerUpdateIndex).toBeGreaterThan(detachIndex);
     expect(body).toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(body).toContain('marketLedger.restoreInstallation(');
     expect(body).toContain('suppressed: marketRecordWasSuppressed');
@@ -123,5 +129,39 @@ describe('market Ghost session boundary', () => {
       initialBranch.indexOf('return installAndDock('),
     );
     expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(2);
+
+    const waitIndex = body.indexOf(
+      'await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);',
+    );
+    const updateIndex = body.indexOf('await manager.update(cindyFilePath,');
+
+    expect(waitIndex).toBeGreaterThan(-1);
+    expect(waitIndex).toBeLessThan(updateIndex);
+    const restoreIndex = body.indexOf('spawnIfResident(installed);');
+    expect(restoreIndex).toBeGreaterThan(updateIndex);
+  });
+
+  it('releases the mutation lease for shutdown failures and restores only after confirmed shutdown', () => {
+    const updateStart = source.indexOf("ipcMain.handle('ghosts:update'");
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:pick-file'", updateStart);
+    const body = source.slice(updateStart, updateEnd);
+
+    const waitIndex = body.indexOf(
+      'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
+    );
+    const tryIndex = body.indexOf('try {\n        runtime.stop(inspected.manifest.id);');
+    const updateIndex = body.indexOf('result = await manager.update(lizFilePath');
+    const restoreIndex = body.indexOf(
+      'if (previousGhost) spawnIfResident(previousGhost);',
+    );
+
+    expect(tryIndex).toBeGreaterThan(-1);
+    expect(tryIndex).toBeLessThan(waitIndex);
+    expect(waitIndex).toBeGreaterThan(-1);
+    expect(waitIndex).toBeLessThan(updateIndex);
+    expect(restoreIndex).toBeGreaterThan(waitIndex);
+    expect(body).toContain('finally {\n        releaseMutation();');
+    expect(body).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
+    expect(body).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });
 });

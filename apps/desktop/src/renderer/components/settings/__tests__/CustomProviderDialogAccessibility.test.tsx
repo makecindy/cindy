@@ -41,6 +41,13 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+async function waitForInitialDialogFocus(): Promise<void> {
+  const nameInput = screen.getByPlaceholderText(
+    'settings.providers.custom.fields.namePlaceholder',
+  );
+  await waitFor(() => expect(document.activeElement).toBe(nameInput));
+}
+
 describe('CustomProviderDialog accessibility', () => {
   it('ignores consumed and IME Escape events, then restores focus after closing', async () => {
     function Harness() {
@@ -144,6 +151,7 @@ describe('CustomProviderDialog accessibility', () => {
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
@@ -182,6 +190,7 @@ describe('CustomProviderDialog accessibility', () => {
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
 
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
@@ -217,6 +226,7 @@ describe('CustomProviderDialog accessibility', () => {
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
@@ -256,6 +266,7 @@ describe('CustomProviderDialog accessibility', () => {
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
@@ -320,6 +331,7 @@ describe('CustomProviderDialog accessibility', () => {
       'settings.providers.custom.fields.apiKeyEditPlaceholder',
     );
 
+    await waitForInitialDialogFocus();
     await user.clear(apiKey);
     await user.type(apiKey, 'replacement-secret');
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));

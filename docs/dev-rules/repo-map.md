@@ -13,7 +13,6 @@
 |---|---|
 | `apps/` | 终端产品（desktop、mobile）与随包分发的二进制资产 |
 | `packages/` | 客户端共享能力包（与 render／main 解耦，详见下表） |
-| `cindy-protocol/` | git submodule：客户端与服务端共享的存量 wire protocol 权威源；package 集合封闭且持续精简，当前保留 device-link、slack-hook、plugin、model-access 四包；升级规则见 [`protocol-and-submodules.md`](protocol-and-submodules.md) |
 | `config/` | 运行期端点清单（`endpoint.json` / `endpoint.dev.json` / `endpoint.global.json`：auth、device-link 等线上 base URL） |
 | `scripts/` | 仓库级工程脚本：dev 启动包装、agent 二进制拉取（`ensure-agent-binaries.mjs`）、i18n／endpoint／文档等校验 guard、worktree 管理 |
 | `tools/` | claude／codex／ripgrep／pi 四个 Desktop runtime 的版本 pin（`latest.json`）与更新器（`update.mjs`） |

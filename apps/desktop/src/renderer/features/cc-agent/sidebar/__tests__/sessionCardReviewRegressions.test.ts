@@ -284,7 +284,7 @@ describe('SessionCard review regressions', () => {
     );
     expect(sessionCardSource).toContain('data-split-group-drag-handle');
     expect(sessionCardSource).toContain('data-no-drag={splitDragHandleActive');
-    expect(sessionCardSource).toContain('writeSplitGroupSessionDragData');
+    expect(sessionCardSource).toContain('startSessionDrag');
   });
 
   it('wires split creation into both sidebar rendering modes', () => {

@@ -7989,6 +7989,47 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.recovery?.kind).toBe('active-turn');
   });
 
+  it('provider rebuild close 保留自动续跑意图，并仍由现有 retry 路径补发', async () => {
+    const h = createHarness();
+    const sid = 'takeover-preserved-across-provider-rebuild';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    h.coordinator.onSessionClosed(sid, { preserveAutoResumeIntent: true });
+    await flush();
+
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
+    expect(h.coordinator.getAutoResumeAttemptToken(sid)).toBe(TAKEOVER_INFO.sessionTotal);
+    expect(latestProjection(h.projections)).toMatchObject({
+      error: null,
+      recovery: { kind: 'active-turn' },
+      autoResumePending: TAKEOVER_INFO,
+    });
+
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
+  });
+
+  it('plain session close 仍 supersede 自动续跑 token', async () => {
+    const h = createHarness();
+    const sid = 'takeover-superseded-by-plain-close';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+
+    h.coordinator.onSessionClosed(sid);
+    await flush();
+
+    expect(h.coordinator.getAutoResumeAttemptToken(sid)).toBeNull();
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('superseded');
+  });
+
   it('host 不接管时照常呈现错误(默认行为不变)', async () => {
     const h = createHarness();
     const sid = 'no-takeover-keeps-banner';
