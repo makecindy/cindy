@@ -16,7 +16,15 @@
  * 模块顶层读 electron app 路径,与本文件要验的启停逻辑无关。
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const readMainSource = (...parts: string[]) =>
+  readFileSync(resolve(__dirname, '..', '..', ...parts), 'utf8').replace(/\r\n?/g, '\n');
+const bootstrapSource = readMainSource('bootstrap-electron.ts');
+const makerHostSource = readMainSource('maker-host', 'index.ts');
 
 const hoisted = vi.hoisted(() => ({
   instances: 0,
@@ -284,5 +292,62 @@ describe('embedding-host 多 consumer 启停', () => {
 
     expect(tx).toHaveBeenCalledWith('embedding.markDone', { rowids: [1] });
     expect(embed).not.toHaveBeenCalled();
+  });
+});
+
+describe('chat embedding availability wiring', () => {
+  it('reconciles the runtime whenever provider access changes', () => {
+    expect(makerHostSource).toContain('providerAccessRuntimeRefreshListener?.();');
+    expect(bootstrapSource).toContain(
+      'setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);',
+    );
+  });
+
+  it('keeps provider broadcasts alive when runtime reconciliation throws', () => {
+    const refreshStart = makerHostSource.indexOf(
+      'function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {',
+    );
+    const refreshEnd = makerHostSource.indexOf(
+      '\n}\n\n/**\n * active catalog',
+      refreshStart,
+    );
+    expect(refreshStart).toBeGreaterThanOrEqual(0);
+    expect(refreshEnd).toBeGreaterThan(refreshStart);
+    const refreshSource = makerHostSource.slice(refreshStart, refreshEnd);
+    expect(refreshSource).toMatch(/try\s*{\s*providerAccessRuntimeRefreshListener\?\.\(\);/);
+    expect(refreshSource).toContain(
+      "desktopMakerLogger.warn('provider access runtime refresh listener failed'",
+    );
+    expect(refreshSource.indexOf('providerAccessRuntimeRefreshListener?.();')).toBeLessThan(
+      refreshSource.indexOf('BrowserWindow.getAllWindows()'),
+    );
+  });
+
+  it('stops unavailable consumers and restores an enabled preference when access returns', () => {
+    expect(bootstrapSource).toContain(
+      "setEmbeddingSourceSuspended('chat', !chatAvailable);",
+    );
+    expect(bootstrapSource).toContain(
+      'if (!chatAvailable) setChatEmbeddingEnabled(false);',
+    );
+    expect(bootstrapSource).toContain(
+      'if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled)',
+    );
+    expect(bootstrapSource).toContain('await shutdownChatEmbeddingConsumer();');
+  });
+
+  it('routes unavailable enable requests through the stable capability error', () => {
+    const start = bootstrapSource.indexOf(
+      'ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET',
+    );
+    const end = bootstrapSource.indexOf(
+      'ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET',
+      start,
+    );
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const handler = bootstrapSource.slice(start, end);
+    expect(handler).toMatch(/throwIpcError\(\s*'UNSUPPORTED_CAPABILITY'/);
+    expect(handler).not.toContain("requireAppCapability('canUseCindyGateway'");
   });
 });
