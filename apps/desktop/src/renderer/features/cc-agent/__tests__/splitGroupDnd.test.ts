@@ -7,6 +7,7 @@ import {
   SPLIT_GROUP_SESSION_MIME,
   SPLIT_GROUP_SESSION_LINK_MIME,
   hasSplitGroupPaneType,
+  hasSplitGroupDragType,
   hasSplitGroupSessionType,
   isSplitGroupComposerDropTarget,
   isSplitGroupDragSource,
@@ -52,6 +53,9 @@ describe('splitGroupDnd', () => {
   it('只接受 Cindy 任务拖拽 MIME', () => {
     expect(hasSplitGroupSessionType([SPLIT_GROUP_SESSION_MIME])).toBe(true);
     expect(hasSplitGroupSessionType(['Files', 'text/plain'])).toBe(false);
+    expect(hasSplitGroupDragType([SPLIT_GROUP_SESSION_MIME])).toBe(true);
+    expect(hasSplitGroupDragType([SPLIT_GROUP_PANE_MIME])).toBe(true);
+    expect(hasSplitGroupDragType(['Files', 'text/plain'])).toBe(false);
   });
 
   it('只写入 Cindy 专用 MIME，避免系统把任务拖拽落成桌面文件', () => {

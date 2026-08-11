@@ -297,6 +297,10 @@ export function hasSplitGroupPaneType(types: ArrayLike<string>): boolean {
   return Array.from(types).includes(SPLIT_GROUP_PANE_MIME);
 }
 
+export function hasSplitGroupDragType(types: ArrayLike<string>): boolean {
+  return hasSplitGroupSessionType(types) || hasSplitGroupPaneType(types);
+}
+
 export interface SplitDragSourceContext {
   editing: boolean;
   orcaRole?: string | null;
