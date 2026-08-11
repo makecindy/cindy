@@ -838,9 +838,108 @@ function withDeepSeekCatalog<T>(fn: () => T | Promise<T>): Promise<T> {
   return Promise.resolve(fn()).finally(() => setActiveCatalog(BUNDLED_CATALOG));
 }
 
+/** NewAPI-style OpenAI-compatible custom provider reported in #2423. */
+function withNewApiCatalog<T>(fn: () => T | Promise<T>): Promise<T> {
+  const newApi: Provider = {
+    id: 'newapi',
+    name: 'NewAPI',
+    source: 'user',
+    agents: ['codex'],
+    auth: { method: 'apiKey' },
+    access: { kind: 'api' },
+    routing: {
+      codex: {
+        upstream: 'https://newapi.example/v1',
+        requestPath: '/chat/completions',
+        authStrategy: 'api-key-header',
+        wireProtocol: 'openai-chat',
+      },
+    },
+    models: {
+      codex: [
+        {
+          id: 'newapi-mini',
+          name: 'NewAPI Mini',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        },
+      ],
+    },
+  } as unknown as Provider;
+  const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+  catalog.providers = [...catalog.providers.filter((provider) => provider.id !== newApi.id), newApi];
+  setActiveCatalog(catalog);
+  return Promise.resolve(fn()).finally(() => setActiveCatalog(BUNDLED_CATALOG));
+}
+
 describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱动)', () => {
   // 默认无凭证:防止 mockReturnValueOnce 泄漏到下一个用例导致真实网络请求。
   beforeEach(() => mockReadCustomProviderKey.mockReturnValue(null));
+
+  it('#2423 NewAPI openai-chat route uses its exact endpoint, model, and credential', async () => {
+    await withNewApiCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce('newapi-key');
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: 'NewAPI title' } }] },
+      }));
+
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'newapi-session', agentKind: 'codex', prompt: 'Summarize this session' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'newapi',
+          listConnectedProviders: async () => [
+            providerStub('anthropic'),
+            providerStub('xd'),
+            providerStub('newapi'),
+          ],
+        },
+      );
+
+      expect(result).toEqual({ status: 'ok', title: 'NewAPI title' });
+      expect(mockReadCustomProviderKey).toHaveBeenCalledWith('newapi', 'codex');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      expect(url).toBe('https://newapi.example/v1/chat/completions');
+      expect(init.headers.Authorization).toBe('Bearer newapi-key');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'newapi-mini',
+        max_tokens: 32,
+        messages: [{ role: 'user', content: 'Summarize this session' }],
+      });
+    });
+  });
+
+  it('#2423 NewAPI failure stays on the selected provider without fallback', async () => {
+    await withNewApiCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce('newapi-key');
+      const fetchImpl = fakeFetch(() => ({ ok: false, status: 401 }));
+
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'newapi-unauthorized', agentKind: 'codex', prompt: 'Summarize this session' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'newapi',
+          listConnectedProviders: async () => [
+            providerStub('anthropic'),
+            providerStub('xd'),
+            providerStub('newapi'),
+          ],
+        },
+      );
+
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(String(vi.mocked(fetchImpl).mock.calls[0]?.[0])).toBe(
+        'https://newapi.example/v1/chat/completions',
+      );
+    });
+  });
 
   it('device-link 任务保留的 kimi-code/k3 → 按会话供应商走自己的 Claude Code 路由', async () => {
     const kimi: Provider = {
