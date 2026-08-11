@@ -5,6 +5,7 @@ const DEFAULT_SHOW_SESSION_TIME = true;
 
 let memoryValue: boolean | null = null;
 const listeners = new Set<() => void>();
+let storageListenerAttached = false;
 
 function parseStoredValue(raw: string | null): boolean | null {
   if (raw === 'true') return true;
@@ -47,6 +48,28 @@ function setShowSidebarSessionTime(next: boolean): void {
   listeners.forEach((listener) => listener());
 }
 
+function handleStorage(event: StorageEvent): void {
+  if (event.key !== STORAGE_KEY) return;
+  memoryValue = parseStoredValue(event.newValue);
+  listeners.forEach((listener) => listener());
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  if (!storageListenerAttached) {
+    window.addEventListener('storage', handleStorage);
+    storageListenerAttached = true;
+  }
+
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0 && storageListenerAttached) {
+      window.removeEventListener('storage', handleStorage);
+      storageListenerAttached = false;
+    }
+  };
+}
+
 export function useSidebarSessionTimeVisibility(): {
   showSessionTime: boolean;
   setShowSessionTime: (next: boolean) => void;
@@ -64,18 +87,7 @@ export function useSidebarSessionTimeVisibility(): {
 
   useEffect(() => {
     const sync = () => setShowSessionTimeState(getShowSidebarSessionTime());
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEY) return;
-      memoryValue = parseStoredValue(event.newValue);
-      sync();
-    };
-
-    listeners.add(sync);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      listeners.delete(sync);
-      window.removeEventListener('storage', onStorage);
-    };
+    return subscribe(sync);
   }, []);
 
   return {

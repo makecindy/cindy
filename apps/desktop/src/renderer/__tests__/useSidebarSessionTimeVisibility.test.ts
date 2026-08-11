@@ -48,4 +48,21 @@ describe('useSidebarSessionTimeVisibility', () => {
 
     expect(getShowSidebarSessionTime()).toBe(true);
   });
+
+  it('shares one window storage listener across multiple hook instances', async () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener');
+    const removeEventListener = vi.spyOn(window, 'removeEventListener');
+    const { useSidebarSessionTimeVisibility } = await import('@/hooks/useSidebarSessionTimeVisibility');
+
+    const view = renderHook(() => ({
+      first: useSidebarSessionTimeVisibility(),
+      second: useSidebarSessionTimeVisibility(),
+    }));
+
+    expect(addEventListener.mock.calls.filter(([type]) => type === 'storage')).toHaveLength(1);
+
+    view.unmount();
+
+    expect(removeEventListener.mock.calls.filter(([type]) => type === 'storage')).toHaveLength(1);
+  });
 });
