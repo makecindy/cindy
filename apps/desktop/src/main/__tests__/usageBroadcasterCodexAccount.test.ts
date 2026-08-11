@@ -481,6 +481,29 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(persisted.primary?.usedPercent).toBe(91);
   });
 
+  // 上一条只覆盖了「失败期间收到完整快照」。稀疏事件留下的是一个非空、却全 null 的
+  // 同名桶 —— 若按桶键整体覆盖, 持久化桶里的窗口会被它抹掉并在下一笔事件写回库,
+  // 正好复现本次要防的损坏。必须逐桶走常规 merge。
+  it('merges a sparse bucket received while hydration was failing field by field', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockRejectedValueOnce(new Error('db busy'));
+
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+    expect(mocks.exec).not.toHaveBeenCalled();
+
+    // 重试读到同一 limitId 的有效桶(82 / 55) —— 窗口不得被内存里的全 null 桶顶掉。
+    mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+    const payload = await broadcaster.readCodexAccountUsageSnapshot();
+    expect(payload?.appServerBuckets?.codex?.primary?.usedPercent).toBe(82);
+    expect(payload?.appServerBuckets?.codex?.secondary?.usedPercent).toBe(55);
+
+    // 而且下一笔事件写回库时窗口仍在, 不会把损坏落盘。
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.primary?.usedPercent).toBe(82);
+  });
+
   it('skips persistence when the owner is not initialized yet', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // 启动早期 getCurrentUserId 尚不可用 → hydration 被跳过, 内存为空。

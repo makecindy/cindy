@@ -575,12 +575,24 @@ async function ensureCodexAccountUsageLoaded(): Promise<void> {
         const parsed = JSON.parse(row.snapshot);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
-          // hydration 只补空缺, 不覆盖内存 —— 首次读失败后重试期间, 内存里可能已经
-          // 装着那段时间收到的**更新**观测(它们因守卫未能落库)。库里的行比它们旧,
-          // 直接赋值会让 UI 回退到旧额度, 且那些观测永远等不到落库时机。
-          codexAppServerBuckets = { ...slots.appServerBuckets, ...codexAppServerBuckets };
+          // hydration 不覆盖内存 —— 首次读失败后重试期间, 内存里可能已经装着那段时间
+          // 收到的**更新**观测(它们因守卫未能落库)。库里的行比它们旧, 直接赋值会让 UI
+          // 回退到旧额度, 且那些观测永远等不到落库时机。
+          //
+          // 但也不能按桶键整体覆盖: 那段时间收到的可能是 windowless 稀疏事件, 留下的是
+          // 一个非空、却全 null 的同名桶 —— 整桶覆盖会抹掉持久化桶里的窗口, 正好复现
+          // 本次要防的损坏。逐桶走常规 merge(持久化桶作 previous), 稀疏事件即按既有
+          // 语义保住旧窗口。
+          const persistedBuckets = slots.appServerBuckets;
+          const mergedBuckets: Record<string, RateLimitSnapshot> = { ...persistedBuckets };
+          for (const [key, pending] of Object.entries(codexAppServerBuckets)) {
+            mergedBuckets[key] = mergeCodexAccountUsageSnapshot(persistedBuckets[key] ?? null, pending);
+          }
+          codexAppServerBuckets = mergedBuckets;
           codexAppServerLatestBucketKey = codexAppServerLatestBucketKey ?? slots.latestBucketKey;
-          codexWebAccountUsageSnapshot = codexWebAccountUsageSnapshot ?? slots.web;
+          codexWebAccountUsageSnapshot = codexWebAccountUsageSnapshot
+            ? mergeCodexAccountUsageSnapshot(slots.web, codexWebAccountUsageSnapshot)
+            : slots.web;
         }
       } catch (err) {
         log.warn(
