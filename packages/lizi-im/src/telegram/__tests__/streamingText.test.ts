@@ -233,8 +233,11 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.sent).toEqual(['⚙️ 工作中 · 5m', '第二段', '第二段', '第三段']);
   });
 
-  it('429 退避耗尽仍按回执未知处理(不重发, 避免整篇重复)', async () => {
-    // 429 的最后一次请求可能已被 Telegram 受理而回执丢失, 不能算确定拒绝。
+  it('429 是明确拒绝: 该段保留待重试, 不缺段', async () => {
+    // 2026-08-11 review 更正: api.ts 的 parseResponse 只在读回完整响应体后才
+    // 构造带 errorCode 的错误 —— 带 errorCode 的 429 是 Telegram 应答的限流
+    // 拒绝("这条我没收"), 不是回执丢失。真正的未知回执在 fetch 层就抛原生
+    // 错误, 没有 errorCode。
     let flood = true;
     const h = makeHarness({
       chunk: (text) => text.split('|'),
@@ -251,7 +254,97 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     flood = false;
     await handle.finalize('第一段|第二段|第三段');
 
+    // 第二段确定未送达 → 必须重发。
+    expect(h.sent).toEqual(['⚙️ 工作中 · 7m', '第二段', '第二段', '第三段']);
+  });
+
+  it('无 errorCode 的网络错误按回执未知处理(不重发, 避免整篇重复)', async () => {
+    // fetch 层的连接中断走不到 parseResponse, 没有 errorCode —— 无法证明
+    // Telegram 没收到, 重试跳过它, 宁可缺一段也不整篇重复。
+    let broken = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第二段' && broken) throw new Error('fetch failed: ECONNRESET');
+        return 'msg-x';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 7m');
+
+    await expect(handle.finalize('第一段|第二段|第三段')).rejects.toThrow(/ECONNRESET/);
+    broken = false;
+    await handle.finalize('第一段|第二段|第三段');
+
     expect(h.sent).toEqual(['⚙️ 工作中 · 7m', '第二段', '第三段']);
+  });
+
+  it('首段未知回执时不重铸整条终稿, 重试只补后续分段', async () => {
+    // 首条终稿已被 Telegram 接受但响应中断: deliveredChunks 若停在 0,
+    // 重试会给用户再发一份完整答案。
+    let broken = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第一段' && broken) throw new Error('socket hang up');
+        return 'msg-x';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 6m');
+
+    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/socket hang up/);
+    broken = false;
+    await handle.finalize('第一段|第二段');
+
+    // 首段按已送达记账 → 不重发; 只补第二段。
+    expect(h.reposted).toEqual(['第一段']);
+    expect(h.sent).toEqual(['⚙️ 工作中 · 6m', '第二段']);
+  });
+
+  it('首段被明确拒绝时保持未投递, 重试重发整条终稿', async () => {
+    let rejected = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第一段' && rejected) {
+          throw Object.assign(new Error('telegram failed: 400'), { errorCode: 400 });
+        }
+        return 'msg-x';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 6m');
+
+    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/400/);
+    rejected = false;
+    await handle.finalize('第一段|第二段');
+
+    // 确定未送达 → 首段必须重发。
+    expect(h.reposted).toEqual(['第一段', '第一段']);
+  });
+
+  it('多批图片: 后批失败后重试从断点续传, 不重复已发附件', async () => {
+    const uploaded: Array<{ start: number; count: number }> = [];
+    let failSecondBatch = true;
+    const h = makeHarness({ extractImageUrls: () => Array.from({ length: 15 }, (_, i) => `img-${i}`) });
+    h.deps.uploadImages = async (_messageId, refs, opts) => {
+      const start = opts?.startIndex ?? 0;
+      uploaded.push({ start, count: refs.length - start });
+      // 第一批 10 张成功, 第二批失败。
+      opts?.onProgress?.(Math.max(start, 10));
+      if (failSecondBatch) {
+        failSecondBatch = false;
+        throw new Error('sendMediaGroup failed');
+      }
+    };
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 2m');
+
+    await expect(handle.finalize('带图答案')).rejects.toThrow(/sendMediaGroup/);
+    await handle.finalize('带图答案');
+
+    // 第二次从第 10 张开始, 不重传前 10 张。
+    expect(uploaded).toEqual([
+      { start: 0, count: 15 },
+      { start: 10, count: 5 },
+    ]);
   });
 
   it('重试后清理的是原始过程载体, 不是已经送达的终稿', async () => {

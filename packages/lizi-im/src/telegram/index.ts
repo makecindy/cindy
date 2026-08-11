@@ -880,13 +880,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           const { html } = markdownToTelegramHtml(markdown);
           await this.editHtml(chatId, nativeId, html, undefined);
         },
-        uploadImages: async (messageId, imageUrls) => {
+        uploadImages: async (messageId, imageUrls, imageOpts) => {
           // 图片是多次真实出站(分组 sendMediaGroup、整组失败回落逐张 sendPhoto),
           // 每次之间都有 await —— 所以核验要下沉到每次调用前, 只在批次开头查一次
           // 挡不住"第一组传完才换主人"这个窗口。
           this.assertRoundStillLive(round);
-          await this.uploadImages(messageId, imageUrls, () =>
-            this.assertRoundStillLive(round),
+          await this.uploadImages(
+            messageId,
+            imageUrls,
+            () => this.assertRoundStillLive(round),
+            imageOpts,
           );
         },
         chunk: chunkTelegramSource,
@@ -1957,10 +1960,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 的逐张回落都是。只在进入本方法时查一次挡不住"第一组传完才换主人"的窗口,
    * 剩下的图片会照发到已失权的旧聊天。
    */
+  /**
+   * `startIndex` / `onProgress` 支撑终稿重试的断点续传(见 streamingText 的
+   * `uploadImages` 契约): 去重后从 `startIndex` 起传, 每完成一批就回报**累计
+   * 已收口张数**。抛错时调用方据此续传, 用户不会收到重复附件。
+   */
   private async uploadImages(
     messageId: string,
     imageRefs: string[],
     assertLive?: () => void,
+    opts?: { startIndex?: number; onProgress?: (deliveredCount: number) => void },
   ): Promise<void> {
     const api = this.api;
     if (!api || imageRefs.length === 0) return;
@@ -1990,24 +1999,44 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       seen.add(absPath);
       absPaths.push(absPath);
     }
-    if (absPaths.length === 1) {
+    // 续传起点按**去重后**的序号切: 与 onProgress 回报的口径一致。
+    const startIndex = Math.max(0, Math.min(opts?.startIndex ?? 0, absPaths.length));
+    const pending = absPaths.slice(startIndex);
+    if (pending.length === 0) return;
+    // 累计计数含已跳过的部分, 这样调用方存的始终是"总共已收口多少张"。
+    let delivered = startIndex;
+    const report = (): void => opts?.onProgress?.(delivered);
+
+    if (pending.length === 1) {
       assertLive?.();
-      await this.sendSinglePhoto(chatId, absPaths[0], anchorReply);
+      await this.sendSinglePhoto(chatId, pending[0], anchorReply);
+      delivered += 1;
+      report();
       return;
     }
-    for (let i = 0; i < absPaths.length; i += 10) {
-      const group = absPaths.slice(i, i + 10);
+    for (let i = 0; i < pending.length; i += 10) {
+      const group = pending.slice(i, i + 10);
       assertLive?.();
       // 单张不成相册, 直接走单发 —— 这条是正常路径, 不是相册失败。
       const outcome =
         group.length > 1 ? await this.sendPhotoAlbum(chatId, group, anchorReply) : 'rejected';
-      if (outcome === 'uncertain') continue; // 可能已经发出去了, 不补发
+      if (outcome === 'uncertain') {
+        // 可能已经发出去了, 不补发 —— 同理也要记进已收口, 重试不得重来。
+        delivered += group.length;
+        report();
+        continue;
+      }
       if (outcome === 'rejected') {
         for (const absPath of group) {
           assertLive?.();
           await this.sendSinglePhoto(chatId, absPath, anchorReply);
+          delivered += 1;
+          report();
         }
+        continue;
       }
+      delivered += group.length;
+      report();
     }
   }
 
