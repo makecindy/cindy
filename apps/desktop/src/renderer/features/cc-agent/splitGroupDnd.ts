@@ -285,8 +285,11 @@ export function writeSplitGroupPaneDragData(
   const sessionId = sessionIdInput.trim();
   if (!sessionId) return false;
   dataTransfer.effectAllowed = 'move';
+  // A pane drag is only meaningful to Cindy's split-group targets. Clear any
+  // generic browser flavor so the composer/editor cannot parse the session id
+  // as plain text before the outer drop cleanup runs.
+  dataTransfer.clearData?.();
   dataTransfer.setData(SPLIT_GROUP_PANE_MIME, sessionId);
-  dataTransfer.setData('text/plain', sessionId);
   return true;
 }
 

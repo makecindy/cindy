@@ -87,13 +87,20 @@ describe('splitGroupDnd', () => {
     const values = new Map<string, string>();
     const dataTransfer = {
       effectAllowed: 'none',
+      clearData: (format?: string) => {
+        if (format === undefined) values.clear();
+        else values.delete(format);
+      },
       setData: (format: string, data: string) => values.set(format, data),
     };
 
+    values.set('text/plain', 'stale-text');
+    values.set('text/uri-list', 'https://example.com/dragged');
     expect(writeSplitGroupPaneDragData(dataTransfer, ' session-a ')).toBe(true);
     expect(dataTransfer.effectAllowed).toBe('move');
     expect(values.get(SPLIT_GROUP_PANE_MIME)).toBe('session-a');
-    expect(values.get('text/plain')).toBe('session-a');
+    expect(values.has('text/plain')).toBe(false);
+    expect(values.has('text/uri-list')).toBe(false);
     expect(hasSplitGroupPaneType([SPLIT_GROUP_PANE_MIME])).toBe(true);
     expect(hasSplitGroupPaneType([SPLIT_GROUP_SESSION_MIME])).toBe(false);
     expect(writeSplitGroupPaneDragData(dataTransfer, '   ')).toBe(false);
