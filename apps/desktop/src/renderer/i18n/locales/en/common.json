@@ -1107,7 +1107,7 @@
         "existing": "Already in app",
         "existingHint": "Session with same SDK ID already exists; won't be re-imported",
         "managedDialogue": "Internal chat",
-        "managedDialogueHint": "Orphan/internal dialogs under Cindy-managed dirs — not shown or imported",
+        "managedDialogueHint": "Orphan/internal chats under Cindy-managed dirs — not shown or imported",
         "filtered": "Skipped",
         "filteredHint": "Internal agent sessions, invalid files, or beyond scan window — not shown or imported",
         "reasonListOpen": " (",
