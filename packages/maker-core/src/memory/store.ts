@@ -158,6 +158,9 @@ export class MakerMemoryStore {
     this.assertScopeOk();
     await this.init();
     const result = await this.storage.write(opts);
+    // storage await 后、FTS 同步前复核 (review #2388 Codex 15th P1): 边界不得
+    // 让 manager.write 直接路径 (Pi compaction) 改旧 owner 的 fts.db。
+    this.assertScopeOk();
     // FTS 同步 — 失败只 warn, 文件已落盘
     try {
       const rec = await this.storage.read(result.filename);
@@ -175,6 +178,8 @@ export class MakerMemoryStore {
     this.assertScopeOk();
     await this.init();
     await this.storage.delete(filename);
+    // storage await 后、FTS 同步前复核 (review #2388 Codex 15th P1)
+    this.assertScopeOk();
     try {
       this.fts.delete(filename);
     } catch (e) {
@@ -257,6 +262,9 @@ export class MakerMemoryStore {
     }
 
     // FTS 同步 (整体重建一次, 比逐个 upsert/delete 简单且更不容易出错)
+    // rebuild 前复核 (review #2388 Codex 15th P1): 删源循环的 await 窗口后,
+    // 边界不得让 FTS 重建落在旧 owner 的 sqlite 上。
+    this.assertScopeOk();
     try {
       const all = await this.storage.list();
       this.fts.rebuild(all);

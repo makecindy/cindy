@@ -563,6 +563,19 @@ export class MakerMemoryManager {
         this.assertScopeUnchanged(scopeAtEntry);
         await fs.rm(dir, { recursive: true, force: true });
         total += 1;
+        // 目录已删 — 池中指向它的 store 全部失效 (review #2388 Greptile 13th):
+        // 删除 await 期间同 owner 的并发 getStore 可能打开该 workdir 入池,
+        // 快照清理碰不到它, 这里按 sanitized 目录名匹配实时池移除, 防止后续
+        // getStore 复用指向已删目录的条目。
+        for (const [workdirKey, { db: staleDb }] of [...this.stores]) {
+          if (memoryScopeDirName(workdirKey) !== entry) continue;
+          try {
+            staleDb.close();
+          } catch {
+            /* swallow */
+          }
+          this.stores.delete(workdirKey);
+        }
       } catch (e) {
         if (e instanceof MemoryError && e.code === 'not-ready') throw e;
         this.logger.warn('resetAll: failed to remove workdir memory dir', {
