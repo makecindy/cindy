@@ -10,10 +10,19 @@ const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
   exec: vi.fn(async () => undefined),
   getCurrentUserId: vi.fn(() => 'user-1'),
+  /** 广播到 renderer 的 payload —— 并发用例据此断言不会闪出空快照。 */
+  broadcasts: [] as unknown[],
 }));
 
 vi.mock('electron', () => ({
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: {
+    getAllWindows: () => [{
+      isDestroyed: () => false,
+      webContents: {
+        send: (_channel: string, payload: unknown) => { mocks.broadcasts.push(payload); },
+      },
+    }],
+  },
 }));
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -58,6 +67,7 @@ describe('codex account usage source slots', () => {
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.broadcasts.length = 0;
   });
 
   it('keeps app-server windows when a WHAM snapshot arrives (no cross-source overwrite)', async () => {
@@ -155,6 +165,7 @@ describe('codex app-server limit buckets', () => {
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.broadcasts.length = 0;
   });
 
   // 2026-07-25 用户实报的真实污染行: app 槽被模型专属促销桶(Spark)占据,
@@ -244,6 +255,7 @@ describe('codex bucket edge cases (review follow-up)', () => {
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.broadcasts.length = 0;
   });
 
   const BUCKET_A = {
@@ -349,6 +361,7 @@ describe('codex stale bucket pruning', () => {
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.broadcasts.length = 0;
   });
 
   it('prunes buckets whose windows expired long ago, keeping the latest one', async () => {
@@ -390,6 +403,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.broadcasts.length = 0;
   });
 
   // 2026-08-11 用户实报的真实覆盖事故: 一条全 null 的 windowless app-server 事件
@@ -407,7 +421,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     source: 'codex-app-server',
   };
 
-  it('skips persistence when hydration failed and the event carries no usable window', async () => {
+  it('skips persistence when hydration failed', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // 冷缓存 hydration 读库失败(db busy 等) → 内存为空, 但持久化行还躺着好数据。
     mocks.queryOne.mockRejectedValue(new Error('db busy'));
@@ -452,9 +466,10 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(persisted.rateLimitReachedType).toBe('credits_depleted');
   });
 
-  it('persists a reached marker arriving on an empty cache too', async () => {
+  it('persists a reached marker on a cold but readable database', async () => {
     const broadcaster = await import('../usageBroadcaster');
-    mocks.queryOne.mockRejectedValue(new Error('db busy'));
+    // 库里本来就没有行(首次安装) —— 读成功即底子可信, 照常落库。
+    mocks.queryOne.mockResolvedValue(null);
 
     await broadcaster.recordCodexAccountUsageSnapshot(CREDITS_DEPLETED_EVENT);
 
@@ -474,6 +489,69 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(persisted.primary?.usedPercent).toBe(82);
     expect(persisted.secondary?.usedPercent).toBe(55);
   });
+
+  // 合法的「限额解除」与事故的空壳形状完全一致 —— 按 payload 内容判会把它一并拦下,
+  // 库里的 reached 标记就再也去不掉: goal-host 据此判 limited=true 且没有重置时间,
+  // 目标被无限期挂起。判据必须落在「merge 底子是否可信」上。
+  it('persists a legitimate clear that removes a previously reached marker', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue({
+      snapshot: JSON.stringify({ ...CREDITS_DEPLETED_EVENT, webSnapshot: null }),
+    });
+
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.rateLimitReachedType ?? null).toBeNull();
+  });
+
+  // codexWebUsageResponseToSnapshot 明确接受只有 plan_type / credits 的 WHAM 响应,
+  // tooltip 也展示这两项。web-only 账号的首份快照没有任何窗口, 不能因此不落库 ——
+  // 否则重启或离线启动就丢了套餐与余额。
+  it('persists a web snapshot carrying only plan and credits', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+
+    await broadcaster.recordCodexAccountUsageSnapshot({
+      primary: null,
+      secondary: null,
+      credits: { hasCredits: true, unlimited: false, balance: '12.50' },
+      planType: 'prolite',
+      source: 'openai-web',
+      accountId: 'acc-1',
+    });
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.webSnapshot?.planType).toBe('prolite');
+    expect(persisted.webSnapshot?.credits?.balance).toBe('12.50');
+  });
+
+  // codex 侧原先把 loaded 置位放在 await 之前, 并发的第二笔 record 会立刻返回并在
+  // **空内存**上 merge —— 这正是产出全 null payload 的路径(claude 侧早有 load-promise
+  // 防住)。可观测的后果是向 renderer 广播一份空快照(chip 闪空), 之后才被 hydration
+  // 覆盖回去。串行化后两笔都等同一次读完成, 不存在这个中间态。
+  it('never broadcasts an empty snapshot while hydration is still in flight', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    let resolveRead!: (value: { snapshot: string } | null) => void;
+    mocks.queryOne.mockReturnValue(new Promise((res) => { resolveRead = res; }));
+
+    const first = broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+    const second = broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+    resolveRead({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+    await Promise.all([first, second]);
+
+    // 每一次广播都必须带着已 hydrate 的窗口, 不能出现窗口为空的中间态。
+    expect(mocks.broadcasts.length).toBeGreaterThan(0);
+    for (const payload of mocks.broadcasts as Array<{ primary?: { usedPercent?: number } | null }>) {
+      expect(payload?.primary?.usedPercent).toBe(82);
+    }
+    const current = await broadcaster.readCodexAccountUsageSnapshot();
+    expect(current?.secondary?.usedPercent).toBe(55);
+  });
 });
 
 describe('sparse rate-limit updates without a limitId', () => {
@@ -482,6 +560,7 @@ describe('sparse rate-limit updates without a limitId', () => {
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.broadcasts.length = 0;
   });
 
   const SPARK = {

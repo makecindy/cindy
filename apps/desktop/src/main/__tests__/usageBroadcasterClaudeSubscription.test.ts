@@ -110,7 +110,7 @@ describe('claude subscription snapshot hydration race', () => {
     const broadcaster = await import('../usageBroadcaster');
     // rejected 是权威的「请求已被拒」信号(isClaudeSubscriptionAlerting 直接据此告警),
     // 缺窗口时也必须落库 —— 否则重启后 chip 不知道当前正被限流。
-    mocks.queryOne.mockRejectedValue(new Error('db busy'));
+    mocks.queryOne.mockResolvedValue(null);
 
     await broadcaster.recordClaudeSubscriptionUsageSnapshot({
       fiveHour: null,
@@ -121,6 +121,34 @@ describe('claude subscription snapshot hydration race', () => {
     });
 
     expect(mocks.exec).toHaveBeenCalled();
+  });
+
+  // 反向转换同样必须落库: 库里是 rejected、后续 allowed 的 status-only 事件没有窗口,
+  // 按内容判会被拦下, 库里就永远停在 rejected —— 重启后 chip 挂着一个假的限流警告。
+  it('persists an allowed transition that clears a persisted rejected status', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue({
+      snapshot: JSON.stringify({
+        fiveHour: null,
+        sevenDay: null,
+        rateLimitStatus: 'rejected',
+        source: 'unified-headers',
+        updatedAt: 1,
+      }),
+    });
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: null,
+      sevenDay: null,
+      rateLimitStatus: 'allowed',
+      source: 'unified-headers',
+      updatedAt: 5,
+    });
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.rateLimitStatus).toBe('allowed');
   });
 
   it('persists a status-only snapshot merged onto hydrated windows (regression guard)', async () => {

@@ -329,6 +329,18 @@ export interface CodexAccountUsagePayload extends RateLimitSnapshot {
 
 let codexAccountUsageOwner: string | null = null;
 let codexAccountUsageLoaded = false;
+/**
+ * 冷缓存 hydration 是否**成功读到过库**(读到空行也算)。
+ *
+ * 落库守卫的判据 —— merge 的底子可信才允许写回。读库失败 / owner 未初始化被跳过时
+ * 内存是空的, 此时任何 merge 结果都不代表账号真实状态, 写回会抹掉库里的有效数据。
+ * 不能改用「payload 内容看起来是否有用」判断: 合法的空(限额解除、credits 清零)与
+ * 事故的空形状完全一致, 按内容判会把前者一并拦下。
+ */
+let codexAccountUsageHydrated = false;
+// 并发 record 必须等同一次 SQLite 读完成后再按到达顺序 merge(与 claude 侧同款) ——
+// 否则第二笔会在 loaded 已被置位、内存却仍为空时 merge 出全 null payload。
+let codexAccountUsageLoadPromise: Promise<void> | null = null;
 /** app-server 桶表: limitId → 该桶最近快照(同桶 merge, 跨桶隔离)。 */
 let codexAppServerBuckets: Record<string, RateLimitSnapshot> = {};
 /** 最近更新的 app-server 桶键 —— 顶层兼容位取它。 */
@@ -370,6 +382,7 @@ function resetCodexAccountUsageCacheIfOwnerChanged(): void {
   if (owner === codexAccountUsageOwner) return;
   codexAccountUsageOwner = owner;
   codexAccountUsageLoaded = false;
+  codexAccountUsageHydrated = false;
   codexAppServerBuckets = {};
   codexAppServerLatestBucketKey = null;
   codexWebAccountUsageSnapshot = null;
@@ -541,68 +554,41 @@ function isCodexWindowlessFallback(snapshot: RateLimitSnapshot): boolean {
   return !snapshot.primary && !snapshot.secondary;
 }
 
-/** 窗口可用 = 非空且 usedPercent 是有限数(RateLimitWindow 的必填字段)。 */
-function hasUsableCodexWindow(snapshot: RateLimitSnapshot | null | undefined): boolean {
-  return [snapshot?.primary, snapshot?.secondary].some(
-    (window) => Boolean(window) && Number.isFinite(window?.usedPercent),
-  );
-}
-
-/**
- * 单槽是否有值得落库的内容: 可用窗口, 或权威的「已达限额」标记。
- *
- * reached 标记没有窗口是正常形态(如 credits 耗尽), 且 isCodexWindowlessFallback 明确
- * 把它当权威值 —— merge 会正当地把旧窗口清成 null。它必须落库: goal-host 的
- * getAccountLimit 从持久化的 rateLimitReachedType 判 limited, 漏存会让重启后暂停的
- * 目标直接重新撞进同一个限额。
- */
-function hasPersistableCodexSlot(snapshot: RateLimitSnapshot | null | undefined): boolean {
-  if (!snapshot) return false;
-  return hasUsableCodexWindow(snapshot) || hasCodexRateLimitReached(snapshot);
-}
-
-/**
- * payload 是否值得落库: 任一槽(顶层 / 桶表 / web)有可用窗口或权威 reached 标记。
- *
- * windowless 稀疏事件本身是合法的(app-server 滚动更新契约), merge 靠内存旧值兜住
- * 窗口 —— 但内存为空时(hydration 读库失败 / owner 未初始化被跳过)无值可兜, 全 null
- * payload 会原样 upsert, 把持久化行里的有效数据永久抹掉(2026-08-11 用户实报)。
- * 这种空壳不落库: 保留旧行, 重启后 hydration 仍能读回有效数据。
- */
-function hasPersistableCodexAccountUsage(payload: CodexAccountUsagePayload | null): boolean {
-  if (!payload) return false;
-  return (
-    hasPersistableCodexSlot(payload)
-    || hasPersistableCodexSlot(payload.webSnapshot)
-    || Object.values(payload.appServerBuckets ?? {}).some(hasPersistableCodexSlot)
-  );
-}
-
 async function ensureCodexAccountUsageLoaded(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
   if (codexAccountUsageLoaded) return;
-  codexAccountUsageLoaded = true;
-  if (!codexAccountUsageOwner) return;
-
-  try {
-    const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
-      'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
-      ['codex'],
-    );
-    if (!row?.snapshot) return;
-    const parsed = JSON.parse(row.snapshot);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
-      codexAppServerBuckets = slots.appServerBuckets;
-      codexAppServerLatestBucketKey = slots.latestBucketKey;
-      codexWebAccountUsageSnapshot = slots.web;
-    }
-  } catch (err) {
-    log.warn(
-      'readCodexAccountUsageSnapshot failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+  if (!codexAccountUsageLoadPromise) {
+    codexAccountUsageLoadPromise = (async () => {
+      try {
+        if (!codexAccountUsageOwner) return;
+        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
+          'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
+          ['codex'],
+        );
+        // 读到库就算 hydrated(无行 = 确认库里本来就没有), 之后允许落库。置位放在
+        // JSON.parse 之前: 损坏行解析失败仍应允许被新快照覆盖, 否则一条坏行会永久
+        // 堵死写入。
+        codexAccountUsageHydrated = true;
+        if (!row?.snapshot) return;
+        const parsed = JSON.parse(row.snapshot);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
+          codexAppServerBuckets = slots.appServerBuckets;
+          codexAppServerLatestBucketKey = slots.latestBucketKey;
+          codexWebAccountUsageSnapshot = slots.web;
+        }
+      } catch (err) {
+        log.warn(
+          'readCodexAccountUsageSnapshot failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      } finally {
+        codexAccountUsageLoaded = true;
+        codexAccountUsageLoadPromise = null;
+      }
+    })();
   }
+  await codexAccountUsageLoadPromise;
 }
 
 export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promise<void> {
@@ -644,9 +630,9 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
   const payload = buildCodexAccountUsagePayload();
   broadcastCodexAccountUsage(payload);
 
-  // 无可用窗口的 payload 不 upsert(保留旧行), 见 hasPersistableCodexAccountUsage。
-  if (!hasPersistableCodexAccountUsage(payload)) {
-    log.warn('skip persisting codex account usage snapshot without any usable window');
+  // merge 的底子不可信时不写回, 见 codexAccountUsageHydrated。
+  if (!codexAccountUsageHydrated) {
+    log.warn('skip persisting codex account usage snapshot: hydration unavailable');
     return;
   }
 
@@ -670,6 +656,8 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
 export async function clearCodexAccountUsageSnapshot(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
   codexAccountUsageLoaded = true;
+  // clear 后库里的状态是已知的(行被删掉), 之后到达的快照可以正常落库。
+  codexAccountUsageHydrated = true;
   codexAppServerBuckets = {};
   codexAppServerLatestBucketKey = null;
   codexWebAccountUsageSnapshot = null;
@@ -736,6 +724,8 @@ export function clearXaiRateLimitSnapshot(): void {
 let claudeSubscriptionUsageOwnerInitialized = false;
 let claudeSubscriptionUsageOwner: string | null = null;
 let claudeSubscriptionUsageLoaded = false;
+/** 与 codex 侧 codexAccountUsageHydrated 同义: 落库守卫的判据。 */
+let claudeSubscriptionUsageHydrated = false;
 let claudeSubscriptionUsageSnapshot: ClaudeSubscriptionUsageSnapshot | null = null;
 // 冷缓存 hydration 的 in-flight promise —— 并发 record 必须等同一次 SQLite 读完成后
 // 再按到达顺序 merge, 否则后到的新快照会先写、再被读回的旧持久化行覆盖。
@@ -752,6 +742,7 @@ function resetClaudeSubscriptionUsageCacheIfOwnerChanged(): void {
   // 首次初始化: loaded / snapshot 本就是初值, 世代不 bump(见上方注释)。
   if (isFirstInit) return;
   claudeSubscriptionUsageLoaded = false;
+  claudeSubscriptionUsageHydrated = false;
   claudeSubscriptionUsageSnapshot = null;
   claudeSubscriptionUsageGeneration += 1;
 }
@@ -770,6 +761,8 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
         );
         // clear / owner 变化抢先发生 → 本次读结果作废, 不覆盖更新的内存状态。
         if (generation !== claudeSubscriptionUsageGeneration) return;
+        // 读到库就算 hydrated(理由同 codex 侧, 含损坏行仍允许被覆盖)。
+        claudeSubscriptionUsageHydrated = true;
         if (!row?.snapshot) return;
         const parsed = JSON.parse(row.snapshot);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -791,25 +784,6 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
   await claudeSubscriptionUsageLoadPromise;
 }
 
-/**
- * 与 codex 侧同口径: 窗口非空且 utilization 是有限数, 或带权威的限流状态。
- *
- * rateLimitStatus='rejected' 是「请求已被拒」的权威信号(isClaudeSubscriptionAlerting
- * 直接据此告警), 缺窗口时同样必须落库 —— 对应 codex 侧的 rateLimitReachedType。
- */
-function hasPersistableClaudeSubscriptionUsage(
-  snapshot: ClaudeSubscriptionUsageSnapshot,
-): boolean {
-  const usable = (window: { utilization?: number } | null | undefined): boolean =>
-    Boolean(window) && Number.isFinite(window?.utilization);
-  return (
-    usable(snapshot.fiveHour)
-    || usable(snapshot.sevenDay)
-    || (snapshot.scoped?.some(usable) ?? false)
-    || snapshot.rateLimitStatus?.trim().toLowerCase() === 'rejected'
-  );
-}
-
 export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): Promise<void> {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
 
@@ -827,10 +801,9 @@ export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): 
   claudeSubscriptionUsageSnapshot = next;
   broadcastClaudeSubscriptionUsage(next);
 
-  // 与 codex 侧同一条保护: status-only 增量落在空内存缓存上(hydration 读库失败)时,
-  // merge 无旧值可保, 全空快照不得 upsert 抹掉持久化行里的有效窗口。
-  if (!hasPersistableClaudeSubscriptionUsage(next)) {
-    log.warn('skip persisting claude subscription usage snapshot without any usable window');
+  // 与 codex 侧同一条保护: merge 的底子不可信时不写回。
+  if (!claudeSubscriptionUsageHydrated) {
+    log.warn('skip persisting claude subscription usage snapshot: hydration unavailable');
     return;
   }
 
@@ -862,6 +835,8 @@ export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): 
 export async function clearClaudeSubscriptionUsageSnapshot(): Promise<void> {
   resetClaudeSubscriptionUsageCacheIfOwnerChanged();
   claudeSubscriptionUsageLoaded = true;
+  // clear 后库里的状态是已知的(行被删掉), 之后到达的快照可以正常落库。
+  claudeSubscriptionUsageHydrated = true;
   claudeSubscriptionUsageSnapshot = null;
   // 仍在飞的冷缓存 hydration 必须作废 —— 否则它读回的旧持久化行会复活刚清掉的数据。
   claudeSubscriptionUsageGeneration += 1;
