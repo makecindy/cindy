@@ -1114,7 +1114,7 @@
         "reasonListSep": "・",
         "reasonListClose": "）",
         "reasonListSource": "Claude：",
-        "reasonInternal": "内部セッション",
+        "reasonInternal": "Agent セッション",
         "reasonNoEvents": "有効な内容なし",
         "reasonWindowLimit": "スキャンウィンドウ外",
         "reasonInvalidId": "ID 形式が無効",
