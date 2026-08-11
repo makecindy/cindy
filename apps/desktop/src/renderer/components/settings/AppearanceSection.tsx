@@ -39,9 +39,11 @@ import { isLocalThemeId } from '../../../shared/local-themes';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
 import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
+import { useSidebarSessionTimeVisibility } from '@/hooks/useSidebarSessionTimeVisibility';
 
 const log = createLogger('settings/AppearanceSection');
 
@@ -316,6 +318,7 @@ export function AppearanceSection() {
     resetCodeSize,
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
+  const { showSessionTime, setShowSessionTime } = useSidebarSessionTimeVisibility();
   const { t } = useTranslation();
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
@@ -838,6 +841,31 @@ export function AppearanceSection() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div
+        className={cn(
+          'flex items-center justify-between gap-3 rounded-xl p-5',
+          'bg-[var(--settings-theme-card-bg)]',
+          'border border-[var(--settings-theme-card-border)]',
+        )}
+      >
+        <div className="flex min-w-0 flex-col gap-1">
+          <p
+            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+            style={{ letterSpacing: '0.12px' }}
+          >
+            {t('settings.appearance.sidebarSessionTime.label')}
+          </p>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.appearance.sidebarSessionTime.hint')}
+          </p>
+        </div>
+        <Switch
+          checked={showSessionTime}
+          onCheckedChange={setShowSessionTime}
+          aria-label={t('settings.appearance.sidebarSessionTime.aria')}
+        />
       </div>
 
       <LayoutResetControl />

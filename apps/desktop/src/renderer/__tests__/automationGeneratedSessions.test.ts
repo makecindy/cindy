@@ -736,6 +736,9 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('hasBeenActive: false');
     expect(source).toContain('hasBeenActive: true');
     expect(source).toContain('formatSidebarTime(primaryActivityIso, t)');
+    expect(source).toContain("const { showSessionTime } = useSidebarSessionTimeVisibility();");
+    expect(source).toContain('if (!showSessionTime)');
+    expect(source).toContain('showSessionTime, t]);');
     expect(source).toContain('setCountdownNowMs(Date.now())');
     expect(source).toContain('window.setInterval');
     // 下次运行倒计时不再进 meta,而是作为整行 hover tooltip 的内容。

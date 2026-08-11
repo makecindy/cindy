@@ -88,6 +88,7 @@ import {
   shouldStartSplitGroupDrag,
   writeSplitGroupSessionDragData,
 } from '../splitGroupDnd';
+import { useSidebarSessionTimeVisibility } from '@/hooks/useSidebarSessionTimeVisibility';
 
 const log = createLogger('SessionCard');
 
@@ -144,6 +145,7 @@ export function SessionCard({
 }: SessionCardProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { showSessionTime } = useSidebarSessionTimeVisibility();
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
@@ -965,13 +967,15 @@ export function SessionCard({
             />
           )}
           <WorktreeBadge sessionId={session.id} size={11} className="size-3.5" />
-          <time
-            dateTime={activityIso}
-            title={formatSidebarTimeAbsolute(activityIso)}
-            className={cn('ml-auto shrink-0', isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--cmd-palette-item-meta)]')}
-          >
-            {cardTimeText}
-          </time>
+            {showSessionTime && (
+              <time
+                dateTime={activityIso}
+                title={formatSidebarTimeAbsolute(activityIso)}
+                className={cn('ml-auto shrink-0', isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--cmd-palette-item-meta)]')}
+              >
+                {cardTimeText}
+              </time>
+            )}
         </div>
       </div>
       )}
@@ -1166,6 +1170,7 @@ function TimeActionsSlot({
   yieldToOrdinalBadge?: boolean;
 }) {
   const { t } = useTranslation();
+  const { showSessionTime } = useSidebarSessionTimeVisibility();
   return (
     <div className="group/slot relative ml-auto flex h-5 shrink-0 items-center justify-end">
       {/* 默认内容:worktree + 时间;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
@@ -1180,16 +1185,18 @@ function TimeActionsSlot({
         )}
       >
         <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />
-        <time
-          dateTime={activityIso}
-          title={formatSidebarTimeAbsolute(activityIso)}
-          className={cn(
-            'text-10 font-medium leading-none tabular-nums',
-            isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
+          {showSessionTime && (
+            <time
+              dateTime={activityIso}
+              title={formatSidebarTimeAbsolute(activityIso)}
+              className={cn(
+                'text-10 font-medium leading-none tabular-nums',
+                isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
+              )}
+            >
+              {formatSidebarTime(activityIso, t)}
+            </time>
           )}
-        >
-          {formatSidebarTime(activityIso, t)}
-        </time>
       </div>
 
       {canQuickArchive && archivePending && (
