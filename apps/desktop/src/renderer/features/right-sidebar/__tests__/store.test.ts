@@ -1349,13 +1349,340 @@ describe('ephemeral preview tabs (sandbox-preview URL, round 27f/27i/27k)', () =
     );
     const first = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
     await new Promise((r) => setTimeout(r, 0)); // first conversion pauses on delete
-    // Newer patch: preview → ordinary, supersedes the first URL.
-    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: 'https://new.example/' }));
+    // Newer patch: preview → ordinary, supersedes the first URL. Since transitions are
+    // serializes per-tab transitions, this one QUEUES behind the parked delete
+    // instead of completing during it — so it is started here and awaited below
+    // rather than awaited inline. The invariant under test is unchanged: when the
+    // older transition resumes it must re-read the cache and skip its stale write.
+    const second = store.patchTabState('s1', tab.id, (s) => ({
+      ...(s as object),
+      url: 'https://new.example/',
+    }));
+    await new Promise((r) => setTimeout(r, 0));
     releaseClose();
-    await first;
+    // Promise.all, not allSettled: neither patch may reject. allSettled would
+    // silently swallow a rejection and let the assertions below still pass.
+    await Promise.all([first, second]);
     // The stale transition must not have written its preview URL to the DB.
     expect(ipc.upsert).not.toHaveBeenCalledWith(
       expect.objectContaining({ state: expect.objectContaining({ url: PREVIEW_URL }) }),
     );
+  });
+
+  it('serializes URL-boundary transitions so a superseded one cannot delete the current row', async () => {
+    // The Xz_34 guard only covered the stale transition's later WRITE. The
+    // DELETE itself was unguarded: an older normal→preview transition parked in
+    // settleTabStateWrites / the delete-retry backoff resumed AFTER a newer
+    // preview→ordinary transition had recreated the ordinary row, and removed
+    // that fresh row — the tab then vanished on detach/restart.
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.close.mockClear();
+    ipc.upsert.mockClear();
+
+    // Park the older transition inside its pre-delete settle step.
+    let releaseSettle!: () => void;
+    const settleGate = new Promise<void>((r) => {
+      releaseSettle = () => r();
+    });
+    ipc.upsert.mockImplementationOnce(async () => {
+      await settleGate;
+      return { ok: true };
+    });
+    // A pending state write is what the older transition settles on.
+    const pending = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'pending' }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const older = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    await new Promise((r) => setTimeout(r, 0)); // older transition parked on settle
+
+    // Newer transition lands while the older one is still parked.
+    const newer = store.patchTabState('s1', tab.id, (s) => ({
+      ...(s as object),
+      url: 'https://new.example/',
+    }));
+
+    releaseSettle();
+    // Promise.all, not allSettled: a superseded transition must resolve, not
+    // reject — swallowing rejections here would hide exactly that regression.
+    await Promise.all([pending, older, newer]);
+
+    // The superseded transition must not have deleted the row that the newer
+    // transition owns.
+    expect(ipc.close).not.toHaveBeenCalled();
+    // ...and the surviving persisted state is the newer, ordinary URL.
+    const lastUpsert = ipc.upsert.mock.calls.at(-1)?.[0];
+    expect(lastUpsert).toMatchObject({
+      id: tab.id,
+      state: expect.objectContaining({ url: 'https://new.example/' }),
+    });
+    expect(store.getBucket('s1').tabs[0].state).toMatchObject({ url: 'https://new.example/' });
+  });
+
+  it('still deletes the stale ordinary row when the transition is NOT superseded (guard is not a blanket skip)', async () => {
+    // Guard-rail for the fix above: the revision check must only suppress the
+    // delete when a NEWER transition owns the row. A lone normal→preview
+    // transition must still clean up its ordinary row, otherwise hydrate/host
+    // migration resurrects it (the Xz_39 regression).
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.close.mockClear();
+    await store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    expect(ipc.close).toHaveBeenCalledWith({ id: tab.id });
+  });
+
+  it('still persists the tab when a second ordinary URL lands right after preview→ordinary', async () => {
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.upsert.mockClear();
+    const toOrdinary = store.patchTabState('s1', tab.id, (s) => ({
+      ...(s as object),
+      url: 'https://one.example/',
+    }));
+    const second = store.patchTabState('s1', tab.id, (s) => ({
+      ...(s as object),
+      url: 'https://two.example/',
+    }));
+    await Promise.all([toOrdinary, second]);
+    // Latest-wins must hold in BOTH the last persisted row and the cache. A bare
+    // toHaveBeenCalled() is not enough: it also passes when the STALE first URL is
+    // what reached SQLite, which would resurface on the next hydrate/restart
+    // .
+    const lastUpsert = ipc.upsert.mock.calls.at(-1)?.[0];
+    expect(lastUpsert).toMatchObject({
+      id: tab.id,
+      state: expect.objectContaining({ url: 'https://two.example/' }),
+    });
+    expect(store.getBucket('s1').tabs[0].state).toMatchObject({ url: 'https://two.example/' });
+  });
+
+  it('does not overwrite a plain patch that lands during a preview→ordinary transition (latest-wins)', async () => {
+    // The transition's own upsert used to carry the state captured at call time,
+    // so a title/favicon patch landing during its async section was overwritten —
+    // the user's tab title silently failed to persist. The transition now writes
+    // the LATEST cache state (its URL is re-checked first).
+    const tab = await store.addTab('s1', 'web-browser', { url: PREVIEW_URL });
+    ipc.upsert.mockClear();
+    // preview -> ordinary, NOT awaited; a plain title patch lands in the same tick.
+    const toOrdinary = store.patchTabState('s1', tab.id, (s) => ({
+      ...(s as object),
+      url: 'https://a.example/',
+    }));
+    const titled = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), title: 'hello' }));
+    await Promise.all([toOrdinary, titled]);
+    const last = ipc.upsert.mock.calls.at(-1)?.[0];
+    expect(last).toMatchObject({
+      id: tab.id,
+      state: expect.objectContaining({ url: 'https://a.example/', title: 'hello' }),
+    });
+  });
+});
+
+describe('preview URL transitions vs close / pending create / delete retry', () => {
+  const PREVIEW_URL =
+    'http://127.0.0.1:49152/preview/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/index.html';
+  let ipc: IpcStub;
+
+  beforeEach(async () => {
+    store = await import('../store');
+    store._resetStore();
+    _resetTabKindRegistry();
+    ipc = makeIpcStub();
+    installIpc(ipc);
+    _resetPopupTabsForTests();
+  });
+
+  afterEach(() => {
+    store._resetStore();
+    _resetTabKindRegistry();
+    _resetPopupTabsForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('does not re-upsert a tab that is closed while a normal→preview transition is in flight (close-during-transition)', async () => {
+    // a conversion parked on its delete step is only guarded here by the
+    // post-await re-read: "tab no longer in cache ⇒ stale". Without it the
+    // resumed transition would enqueue an upsert that re-creates the closed tab
+    // in the DB → it resurrects as a ghost on the next hydrate/restart.
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.upsert.mockClear();
+    ipc.close.mockClear();
+
+    // Park the older transition inside its delete step.
+    let releaseClose!: () => void;
+    ipc.close.mockImplementationOnce(
+      () =>
+        new Promise<{ ok: true }>((r) => {
+          releaseClose = () => r({ ok: true });
+        }),
+    );
+    const converting = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    await new Promise((r) => setTimeout(r, 0)); // conversion parked on delete
+
+    // Close the tab while the conversion is still in flight.
+    await store.closeTab('s1', tab.id);
+    expect(store.getBucket('s1').tabs).toHaveLength(0);
+
+    releaseClose();
+    await converting; // must resolve, not reject
+
+    // The closed tab must NOT be written back into the DB.
+    expect(ipc.upsert).not.toHaveBeenCalledWith(expect.objectContaining({ id: tab.id }));
+  });
+
+  it('waits for the in-flight create to land before deleting the ordinary row on normal→preview (pending-create)', async () => {
+    // A normal tab whose addTab create upsert is still in flight when a
+    // normal→preview patch lands. The conversion must wait for that create to
+    // LAND before issuing the row delete — otherwise the delete races ahead,
+    // sees NOT_FOUND (treated as success), and the later upsert re-creates the
+    // stale ordinary row that hydrate resurrects. This is cleanupConvertedPreviewRow's
+    // `await create` guard.
+    const calls: string[] = [];
+    let releaseUpsert!: () => void;
+    ipc.upsert.mockImplementationOnce(() => {
+      // Record the upsert when it RESOLVES, not when called — the invariant is
+      // that close must come after the create has LANDED, so the delete cannot
+      // race ahead of the pending insert.
+      return new Promise<{ ok: true }>((r) => {
+        releaseUpsert = () => r({ ok: true });
+      }).then((res) => {
+        calls.push('upsert');
+        return res;
+      });
+    });
+    ipc.close.mockImplementation(async () => {
+      calls.push('close');
+      return { ok: true };
+    });
+
+    const creating = store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    const tabId = store.getBucket('s1').tabs[0].id;
+    await new Promise((r) => setTimeout(r, 0)); // addTab parked on its create upsert
+
+    const converting = store.patchTabState('s1', tabId, (s) => ({
+      ...(s as object),
+      url: PREVIEW_URL,
+    }));
+    await new Promise((r) => setTimeout(r, 0)); // conversion awaits the pending create
+
+    releaseUpsert();
+    // Promise.all, not allSettled: neither call may reject.
+    await Promise.all([creating, converting]);
+
+    // The delete must NOT race ahead of the create: upsert resolves, then close.
+    expect(calls).toEqual(['upsert', 'close']);
+  });
+
+  it('does not retry the row delete when a newer transition supersedes during backoff (supersede-during-retry)', async () => {
+    // The older normal→preview conversion's delete fails once (a plain transient
+    // error — NOT [NOT_FOUND], which would be treated as "row already gone" and
+    // return). It enters the overload backoff. A newer preview→ordinary patch
+    // supersedes it during that wait; the retry must be suppressed by the
+    // pre-close revision check — no second close may ever be issued.
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.upsert.mockClear();
+    ipc.close.mockClear();
+
+    ipc.close.mockImplementationOnce(async () => {
+      throw new Error('db down'); // transient, NOT [NOT_FOUND]
+    });
+    ipc.close.mockImplementation(async () => ({ ok: true })); // a retry WOULD succeed
+
+    const older = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    await new Promise((r) => setTimeout(r, 0)); // older conversion is now in backoff wait
+
+    const newer = store.patchTabState('s1', tab.id, (s) => ({
+      ...(s as object),
+      url: 'https://new.example/',
+    }));
+    // Promise.all, not allSettled: neither patch may reject.
+    await Promise.all([older, newer]);
+
+    // The retry was suppressed: close ran exactly once, never a second time.
+    expect(ipc.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reject or roll back the cache when superseded at the final delete failure (supersede-at-final-failure)', async () => {
+    // The delete fails through the whole retry budget. At the LAST close — the
+    // attempt after the budget is spent, which would otherwise throw — a newer
+    // preview→ordinary patch supersedes the old transition while that close is
+    // in flight. The post-close revision check must return instead of letting the
+    // failure escalate: a throw would roll back the cache URL to the stale
+    // ordinary value and clobber the newer navigation.
+    // STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS = [25, 75, 150] (length 3): close is
+    // attempted budget+1 = 4 times before the final failure would throw.
+    const RETRY_BUDGET = 3;
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.upsert.mockClear();
+    ipc.close.mockClear();
+
+    let closeCalls = 0;
+    let lastCloseHanging = false;
+    let releaseLastReject!: () => void;
+    ipc.close.mockImplementation(async () => {
+      closeCalls += 1;
+      if (closeCalls <= RETRY_BUDGET) {
+        throw new Error('db down'); // attempts 0..2 fail immediately
+      }
+      // attempt 3 = the final close: hang until the test releases a rejection
+      lastCloseHanging = true;
+      return new Promise((_resolve, reject) => {
+        releaseLastReject = () => reject(new Error('db down'));
+      });
+    });
+
+    const older = store.patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }));
+    await vi.waitFor(() => expect(lastCloseHanging).toBe(true)); // parked on the final close
+
+    const newer = store.patchTabState('s1', tab.id, (s) => ({
+      ...(s as object),
+      url: 'https://new.example/',
+    }));
+    releaseLastReject();
+    // Promise.all, not allSettled: a superseded transition must RESOLVE — a
+    // reject here is exactly the rollback path we are guarding against.
+    await Promise.all([older, newer]);
+
+    // No cache rollback: the newer ordinary URL survives (not reverted to a.example).
+    expect(store.getBucket('s1').tabs[0].state).toMatchObject({ url: 'https://new.example/' });
+    // The budget was spent but nothing beyond it was attempted.
+    expect(ipc.close).toHaveBeenCalledTimes(RETRY_BUDGET + 1);
+  });
+
+  it('still deletes the row when closing a tab whose normal→preview delete failed (close-after-failed-conversion)', async () => {
+    // Both sides used to assume the other one deletes: the conversion marks the
+    // tab ephemeral synchronously, so closeTab skips its own ipc.close; but if
+    // the conversion's own delete then fails, nobody removes the row and the tab
+    // the user closed comes back on the next hydrate/restart. closeTab now waits
+    // for the transition to settle, sees the rolled-back (non-ephemeral) identity
+    // and issues the delete itself.
+    const tab = await store.addTab('s1', 'web-browser', { url: 'https://a.example/' });
+    ipc.close.mockClear();
+
+    // The conversion's own delete hangs, then ultimately fails. closeTab must run
+    // WHILE it is still parked — that is the only window in which the tab is
+    // marked ephemeral but its ordinary row has not actually been removed.
+    let releaseConversionClose!: () => void;
+    ipc.close.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          releaseConversionClose = () => reject(new Error('db down'));
+        }),
+    );
+    ipc.close.mockImplementation(async () => ({ ok: true })); // closeTab's own delete succeeds
+
+    const converting = store
+      .patchTabState('s1', tab.id, (s) => ({ ...(s as object), url: PREVIEW_URL }))
+      .catch(() => undefined); // the conversion is expected to report failure
+    await new Promise((r) => setTimeout(r, 0)); // conversion parked on its delete
+
+    // User closes the tab while the conversion is still in flight.
+    await store.closeTab('s1', tab.id);
+
+    // Assert BEFORE releasing the conversion: while its delete is still parked it
+    // cannot have retried, so a second close can only be closeTab's own takeover.
+    // Without the takeover, closeTab reads the tab as ephemeral, skips its delete,
+    // and the ordinary row survives as a ghost — only 1 close would ever be made.
+    expect(ipc.close).toHaveBeenCalledTimes(2);
+
+    releaseConversionClose();
+    await converting;
   });
 });

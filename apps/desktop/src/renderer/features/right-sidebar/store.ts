@@ -72,33 +72,56 @@ function extractStateUrl(state: unknown): string {
  *    (codex-connector P1, round 27l Xw9-l)。
  * 返回 true 表示"新 URL 是预览"(调用方据此跳过持久化写)。
  */
-async function syncEphemeralStatus(sessionId: string, tabId: string, newUrl: string): Promise<boolean> {
-  const isPreview = isSandboxPreviewUrl(newUrl);
+/**
+ * **同步**翻转 ephemeral 身份,返回是否还需要异步清理旧持久行。
+ *
+ * 必须同步:同一 tick 内紧跟着到来的普通 patch(title / favicon /
+ * 下一个 URL——BrowserTabBody 全是 fire-and-forget)会**立刻**读 `isEphemeralTab`
+ * 决定要不要落库。若把身份翻转推迟到微任务(如放进转换队列的 task 里),
+ * preview→ordinary 之后紧跟的普通 patch 会误以为自己还是临时标签而直接 return,
+ * 该标签最终一行都没写进 DB,detach / 重启后整个消失。
+ */
+function applyEphemeralIdentity(tabId: string, isPreview: boolean): boolean {
   const wasEphemeral = ephemeralTabIds.has(tabId);
   if (isPreview && !wasEphemeral) {
-    // 先标 ephemeral:转换期间该 tab 不再持久化,即使后续操作被 await 中断
-    // 也不会把预览 URL 写进 DB。
+    // 标 ephemeral:转换期间该 tab 不再持久化,即使后续清理被 await 中断
+    // 也不会把预览 URL 写进 DB。旧持久行的清理交给异步段。
     ephemeralTabIds.add(tabId);
-    // 再排空该 tab 已入队的 state 写,避免 pending upsert 在删除后复活普通行。
-    try {
-      await settleTabStateWrites(sessionId, tabId);
-    } catch {
-      /* 排空失败仍尝试删行;hydrate 过滤兜底 */
-    }
-    try {
-      await cleanupOrphanTabRow(sessionId, tabId, 'patchTabState->preview');
-    } catch (err) {
-      // 删除失败(重试耗尽):不能"标 ephemeral 却报成功"——残留的普通 URL 行
-      // 不会被 hydrate 的 preview 过滤删掉,宿主迁移/重启会复活旧普通状态
-      // (codex-connector P1, round 27l Xz_39)。回滚身份并传播错误,让
-      // patchTabState 报失败,由调用方决定。
-      ephemeralTabIds.delete(tabId);
-      throw err;
-    }
-  } else if (!isPreview && wasEphemeral) {
-    ephemeralTabIds.delete(tabId);
+    return true;
   }
-  return isPreview;
+  if (!isPreview && wasEphemeral) ephemeralTabIds.delete(tabId);
+  return false;
+}
+
+/**
+ * 转换的**异步**段:排空该 tab 排队中的 state 写,再删掉它此前落库的普通行。
+ * 只在 普通→预览 需要(预览→普通 无行可删,由 patchTabState 的正常写路径补建)。
+ */
+async function cleanupConvertedPreviewRow(
+  sessionId: string,
+  tabId: string,
+  isSuperseded: () => boolean,
+): Promise<void> {
+  // 排空该 tab 已入队的 state 写,避免 pending upsert 在删除后复活普通行。
+  try {
+    await settleTabStateWrites(sessionId, tabId);
+  } catch {
+    /* 排空失败仍尝试删行;hydrate 过滤兜底 */
+  }
+  // 创建仍在途时删行会拿到 NOT_FOUND(视为成功),随后 addTab 的 upsert 才落地
+  // → 旧普通行残留。等创建落定再删。
+  const create = pendingTabCreates.get(tabId);
+  if (create) await create.catch(() => false);
+  try {
+    await cleanupOrphanTabRow(sessionId, tabId, 'patchTabState->preview', isSuperseded);
+  } catch (err) {
+    // 删除失败(重试耗尽):不能"标 ephemeral 却报成功"——残留的普通 URL 行
+    // 不会被 hydrate 的 preview 过滤删掉,宿主迁移/重启会复活旧普通状态
+    // (codex-connector P1, round 27l Xz_39)。回滚身份并传播错误,让
+    // patchTabState 报失败,由调用方决定。
+    ephemeralTabIds.delete(tabId);
+    throw err;
+  }
 }
 
 /**
@@ -188,6 +211,61 @@ function enqueueCloseMutation(sessionId: string, task: () => Promise<void>): Pro
   });
   return run;
 }
+
+/**
+ * per-tab URL 预览边界转换的**串行队列 + 代次号**(key = `sessionId\0tabId`)。
+ *
+ * 一次转换不是原子的:它要 settle 排队写、DELETE 旧行、(可能)重试 DELETE,每一步
+ * 都是 await。此前逐个表现打补丁(跳过陈旧 upsert / 回滚 ephemeral / 回滚 cache URL)
+ * 守住的都是**转换后面的写入**,而**删除动作本身**始终没人守——旧的 normal→preview
+ * 转换卡在 settle 或 DELETE 重试等待里时,更新的 preview→ordinary 转换能整段跑完并
+ * 重建普通行,随后旧删除才发出 → 删掉的是**新行**,标签在 detach / 重启后消失
+ * (codex-connector P1)。
+ *
+ * 两层防护,一次根治该主题(不补兜底):
+ *  1. **串行**:同一 tab 的转换段整体排队,两次转换永不交错。
+ *  2. **代次校验**:转换一被发起就先占号(**排队之前**),在途的旧转换因此能在每次
+ *     `ipc.close` 之前(含重试)发现自己已被取代并放弃删除——此时行的归属已交给
+ *     更新的那次转换,由它写成正确状态。
+ *
+ * 无死锁:持锁段只等待**入队时刻已存在**的 state 写;后到的转换在拿锁前不会入队新写。
+ */
+const tabTransitionQueues = new Map<string, Promise<void>>();
+const tabTransitionRevisions = new Map<string, number>();
+
+/** 发起一次转换并占号。必须在**入队之前**调用,否则在途的旧转换看不到自己已被取代。 */
+function beginTabTransition(key: string): number {
+  const revision = (tabTransitionRevisions.get(key) ?? 0) + 1;
+  tabTransitionRevisions.set(key, revision);
+  return revision;
+}
+
+/** 本次转换是否已被更新的转换取代(取代 → 放弃删除,行归新转换所有)。 */
+function isTabTransitionSuperseded(key: string, revision: number): boolean {
+  return tabTransitionRevisions.get(key) !== revision;
+}
+
+/** 把一次转换排到该 tab 队尾。链本身吞异常(只用于排序),调用方仍拿到真实结果 / 异常。 */
+function enqueueTabTransition<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const prev = tabTransitionQueues.get(key) ?? Promise.resolve();
+  const run = prev.then(task);
+  const chained = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  tabTransitionQueues.set(key, chained);
+  void chained.then(() => {
+    // 队尾仍是自己 = 该 tab 已无在途/排队的转换,没有任何人还持有捕获的代次号,
+    // 此时连代次一起回收才安全(否则 ABA:回收后新转换从 1 重新开始,可能与某个
+    // 仍在途的旧转换捕获值相同)。store 是进程级单例,tab id churn 下不回收会让
+    // 这两个 Map 无界增长。
+    if (tabTransitionQueues.get(key) !== chained) return;
+    tabTransitionQueues.delete(key);
+    tabTransitionRevisions.delete(key);
+  });
+  return run;
+}
+
 const persistedStateBaselines = new Map<string, unknown>();
 const STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS = [25, 75, 150] as const;
 
@@ -299,15 +377,25 @@ async function cleanupOrphanTabRow(
   sessionId: string,
   tabId: string,
   caller: string,
+  isSuperseded?: () => boolean,
 ): Promise<void> {
   const ipc = ipcApi();
   if (!ipc || !shouldPersist(sessionId)) return;
   for (let attempt = 0; ; attempt += 1) {
+    // 代次校验必须挡在**每一次** close 之前(含重试):settle / 重试退避的等待期间,
+    // 更新的转换可能已经把这一行重建成正确状态。此时旧删除必须放弃——否则删掉的
+    // 是新行,标签在 detach / 重启后消失(codex-connector P1, round 27m X6Uc8)。
+    if (isSuperseded?.()) return;
     try {
       await ipc.close({ id: tabId });
       return;
     } catch (cleanupErr) {
       if (isTabRowMissingError(cleanupErr)) return;
+      // close 已发出**之后**才被取代的情况:此刻必须复核,且要赶在退避等待与
+      // 最终抛错之前。否则(a)白等一轮退避,(b)最终抛错会让调用方把 cache 回滚
+      // 成旧 URL、覆盖更新的转换,最新导航整个丢失
+      // 行已归新转换所有,放弃即可,不是失败。
+      if (isSuperseded?.()) return;
       if (attempt < STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS.length) {
         await wait(STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS[attempt]);
         continue;
@@ -331,6 +419,8 @@ function resetStateWriteQueue(): void {
   pendingStateWriteOrder.length = 0;
   patchRevisions.clear();
   persistedStateBaselines.clear();
+  tabTransitionQueues.clear();
+  tabTransitionRevisions.clear();
 }
 
 async function drainStateWrites(): Promise<void> {
@@ -896,7 +986,19 @@ export async function closeTab(
       // 同步该 active(codex-connector P2, round 27l XQGws):此前整个块被
       // `!isEphemeralTab(tabId)` 短路,DB 里 active 会停在被关预览标签的右邻
       // 之前的值,下次 hydrate/宿主迁移跳回旧 active。
-      if (persistable && !isEphemeralTab(tabId)) {
+      // 转换在途时 ephemeral 是**中间态**,不能照它决定要不要删行:
+      // 普通→预览转换同步标了 ephemeral 后进入删行重试,closeTab 见状跳过自己的
+      // close;转换若随后失败或被取代,**没有任何人删那行**——用户关掉的标签下次
+      // hydrate / 重启又回来了。
+      // 这里不能"等转换落定"再决定:转换可能正卡在自己的 DELETE 上,等它会死锁。
+      // 改为**接管**:提升代次让在途转换放弃删除,由 closeTab 用容忍 NOT_FOUND 的
+      // 清理路径删掉,保证恰好一方负责且不阻塞。
+      const transitionKey = tabStateWriteKey(sessionId, tabId);
+      const conversionInFlight = tabTransitionQueues.has(transitionKey);
+      if (persistable && isEphemeralTab(tabId) && conversionInFlight) {
+        beginTabTransition(transitionKey); // supersede:在途转换不再自己删行
+        await cleanupOrphanTabRow(sessionId, tabId, 'closeTab->conversion-in-flight');
+      } else if (persistable && !isEphemeralTab(tabId)) {
         await ipc!.close({ id: tabId });
         // —— close 已落库:从这里起任何失败都不得进入下面的回滚分支(把已删的
         // tab 插回 cache 会与 DB 反向分叉)。active 同步单独 catch 兜底。
@@ -1066,36 +1168,62 @@ export async function patchTabState(
   // 会把已变身的标签按错误身份恢复。仅当 URL 实际跨越边界才处理(其它 patch
   // 如 title/favicon 不触发,避免无谓的写队列 settle 破坏既有写序)。
   let transitionedPreviewToOrdinary = false;
+  // 默认落库本次 patch 的结果;跨越预览边界时会在异步段结束后改用**当时最新的**
+  // cache state(见下方 latest-wins 注释)。
+  let stateToPersist: unknown = newState;
   if (oldTab.kind === 'web-browser') {
     const oldUrl = extractStateUrl(oldTab.state);
     const newUrl = extractStateUrl(newState);
     const wasPreview = isSandboxPreviewUrl(oldUrl);
     const isPreview = isSandboxPreviewUrl(newUrl);
     if (wasPreview !== isPreview) {
-      try {
-        await syncEphemeralStatus(sessionId, tabId, newUrl);
-      } catch (err) {
-        // 删除失败(普通→预览):回滚 cache 里的预览 URL,否则后续 title/favicon
-        // patch 走普通 upsert 把失效预览 token 写回仍存活的数据库行
-        // (codex-connector P2, round 27l X1gEf)。只回滚 URL 字段,保留其它 state。
-        const current = getBucket(sessionId);
-        const curTab = current.tabs.find((t) => t.id === tabId);
-        if (curTab && typeof curTab.state === 'object' && curTab.state !== null) {
-          const rolledBack = { ...(curTab.state as Record<string, unknown>), url: oldUrl };
-          const tabs = [...current.tabs];
-          tabs[idx] = { ...curTab, state: rolledBack };
-          setBucket(sessionId, { tabs });
+      // 转换段整体串行 + 代次校验(round 27m X6Uc8):先占号再排队——占号必须早于排队,
+      // 否则在途的旧转换看不到自己已被取代,会在 settle / DELETE 重试之后把更新
+      // 的转换刚建好的行删掉。详见 tabTransitionQueues 注释。
+      const transitionKey = tabStateWriteKey(sessionId, tabId);
+      const transitionRevision = beginTabTransition(transitionKey);
+      const isSuperseded = () => isTabTransitionSuperseded(transitionKey, transitionRevision);
+      // 身份翻转**同步**做掉,不能进队列:同 tick 紧跟的普通 patch 会
+      // 立刻读 isEphemeralTab 决定要不要落库,推迟一个微任务就会让它误判并整个
+      // 跳过持久化 —— 转普通后的标签一行都不写,重启即消失。只有"删旧行"这段
+      // 异步工作需要排队。
+      const needsRowCleanup = applyEphemeralIdentity(tabId, isPreview);
+      const stillCurrent = await enqueueTabTransition(transitionKey, async () => {
+        try {
+          if (needsRowCleanup) await cleanupConvertedPreviewRow(sessionId, tabId, isSuperseded);
+        } catch (err) {
+          // 删除失败(普通→预览):回滚 cache 里的预览 URL,否则后续 title/favicon
+          // patch 走普通 upsert 把失效预览 token 写回仍存活的数据库行
+          // (codex-connector P2, round 27l X1gEf)。只回滚 URL 字段,保留其它 state。
+          const current = getBucket(sessionId);
+          const curTab = current.tabs.find((t) => t.id === tabId);
+          if (curTab && typeof curTab.state === 'object' && curTab.state !== null) {
+            const rolledBack = { ...(curTab.state as Record<string, unknown>), url: oldUrl };
+            const tabs = [...current.tabs];
+            tabs[idx] = { ...curTab, state: rolledBack };
+            setBucket(sessionId, { tabs });
+          }
+          throw err;
         }
-        throw err;
-      }
-      // 竞态防护:syncEphemeralStatus 的 await 期间,后续 patch 可能已把该 tab
-      // 的 URL 再次跨越预览边界(如 normal→preview 排队时又来 preview→ordinary)。
-      // 旧转换恢复后必须重读当前状态,若 URL 已非本次入参则跳过写库——否则
-      // cache 显示新 URL 而 SQLite 写入过期值,宿主迁移/重启恢复错误状态
-      // (codex-connector P1, round 27l Xz_34)。
-      const now = getBucket(sessionId);
-      const currentTab = now.tabs.find((t) => t.id === tabId);
-      if (currentTab && extractStateUrl(currentTab.state) !== newUrl) return;
+        // 竞态防护:转换段的 await 期间,后续 patch 可能已把该 tab 的 URL 再次
+        // 跨越预览边界(如 normal→preview 排队时又来 preview→ordinary)。旧转换
+        // 恢复后必须重读当前状态,若 URL 已非本次入参则跳过写库——否则 cache
+        // 显示新 URL 而 SQLite 写入过期值,宿主迁移/重启恢复错误状态
+        // (codex-connector P1, round 27l Xz_34)。
+        // tab 已不在 bucket 里(转换期间被 closeTab 移除)同样算作陈旧:此时
+        // 再 upsert 会把已关闭的标签重新写回 DB,重启后幽灵复活
+        const now = getBucket(sessionId);
+        const currentTab = now.tabs.find((t) => t.id === tabId);
+        return !!currentTab && extractStateUrl(currentTab.state) === newUrl;
+      });
+      if (!stillCurrent) return;
+      // latest-wins:转换的异步段期间,同 tab 的普通 patch
+      // (title / favicon —— BrowserTabBody 全是 fire-and-forget)可能已经把更新的
+      // state 落了库。此刻若仍用调用时捕获的 newState 去 upsert,就会把那些更新
+      // **覆盖回旧值**(改了标题存不进去)。URL 已在上面确认未变,所以改用当前
+      // cache 里的完整 state:URL 仍是本次的 newUrl,但带上了期间累积的其它字段。
+      const latest = getBucket(sessionId).tabs.find((t) => t.id === tabId);
+      if (latest) stateToPersist = latest.state;
       transitionedPreviewToOrdinary = wasPreview && !isPreview;
     }
   }
@@ -1113,7 +1241,7 @@ export async function patchTabState(
       sessionId,
       kind: oldTab.kind,
       position: idx,
-      state: newState,
+      state: stateToPersist,
     },
     revision,
   );
