@@ -31,10 +31,30 @@ export interface ReviewWorkspaceEvidence {
   sensitiveFilesOmitted?: number;
 }
 
+/**
+ * The branch's own work: everything it changed relative to where it forked.
+ *
+ * A committed branch leaves a clean tree and an unrelated last turn, so without
+ * this the review would see no code at all — or worse, review only the most
+ * recent turn while appearing to cover the branch.
+ */
+export interface ReviewBranchEvidence {
+  baseRef: string;
+  fileCount: number;
+  diffs: FileDiff[];
+  capped: ReviewCappedDiffData | null;
+  sensitiveFilesOmitted?: number;
+  /** Set when the branch diff could not be read completely. */
+  unavailableReason?: string;
+}
+
 export interface BuildReviewPromptInput {
   focus?: string;
   context: ReviewContextMessage[];
   workspace: ReviewWorkspaceEvidence | null;
+  branch?: ReviewBranchEvidence | null;
+  /** Why no branch evidence is present, when it should have been. */
+  branchUnavailableReason?: string;
   changeSet: TurnChangeSetDetail | null;
   artifacts: ReviewArtifactLabel[];
   artifactsOmitted?: boolean;
@@ -146,7 +166,10 @@ function diffSection(diffs: FileDiff[]): string {
   return parts.join('\n\n');
 }
 
-function cappedBucketSection(label: '已暂存' | '未暂存', capped: ReviewCappedDiffData): string {
+function cappedBucketSection(
+  label: '已暂存' | '未暂存' | '分支',
+  capped: ReviewCappedDiffData,
+): string {
   const safeFiles = capped.files.filter(
     (file) =>
       !isReviewSensitiveCredentialPath(file.path) &&
@@ -179,6 +202,19 @@ function workspaceDiffSection(workspace: ReviewWorkspaceEvidence): string {
   return clip(parts.join('\n\n'), MAX_DIFF_CHARS);
 }
 
+function branchDiffSection(branch: ReviewBranchEvidence): string {
+  const parts: string[] = [];
+  if (branch.diffs.length > 0) parts.push(diffSection(branch.diffs));
+  if (branch.capped) parts.push(cappedBucketSection('分支', branch.capped));
+  if (parts.length === 0) {
+    if ((branch.sensitiveFilesOmitted ?? 0) > 0) {
+      return '（敏感路径变更已从证据中排除，且没有其它可嵌入的文本补丁；不得读取或评价敏感内容。）';
+    }
+    return '（本分支相对基线有变更，但没有可嵌入的文本补丁；请用只读工具检查列出的文件。）';
+  }
+  return clip(parts.join('\n\n'), MAX_DIFF_CHARS);
+}
+
 function coverageSection(input: BuildReviewPromptInput): string {
   if (input.workspace?.dirty) {
     const capped = [
@@ -194,17 +230,32 @@ function coverageSection(input: BuildReviewPromptInput): string {
       ? `${summary}${sensitiveNote}${capped.join('、')}变更因体量上限只有摘要；必须用只读工具补查非敏感路径，且不得声称已完整覆盖。`
       : `${summary}${sensitiveNote}下方包含当前已暂存和未暂存补丁；二进制、超大或不可渲染的非敏感文件仍须用只读工具核对。`;
   }
+  if (input.branch) {
+    const summary = `当前 Git 工作区没有未提交变更；下方是本分支相对基线 ${inlineLabel(input.branch.baseRef)} 的全部提交变更（${input.branch.fileCount} 个文件）。`;
+    const sensitiveNote =
+      (input.branch.sensitiveFilesOmitted ?? 0) > 0
+        ? `其中 ${input.branch.sensitiveFilesOmitted} 份敏感路径变更已从证据中排除；不得读取或评价其内容。`
+        : '';
+    return input.branch.capped
+      ? `${summary}${sensitiveNote}部分变更���体量上限只有摘要；必须用只读工具补查非敏感路径，且不得声称已完整覆盖。`
+      : `${summary}${sensitiveNote}二进制、超大或不可渲染的非敏感文件仍须用只读工具核对。`;
+  }
   if (input.changeSet) {
     const workspaceNote = input.workspace
       ? input.workspace.disabledReason
         ? `当前 Git 工作区不可用（${input.workspace.disabledReason}）。`
         : '当前 Git 工作区没有未提交变更。'
       : '当前 Git 工作区证据读取失败或不可用。';
+    // A branch diff would be the better evidence here but could not be read;
+    // say so explicitly rather than let the last turn stand in for the branch.
+    const branchNote = input.branchUnavailableReason
+      ? `本分支相对基线的整体差异无法读取（${input.branchUnavailableReason}），因此下方只是最近一轮的证据。`
+      : '';
     const turnNote =
       input.changeSet.state === 'complete' && input.changeSet.incompleteReasons.length === 0
         ? '下方提供最近一轮捕获的变更证据，但它不等同于当前工作区全量差异。'
         : `最近一轮变更证据可能不完整。状态=${input.changeSet.state}；缺口=${input.changeSet.incompleteReasons.join(', ') || '未说明'}。不得声称已完整覆盖。`;
-    return `${workspaceNote}${turnNote}`;
+    return `${workspaceNote}${branchNote}${turnNote}`;
   }
   if (input.workspace?.disabledReason) {
     return `没有可用的 Git 变更证据（${input.workspace.disabledReason}）。这不是跳过审查的理由：请审查当前成果、显式附件和工作目录中的相关文件。`;
@@ -213,14 +264,20 @@ function coverageSection(input: BuildReviewPromptInput): string {
 }
 
 function changeEvidenceSection(input: BuildReviewPromptInput): string {
+  // Uncommitted work first: it is what the user is looking at right now.
+  // Then the branch's own commits, which are the deliverable once committed.
+  // The last turn is a fallback for tasks with no branch of their own.
   if (input.workspace?.dirty) return workspaceDiffSection(input.workspace);
+  if (input.branch) return branchDiffSection(input.branch);
   if (input.changeSet) return diffSection(input.changeSet.diffs);
   return '（无 Git 补丁。）';
 }
 
 function resolveTargetKind(input: BuildReviewPromptInput): ReviewTargetKind {
   const hasChanges =
-    !!input.workspace?.dirty || (!!input.changeSet && input.changeSet.diffs.length > 0);
+    !!input.workspace?.dirty ||
+    (!!input.branch && input.branch.fileCount > 0) ||
+    (!!input.changeSet && input.changeSet.diffs.length > 0);
   const hasArtifacts = input.artifacts.length > 0;
   if (hasChanges && hasArtifacts) return 'mixed';
   if (hasChanges) return 'changes';

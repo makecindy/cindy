@@ -7024,6 +7024,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           focus: evidence.focusPath ? `审查路径：${evidence.focusPath}` : request.focus,
           context: evidence.context,
           workspace: evidence.workspace,
+          branch: evidence.branch,
+          ...(evidence.branchUnavailableReason
+            ? { branchUnavailableReason: evidence.branchUnavailableReason }
+            : {}),
           changeSet: evidence.changeSet,
           artifacts: evidence.artifacts,
           artifactsOmitted: evidence.artifactsOmitted,

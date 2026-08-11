@@ -11,12 +11,13 @@ import { messages } from '../localDb/schema.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
-import { readReviewData } from '../git-review/ipc.js';
+import { readReviewBranchDiff, readReviewData } from '../git-review/ipc.js';
 import { getTurnChangeSets, listTurnChangeSets } from '../turn-change-set/store.js';
 import type { TurnChangeSetDetail } from '../../shared/turnChangeSet.js';
 import { readReviewRunFromAgentMeta } from '../../shared/reviewRun.js';
 import type {
   ReviewArtifactLabel,
+  ReviewBranchEvidence,
   ReviewContextMessage,
   ReviewWorkspaceEvidence,
 } from './reviewPrompt.js';
@@ -66,6 +67,8 @@ export interface LoadedReviewEvidence {
   contextFingerprint: string;
   workspace: ReviewWorkspaceEvidence | null;
   workspaceFingerprint: string | null;
+  branch: ReviewBranchEvidence | null;
+  branchUnavailableReason?: string;
   changeSet: TurnChangeSetDetail | null;
   artifacts: ReviewArtifactLabel[];
   artifactExcerpts: ReviewArtifactExcerpt[];
@@ -100,6 +103,51 @@ function mapReviewWorkspace(
     disabledReason: reviewData.summary.disabledReason,
     diffs: sanitized.value,
     sensitiveFilesOmitted: sanitized.omittedSensitiveFiles,
+  };
+}
+
+/**
+ * The branch's own commits, read only when the tree is clean.
+ *
+ * With uncommitted work present that work is the review target. Once it is
+ * committed the tree goes clean and the last turn is no longer a faithful
+ * stand-in for the branch — reviewing it would silently cover one turn while
+ * appearing to cover the whole branch.
+ */
+async function loadReviewBranchEvidence(
+  sessionId: string,
+  readBranchDiff: typeof readReviewBranchDiff,
+): Promise<{ branch: ReviewBranchEvidence | null; unavailableReason?: string }> {
+  let data: Awaited<ReturnType<typeof readReviewBranchDiff>>;
+  try {
+    data = await readBranchDiff(sessionId, null);
+  } catch (error) {
+    return { branch: null, unavailableReason: error instanceof Error ? error.message : '读取失败' };
+  }
+  if (!data.baseRef || !data.mergeBaseOid) {
+    return { branch: null, unavailableReason: data.warning?.code ?? '未找到基线分支' };
+  }
+  const sanitized = sanitizeReviewDiffBucket({
+    staged: data.diffs,
+    unstaged: [],
+    capped: { staged: data.capped, unstaged: null },
+  });
+  const diffs = sanitized.value.staged;
+  const capped = sanitized.value.capped?.staged ?? null;
+  const fileCount = capped ? capped.stats.fileCount : diffs.length;
+  if (fileCount === 0 && sanitized.omittedSensitiveFiles === 0) {
+    // Nothing of its own to review; fall through to the last turn.
+    return { branch: null };
+  }
+  return {
+    branch: {
+      baseRef: data.baseRef,
+      fileCount,
+      diffs,
+      capped,
+      sensitiveFilesOmitted: sanitized.omittedSensitiveFiles,
+      ...(data.warning ? { unavailableReason: data.warning.code } : {}),
+    },
   };
 }
 
@@ -464,6 +512,12 @@ export async function loadReviewEvidence(input: {
   const changeSet = sanitizeReviewChangeSet(rawChangeSet).value;
   const workspaceSnapshot = await readReviewWorkspaceSnapshot(input.sourceSessionId);
   const workspace = workspaceSnapshot?.workspace ?? null;
+  // Only when there is no uncommitted work: that work, when present, is what
+  // the user is asking about, and reading the branch as well would bury it.
+  const branchEvidence =
+    workspace && !workspace.dirty && !workspace.disabledReason
+      ? await loadReviewBranchEvidence(input.sourceSessionId, readReviewBranchDiff)
+      : { branch: null };
 
   const artifacts: ReviewArtifactLabel[] = [];
   const artifactExcerpts: ReviewArtifactExcerpt[] = [];
@@ -652,6 +706,10 @@ export async function loadReviewEvidence(input: {
     contextFingerprint: fingerprintReviewContextRows(visibleRows),
     workspace,
     workspaceFingerprint: workspaceSnapshot?.fingerprint ?? null,
+    branch: branchEvidence.branch,
+    ...(branchEvidence.unavailableReason
+      ? { branchUnavailableReason: branchEvidence.unavailableReason }
+      : {}),
     changeSet,
     artifacts,
     artifactExcerpts,

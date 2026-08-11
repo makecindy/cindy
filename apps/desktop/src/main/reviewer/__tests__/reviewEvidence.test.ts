@@ -5,11 +5,14 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { readReviewDataMock, reviewRows, utilityProcessFork } = vi.hoisted(() => ({
-  readReviewDataMock: vi.fn(),
-  reviewRows: [] as Array<Record<string, unknown>>,
-  utilityProcessFork: vi.fn(),
-}));
+const { readReviewDataMock, readReviewBranchDiffMock, reviewRows, utilityProcessFork } = vi.hoisted(
+  () => ({
+    readReviewDataMock: vi.fn(),
+    readReviewBranchDiffMock: vi.fn(),
+    reviewRows: [] as Array<Record<string, unknown>>,
+    utilityProcessFork: vi.fn(),
+  }),
+);
 
 vi.mock('electron', () => ({ utilityProcess: { fork: utilityProcessFork } }));
 vi.mock('../../localDb/client/current.js', () => ({
@@ -25,7 +28,10 @@ vi.mock('../../localDb/client/current.js', () => ({
     },
   }),
 }));
-vi.mock('../../git-review/ipc.js', () => ({ readReviewData: readReviewDataMock }));
+vi.mock('../../git-review/ipc.js', () => ({
+  readReviewData: readReviewDataMock,
+  readReviewBranchDiff: readReviewBranchDiffMock,
+}));
 vi.mock('../../turn-change-set/store.js', () => ({
   listTurnChangeSets: async () => [],
   getTurnChangeSets: async () => [],
@@ -92,12 +98,24 @@ async function tempDir(): Promise<string> {
 
 beforeEach(() => {
   readReviewDataMock.mockResolvedValue(nonGitReviewData());
+  readReviewBranchDiffMock.mockResolvedValue({
+    scope: null,
+    baseRef: null,
+    baseOid: null,
+    headOid: null,
+    mergeBaseOid: null,
+    candidates: [],
+    diffs: [],
+    capped: null,
+    warning: null,
+  });
   utilityProcessFork.mockImplementation(() => new RejectingPdfUtility());
 });
 
 afterEach(async () => {
   reviewRows.splice(0);
   readReviewDataMock.mockReset();
+  readReviewBranchDiffMock.mockReset();
   utilityProcessFork.mockReset();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -628,5 +646,42 @@ describe('loadReviewEvidence attachment boundaries', () => {
       expect.objectContaining({ type: 'image', base64: 'Zmlyc3Q=', originalName: 'same.png' }),
       expect.objectContaining({ type: 'image', base64: 'c2Vjb25k', originalName: 'same.png' }),
     ]);
+  });
+
+  it('does not read the branch diff while uncommitted work exists', async () => {
+    // Uncommitted work is the review target; reading the branch as well would
+    // bury it under commits the user is not asking about.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cappedReviewData(repoRoot, 'src/a.ts'));
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(readReviewBranchDiffMock).not.toHaveBeenCalled();
+    expect(evidence.branch).toBeNull();
+  });
+
+  it('does not read the branch diff for a non-Git task', async () => {
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: '/tmp/non-git-review',
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(readReviewBranchDiffMock).not.toHaveBeenCalled();
+    expect(evidence.branch).toBeNull();
   });
 });
