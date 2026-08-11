@@ -170,6 +170,14 @@ export class MemoryStorage {
     /** 已就绪的目录绝对路径, e.g. <userData>/maker-memory/<sanitized-workdir>/ */
     public readonly dir: string,
     public readonly config: MemoryConfig = DEFAULT_MEMORY_CONFIG,
+    /**
+     * 文件系统写入前守卫 (review #2388 Codex 8th P1): write 内部在真正写盘前
+     * 有 await (tryReadRaw 读现有文件判 mode), 边界可在此窗口发生 — 必须在该
+     * await 之后、fs.writeFile 之前复核 owner scope, 否则直接调用方 (如 Pi
+     * compaction 经 manager.write, withStore 后置检查之外) 会把写入落到旧
+     * owner 根后报成功。由 store 透传 manager 注入的 scopeCheck。
+     */
+    private readonly beforeFileWrite?: () => void,
   ) {}
 
   /** mkdir -p + 写 meta.json (如缺失). 幂等。 */
@@ -291,6 +299,9 @@ export class MemoryStorage {
     }
 
     const fileText = matter.stringify(nextBody, nextFrontmatter);
+    // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
+    // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
+    this.beforeFileWrite?.();
     await fs.writeFile(fullPath, fileText, 'utf8');
     await this.rebuildIndex();
 

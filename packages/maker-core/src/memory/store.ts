@@ -81,7 +81,13 @@ export class MakerMemoryStore {
 
   constructor(private readonly deps: MakerMemoryStoreDeps) {
     const config = { ...DEFAULT_MEMORY_CONFIG, ...(deps.config ?? {}) };
-    this.storage = new MemoryStorage(deps.storageDir, config);
+    this.storage = new MemoryStorage(
+      deps.storageDir,
+      config,
+      // 透传 scope 守卫到 storage 写路径 — write 内部 tryReadRaw await 窗口后、
+      // 真正写盘前复核 (review #2388 Codex 8th P1)
+      deps.scopeCheck ? () => this.assertScopeOk() : undefined,
+    );
     this.fts = new MemoryFts(deps.db);
     this.logger = deps.logger;
   }
