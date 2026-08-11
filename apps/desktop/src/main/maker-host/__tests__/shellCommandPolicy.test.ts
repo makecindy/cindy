@@ -377,6 +377,9 @@ EOF
 sh /tmp/x.sh`,
     `bash <<< '"xcr" + "un" + " sim" + "ctl shutdown DEVICE"'`,
     `bash <<< '"xcr" "un" " sim" "ctl shutdown DEVICE"'`,
+    `python3 <<< 'print("a|b"); os.system("xcrun simctl shutdown DEVICE")'`,
+    `python3 <<< 'print("a|b"); os.system("xcr" + "un" + " sim" + "ctl shutdown DEVICE")'`,
+    `python3 <<< 'x = "|"; os.system("xcrun simctl shutdown DEVICE")'`,
     `cat <<< 'x' | python3 <<< '"xcr" "un" " sim" "ctl shutdown DEVICE"'`,
     `cat <<< 'x' | python3 <<< 'xcrun simctl shutdown DEVICE'`,
     `cat <<< 'x' | bash <<< 'xcrun simctl shutdown DEVICE'`,
@@ -587,6 +590,7 @@ EOF`,
     `cat <<< 'x' | bash <<< 'echo hi'`,
     `python3 <<< 'print(1)' | cat <<< 'xcrun simctl shutdown DEVICE'`,
     `python3 <<< 'print(1)' | grep x <<< 'xcrun simctl shutdown DEVICE'`,
+    `python3 <<< 'print("a|b")' | cat`,
     `echo 'echo hello' | sh`,
     `cat <<'EOF' | sh
 printf '%s' "$var"

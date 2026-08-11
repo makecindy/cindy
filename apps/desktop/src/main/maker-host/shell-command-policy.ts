@@ -1689,6 +1689,33 @@ function redactNonShellHeredocBodies(command: string): string {
   return redacted.join('\n');
 }
 
+/** Index of the first `|` outside quotes, or -1. */
+function unquotedPipeIndex(text: string): number {
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '|') return index;
+  }
+  return -1;
+}
+
 /** A here-string is executable stdin just like a heredoc or producer pipeline. */
 function containsInterpreterHereStringBypass(command: string): boolean {
   for (const clause of shellClauses(command)) {
@@ -1711,10 +1738,11 @@ function containsInterpreterHereStringBypass(command: string): boolean {
       }
       if (quote || clause.slice(index, index + 3) !== '<<<') continue;
       const consumer = clause.slice(0, index).trim();
-      // The payload ends at the next pipeline boundary: a later here-string
-      // belongs to a different consumer (`python3 <<< code | cat <<< data`).
+      // The payload ends at the next unquoted pipeline boundary: a later
+      // here-string belongs to a different consumer (`python3 <<< code |
+      // cat <<< data`), while a `|` inside quotes is payload text.
       const rest = clause.slice(index + 3);
-      const pipeIndex = rest.indexOf('|');
+      const pipeIndex = unquotedPipeIndex(rest);
       const payload = pipeIndex === -1 ? rest : rest.slice(0, pipeIndex);
       if (
         shellSegments(consumer).some((segment) =>
