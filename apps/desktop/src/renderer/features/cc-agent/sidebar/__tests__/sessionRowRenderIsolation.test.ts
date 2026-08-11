@@ -18,7 +18,7 @@
  */
 
 import { createElement, Fragment } from 'react';
-import { act, cleanup, createEvent, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -194,6 +194,30 @@ describe('SessionItem — 归档视觉', () => {
     expect(archivedIconBranch).toContain('text-[var(--sidebar-item-active-foreground)]');
     expect(archivedIconBranch).toContain('strokeWidth={1.75}');
     expect(archivedIconBranch).toContain('text-[var(--cmd-palette-item-meta)]');
+  });
+});
+
+describe('SessionItem — 任务菜单', () => {
+  it('不再暴露分栏打开入口', () => {
+    render(rowsElement([makeSession('menu-session')], new Set()));
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'ccAgent.sidebar.sessionMenu.moreActions',
+      }),
+    );
+
+    const menu = screen.getByRole('menu');
+    expect(
+      within(menu).getByRole('menuitem', {
+        name: 'ccAgent.sidebar.sessionMenu.rename',
+      }),
+    ).toBeTruthy();
+    expect(
+      within(menu).queryByRole('menuitem', {
+        name: /(?:splitGroup\.openInSplit|在分栏中打开)/,
+      }),
+    ).toBeNull();
   });
 });
 
