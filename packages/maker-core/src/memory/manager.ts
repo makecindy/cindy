@@ -666,6 +666,10 @@ export class MakerMemoryManager {
       try {
         entries = await fs.readdir(memoryRoot);
       } catch {
+        // 空根/ENOENT 分支 (review #2388 Codex 21st P1): 也视为一次完成的 reset
+        // 尝试 — 必须 bump generation, 否则 init 中暂停的 getStore 恢复后通过
+        // generation 检查, 在用户可见的 reset 完成后写入新 memory。
+        this.poolGeneration += 1;
         return { removedCount: 0 };
       }
       for (const entry of entries) {
@@ -751,6 +755,9 @@ export class MakerMemoryManager {
     ].join('\n');
 
     const suggestions = await agent.oneShot(prompt, { maxTokens: 800, timeoutMs: 60_000 });
+    // oneShot await 后、返回前复核 (review #2388 Codex 21st P1): 边界在 LLM
+    // 调用期间发生则建议文本基于旧 owner 数据 — 不得向当前 session 报 ok。
+    this.assertScopeUnchanged(scopeAtEntry);
     return { suggestions };
   }
 
