@@ -7009,9 +7009,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         throw error;
       }
+      // A committed branch is reviewable content on its own: opening an existing
+      // worktree and running /review has no conversation, no dirty tree and no
+      // turn of its own, yet the branch's commits are exactly what to review.
       if (
         evidence.context.length === 0 &&
         !evidence.workspace?.dirty &&
+        !evidence.branch &&
         !evidence.changeSet &&
         evidence.artifacts.length === 0 &&
         !request.focus
