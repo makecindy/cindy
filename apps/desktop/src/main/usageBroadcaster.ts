@@ -541,6 +541,30 @@ function isCodexWindowlessFallback(snapshot: RateLimitSnapshot): boolean {
   return !snapshot.primary && !snapshot.secondary;
 }
 
+/** 窗口可用 = 非空且 usedPercent 是有限数(RateLimitWindow 的必填字段)。 */
+function hasUsableCodexWindow(snapshot: RateLimitSnapshot | null | undefined): boolean {
+  return [snapshot?.primary, snapshot?.secondary].some(
+    (window) => Boolean(window) && Number.isFinite(window?.usedPercent),
+  );
+}
+
+/**
+ * payload 是否值得落库: 任一槽(顶层 / 桶表 / web)带可用窗口。
+ *
+ * windowless 稀疏事件本身是合法的(app-server 滚动更新契约), merge 靠内存旧值兜住
+ * 窗口 —— 但内存为空时(hydration 读库失败 / owner 未初始化被跳过)无值可兜, 全 null
+ * payload 会原样 upsert, 把持久化行里的有效数据永久抹掉(2026-08-11 用户实报)。
+ * 空 payload 不落库: 保留旧行, 重启后 hydration 仍能读回有效数据。
+ */
+function hasPersistableCodexAccountUsage(payload: CodexAccountUsagePayload | null): boolean {
+  if (!payload) return false;
+  return (
+    hasUsableCodexWindow(payload)
+    || hasUsableCodexWindow(payload.webSnapshot)
+    || Object.values(payload.appServerBuckets ?? {}).some(hasUsableCodexWindow)
+  );
+}
+
 async function ensureCodexAccountUsageLoaded(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
   if (codexAccountUsageLoaded) return;
@@ -606,6 +630,12 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
   }
   const payload = buildCodexAccountUsagePayload();
   broadcastCodexAccountUsage(payload);
+
+  // 无可用窗口的 payload 不 upsert(保留旧行), 见 hasPersistableCodexAccountUsage。
+  if (!hasPersistableCodexAccountUsage(payload)) {
+    log.warn('skip persisting codex account usage snapshot without any usable window');
+    return;
+  }
 
   try {
     await getDbClient().exec(
@@ -748,6 +778,19 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
   await claudeSubscriptionUsageLoadPromise;
 }
 
+/** 与 codex 侧 hasUsableCodexWindow 同口径: 窗口非空且 utilization 是有限数。 */
+function hasPersistableClaudeSubscriptionUsage(
+  snapshot: ClaudeSubscriptionUsageSnapshot,
+): boolean {
+  const usable = (window: { utilization?: number } | null | undefined): boolean =>
+    Boolean(window) && Number.isFinite(window?.utilization);
+  return (
+    usable(snapshot.fiveHour)
+    || usable(snapshot.sevenDay)
+    || (snapshot.scoped?.some(usable) ?? false)
+  );
+}
+
 export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): Promise<void> {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
 
@@ -764,6 +807,13 @@ export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): 
   );
   claudeSubscriptionUsageSnapshot = next;
   broadcastClaudeSubscriptionUsage(next);
+
+  // 与 codex 侧同一条保护: status-only 增量落在空内存缓存上(hydration 读库失败)时,
+  // merge 无旧值可保, 全空快照不得 upsert 抹掉持久化行里的有效窗口。
+  if (!hasPersistableClaudeSubscriptionUsage(next)) {
+    log.warn('skip persisting claude subscription usage snapshot without any usable window');
+    return;
+  }
 
   try {
     await getDbClient().exec(

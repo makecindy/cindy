@@ -384,6 +384,65 @@ describe('codex stale bucket pruning', () => {
   });
 });
 
+describe('empty snapshot must not clobber the persisted row', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mocks.queryOne.mockReset().mockResolvedValue(null);
+    mocks.exec.mockReset().mockResolvedValue(undefined);
+    mocks.getCurrentUserId.mockReturnValue('user-1');
+  });
+
+  // 2026-08-11 用户实报的真实覆盖事故: 一条全 null 的 windowless app-server 事件
+  // 落在**空的内存缓存**上(hydration 未命中), merge 无旧值可保, 全 null 桶被
+  // 无条件 upsert 落库 —— 持久化行里的有效窗口 / credits / planType 永久丢失,
+  // 且对消费方是静默失败(JSON 可解析、字段都在、值全 null)。
+  const NULL_SPARSE_EVENT = {
+    limitId: 'codex',
+    limitName: null,
+    primary: null,
+    secondary: null,
+    credits: null,
+    planType: null,
+    rateLimitReachedType: null,
+    source: 'codex-app-server',
+  };
+
+  it('skips persistence when hydration failed and the event carries no usable window', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // 冷缓存 hydration 读库失败(db busy 等) → 内存为空, 但持久化行还躺着好数据。
+    mocks.queryOne.mockRejectedValue(new Error('db busy'));
+
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+
+    // 全 null payload 不得 upsert —— 否则库里的有效行被抹掉且不可恢复。
+    expect(mocks.exec).not.toHaveBeenCalled();
+  });
+
+  it('skips persistence when the owner is not initialized yet', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // 启动早期 getCurrentUserId 尚不可用 → hydration 被跳过, 内存为空。
+    mocks.getCurrentUserId.mockReturnValue(null as unknown as string);
+
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+
+    expect(mocks.exec).not.toHaveBeenCalled();
+  });
+
+  it('still persists windowless events merged onto hydrated windows (regression guard)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // hydration 正常命中: windowless 稀疏事件按契约并入已有桶, 窗口保留 → 照常落库。
+    mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.primary?.usedPercent).toBe(82);
+    expect(persisted.secondary?.usedPercent).toBe(55);
+  });
+});
+
 describe('sparse rate-limit updates without a limitId', () => {
   beforeEach(() => {
     vi.resetModules();

@@ -88,6 +88,49 @@ describe('claude subscription snapshot hydration race', () => {
     expect(current?.updatedAt).toBe(2);
   });
 
+  it('does not clobber the persisted row with a window-less snapshot when hydration failed', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // 冷缓存 hydration 读库失败 → 内存为空; 一笔 status-only headers 快照
+    // (仅 rateLimitStatus, 无任何窗口)到达。merge 无旧值可保 → 全空快照会被
+    // 无条件 upsert, 抹掉持久化行里的有效窗口(与 codex 侧同形状的覆盖事故)。
+    mocks.queryOne.mockRejectedValue(new Error('db busy'));
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: null,
+      sevenDay: null,
+      rateLimitStatus: 'allowed',
+      source: 'unified-headers',
+      updatedAt: 5,
+    });
+
+    expect(mocks.exec).not.toHaveBeenCalled();
+  });
+
+  it('persists a status-only snapshot merged onto hydrated windows (regression guard)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // hydration 正常命中 → status-only 增量并入已有窗口, 照常落库且窗口保留。
+    mocks.queryOne.mockResolvedValue({
+      snapshot: JSON.stringify({
+        fiveHour: { utilization: 54, resetsAt: 1_786_355_999 },
+        source: 'oauth-endpoint',
+        updatedAt: 1,
+      }),
+    });
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: null,
+      sevenDay: null,
+      rateLimitStatus: 'allowed',
+      source: 'unified-headers',
+      updatedAt: 5,
+    });
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.fiveHour?.utilization).toBe(54);
+  });
+
   it('discards an in-flight hydration result when clear wins the race', async () => {
     const broadcaster = await import('../usageBroadcaster');
     const dbRead = deferred<{ snapshot: string } | null>();
