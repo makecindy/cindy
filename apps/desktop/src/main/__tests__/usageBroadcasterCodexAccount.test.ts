@@ -456,6 +456,31 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(persisted.primary?.usedPercent).toBe(91);
   });
 
+  // 重试成功时读到的行比内存旧 —— hydration 失败期间收到的观测因守卫未能落库, 只活在
+  // 内存里。直接赋值会让 UI 回退到旧额度, 且那些观测永远等不到落库时机。
+  it('keeps snapshots received while hydration was failing', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockRejectedValueOnce(new Error('db busy'));
+
+    await broadcaster.recordCodexAccountUsageSnapshot({
+      limitId: 'codex',
+      primary: { usedPercent: 91, windowMinutes: 300, resetsAt: 1_800_000_000 },
+      source: 'codex-app-server',
+    });
+    expect(mocks.exec).not.toHaveBeenCalled();
+
+    // 重试读到的是更旧的持久化行(82%) —— 不得顶掉内存里的 91%。
+    mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+    const payload = await broadcaster.readCodexAccountUsageSnapshot();
+    expect(payload?.appServerBuckets?.codex?.primary?.usedPercent).toBe(91);
+
+    // 且这份观测在下一笔事件时随 payload 一并落库, 不会永久停在内存里。
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.primary?.usedPercent).toBe(91);
+  });
+
   it('skips persistence when the owner is not initialized yet', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // 启动早期 getCurrentUserId 尚不可用 → hydration 被跳过, 内存为空。

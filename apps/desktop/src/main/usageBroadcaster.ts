@@ -575,9 +575,12 @@ async function ensureCodexAccountUsageLoaded(): Promise<void> {
         const parsed = JSON.parse(row.snapshot);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
-          codexAppServerBuckets = slots.appServerBuckets;
-          codexAppServerLatestBucketKey = slots.latestBucketKey;
-          codexWebAccountUsageSnapshot = slots.web;
+          // hydration 只补空缺, 不覆盖内存 —— 首次读失败后重试期间, 内存里可能已经
+          // 装着那段时间收到的**更新**观测(它们因守卫未能落库)。库里的行比它们旧,
+          // 直接赋值会让 UI 回退到旧额度, 且那些观测永远等不到落库时机。
+          codexAppServerBuckets = { ...slots.appServerBuckets, ...codexAppServerBuckets };
+          codexAppServerLatestBucketKey = codexAppServerLatestBucketKey ?? slots.latestBucketKey;
+          codexWebAccountUsageSnapshot = codexWebAccountUsageSnapshot ?? slots.web;
         }
       } catch (err) {
         log.warn(
@@ -765,7 +768,12 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
         if (!row?.snapshot) return;
         const parsed = JSON.parse(row.snapshot);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          claudeSubscriptionUsageSnapshot = parsed as ClaudeSubscriptionUsageSnapshot;
+          // 理由同 codex 侧: 内存里可能是重试期间收到的更新快照, 库里的行是旧的 ——
+          // 以持久化行为底、内存增量在上做一次常规 merge, 而不是直接赋值。
+          const persisted = parsed as ClaudeSubscriptionUsageSnapshot;
+          claudeSubscriptionUsageSnapshot = claudeSubscriptionUsageSnapshot
+            ? mergeClaudeSubscriptionUsageSnapshot(persisted, claudeSubscriptionUsageSnapshot)
+            : persisted;
         }
       } catch (err) {
         log.warn(

@@ -128,6 +128,30 @@ describe('claude subscription snapshot hydration race', () => {
     expect(persisted.fiveHour?.utilization).toBe(42);
   });
 
+  // 与 codex 侧同一条: 重试读到的旧行不得顶掉 hydration 失败期间收到的新快照。
+  it('keeps snapshots received while hydration was failing', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockRejectedValueOnce(new Error('db busy'));
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: { utilization: 42 }, source: 'unified-headers', updatedAt: 2,
+    });
+    expect(mocks.exec).not.toHaveBeenCalled();
+
+    mocks.queryOne.mockResolvedValue({
+      snapshot: JSON.stringify({
+        fiveHour: { utilization: 5 },
+        scoped: [{ utilization: 12, modelDisplayName: 'Opus' }],
+        source: 'oauth-endpoint',
+        updatedAt: 1,
+      }),
+    });
+    const current = await broadcaster.readClaudeSubscriptionUsageSnapshot();
+    // 内存里的 42% 胜出, 同时补上库里独有的 scoped(端点源才有, headers 源没有)。
+    expect(current?.fiveHour?.utilization).toBe(42);
+    expect(current?.scoped?.[0]?.modelDisplayName).toBe('Opus');
+  });
+
   it('persists a rejected status even without windows (与 codex 侧 reached 标记同口径)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // rejected 是权威的「请求已被拒」信号(isClaudeSubscriptionAlerting 直接据此告警),
