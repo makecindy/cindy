@@ -636,6 +636,58 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
     );
   });
 
+  it("does not let a later settled create retire older incomplete startup evidence", async () => {
+    const oldMarkerName =
+      "__CindyPending__profilealpha__11111111-2222-4333-8444-555555555555";
+    const newUdid = "2A9D41E0-E031-4AD0-A8B5-847480802E8E";
+    let listCount = 0;
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args[1] === "list") {
+          listCount += 1;
+          return {
+            stdout: devicesJson([
+              {
+                udid: UDID,
+                name: oldMarkerName,
+                deviceTypeIdentifier: null,
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[1] === "create") {
+          return { stdout: `${newUdid}\n`, stderr: "", exitCode: 0 };
+        }
+        if (args[1] === "rename") {
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        throw new Error(`unexpected ${args.join(" ")}`);
+      },
+    );
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "profilealpha",
+      pendingCreateEvidence: evidence,
+    });
+
+    await expect(
+      lifecycle.recoverPendingCreatesAtStartup?.([]),
+    ).resolves.toEqual({ recovered: [], complete: false });
+    expect(listCount).toBe(2);
+
+    const created = await lifecycle.createExact({
+      name: "Cindy iPhone",
+      deviceTypeIdentifier: DEVICE_TYPE,
+      runtimeIdentifier: RUNTIME,
+    });
+    await lifecycle.renameExact?.(created.udid, "Cindy iPhone");
+
+    expect(evidence.cleared).toEqual([]);
+  });
+
   it("cancels create and deletes only an exact late-created UDID", async () => {
     const controller = new AbortController();
     const reason = new Error("create cancelled for exit");

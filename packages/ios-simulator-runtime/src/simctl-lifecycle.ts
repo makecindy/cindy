@@ -552,6 +552,10 @@ export function createIOSSimulatorSimctlLifecycle(
    */
   const pendingCreateMarkers = new Map<string, string | null>();
   let lastArmedEvidenceGeneration = 0;
+  // Evidence may predate this lifecycle. If startup recovery could not prove
+  // that older marker is gone, a later create must not retire the shared file
+  // merely because its own marker settled successfully.
+  let startupRecoveryIncomplete = false;
 
   function armPendingCreateMarker(markerName: string): void {
     if (!pendingCreateEvidence) return;
@@ -568,7 +572,7 @@ export function createIOSSimulatorSimctlLifecycle(
   function settlePendingCreateMarker(markerName: string): void {
     if (!pendingCreateEvidence) return;
     if (!pendingCreateMarkers.delete(markerName)) return;
-    if (pendingCreateMarkers.size > 0) return;
+    if (pendingCreateMarkers.size > 0 || startupRecoveryIncomplete) return;
     // The newest arm is the generation the file now carries, so retiring against
     // it is a no-op if anything armed the breadcrumb outside this lifecycle.
     pendingCreateEvidence.clearIfUnchanged(lastArmedEvidenceGeneration);
@@ -976,9 +980,15 @@ export function createIOSSimulatorSimctlLifecycle(
           requireIdentifier(device.name, "name"),
         ]),
       );
-      const pending = (await list(signal)).filter((device) =>
-        isPendingCreateName(device.name),
-      );
+      let pending: IOSSimulatorDevice[];
+      try {
+        pending = (await list(signal)).filter((device) =>
+          isPendingCreateName(device.name),
+        );
+      } catch (error) {
+        startupRecoveryIncomplete = true;
+        throw error;
+      }
       const recovered: string[] = [];
       let complete = true;
       let firstFailure: unknown = null;
@@ -1013,11 +1023,18 @@ export function createIOSSimulatorSimctlLifecycle(
           await cleanupFailedCreate(udid, signal);
           recovered.push(udid);
         } catch (error) {
-          if (signal?.aborted) throwIfAborted(signal);
+          if (signal?.aborted) {
+            startupRecoveryIncomplete = true;
+            throwIfAborted(signal);
+          }
           firstFailure ??= error;
         }
       }
-      if (firstFailure !== null) throw firstFailure;
+      if (firstFailure !== null) {
+        startupRecoveryIncomplete = true;
+        throw firstFailure;
+      }
+      startupRecoveryIncomplete = !complete;
       return { recovered, complete };
     },
 
