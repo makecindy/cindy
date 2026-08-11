@@ -328,7 +328,6 @@ export interface CodexAccountUsagePayload extends RateLimitSnapshot {
 }
 
 let codexAccountUsageOwner: string | null = null;
-let codexAccountUsageLoaded = false;
 /**
  * 冷缓存 hydration 是否**成功读到过库**(读到空行也算)。
  *
@@ -336,6 +335,10 @@ let codexAccountUsageLoaded = false;
  * 内存是空的, 此时任何 merge 结果都不代表账号真实状态, 写回会抹掉库里的有效数据。
  * 不能改用「payload 内容看起来是否有用」判断: 合法的空(限额解除、credits 清零)与
  * 事故的空形状完全一致, 按内容判会把前者一并拦下。
+ *
+ * 它同时充当「无需再读库」的判据 —— 读失败时保持 false, 下一次 record / read 会重试。
+ * 若另设一个「已加载」标志并在失败时也置位, 一次瞬时 db busy 就会让本进程之后
+ * 所有落库被永久跳过。
  */
 let codexAccountUsageHydrated = false;
 // 并发 record 必须等同一次 SQLite 读完成后再按到达顺序 merge(与 claude 侧同款) ——
@@ -381,7 +384,6 @@ function resetCodexAccountUsageCacheIfOwnerChanged(): void {
   const owner = currentAccountUsageOwner();
   if (owner === codexAccountUsageOwner) return;
   codexAccountUsageOwner = owner;
-  codexAccountUsageLoaded = false;
   codexAccountUsageHydrated = false;
   codexAppServerBuckets = {};
   codexAppServerLatestBucketKey = null;
@@ -556,7 +558,7 @@ function isCodexWindowlessFallback(snapshot: RateLimitSnapshot): boolean {
 
 async function ensureCodexAccountUsageLoaded(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
-  if (codexAccountUsageLoaded) return;
+  if (codexAccountUsageHydrated) return;
   if (!codexAccountUsageLoadPromise) {
     codexAccountUsageLoadPromise = (async () => {
       try {
@@ -583,7 +585,7 @@ async function ensureCodexAccountUsageLoaded(): Promise<void> {
           err instanceof Error ? err.message : String(err),
         );
       } finally {
-        codexAccountUsageLoaded = true;
+        // 只清 in-flight 句柄。hydrated 仅在读成功时置位 —— 失败留给下一次重试。
         codexAccountUsageLoadPromise = null;
       }
     })();
@@ -655,8 +657,7 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
 
 export async function clearCodexAccountUsageSnapshot(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
-  codexAccountUsageLoaded = true;
-  // clear 后库里的状态是已知的(行被删掉), 之后到达的快照可以正常落库。
+  // clear 后库里的状态是已知的(行被删掉): 既不必再读库, 之后到达的快照也可正常落库。
   codexAccountUsageHydrated = true;
   codexAppServerBuckets = {};
   codexAppServerLatestBucketKey = null;
@@ -723,8 +724,7 @@ export function clearXaiRateLimitSnapshot(): void {
 // 误丢(headers 单笔 + 端点 180s 节流时, chip 要空到下一次刷新)。
 let claudeSubscriptionUsageOwnerInitialized = false;
 let claudeSubscriptionUsageOwner: string | null = null;
-let claudeSubscriptionUsageLoaded = false;
-/** 与 codex 侧 codexAccountUsageHydrated 同义: 落库守卫的判据。 */
+/** 与 codex 侧 codexAccountUsageHydrated 同义: 落库守卫 + 「无需再读库」的判据。 */
 let claudeSubscriptionUsageHydrated = false;
 let claudeSubscriptionUsageSnapshot: ClaudeSubscriptionUsageSnapshot | null = null;
 // 冷缓存 hydration 的 in-flight promise —— 并发 record 必须等同一次 SQLite 读完成后
@@ -741,7 +741,6 @@ function resetClaudeSubscriptionUsageCacheIfOwnerChanged(): void {
   claudeSubscriptionUsageOwner = owner;
   // 首次初始化: loaded / snapshot 本就是初值, 世代不 bump(见上方注释)。
   if (isFirstInit) return;
-  claudeSubscriptionUsageLoaded = false;
   claudeSubscriptionUsageHydrated = false;
   claudeSubscriptionUsageSnapshot = null;
   claudeSubscriptionUsageGeneration += 1;
@@ -749,7 +748,7 @@ function resetClaudeSubscriptionUsageCacheIfOwnerChanged(): void {
 
 async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
   resetClaudeSubscriptionUsageCacheIfOwnerChanged();
-  if (claudeSubscriptionUsageLoaded) return;
+  if (claudeSubscriptionUsageHydrated) return;
   if (!claudeSubscriptionUsageLoadPromise) {
     const generation = claudeSubscriptionUsageGeneration;
     claudeSubscriptionUsageLoadPromise = (async () => {
@@ -774,9 +773,7 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
           err instanceof Error ? err.message : String(err),
         );
       } finally {
-        if (generation === claudeSubscriptionUsageGeneration) {
-          claudeSubscriptionUsageLoaded = true;
-        }
+        // 只清 in-flight 句柄, 理由同 codex 侧(读失败必须留重试机会)。
         claudeSubscriptionUsageLoadPromise = null;
       }
     })();
@@ -834,8 +831,7 @@ export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): 
 
 export async function clearClaudeSubscriptionUsageSnapshot(): Promise<void> {
   resetClaudeSubscriptionUsageCacheIfOwnerChanged();
-  claudeSubscriptionUsageLoaded = true;
-  // clear 后库里的状态是已知的(行被删掉), 之后到达的快照可以正常落库。
+  // clear 后库里的状态是已知的(行被删掉): 既不必再读库, 之后到达的快照也可正常落库。
   claudeSubscriptionUsageHydrated = true;
   claudeSubscriptionUsageSnapshot = null;
   // 仍在飞的冷缓存 hydration 必须作废 —— 否则它读回的旧持久化行会复活刚清掉的数据。

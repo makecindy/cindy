@@ -432,6 +432,30 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(mocks.exec).not.toHaveBeenCalled();
   });
 
+  // 读库失败必须保留重试机会: 若把未成功的 hydration 标记成「已加载」, 之后所有刷新
+  // 都会在 ensure 开头短路、被落库守卫永久跳过 —— 一次瞬时 db busy 就让本进程再也
+  // 无法持久化任何额度数据。
+  it('retries hydration after a transient read failure instead of giving up', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockRejectedValueOnce(new Error('db busy'));
+
+    await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
+    expect(mocks.exec).not.toHaveBeenCalled();
+
+    // 库恢复后, 下一笔完整快照必须能重新读库并正常落库。
+    mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+    await broadcaster.recordCodexAccountUsageSnapshot({
+      limitId: 'codex',
+      primary: { usedPercent: 91, windowMinutes: 300, resetsAt: 1_800_000_000 },
+      source: 'codex-app-server',
+    });
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.primary?.usedPercent).toBe(91);
+  });
+
   it('skips persistence when the owner is not initialized yet', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // 启动早期 getCurrentUserId 尚不可用 → hydration 被跳过, 内存为空。

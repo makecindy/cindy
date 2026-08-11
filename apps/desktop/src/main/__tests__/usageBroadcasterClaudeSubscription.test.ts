@@ -106,6 +106,28 @@ describe('claude subscription snapshot hydration race', () => {
     expect(mocks.exec).not.toHaveBeenCalled();
   });
 
+  // 与 codex 侧同一条: 读库失败不得把缓存标记成已加载, 否则本进程之后再也无法落库。
+  it('retries hydration after a transient read failure instead of giving up', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockRejectedValueOnce(new Error('db busy'));
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: null, sevenDay: null, rateLimitStatus: 'allowed',
+      source: 'unified-headers', updatedAt: 1,
+    });
+    expect(mocks.exec).not.toHaveBeenCalled();
+
+    mocks.queryOne.mockResolvedValue(null);
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: { utilization: 42 }, source: 'unified-headers', updatedAt: 2,
+    });
+
+    expect(mocks.exec).toHaveBeenCalled();
+    const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
+    const persisted = JSON.parse(lastExecParams[1] as string);
+    expect(persisted.fiveHour?.utilization).toBe(42);
+  });
+
   it('persists a rejected status even without windows (与 codex 侧 reached 标记同口径)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     // rejected 是权威的「请求已被拒」信号(isClaudeSubscriptionAlerting 直接据此告警),
