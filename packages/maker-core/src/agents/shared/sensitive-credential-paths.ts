@@ -97,13 +97,14 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/apps/pi-bin/**",
   "**/apps/ripgrep-bin/**",
   // Match the path rule above: only the downloaded
-  // `updates/<semver>/<platform>-<arch>/` payloads, so a reviewed repository
-  // keeping its own source under these names stays searchable. Globs cannot
-  // express the semver segment, so these stay slightly broader than the regex.
-  "**/tools/claude/updates/*/{darwin,linux,win32}-*/**",
-  "**/tools/codex/updates/*/{darwin,linux,win32}-*/**",
-  "**/tools/pi/updates/*/{darwin,linux,win32}-*/**",
-  "**/tools/ripgrep/updates/*/{darwin,linux,win32}-*/**",
+  // `updates/<semver>/<platform>-<arch>/` payloads. These globs run as a
+  // second, result-level filter for directory search, so anything broader
+  // than the regex would silently drop reviewable source that the regex
+  // already allowed. `*.*.*` keeps the version segment equivalent to it.
+  "**/tools/claude/updates/*.*.*/{darwin,linux,win32}-*/**",
+  "**/tools/codex/updates/*.*.*/{darwin,linux,win32}-*/**",
+  "**/tools/pi/updates/*.*.*/{darwin,linux,win32}-*/**",
+  "**/tools/ripgrep/updates/*.*.*/{darwin,linux,win32}-*/**",
   "**/.vite/**",
   "**/.ssh/**",
   "**/.aws/**",

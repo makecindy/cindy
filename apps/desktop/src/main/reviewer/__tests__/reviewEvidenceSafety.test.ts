@@ -273,6 +273,37 @@ describe('review change set content paths', () => {
     expect(result.truncated).toBe(false);
   });
 
+  it('fails closed when the turn changed something it could not enumerate', () => {
+    // An opaque tool leaves no entry and no count, so a size comparison alone
+    // sees a complete zero-file change set and would bind an empty baseline.
+    const result = reviewChangeSetContentPaths(
+      changeSet([], '/repo', { fileCount: 0, incompleteReasons: ['opaque-tool'] }),
+      '/repo',
+    );
+
+    expect(result.paths).toEqual([]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('fails closed for an unenumerable gap even alongside recorded files', () => {
+    expect(
+      reviewChangeSetContentPaths(
+        changeSet([file('src/a.ts')], '/repo', { incompleteReasons: ['diff-too-large'] }),
+        '/repo',
+      ).truncated,
+    ).toBe(true);
+  });
+
+  it('does not treat redaction alone as an unenumerable gap', () => {
+    // sensitive-file is deliberate and accounted for; it must not fail closed.
+    expect(
+      reviewChangeSetContentPaths(
+        changeSet([file('src/a.ts')], '/repo', { incompleteReasons: ['sensitive-file'] }),
+        '/repo',
+      ).truncated,
+    ).toBe(false);
+  });
+
   it('still fails closed when redaction cannot explain the whole shortfall', () => {
     // One entry was redacted, but the change set claims three files — the third
     // is simply missing and no baseline can cover it.

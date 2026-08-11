@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -129,10 +131,10 @@ describe("Review credential path policy", () => {
         "**/.git/**",
         "**/node_modules/**",
         "**/apps/codex-bin/**",
-        "**/tools/claude/updates/*/{darwin,linux,win32}-*/**",
-        "**/tools/codex/updates/*/{darwin,linux,win32}-*/**",
-        "**/tools/pi/updates/*/{darwin,linux,win32}-*/**",
-        "**/tools/ripgrep/updates/*/{darwin,linux,win32}-*/**",
+        "**/tools/claude/updates/*.*.*/{darwin,linux,win32}-*/**",
+        "**/tools/codex/updates/*.*.*/{darwin,linux,win32}-*/**",
+        "**/tools/pi/updates/*.*.*/{darwin,linux,win32}-*/**",
+        "**/tools/ripgrep/updates/*.*.*/{darwin,linux,win32}-*/**",
         "**/.vite/**",
         "**/credentials.json",
         "**/auth.json",
@@ -140,5 +142,42 @@ describe("Review credential path policy", () => {
         "**/id_ed25519",
       ]),
     );
+  });
+
+  it("does not let the search globs deny what the path rule allows", () => {
+    // The globs run as a second, result-level filter after the path check, so
+    // a glob broader than the regex silently drops reviewable source from
+    // directory search even though every path-level check allowed it.
+    const reviewable = [
+      "/userrepo/tools/codex/updates/v2/darwin-arm64/main.ts",
+      "/userrepo/tools/claude/updates/next/linux-x64/index.ts",
+      "/userrepo/tools/pi/updates/migrate.ts",
+      "/userrepo/tools/database/updates/migrate.ts",
+      "/userrepo/src/app.ts",
+    ];
+
+    for (const candidate of reviewable) {
+      expect(isReviewSensitiveCredentialPath(candidate)).toBe(false);
+      const deniedByGlob = REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.some(
+        (pattern) => path.matchesGlob(candidate, pattern),
+      );
+      expect(deniedByGlob).toBe(false);
+    }
+  });
+
+  it("denies managed harness payloads through both layers", () => {
+    for (const payload of [
+      "/repo/tools/codex/updates/0.144.6/darwin-arm64/codex",
+      "/repo/tools/claude/updates/2.1.215/darwin-arm64/claude",
+      "/repo/tools/pi/updates/0.83.0/linux-x64/pi",
+      "/repo/tools/ripgrep/updates/15.1.0/win32-x64/rg.exe",
+    ]) {
+      expect(isReviewSensitiveCredentialPath(payload)).toBe(true);
+      expect(
+        REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.some((pattern) =>
+          path.matchesGlob(payload, pattern),
+        ),
+      ).toBe(true);
+    }
   });
 });

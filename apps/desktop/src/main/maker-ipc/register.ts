@@ -7085,19 +7085,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             evidence.changeSet,
             sourceWorkingDir,
           );
-          // A change set that cannot account for all of its own files cannot
-          // serve as a baseline. Refuse instead of publishing a conclusion whose
-          // freshness check silently skipped everything past the summarized
-          // prefix.
+          // A change set that cannot account for everything the turn changed —
+          // whether it was summarized away or never enumerable in the first
+          // place — cannot serve as a baseline. Refuse instead of publishing a
+          // conclusion whose freshness check silently skipped the remainder.
           //
           // A Git fingerprint is not an exemption: it hashes tracked evidence
-          // only, so a dropped entry that happens to be an ignored deliverable
+          // only, so a missing entry that happens to be an ignored deliverable
           // is covered by neither side — exactly the gap this change closes.
           if (changeSetContent.truncated) {
             throw new ReviewPreconditionError({
               code: 'artifact-unavailable',
               message:
-                'The reviewed change set lists more files than it can enumerate, so Review cannot bind a complete content baseline',
+                'The reviewed change set cannot account for every file the turn changed, so Review cannot bind a complete content baseline',
             });
           }
           const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];

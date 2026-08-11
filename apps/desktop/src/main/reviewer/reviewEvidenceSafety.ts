@@ -119,18 +119,37 @@ function isSafeRelativeChangePath(rawPath: string): boolean {
   );
 }
 
+/**
+ * Gaps where the turn is known to have changed something it could not record.
+ *
+ * These leave no entry to count, so a change set carrying one can report
+ * `fileCount: 0` and still be missing real deliverables. Redaction is excluded:
+ * it is deliberate, and the removed files are accounted for separately.
+ */
+const UNENUMERABLE_CHANGE_REASONS: ReadonlySet<string> = new Set([
+  'opaque-tool',
+  'outside-workspace',
+  'remote-session',
+  'file-too-large',
+  'binary-file',
+  'read-failed',
+  'diff-too-large',
+  'provider-diff-conflict',
+  'concurrent-workspace',
+]);
+
 export interface ReviewChangeSetContentPaths {
   paths: string[];
   /**
-   * True when the change set records more files than it can account for, so the
-   * returned paths cannot be a complete baseline for it.
+   * True when the change set cannot account for everything the turn changed, so
+   * the returned paths cannot be a complete baseline for it.
    *
-   * Persisted details are rebuilt through `toSummary()`, which caps `files` at
-   * 50 entries while keeping the true `fileCount`. Callers that rely on these
-   * paths for freshness must fail closed rather than publish a conclusion whose
-   * baseline silently omitted the 51st file onward.
+   * Two ways that happens. Persisted details are rebuilt through `toSummary()`,
+   * which caps `files` at 50 entries while keeping the true `fileCount`. And a
+   * turn can change something it could never enumerate at all — an opaque tool,
+   * a file too large to diff — which leaves no entry and no count to compare.
    *
-   * Deliberate redaction is not truncation: `sanitizeReviewChangeSet` removes
+   * Deliberate redaction is neither: `sanitizeReviewChangeSet` removes
    * credential entries on purpose and records `sensitive-file`, so those files
    * are accounted for even though they are absent by design.
    */
@@ -198,8 +217,12 @@ export function reviewChangeSetContentPaths(
     collect(entry.oldPath);
   }
 
+  const unenumerable = changeSet.incompleteReasons.some((reason) =>
+    UNENUMERABLE_CHANGE_REASONS.has(reason),
+  );
   return {
     paths: [...paths],
-    truncated: seen.size + redactedChangeEntryCount(changeSet) < changeSet.fileCount,
+    truncated:
+      unenumerable || seen.size + redactedChangeEntryCount(changeSet) < changeSet.fileCount,
   };
 }
