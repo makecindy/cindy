@@ -46,4 +46,4 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 **Notes:**
 
 - Click the sidebar collapse arrow to shrink it to an icon-only strip — that's purely visual, you don't lose any features.
-- **Pin state and order** are persisted in `<userData>/sidebar-settings.json` and are shared across windows. **Filter settings** are stored per-window (in that window's local storage), so they don't sync between, say, a dev window and the installed app.
+- **Pin state, order, hidden projects, project filters, and identity-based collapse/selection state are isolated per Cindy account.** Pin and hidden-project changes sync across open windows for the same account. Display-only preferences remain local to each window, so they don't sync between, say, a dev window and the installed app.

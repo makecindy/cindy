@@ -282,6 +282,19 @@ import {
 } from '../../../shared/conversationSearchJump';
 
 const log = createLogger('CCAgentSessionView');
+/**
+ * 子代理页签只登记、不抢占。
+ *
+ * 子代理在对话流里已经有自己的卡片,右栏再自动弹出会把同一件事讲两遍,还会抢走
+ * 用户当时正在看的东西。入口保持可发现即可,展开留给用户点卡片或点右栏开关。
+ * 两条登记路径(历史挂载 / 首个实时子代理)共用这一份参数,避免其中一条被单独改回
+ * 自动展开。
+ */
+const SUBAGENT_TAB_REGISTER_ONLY = {
+  focusTab: false,
+  revealSidebar: false,
+  userInitiated: false,
+} as const;
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
 // stream:profile 记录 MessageStream 子树每次 ≥50ms 的 React commit(phase +
 // actualDuration),与 perf/interaction 的 longtask 时长对齐即可判定长任务
@@ -549,9 +562,9 @@ export function CCAgentSessionView({
     });
   }, [navigate, sessionId, viewVisible]);
 
-  // A task that has Subagents owns one durable Subagent tab. On history mount
-  // we silently ensure the tab exists; the first live child also reveals the
-  // sidebar, without stealing OS focus or replacing an already-active tab.
+  // A task that has Subagents owns one durable Subagent tab. Both on history
+  // mount and on the first live child we only ensure the tab exists — never
+  // stealing OS focus, replacing an already-active tab, or opening the sidebar.
   useEffect(() => {
     if (!ownsWindowRoute || !viewVisible || !sessionId) return;
     let disposed = false;
@@ -567,11 +580,7 @@ export function CCAgentSessionView({
         ) {
           return;
         }
-        return openSubagentsTab(sessionId, {
-          focusTab: false,
-          revealSidebar: false,
-          userInitiated: false,
-        });
+        return openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY);
       })
       .catch(() => undefined);
     const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged(
@@ -584,11 +593,7 @@ export function CCAgentSessionView({
         ) {
           return;
         }
-        void openSubagentsTab(sessionId, {
-          focusTab: false,
-          revealSidebar: payload.created && payload.firstForSession,
-          userInitiated: false,
-        }).catch(() => undefined);
+        void openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY).catch(() => undefined);
       },
     );
     return () => {

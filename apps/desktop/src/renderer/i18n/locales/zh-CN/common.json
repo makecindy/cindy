@@ -3447,6 +3447,7 @@
           "failed": "未能完成插件恢复检查。插件和配置未被改动，可在插件页重试。"
         },
         "reminder": "部分插件可能需要恢复，请到插件页查看 {{count}} 个候选项。",
+        "reminder_other": "部分插件可能需要恢复，请到插件页查看 {{count}} 个候选项。",
         "inline": {
           "title": "插件恢复需要处理",
           "pending": "有 {{count}} 个插件仍在本机，等待你确认恢复。",
@@ -4867,7 +4868,15 @@
         "unmerged": "存在未合并文件",
         "in-progress": "git 操作进行中",
         "agent-running": "Agent 正在运行",
-        "disabled": "审查不可用"
+        "disabled": "审查不可用",
+        "remote-device": "远程设备任务仅支持查看",
+        "remote-ssh": "SSH 工作区审查仅支持查看"
+      },
+      "remote": {
+        "deviceTooOldTitle": "对方设备版本过旧",
+        "deviceTooOldDesc": "对方设备的 {{appName}} 版本过旧，暂不支持远程审查，请升级被控设备后重试。",
+        "oversizeTitle": "改动数据过大",
+        "oversizeDesc": "该视图的改动超过设备互联单次传输上限，请在被控设备上查看。"
       },
       "unmodifiedLines_one": "{{count}} 行未改动",
       "unmodifiedLines_other": "{{count}} 行未改动",
@@ -5068,7 +5077,7 @@
         },
         "no-session": {
           "title": "任务不存在",
-          "desc": "找不到当前任务记录。"
+          "desc": "本设备上找不到该任务记录。"
         },
         "no-workdir": {
           "title": "没有工作目录",
@@ -6005,6 +6014,7 @@
     "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
   },
   "chat": {
+    "sessionLoading": "正在加载任务",
     "askUserQuestion": {
       "skippedAnswer": "已跳过"
     },

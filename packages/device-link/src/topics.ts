@@ -33,6 +33,9 @@ export const FILE_BROWSER_EVENT_CHANNEL = 'maker:file-browser:event';
 /** 远程文件浏览的聚合 invoke channel(单 channel:老被控端 CHANNEL_NOT_ALLOWED 即全无能力)。 */
 export const FILE_BROWSER_REMOTE_OP_CHANNEL = 'file-browser:remote-op';
 
+/** 远程 git 审查(只读)的聚合 invoke channel(单 channel:老被控端 CHANNEL_NOT_ALLOWED 即全无能力)。 */
+export const GIT_REVIEW_REMOTE_OP_CHANNEL = 'git-review:remote-op';
+
 const FS_WATCH_TOPIC_PREFIX = 'fs-watch:';
 
 export function fsWatchTopic(workdir: string): Topic {
