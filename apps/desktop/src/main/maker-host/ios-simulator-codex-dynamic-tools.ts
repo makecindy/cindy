@@ -146,7 +146,7 @@ export function createIOSSimulatorCodexDynamicToolProvider(options: {
           tools: registry.list(availability?.tools),
           ...(availability ? { availability } : {}),
           workflow:
-            'Use this embedded viewer workflow: check_environment, then list_devices and either create_instance or attach_device, then start_instance. Build, install, and launch the app through this gateway. Route mutations with instanceId, generation, and leaseId.',
+            'Use this embedded viewer workflow: check_environment, then list_simulator_devices and either create_instance or attach_device, then start_instance. Build, install, and launch the app through this gateway. Route mutations with instanceId, generation, and leaseId.',
         });
       }
 

@@ -5939,7 +5939,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           const recommendedActions: string[] = [];
           if (!environment.ready) recommendedActions.push('check_environment');
           if (environment.ready && instances.length === 0) {
-            recommendedActions.push('list_devices', 'create_instance_or_attach_device');
+            // Advertised names only: a recommendation the model cannot find in
+            // list_tools sends it back to the ambiguous superseded name.
+            recommendedActions.push(
+              'list_simulator_devices',
+              'create_instance_or_attach_device',
+            );
           }
           if (instances.some((entry) => !entry.running)) recommendedActions.push('start_instance');
           if (

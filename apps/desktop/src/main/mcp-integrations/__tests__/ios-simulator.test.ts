@@ -790,6 +790,18 @@ describe('iOS Simulator host', () => {
       state: 'unavailable',
       reasonCode: 'SESSION_NOT_FOUND',
     });
+
+    // Recommendations are model guidance too: naming a superseded tool sends the
+    // model back to the ambiguous name this rename hides.
+    const doctor = await host.callTool('doctor', {}, { sessionId: 'session-a' });
+    const recommended = (doctor as { data: { recommendedActions: string[] } }).data
+      .recommendedActions;
+    expect(recommended).toContain('list_simulator_devices');
+    for (const action of recommended) {
+      expect(advertised.has(action) || action === 'create_instance_or_attach_device').toBe(
+        true,
+      );
+    }
   });
 
   it('removes stale orphaned xcresult bundles during ownership reconciliation', async () => {
