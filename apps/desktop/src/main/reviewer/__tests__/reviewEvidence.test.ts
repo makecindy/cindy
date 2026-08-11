@@ -201,6 +201,29 @@ function cappedReviewData(repoRoot: string, filePath: string): ReviewData {
   };
 }
 
+function branchFileDiff(filePath: string) {
+  return {
+    id: `branch:${filePath}`,
+    source: 'branch' as const,
+    path: filePath,
+    oldPath: null,
+    status: 'modified' as const,
+    kind: 'text' as const,
+    size: 12,
+    additions: 1,
+    deletions: 0,
+    isBinary: false,
+    isSubmodule: false,
+    isTooLarge: false,
+    mode: { old: null, new: null },
+    index: { oldOid: null, newOid: null },
+    rawHeader: `diff --git a/${filePath} b/${filePath}`,
+    rawPatch: '@@ -1 +1 @@\n-old\n+new',
+    hunks: [],
+    error: null,
+  };
+}
+
 /** A Git workspace with everything committed, which is when branch review applies. */
 function cleanGitReviewData(repoRoot: string): ReviewData {
   const scope = {
@@ -788,6 +811,83 @@ describe('loadReviewEvidence attachment boundaries', () => {
     expect(evidence.branchUnavailableReason).toBe('ambiguous-base');
   });
 
+  it('refuses to compare against an unrelated remote branch', async () => {
+    // Same rule as the local case: a candidate that merely sorted first is not
+    // a base. `origin/foo` is no more meaningful than `some-other-feature`.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/foo',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'origin/foo',
+          shortName: 'foo',
+          kind: 'remote',
+          remote: 'origin',
+          oid: 'b'.repeat(40),
+        },
+      ],
+      diffs: [],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch).toBeNull();
+    expect(evidence.branchUnavailableReason).toBe('ambiguous-base');
+  });
+
+  it('accepts the branch upstream as a base', async () => {
+    // An upstream is chosen by the user's own tracking config, so it is
+    // meaningful even when its name looks nothing like a default.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/release-2026',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'origin/release-2026',
+          shortName: 'release-2026',
+          kind: 'upstream',
+          remote: 'origin',
+          oid: 'b'.repeat(40),
+        },
+      ],
+      diffs: [branchFileDiff('src/a.ts')],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch?.baseRef).toBe('origin/release-2026');
+  });
+
   it('accepts a local default branch as a base', async () => {
     // A repository with no remote still has a meaningful base when it is named
     // like the default; rejecting it would disable branch review offline.
@@ -807,28 +907,7 @@ describe('loadReviewEvidence attachment boundaries', () => {
           oid: 'b'.repeat(40),
         },
       ],
-      diffs: [
-        {
-          id: 'branch:src/a.ts',
-          source: 'branch',
-          path: 'src/a.ts',
-          oldPath: null,
-          status: 'modified',
-          kind: 'text',
-          size: 12,
-          additions: 1,
-          deletions: 0,
-          isBinary: false,
-          isSubmodule: false,
-          isTooLarge: false,
-          mode: { old: null, new: null },
-          index: { oldOid: null, newOid: null },
-          rawHeader: 'diff --git a/src/a.ts b/src/a.ts',
-          rawPatch: '@@ -1 +1 @@\n-old\n+new',
-          hunks: [],
-          error: null,
-        },
-      ],
+      diffs: [branchFileDiff('src/a.ts')],
       capped: null,
       warning: null,
     });

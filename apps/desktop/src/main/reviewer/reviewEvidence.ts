@@ -114,6 +114,12 @@ function mapReviewWorkspace(
  * stand-in for the branch — reviewing it would silently cover one turn while
  * appearing to cover the whole branch.
  */
+/** `main`, `origin/master`, … — a ref whose name alone says it is a default. */
+function isDefaultBranchName(refName: string): boolean {
+  const shortName = refName.includes('/') ? refName.slice(refName.lastIndexOf('/') + 1) : refName;
+  return /^(?:main|master|develop|trunk)$/i.test(shortName);
+}
+
 async function loadReviewBranchEvidence(
   sessionId: string,
   readBranchDiff: typeof readReviewBranchDiff,
@@ -128,16 +134,21 @@ async function loadReviewBranchEvidence(
     return { branch: null, unavailableReason: data.warning?.code ?? '未找到基线分支' };
   }
   // Nobody picks the base here — unlike the Git review pane, this runs
-  // unattended. With no upstream or default branch present, the picker falls
-  // back to the first ordinary local branch, which can be an unrelated sibling;
-  // presenting that comparison as "the branch's work" is worse than presenting
-  // nothing. Accept only a base that identifies itself: a remote, an upstream,
-  // or a branch actually named like the default. A local `main` qualifies; a
-  // local `some-other-feature` does not.
+  // unattended. With no recognized default present, the picker just takes the
+  // first remaining candidate in sort order, which can be an unrelated sibling
+  // (`some-feature`, `origin/foo`); presenting that comparison as "the branch's
+  // work" is worse than presenting nothing.
+  //
+  // So require a base that identifies itself rather than one that merely sorted
+  // first: the remote's own default, the branch's upstream, or a ref actually
+  // named like a default. Anything else reports `ambiguous-base`.
   const chosen = data.candidates.find((candidate) => candidate.refName === data.baseRef);
-  const baseIsAnonymousLocal =
-    chosen?.kind === 'local' && !/^(?:main|master|develop|trunk)$/i.test(chosen.refName);
-  if (baseIsAnonymousLocal) {
+  const baseIdentifiesItself =
+    !chosen ||
+    chosen.kind === 'remote-default' ||
+    chosen.kind === 'upstream' ||
+    isDefaultBranchName(chosen.refName);
+  if (!baseIdentifiesItself) {
     return { branch: null, unavailableReason: 'ambiguous-base' };
   }
   const sanitized = sanitizeReviewDiffBucket({

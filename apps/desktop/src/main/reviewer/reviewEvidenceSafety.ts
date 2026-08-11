@@ -204,7 +204,10 @@ export function reviewChangeSetContentPaths(
     if (isReviewSensitiveCredentialPath(rawPath)) return;
     const absolute = path.resolve(root, ...rawPath.split(/[\\/]/));
     const relative = path.relative(root, absolute);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) return;
+    // `..config` is an ordinary filename; only a bare `..` or a `../` prefix
+    // actually leaves the root.
+    const escapesRoot = relative === '..' || relative.startsWith(`..${path.sep}`);
+    if (escapesRoot || path.isAbsolute(relative)) return;
     if (isReviewSensitiveCredentialPath(absolute)) return;
     paths.add(absolute);
   };

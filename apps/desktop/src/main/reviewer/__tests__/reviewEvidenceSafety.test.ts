@@ -194,6 +194,18 @@ describe('review change set content paths', () => {
     ).toEqual([]);
   });
 
+  it('keeps ordinary filenames that begin with two dots', () => {
+    // `..config` stays inside the root; only a bare `..` or a `../` prefix
+    // escapes it. Dropping these silently left them out of the baseline while
+    // still counting toward completeness, so edits to them went unnoticed.
+    expect(
+      reviewChangeSetContentPaths(
+        changeSet([file('..config/result.md'), file('..report')]),
+        '/repo',
+      ).paths.sort(),
+    ).toEqual([abs('/repo', '..config/result.md'), abs('/repo', '..report')].sort());
+  });
+
   it('keeps a confined new path when only its rename source is unsafe', () => {
     // Each side is validated on its own: the file really did change and belongs
     // in the baseline, while the escaping rename source is simply dropped.
