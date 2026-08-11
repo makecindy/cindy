@@ -53,10 +53,9 @@ describe('Review external input wiring', () => {
     expect(registerSource).not.toContain(
       'const artifactPaths = [...reviewReadPaths, sourceWorkingDir];',
     );
-    // Change-set files are bound unconditionally. Git evidence hashes identity,
-    // status and patches, so an ignored deliverable built by the reviewed turn
-    // is covered by neither fingerprint unless it is included here.
-    expect(registerSource).toContain('const changeSetContent = reviewChangeSetContentPaths(');
+    // When the change set IS the evidence, its files are bound: Git evidence
+    // hashes identity, status and patches, so an ignored deliverable built by
+    // the reviewed turn is covered by neither fingerprint otherwise.
     expect(registerSource).toContain(
       'const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];',
     );
@@ -64,9 +63,14 @@ describe('Review external input wiring', () => {
     // baseline; publishing against it would skip the truncated remainder.
     // A Git fingerprint is not an exemption — it cannot see ignored files,
     // so a dropped entry that is an ignored deliverable is covered by neither.
-    // The gate applies only when the change set is the selected evidence: with
-    // a branch diff in hand its gaps are already covered and must not block.
-    expect(registerSource).toContain('if (changeSetIsReviewed && changeSetContent.truncated) {');
+    // The change set contributes nothing at all unless it is the selected
+    // evidence: an unrelated turn must not refuse the review through the gate,
+    // nor bind its own paths into the fingerprint and invalidate the result.
+    expect(registerSource).toContain('const changeSetIsReviewed = !evidence.workspace?.dirty');
+    expect(registerSource).toContain(
+      '? reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)\n            : { paths: [], truncated: false };',
+    );
+    expect(registerSource).toContain('if (changeSetContent.truncated) {');
     // The workspace fingerprint pins HEAD, not the base being compared against,
     // so both gates must recheck the branch baseline as well.
     expect(

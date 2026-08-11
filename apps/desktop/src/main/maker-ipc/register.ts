@@ -7082,15 +7082,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // fingerprint hashes identity, porcelain status and patches, so an
           // ignored deliverable built by the reviewed turn (dist/report.html)
           // is covered by neither unless it is included here.
-          const changeSetContent = reviewChangeSetContentPaths(
-            evidence.changeSet,
-            sourceWorkingDir,
-          );
           // The change set is the review target only when nothing better was
           // selected. With uncommitted work or a branch diff in hand it is not
-          // part of the evidence, so its own gaps must not block the review —
-          // those commits are already represented by the selected evidence.
+          // part of the evidence, so neither its gaps nor its paths belong
+          // here — those commits are already represented by the selected
+          // evidence, and binding unreviewed paths would let an unrelated turn
+          // refuse the review or invalidate its result.
           const changeSetIsReviewed = !evidence.workspace?.dirty && !evidence.branch;
+          const changeSetContent = changeSetIsReviewed
+            ? reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)
+            : { paths: [], truncated: false };
           // A change set that cannot account for everything the turn changed —
           // whether it was summarized away or never enumerable in the first
           // place — cannot serve as a baseline. Refuse instead of publishing a
@@ -7099,7 +7100,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // A Git fingerprint is not an exemption: it hashes tracked evidence
           // only, so a missing entry that happens to be an ignored deliverable
           // is covered by neither side — exactly the gap this change closes.
-          if (changeSetIsReviewed && changeSetContent.truncated) {
+          if (changeSetContent.truncated) {
             throw new ReviewPreconditionError({
               code: 'artifact-unavailable',
               message:
