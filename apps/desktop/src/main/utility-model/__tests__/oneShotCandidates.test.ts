@@ -1443,7 +1443,9 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://anthropic.example/api/v1/messages', expect.anything());
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string>; body: string };
     expect(init.headers.Authorization).toBe('Bearer anthropic-token');
-    expect(JSON.parse(init.body).model).toBe('claude-sonnet-4-6[1m]');
+    // 直连 /v1/messages 必须用真实 API model id:SDK 的 `[1m]` beta 通道后缀
+    // 会命中 Anthropic API 404(见 #2429)。目录 contextWindow ≥1M 也不能带。
+    expect(JSON.parse(init.body).model).toBe('claude-sonnet-4-6');
   });
 
   it('uses OpenAI Codex OAuth and strips the bridge model prefix on the selected route', async () => {
@@ -1549,4 +1551,51 @@ describe('utility one-shot candidates', () => {
       expect(body).not.toHaveProperty('reasoning');
     },
   );
+});
+
+describe('utility Anthropic messages direct model id (#2429)', () => {
+  const anthropicProvider = (models: Array<{ id: string; contextWindow: number }>) => ({
+    providers: [{
+      id: 'anthropic',
+      name: 'Anthropic',
+      source: 'builtin',
+      agents: ['claude-code'],
+      auth: { method: 'oauth' },
+      routing: {
+        'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
+      },
+      models: { 'claude-code': models },
+    }],
+  });
+
+  async function runAnthropicOneShot(model: string) {
+    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'script' }] }),
+    } as never);
+    await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'anthropic',
+      agentKind: 'claude-code',
+      model,
+    });
+    const lastCall = fetchMock.mock.calls.at(-1);
+    return JSON.parse(String(lastCall?.[1]?.body)).model as string;
+  }
+
+  it('sends a bare API model id for 1M-context models (no SDK [1m] wire suffix)', async () => {
+    activeCatalog.mockReturnValue(anthropicProvider([
+      { id: 'claude-fable-5', contextWindow: 1_000_000 },
+      { id: 'claude-opus-5', contextWindow: 1_000_000 },
+    ]) as never);
+    expect(await runAnthropicOneShot('claude-fable-5')).toBe('claude-fable-5');
+    expect(await runAnthropicOneShot('claude-opus-5')).toBe('claude-opus-5');
+  });
+
+  it('keeps the bare model id for non-1M Claude models (e.g. Haiku)', async () => {
+    activeCatalog.mockReturnValue(anthropicProvider([
+      { id: 'claude-haiku-4-5', contextWindow: 200_000 },
+    ]) as never);
+    expect(await runAnthropicOneShot('claude-haiku-4-5')).toBe('claude-haiku-4-5');
+  });
 });

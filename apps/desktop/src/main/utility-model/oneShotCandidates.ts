@@ -624,7 +624,7 @@ async function requestBuiltinProviderText(
           'anthropic-version': '2023-06-01',
           'anthropic-beta': 'oauth-2025-04-20',
         },
-        model: toSdkModelString(input.model, findProviderModel(input.provider, input.agentKind, input.model)?.contextWindow),
+        model: toAnthropicMessagesModelId(input.model, findProviderModel(input.provider, input.agentKind, input.model)?.contextWindow),
         prompt: text,
         // Anthropic API 协议必填 max_tokens:缺省时以模型目录声明的 maxOutput
         // (模型自身输出能力)兜底,没有目录条目才回退 81920——宿主不设政策上限。
@@ -903,6 +903,19 @@ function appendProviderPath(baseUrl: string, suffix: string): string {
   // Fragments are client-side only and must not be sent as part of an API URL.
   url.hash = '';
   return url.toString();
+}
+
+/**
+ * Anthropic Messages API 直连请求的 model 转换。
+ *
+ * 主链 Claude Code 走 SDK/本地代理，`[1m]` 是 SDK 识别 1M beta 通道的 wire
+ * 后缀（见 maker-core toSdkModelString 契约：SDK 细节不外泄给调用方）。
+ * 本路径直连 /v1/messages，Anthropic API 不认 `[1m]` 后缀（返回 404），
+ * 因此发往 API 的 model 必须剥离该后缀、保留目录真实 model id。
+ * 只作用于内置 anthropic 分支；自定义/兼容供应商走各自 model 透传，不做全局剥离。
+ */
+function toAnthropicMessagesModelId(model: string, contextWindow?: number | null): string {
+  return toSdkModelString(model, contextWindow).replace(/\[1m\]$/, '');
 }
 
 /** Claude providers may configure either the host root or an existing `/v1` base. */
