@@ -391,7 +391,9 @@ describe('readReviewWorkspaceSnapshot', () => {
   it('does not hand a dirty submodule to the file fingerprinter', async () => {
     // A gitlink is a directory and the fingerprinter accepts only regular
     // files, so including it would abort evidence loading and make the whole
-    // dirty workspace unreviewable. Its commit oid rides along in the status.
+    // dirty workspace unreviewable. The cost of excluding it — edits inside
+    // the submodule are not bound — is stated at the call site and tracked in
+    // #2463; it is not offset by the porcelain status, which keeps no oid.
     const repoRoot = await tempDir();
     const submodulePath = 'vendor/lib';
     await fs.mkdir(path.join(repoRoot, submodulePath), { recursive: true });

@@ -223,8 +223,17 @@ function workspacePathsWithoutContent(workspace: ReviewWorkspaceEvidence): strin
     // read this layer does not have — the gitlink oid plus a recursive digest
     // of the inner worktree — which is a submodule-aware reader, not another
     // path added to the file fingerprinter. That reader is out of scope here
-    // and tracked separately; do not "fix" this by feeding the directory back
+    // and tracked in #2463; do not "fix" this by feeding the directory back
     // in, which is the crash described above.
+    //
+    // What bounds the exposure meanwhile: inner content is never part of the
+    // evidence (diffReader classifies every submodule entry as `submodule`
+    // with an empty patch, so no inner bytes reach the prompt), and a file
+    // inside a submodule that is explicitly attached lands in reviewReadPaths
+    // and is fully content-hashed by fingerprintReviewArtifacts. The unbound
+    // case is the reviewer opening an inner file that is neither — the same
+    // class as opening any unchanged tracked file, which no fingerprint here
+    // covers either.
     .filter((diff) => !diff.rawPatch && !diff.isSubmodule)
     .flatMap((diff) => [diff.path, diff.oldPath].filter(Boolean) as string[]);
   return [...new Set([...capped, ...contentless])];
