@@ -1879,15 +1879,24 @@ test("runPlannedTests passes selected include files to packageBin commands", asy
 		allFiles: ["packages/orca-workflow/src/__tests__/orca-bridge-mcp.test.ts"],
 		manifest,
 		tier: "unit",
-		runCommandImpl: async (command, args) => {
-			calls.push({ command, args });
+		runCommandImpl: async (command, args, options) => {
+			calls.push({ command, args, options });
 			return { exitCode: 0, output: "PASS" };
 		},
 	});
-	assert.deepEqual(calls[0].args.slice(-1), [
+	// Windows 上 resolvePnpmInvocation 会通过 cmd.exe 包装，实际 pnpm 参数
+	// 放在 env 的 CINDY_PNPM_CMD_ARG_N 里。其他平台参数直接在 args 里。
+	const call = calls[0];
+	const pnpmArgs = call.options?.env
+		? Object.keys(call.options.env)
+				.filter((k) => k.startsWith("CINDY_PNPM_CMD_ARG_"))
+				.sort()
+				.map((k) => call.options.env[k])
+		: call.args;
+	assert.deepEqual(pnpmArgs.slice(-1), [
 		"src/__tests__/orca-bridge-mcp.test.ts",
 	]);
-	assert.equal(calls[0].args.includes("src/__tests__/**/*.test.ts"), false);
+	assert.equal(pnpmArgs.includes("src/__tests__/**/*.test.ts"), false);
 });
 
 test("buildPnpmArgs rejects selected files outside the workspace", () => {

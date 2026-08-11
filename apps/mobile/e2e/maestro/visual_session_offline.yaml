@@ -26,5 +26,14 @@ appId: ${APP_ID}
     visible:
       id: "session.sendButton"
     timeout: 5000
+- assertNotVisible:
+    id: "connection.syncButton"
+- tapOn:
+    id: "session.sendButton"
+- extendedWaitUntil:
+    visible:
+      id: "pendingSend.badge.uploading"
+    timeout: 5000
+- assertVisible: "Offline visual draft"
 - takeScreenshot:
     path: visual-session-offline

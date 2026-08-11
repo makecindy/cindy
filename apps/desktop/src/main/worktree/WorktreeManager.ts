@@ -673,17 +673,19 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
-    // 0. 防御性校验 worktree name(IPC 不可信, UI 当前虽然只走自动生成,
-    //    但调试 / 未来扩展 / 误用都可能传入非法值)。
+    // 0. 防御性校验显式 worktree name(IPC 不可信, 调试 / 未来扩展 / 误用
+    //    都可能传入非法值)。只有空白名是生成请求；包括 auto-* 在内的合法非空名
+    //    都按显式名称保留。
     //    要求: [a-z0-9-], 首尾字母数字, 无连续 --, 长度 ≤20。
     //    符合 git ref + Windows/POSIX 路径 + cli flag 安全的交集。
-    const nameError = validateWorktreeName(req.name);
-    if (nameError) {
+    const shouldGenerateName = typeof req.name === 'string' && req.name.trim().length === 0;
+    const explicitNameError = shouldGenerateName ? null : validateWorktreeName(req.name);
+    if (explicitNameError) {
       return {
         ok: false,
         error: {
           kind: 'unknown',
-          message: `worktree 名称非法: ${nameError}`,
+          message: `worktree 名称非法: ${explicitNameError}`,
           hint: `示例合法值: pensive-lederberg, auto-3l9k0c`,
         },
       };
@@ -748,8 +750,20 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
 
     // 3. 路径冲突避让
     const taken = await timed('collect taken names', () => getTakenNames(baseRepo));
+    const requestedName = shouldGenerateName ? generateUniqueName(taken) : req.name;
+    const nameError = validateWorktreeName(requestedName);
+    if (nameError) {
+      return {
+        ok: false,
+        error: {
+          kind: 'unknown',
+          message: `worktree 名称非法: ${nameError}`,
+          hint: `示例合法值: pensive-lederberg, auto-3l9k0c`,
+        },
+      };
+    }
     // 显式 collision（含大小写与 ref 层级冲突）统一走 avoidCollision。
-    let name = avoidCollision(req.name, taken);
+    let name = avoidCollision(requestedName, taken);
     let worktreePath = path.join(baseRepo, MANAGED_WORKTREE_DIR_NAME, name);
     // 文件系统 collision(store 没记录但目录已存在): 多走一次 avoid
     let attempts = 0;

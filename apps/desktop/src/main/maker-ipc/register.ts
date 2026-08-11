@@ -23,6 +23,7 @@ import type {
   InteractionRequest,
   Maker,
   SendOrigin,
+  Session,
   SessionSendOptions,
   SessionSendResult,
   UserMessage,
@@ -200,7 +201,11 @@ import {
   cleanupOrphanedReviewArtifactSnapshots,
   prepareStableReviewArtifactSnapshots,
 } from '../reviewer/reviewArtifactSnapshot.js';
-import { fingerprintReviewArtifacts } from '../reviewer/reviewArtifactFingerprint.js';
+import {
+  fingerprintReviewArtifacts,
+  ReviewArtifactFingerprintChangedError,
+  ReviewArtifactFingerprintLimitError,
+} from '../reviewer/reviewArtifactFingerprint.js';
 import { enforceReviewCreateOptions } from '../reviewer/reviewSessionPolicy.js';
 import { reviewSourceIdentityMatches } from '../reviewer/reviewSourceIdentity.js';
 import { buildReviewSessionTitle } from '../reviewer/reviewSessionTitle.js';
@@ -307,6 +312,7 @@ import {
   ensureCodexMcpBridgeStartedForRemote,
   finalizeCodexAfterAuthModeChange,
   getMaker,
+  getMakerIfReady,
   getPluginRegistry,
   prepareCodexForAuthModeChange,
   restartCodexAfterAuthModeChange,
@@ -596,8 +602,6 @@ import {
 import {
   createOrcaWorkerCreationService,
   normalizeOrcaWorkerLabel,
-  providerRouteRequiresExplicitSelection,
-  type OrcaWorkerProviderRoutingContext,
 } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionExecutionConfig,
@@ -642,7 +646,11 @@ import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
-import { registerReviewStartHandler, type ReviewFailureReason } from './reviewStartHandler.js';
+import {
+  registerReviewStartHandler,
+  ReviewPreconditionError,
+  type ReviewFailureReason,
+} from './reviewStartHandler.js';
 import { registerStopAgentTaskHandler } from './stopAgentTaskHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgroundTasksHandler.js';
 import { registerProviderHandlers } from './providerHandlers.js';
@@ -658,13 +666,7 @@ import {
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
 } from '../maker-host/createDesktopProviderService.js';
-import {
-  connectedProvidersForAgent,
-  effectiveSourceIdForModel,
-  findModelRegistryRoute,
-  isModelSelectableForNewRoute,
-  type ProviderView,
-} from '@cindy/model-providers';
+import { readOrcaWorkerProviderRoutingContext } from './orcaProviderRoutingContext.js';
 import {
   getSessionProvider,
   hydrateSessionProvider,
@@ -1017,6 +1019,14 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
     failPendingSchedulerAutoResume(sessionId, attemptToken),
   log: (message, fields) => log.debug(message, fields),
 });
+
+/**
+ * A Codex reconnect-stall retry is scheduled against the current runtime
+ * Session, but that provider may close/rebuild the exact instance before the
+ * backoff timer fires. Bind the lease to the instance, not only sessionId:
+ * a replacement Session can otherwise inherit a late close callback.
+ */
+const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();
 
 /**
  * 用户明确停止会话时统一撤销两类自动续跑与它们的退避簿记。
@@ -2411,6 +2421,31 @@ export async function withSendToSessionLock<T>(
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
+
+function getWiredSessionCloseReason(session: WiredSession) {
+  return getMakerIfReady()?.getSessionCloseReason(session) ?? 'unexpected';
+}
+
+/**
+ * Preserve only the narrow provider-rebuild handoff window for an interrupted
+ * Codex reconnect stall. Every check is deliberately instance- and token-
+ * scoped so a user close, a later retry, or an already-running callback cannot
+ * resurrect the old business session.
+ */
+function shouldPreserveCodexReconnectStalledAutoResume(
+  session: WiredSession,
+  closeReason: ReturnType<typeof getWiredSessionCloseReason>,
+): boolean {
+  const attemptToken = pendingCodexReconnectStalledRebuilds.get(session);
+  if (attemptToken === undefined) return false;
+  if (closeReason !== 'unexpected') return false;
+  if (!interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)) return false;
+  if (!autoResumeBookkeeping.isCurrentAttempt(session.id, attemptToken)) return false;
+  const coordinator = agentInputCoordinatorHolder;
+  if (!coordinator || !coordinator.isAutoResumePending(session.id)) return false;
+  if (coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken) return false;
+  return autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken);
+}
 
 /**
  * GoalController 已确认当前 turn 归自己所有后调用：复用输入协调器的 Stop 边界中断
@@ -4947,14 +4982,28 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           session,
         );
+        const closeReason = getWiredSessionCloseReason(session);
+        const preserveAutoResumeIntent = shouldPreserveCodexReconnectStalledAutoResume(
+          session,
+          closeReason,
+        );
+        pendingCodexReconnectStalledRebuilds.delete(session);
         try {
           cleanupPendingInteractionsForSession(session.id, 'session_closed');
-          // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
-          // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
-          // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
-          // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
-          interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
-          autoResumeBookkeeping.teardown(session.id);
+          if (preserveAutoResumeIntent) {
+            log.info('preserving scheduled Codex reconnect-stall auto-resume across provider rebuild', {
+              sessionId: session.id,
+              attemptToken: agentInputCoordinatorHolder?.getAutoResumeAttemptToken(session.id),
+              closeReason,
+            });
+          } else {
+            // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
+            // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
+            // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
+            // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
+            interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
+            autoResumeBookkeeping.teardown(session.id);
+          }
           // rehydrate / 凭证切换 close-rebuild 窗口:同一逻辑会话进程内重建,
           // 协调器状态应连续。窗口内保留 input boundary(不 abort,避免取消
           // 驱动本次重建的 signal → #1930 cancelled-before-dispatch),但
@@ -4964,6 +5013,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 标记 / wiring teardown)照常。
           agentInputCoordinatorHolder?.onSessionClosed(session.id, {
             preserveInputBoundary: rehydrateCloseSuppression.isSuppressed(session.id),
+            preserveAutoResumeIntent,
           });
           // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
           pendingCredentialSwitchHolder?.onSessionClosed(session.id);
@@ -7070,9 +7120,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // caches or nested-submodule contents, so the reusable result must
           // also bind the complete non-sensitive readable workspace content.
           const artifactPaths = [...reviewReadPaths, sourceWorkingDir];
-          const artifactFingerprint = await fingerprintReviewArtifacts(artifactPaths);
-          const completeArtifactFingerprintIsCurrent = async (): Promise<boolean> =>
-            (await fingerprintReviewArtifacts(artifactPaths)) === artifactFingerprint;
+          const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
+          let artifactFingerprint: string;
+          try {
+            artifactFingerprint = await fingerprintReviewArtifacts(
+              artifactPaths,
+              artifactFingerprintOptions,
+            );
+          } catch (error) {
+            if (
+              error instanceof ReviewArtifactFingerprintChangedError ||
+              error instanceof ReviewArtifactFingerprintLimitError
+            ) {
+              throw new ReviewPreconditionError({
+                code: 'artifact-unavailable',
+                message: error.message,
+              });
+            }
+            throw error;
+          }
+          const artifactFingerprintIsCurrent = async (
+            paths: readonly string[],
+            expected: string,
+          ): Promise<boolean> => {
+            try {
+              return (
+                (await fingerprintReviewArtifacts(paths, artifactFingerprintOptions)) === expected
+              );
+            } catch {
+              return false;
+            }
+          };
+          const completeArtifactFingerprintIsCurrent = (): Promise<boolean> =>
+            artifactFingerprintIsCurrent(artifactPaths, artifactFingerprint);
           const readCurrentSourceIdentity = async () => {
             const [currentSource] = await db
               .select({
@@ -7136,8 +7216,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 };
               }
               if (
-                (await fingerprintReviewArtifacts(authorizedArtifactPaths)) !==
-                sourceArtifactFingerprint
+                !(await artifactFingerprintIsCurrent(
+                  authorizedArtifactPaths,
+                  sourceArtifactFingerprint,
+                ))
               ) {
                 return {
                   code: 'artifact-changed',
@@ -7185,8 +7267,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 };
               }
               if (
-                (await fingerprintReviewArtifacts(authorizedArtifactPaths)) !==
-                sourceArtifactFingerprint
+                !(await artifactFingerprintIsCurrent(
+                  authorizedArtifactPaths,
+                  sourceArtifactFingerprint,
+                ))
               ) {
                 return {
                   code: 'artifact-changed',
@@ -9141,67 +9225,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   orcaTeamServiceForEvents = orcaTeamService;
 
-  async function getProviderRoutingContext(): Promise<OrcaWorkerProviderRoutingContext> {
-    const catalog = getDesktopSelectableCatalog();
-    const views = await getDesktopProviderService().listProviders({
-      allowSideEffects: true,
-      catalog,
+  const getProviderRoutingContext = () =>
+    readOrcaWorkerProviderRoutingContext({
+      providerService: getDesktopProviderService(),
+      getCatalog: getActiveCatalog,
     });
-    const modelRegistry = catalog.modelRegistry;
-    // 准入过滤与 modelList.ts 标准派生同口径:用户停用的模型(disabled,见
-    // model-disable-store)与非聊天模型(image/video/tts/stt/realtime/
-    // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
-    // create_worker / send_to_session 点名它们会在创建前结构化失败，而不是静默
-    // 路由过去。停用的供应商已在 connectedProvidersForAgent(suspended) 一层出局。
-    // models/fastModels/effortMetaByModel 是两个创建入口唯一能看到的 provider 维度
-    // 快照；同 id 模型跨来源的能力可能分叉，不能只看 Maker 的拍平首见条目。
-    const routableModels = (provider: ProviderView, agent: AgentKind) =>
-      (provider.models[agent] ?? []).filter((model) =>
-        isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
-      );
-    const availabilityFor = (agent: AgentKind) =>
-      connectedProvidersForAgent(views, agent).map((provider) => {
-        const models = routableModels(provider, agent);
-        const registryIdentityByModel = Object.fromEntries(
-          models.flatMap((model) => {
-            const matched = findModelRegistryRoute(
-              modelRegistry,
-              provider.id,
-              model.id,
-              agent === 'pi' ? undefined : agent,
-            );
-            return matched ? [[model.id, matched.entry.id]] : [];
-          }),
-        );
-        return {
-          id: provider.id,
-          name: provider.name,
-          models: models.map((model) => model.id),
-          registryIdentityByModel,
-          fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
-          effortMetaByModel: Object.fromEntries(
-            models.map((model) => [
-              model.id,
-              { efforts: model.efforts, defaultEffort: model.defaultEffort },
-            ]),
-          ),
-          requiresExplicitRoute: providerRouteRequiresExplicitSelection(
-            provider.routing[agent]?.authStrategy,
-          ),
-          chatBridgedCodex:
-            agent === 'codex' && provider.routing[agent]?.wireProtocol === 'openai-chat',
-        };
-      });
-    return {
-      availability: {
-        'claude-code': availabilityFor('claude-code'),
-        codex: availabilityFor('codex'),
-        pi: availabilityFor('pi'),
-      },
-      resolveDefaultProviderIdForModel: (agent, model) =>
-        effectiveSourceIdForModel(views, null, model, agent),
-    };
-  }
 
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
     getActiveTeamByLead,
@@ -10554,6 +10582,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : null;
       if (schedulerRunId) {
         beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
+      }
+      if (signals.reason === 'codex_reconnect_stalled') {
+        const runtimeSession = getStableSessionForTurnBoundary(sessionId);
+        if (runtimeSession) {
+          pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);
+        }
       }
       // 排期的撤旧、补落与令牌都在 AutoResumeBookkeeping.schedule 里(带单测),这里只给
       // 退避时长和到点要干的事。

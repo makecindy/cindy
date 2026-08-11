@@ -218,6 +218,22 @@ function hasConcurrentLiveInstanceSync(
 }
 
 /**
+ * Whether this process may safely inspect or claim state from the shared,
+ * pre-owner userData namespace. Unlike hasLegacyOwnerNamespaceClaim, this
+ * predicate does not require a verified cloud-owner marker, so stable local
+ * profiles can use it for their own one-time owner attribution.
+ */
+export function hasExclusiveSharedLegacyUserDataAccess(
+  userDataDir = app.getPath('userData'),
+  isPidAlive: (pid: number) => boolean = isPidAliveDefault,
+): boolean {
+  return (
+    process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1' &&
+    !hasConcurrentLiveInstanceSync(userDataDir, isPidAlive)
+  );
+}
+
+/**
  * Legacy secrets may only be imported by the cloud owner that won the global
  * pre-namespace claim. The marker is intentionally outside owner roots so a
  * later account cannot reinterpret the same shared legacy credential files.
@@ -239,7 +255,7 @@ export function hasLegacyOwnerNamespaceClaim(
   userDataDir = app.getPath('userData'),
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
 ): boolean {
-  if (process.env.XDT_PASSIVE_SHARED_USER_DATA === '1') return false;
+  if (!hasExclusiveSharedLegacyUserDataAccess(userDataDir, isPidAlive)) return false;
   try {
     const parsed = JSON.parse(
       fsSync.readFileSync(path.join(userDataDir, CLAIM_MARKER), 'utf-8'),
@@ -254,7 +270,7 @@ export function hasLegacyOwnerNamespaceClaim(
   } catch {
     return false;
   }
-  return !hasConcurrentLiveInstanceSync(userDataDir, isPidAlive);
+  return true;
 }
 
 function readMarkerSync(
@@ -279,11 +295,49 @@ function readMarkerSync(
   }
 }
 
+/**
+ * Whether the immutable shared legacy-data claim belongs to another owner.
+ * Partial claims count: once a marker names an owner, later accounts must not
+ * reinterpret or wait on that owner's remaining legacy files.
+ */
+export function isLegacyOwnerNamespaceClaimedByOtherOwner(
+  ownerId: string,
+  userDataDir = app.getPath('userData'),
+): boolean {
+  const { marker, invalid } = readMarkerSync(userDataDir);
+  return !invalid && marker !== null && marker.ownerKey !== dataOwnerStorageKey(ownerId);
+}
+
+/**
+ * Read-only inspection for consumers opening data that is already owner-scoped.
+ * This is not permission to move shared legacy files: unlike
+ * hasLegacyOwnerNamespaceClaim, it accepts partial claims and intentionally
+ * ignores passive/live peers.
+ */
+export function isLegacyOwnerNamespaceClaimOwnedBy(
+  ownerId: string,
+  userDataDir = app.getPath('userData'),
+): boolean {
+  const { marker, invalid } = readMarkerSync(userDataDir);
+  return (
+    !invalid &&
+    marker !== null &&
+    marker.ownerKey === dataOwnerStorageKey(ownerId)
+  );
+}
+
 interface LegacyGhostDir {
   root: string;
   id: string;
   dir: string;
   command: string | null;
+}
+
+function filterLegacyGhostsByIdPolicy(
+  ghosts: LegacyGhostDir[],
+  rejectReservedIds: boolean,
+): LegacyGhostDir[] {
+  return rejectReservedIds ? ghosts.filter((ghost) => !isOfficialGhostId(ghost.id)) : ghosts;
 }
 
 function readValidLegacyGhostDir(
@@ -483,7 +537,10 @@ export function getLegacyGhostRecoveryStatus(
   session: MigrationSessionState,
   userDataDir?: string,
   boundaryPending = false,
-  options: { reservedCommands?: ReadonlySet<string> } = {},
+  options: {
+    reservedCommands?: ReadonlySet<string>;
+    rejectReservedIds?: boolean;
+  } = {},
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
 ): LegacyGhostRecoveryStatus {
   if (boundaryPending || session.mode !== 'cloud' || !session.dataOwnerId || !session.user) {
@@ -493,14 +550,15 @@ export function getLegacyGhostRecoveryStatus(
 
   const root = userDataDir ?? app.getPath('userData');
   const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
-  const sharedLegacyGhosts = listSharedLegacyGhostDirs(root);
-  const scopedLegacyGhosts = listOwnerScopedLegacyGhostDirs(root, ownerKey);
-  const legacyGhosts = [...sharedLegacyGhosts, ...scopedLegacyGhosts];
-  const legacyPluginCount = legacyGhosts.length;
-  if (legacyPluginCount === 0) return NO_LEGACY_GHOST_RECOVERY;
-  if (process.env.XDT_PASSIVE_SHARED_USER_DATA === '1') {
-    return { state: 'deferred', legacyPluginCount, canRetry: false };
-  }
+  const rejectReservedIds = options.rejectReservedIds === true;
+  const sharedLegacyGhosts = filterLegacyGhostsByIdPolicy(
+    listSharedLegacyGhostDirs(root),
+    rejectReservedIds,
+  );
+  const scopedLegacyGhosts = filterLegacyGhostsByIdPolicy(
+    listOwnerScopedLegacyGhostDirs(root, ownerKey),
+    rejectReservedIds,
+  );
 
   const markerRead = readMarkerSync(root);
   const sharedRecoveryBlocked =
@@ -509,15 +567,27 @@ export function getLegacyGhostRecoveryStatus(
       (markerRead.marker !== null && markerRead.marker.ownerKey !== ownerKey));
   if (sharedRecoveryBlocked && scopedLegacyGhosts.length === 0) {
     if (markerRead.marker && markerRead.marker.ownerKey !== ownerKey) {
-      return { state: 'claimed-by-other-owner', legacyPluginCount, canRetry: false };
+      // 已明确属于其他账号的共享目录不是当前账号的恢复任务。
+      return NO_LEGACY_GHOST_RECOVERY;
     }
-    return { state: 'partial', legacyPluginCount, canRetry: false };
+    return {
+      state: 'partial',
+      legacyPluginCount: sharedLegacyGhosts.length,
+      canRetry: false,
+    };
+  }
+  const eligibleLegacyGhosts = sharedRecoveryBlocked
+    ? scopedLegacyGhosts
+    : [...sharedLegacyGhosts, ...scopedLegacyGhosts];
+  const legacyPluginCount = eligibleLegacyGhosts.length;
+  if (legacyPluginCount === 0) return NO_LEGACY_GHOST_RECOVERY;
+  if (process.env.XDT_PASSIVE_SHARED_USER_DATA === '1') {
+    return { state: 'deferred', legacyPluginCount, canRetry: false };
   }
   if (hasConcurrentLiveInstanceSync(root, isPidAlive)) {
     return { state: 'deferred', legacyPluginCount, canRetry: false };
   }
 
-  const eligibleLegacyGhosts = sharedRecoveryBlocked ? scopedLegacyGhosts : legacyGhosts;
   const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
   if (!hasSafeRecoveryTargetChainSync(root, targetRoot)) {
     return { state: 'partial', legacyPluginCount, canRetry: false };
@@ -542,14 +612,6 @@ export function getLegacyGhostRecoveryStatus(
     return command === null || !occupiedCommands.has(command);
   });
   if (!canRetry) {
-    if (
-      sharedRecoveryBlocked &&
-      markerRead.marker &&
-      markerRead.marker.ownerKey !== ownerKey &&
-      scopedLegacyGhosts.length === 0
-    ) {
-      return { state: 'claimed-by-other-owner', legacyPluginCount, canRetry: false };
-    }
     return { state: 'partial', legacyPluginCount, canRetry: false };
   }
 
@@ -577,8 +639,15 @@ export async function recoverLegacyGhostPlugins(
   const userDataDir = deps.userDataDir();
   const ownerKey = dataOwnerStorageKey(ownerId);
   const markerPath = path.join(userDataDir, CLAIM_MARKER);
-  const sharedLegacyGhosts = listSharedLegacyGhostDirs(userDataDir);
-  const scopedLegacyGhosts = listOwnerScopedLegacyGhostDirs(userDataDir, ownerKey);
+  const rejectReservedIds = options.rejectReservedIds === true;
+  const sharedLegacyGhosts = filterLegacyGhostsByIdPolicy(
+    listSharedLegacyGhostDirs(userDataDir),
+    rejectReservedIds,
+  );
+  const scopedLegacyGhosts = filterLegacyGhostsByIdPolicy(
+    listOwnerScopedLegacyGhostDirs(userDataDir, ownerKey),
+    rejectReservedIds,
+  );
   let marker: ClaimMarker | null = null;
   let eligibleSharedGhosts = sharedLegacyGhosts;
   let sharedRecoveryBlocked = false;
@@ -616,10 +685,6 @@ export async function recoverLegacyGhostPlugins(
   let movableLegacyGhosts: ReturnType<typeof listLegacyGhostDirs> = [];
   let conflicts = sharedRecoveryBlocked ? sharedLegacyGhosts.length : 0;
   for (const legacy of [...eligibleSharedGhosts, ...scopedLegacyGhosts]) {
-    if (options.rejectReservedIds && isOfficialGhostId(legacy.id)) {
-      conflicts += 1;
-      continue;
-    }
     if ((await pathType(deps, path.join(targetRoot, legacy.id))) === 'missing') {
       movableLegacyGhosts.push(legacy);
     } else {

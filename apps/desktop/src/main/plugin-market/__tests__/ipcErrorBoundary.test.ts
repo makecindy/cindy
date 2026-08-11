@@ -21,6 +21,10 @@ describe('Plugin Market IPC error boundary', () => {
     resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const ghostPluginPageSource = readFileSync(
+    resolve(process.cwd(), 'src/renderer/features/plugin/GhostPluginPage.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   it('preserves structured errors and normalizes unexpected failures', () => {
     const start = registerSource.indexOf('async function invokePluginMarket');
@@ -90,11 +94,21 @@ describe('Plugin Market IPC error boundary', () => {
     expect(syncBody).toContain('await snapshotAndSignalRemovalNotice();');
     expect(syncBody).toContain("log.warn('default plugin startup sync failed'");
 
-    const snapshotStart = registerSource.indexOf('async function snapshotAndSignalRemovalNotice()');
+    const snapshotStart = registerSource.indexOf(
+      'async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOptions)',
+    );
     const snapshotEnd = registerSource.indexOf('\n}\n\n/**', snapshotStart);
     const snapshotBody = registerSource.slice(snapshotStart, snapshotEnd);
     expect(snapshotBody).toContain('finally {');
     expect(snapshotBody).toContain('signalRemovalNoticeAvailable();');
+    expect(snapshotBody).toContain('signalUpgradeNoticeAvailable();');
+
+    expect(registerSource).toContain('deferDefaultReconciliation: true');
+    expect(registerSource).toContain('onDeferredReconciliationSettled: () => {');
+    expect(ghostPluginPageSource).toContain(
+      'window.electronAPI.pluginMarket.onUpgradeNoticeAvailable(() => {',
+    );
+    expect(ghostPluginPageSource).toContain('void refreshMarket(true).catch(() => undefined);');
 
     const ownerSyncStart = bootstrapSource.indexOf(
       'function syncDefaultPluginsForActiveOwner(): void',

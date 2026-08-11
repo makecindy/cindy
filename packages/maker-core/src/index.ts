@@ -20,6 +20,7 @@ export {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
   pathIsWithinReviewGrant,
+  reviewFileLinkLayoutIsSafe,
   resolveReviewReadPath,
   type ReviewReadGrant,
 } from './agents/shared/review-read-scope.js';

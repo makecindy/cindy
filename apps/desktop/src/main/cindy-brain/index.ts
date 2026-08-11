@@ -45,7 +45,10 @@ import {
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
-import type { PluginMarketPackageReviewFacts } from '../../shared/pluginMarket.js';
+import type {
+  PluginMarketItemSource,
+  PluginMarketPackageReviewFacts,
+} from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   activeOwnerScopeKey,
@@ -78,7 +81,12 @@ import {
   recordBuiltinTombstone,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
-import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
+import {
+  getAccessToken,
+  getAuthState,
+  getCurrentUserId,
+  onAuthStateChange,
+} from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createGhostOauthBrokerClient } from './ghostOauthBroker.js';
@@ -236,7 +244,11 @@ import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
-import { ghostManifestDigest, PluginMarketLedger } from '../plugin-market/ledger.js';
+import {
+  ghostManifestDigest,
+  PluginMarketLedger,
+  type PluginMarketInstallationRecord,
+} from '../plugin-market/ledger.js';
 import {
   GhostSubscriptionGateway,
   GhostActivityTracker,
@@ -524,7 +536,10 @@ function getLegacyGhostRecoveryStatusForActiveSession(): LegacyGhostRecoveryStat
     currentLegacyGhostMigrationSession(),
     undefined,
     isAppSessionBoundaryPending(),
-    { reservedCommands: reservedBuiltinCommands },
+    {
+      reservedCommands: reservedBuiltinCommands,
+      rejectReservedIds: app.isPackaged,
+    },
   );
 }
 
@@ -3836,16 +3851,20 @@ export async function installOrUpdateMarketGhostPackage(
     ghostId: string;
     version: string;
     /**
-     * 安装前实际展示给用户的 manifest。真实包若声明了未展示权限，会在
-     * 落盘前暂停并把同一份已验证包交给上层复核。
+     * 手动首装确认真实包、同来源更新仅在真实包扩权时确认；默认安装只把
+     * 市场目录 manifest 当作 fail-closed 权限上限。目录 manifest 不记作批准。
      */
-    reviewedManifest?: GhostManifest;
-    /** 经来源账本摘要认证的已装清单；缺失时不得回退到可变运行时清单。 */
+    permissionPolicy?:
+      | { mode: 'manual'; sourceType: PluginMarketItemSource }
+      | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
+    /** 安装锁内从当前已落位包读取的 canonical 权限基线。 */
     permissionBaselineManifest?: GhostManifest;
     /** 用户确认过的真实下载包 SHA 与确认时的已装权限基线。 */
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
     beforeCommitInLock?: () => void;
+    /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
+    onPackagePlacedInLock?: () => void;
     /** 仅 server-market 主机路径可传；custom/local 不传。 */
     officialCindyGithub?: boolean;
   },
@@ -3863,11 +3882,15 @@ async function installOrUpdateMarketGhostPackageLocked(
   expected: {
     ghostId: string;
     version: string;
-    reviewedManifest?: GhostManifest;
+    permissionPolicy?:
+      | { mode: 'manual'; sourceType: PluginMarketItemSource }
+      | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
     permissionBaselineManifest?: GhostManifest;
     approvedPackageSha256?: string;
     reviewedBaseline?: string;
     beforeCommitInLock?: () => void;
+    /** 新包已经原子换位；后续异常不能再按落位失败回滚来源路由。 */
+    onPackagePlacedInLock?: () => void;
     officialCindyGithub?: boolean;
   },
 ): Promise<InstalledGhost> {
@@ -3890,7 +3913,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         : undefined;
     requireGhostAvailableForActiveSession(expected.ghostId);
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
-    if (expected.reviewedManifest) {
+    if (expected.permissionPolicy) {
       const baselineManifest = expected.permissionBaselineManifest ?? null;
       const installedBaseline = baselineManifest
         ? ghostPermissionBaselineKey(baselineManifest)
@@ -3906,27 +3929,40 @@ async function installOrUpdateMarketGhostPackageLocked(
           'Downloaded Plugin package changed after permission review',
         );
       }
-      const unreviewed = unreviewedGhostPermissionItems(
-        expected.reviewedManifest,
-        baselineManifest ?? undefined,
-        inspected.canonicalManifest,
-      );
-      if (unreviewed.length > 0) {
+      const permissionDiff = baselineManifest
+        ? diffGhostPermissionItems(baselineManifest, inspected.canonicalManifest)
+        : null;
+      const unreviewed =
+        expected.permissionPolicy.mode === 'cap'
+          ? unreviewedGhostPermissionItems(
+              expected.permissionPolicy.manifest,
+              baselineManifest ?? undefined,
+              inspected.canonicalManifest,
+            )
+          : [];
+      const needsReview =
+        expected.permissionPolicy.mode === 'manual'
+          ? permissionDiff === null || permissionDiff.added.length > 0
+          : unreviewed.length > 0;
+      if (needsReview && expected.approvedPackageSha256 === undefined) {
+        const reviewKeys =
+          expected.permissionPolicy.mode === 'manual'
+            ? (permissionDiff?.added.map((item) => item.key) ?? [])
+            : unreviewed.map((item) => item.key);
         const review: PluginMarketPackageReviewFacts = {
           manifest: inspected.manifest,
-          permissionDiff: baselineManifest
-            ? diffGhostPermissionItems(baselineManifest, inspected.canonicalManifest)
-            : null,
+          permissionDiff,
+          isUpdate: installed !== undefined,
           packageSha256: inspected.packageSha256,
           installedBaseline,
+          sourceType: expected.permissionPolicy.sourceType,
         };
-        if (expected.approvedPackageSha256 === undefined) {
-          log.info('market package requires permission review', {
-            ghostId: expected.ghostId,
-            keys: unreviewed.map((item) => item.key),
-          });
-          throw new GhostPackagePermissionReviewRequiredError(review);
-        }
+        log.info('market package requires permission review', {
+          ghostId: expected.ghostId,
+          mode: expected.permissionPolicy.mode,
+          keys: reviewKeys,
+        });
+        throw new GhostPackagePermissionReviewRequiredError(review);
       }
     }
     rejectUnauthorizedTokenBroker(inspected.canonicalManifest);
@@ -3963,15 +3999,29 @@ async function installOrUpdateMarketGhostPackageLocked(
     getGhostAgentSlot().clearGhost(expected.ghostId);
     getGhostErrandSlot().clearGhost(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
+    let packagePlaced = false;
     try {
       // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
       result = await manager.update(cindyFilePath, {
         expectedPackageSha256: inspected.packageSha256,
         ...(trustOverride ? { trustOverride } : {}),
+        onPackagePlaced: () => {
+          packagePlaced = true;
+          expected.onPackagePlacedInLock?.();
+        },
       });
     } catch (error) {
-      spawnIfResident(installed);
-      throw error;
+      if (!packagePlaced) {
+        spawnIfResident(installed);
+        throw error;
+      }
+      const placed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
+      if (!placed) throw error;
+      log.warn('market ghost post-placement notification failed', {
+        ghostId: expected.ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      result = { ghost: placed };
     }
     if ('rejection' in result) {
       spawnIfResident(installed);
@@ -5219,6 +5269,10 @@ export function registerGhostIpc(): void {
     ) {
       throwIpcError('INVALID_PARAMS', 'expectedPackageSha256 must come from ghosts:inspect');
     }
+    const mutationOwner = captureGhostMutationOwner();
+    const marketLedger = getPluginMarketLedger().bind(
+      ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
+    );
     const inspected = await manager.inspect(lizFilePath);
     if ('rejection' in inspected) throwInstallError(inspected.rejection);
     assertGhostSupportsCurrentCindy(inspected.canonicalManifest);
@@ -5230,37 +5284,122 @@ export function registerGhostIpc(): void {
     // 与市场装入/本地装入/卸载共用按 ghostId 的互斥:换目录期间同 id 的其它
     // 装入/卸载不得插入(否则并发装入会与本次 rename 竞争、留下不一致态)。
     return withGhostInstallLock(inspected.manifest.id, async () => {
-      const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
-      runtime.stop(inspected.manifest.id);
-      getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
-      getGhostAgentSlot().clearGhost(inspected.manifest.id);
-      getGhostErrandSlot().clearGhost(inspected.manifest.id);
-      let result: Awaited<ReturnType<typeof manager.update>>;
+      const releaseMutation = beginGhostMutation(mutationOwner);
       try {
-        result = await manager.update(lizFilePath, { expectedPackageSha256 });
-      } catch (err) {
-        // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
-        if (previousGhost) spawnIfResident(previousGhost);
-        throw err;
-      }
-      if ('rejection' in result) {
-        if (previousGhost) spawnIfResident(previousGhost);
-        throwInstallError(result.rejection);
-      }
-      runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
-      const store = getLayoutStore();
-      const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
-      if (docked) {
-        const applied = store.setLayout(docked);
-        if ('rejection' in applied) {
-          log.warn('ghost panel dock rejected', {
-            id: result.ghost.manifest.id,
-            reason: applied.rejection,
+        const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
+        let marketRecord: PluginMarketInstallationRecord | null;
+        let marketInstallSubject: string | null = null;
+        let marketRecordWasSuppressed = false;
+        try {
+          marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
+          if (
+            marketRecord?.installed &&
+            (marketRecord.source === 'market' || marketRecord.source === 'legacy-adopted')
+          ) {
+            marketInstallSubject = getCurrentUserId() ?? mutationOwner.dataOwnerId;
+            marketRecordWasSuppressed = marketInstallSubject
+              ? marketLedger.isDefaultInstallSuppressed(
+                  marketInstallSubject,
+                  marketRecord.pluginId,
+                )
+              : false;
+          }
+        } catch (error) {
+          log.warn('failed to verify Plugin provenance before local update', {
+            ghostId: inspected.manifest.id,
+            error: error instanceof Error ? error.message : String(error),
           });
+          throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');
         }
+        // 用户已在本地包确认流程中明确选择了这份真实包：同 id 可以原位替换，
+        // 市场来源不是永久所有权。替换前先切断旧市场更新路由；落位失败再恢复，
+        // 全程不清理 Secret、KV、偏好或其它按 ghostId 保存的用户状态。
+        const detachMarketRecord = Boolean(marketRecord?.installed);
+        const restoreMarketRecord = (): void => {
+          if (!detachMarketRecord || !marketRecord) return;
+          try {
+            marketLedger.restoreInstallation(
+              marketRecord,
+              marketInstallSubject
+                ? {
+                    userId: marketInstallSubject,
+                    suppressed: marketRecordWasSuppressed,
+                  }
+                : undefined,
+            );
+          } catch (error) {
+            // 恢复失败时保持路由失效是安全降级：不能让旧市场自动覆盖用户
+            // 明确选择的本地包。用户仍可从任一市场显式替换同 ID 插件。
+            log.error('failed to restore Plugin market provenance after local update failure', {
+              ghostId: inspected.manifest.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        };
+        if (detachMarketRecord) {
+          try {
+            // 先持久化切断自动更新路由，再改真实包。账本不可写时不触碰包，
+            // 避免同 manifest 的本地代码被旧市场静默覆盖。
+            marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
+          } catch (error) {
+            restoreMarketRecord();
+            log.warn('failed to detach Plugin market provenance before local update', {
+              ghostId: inspected.manifest.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');
+          }
+        }
+        runtime.stop(inspected.manifest.id);
+        getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
+        getGhostAgentSlot().clearGhost(inspected.manifest.id);
+        getGhostErrandSlot().clearGhost(inspected.manifest.id);
+        let result: Awaited<ReturnType<typeof manager.update>>;
+        let packagePlaced = false;
+        try {
+          result = await manager.update(lizFilePath, {
+            expectedPackageSha256,
+            onPackagePlaced: () => {
+              packagePlaced = true;
+            },
+          });
+        } catch (err) {
+          if (!packagePlaced) {
+            restoreMarketRecord();
+            // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
+            if (previousGhost) spawnIfResident(previousGhost);
+            throw err;
+          }
+          const placed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
+          if (!placed) throw err;
+          log.warn('local ghost post-placement notification failed', {
+            ghostId: inspected.manifest.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          result = { ghost: placed };
+        }
+        if ('rejection' in result) {
+          restoreMarketRecord();
+          if (previousGhost) spawnIfResident(previousGhost);
+          throwInstallError(result.rejection);
+        }
+        runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
+        const store = getLayoutStore();
+        const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
+        if (docked) {
+          const applied = store.setLayout(docked);
+          if ('rejection' in applied) {
+            log.warn('ghost panel dock rejected', {
+              id: result.ghost.manifest.id,
+              reason: applied.rejection,
+            });
+          }
+        }
+        spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
+        return { ghost: result.ghost };
+      } finally {
+        releaseMutation();
       }
-      spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
-      return { ghost: result.ghost };
     });
   });
 

@@ -51,9 +51,16 @@ arm64 和 x64 产物。
 
 公开发版不得使用 `--allow-unsigned`、`--no-sign` 或 `--skip-smoke` 绕过门禁。
 
+> 单机双架构连打的 cross-architecture 例外:在一台 arm64 机上连打 arm64+x64 时,x64
+> 那趟无法在本机 exec(Rosetta 起 x64 Electron 会挂),该趟会**跳过 launch-based release
+> gate,改为只做 Mach-O 架构门禁**(公证仍照常完成)。x64 正式包不含 native helper、
+> 运行期必然回退 WDA/MJPEG,故不降低真实安全;若要对 x64 做完整 launch-based
+> qualification,需在可运行 x64 的发布机上单独跑。详见
+> `docs/ios-simulator-integration-plan.md` 的 cross-architecture 例外说明。
+
 ## 发布检查
 
-打包脚本成功退出即表示 Helper 签名、公证和静态 release gate 已通过。发布前可额外抽查：
+打包脚本成功退出即表示 Helper 签名、公证和静态 release gate 已通过（命中上文 cross-architecture 例外的跨 arch 那趟例外:该趟为 Mach-O 架构门禁,launch-based static gate 跳过)。发布前可额外抽查：
 
 ```bash
 codesign --verify --deep --strict --verbose=2 /path/to/Cindy.app
