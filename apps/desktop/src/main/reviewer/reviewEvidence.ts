@@ -227,7 +227,11 @@ function workspacePathsWithoutContent(workspace: ReviewWorkspaceEvidence): strin
         : [],
   );
   const contentless = [...workspace.diffs.staged, ...workspace.diffs.unstaged]
-    .filter((diff) => !diff.rawPatch)
+    // Submodules are excluded on purpose: a gitlink is a directory, and the
+    // content fingerprinter only accepts regular files, so passing one would
+    // abort evidence loading outright. Its identity is a commit oid, which the
+    // porcelain status already carries into the Git digest.
+    .filter((diff) => !diff.rawPatch && !diff.isSubmodule)
     .flatMap((diff) => [diff.path, diff.oldPath].filter(Boolean) as string[]);
   return [...new Set([...capped, ...contentless])];
 }

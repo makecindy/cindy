@@ -388,6 +388,31 @@ describe('readReviewWorkspaceSnapshot', () => {
     expect(after?.fingerprint).not.toBe(before?.fingerprint);
   });
 
+  it('does not hand a dirty submodule to the file fingerprinter', async () => {
+    // A gitlink is a directory and the fingerprinter accepts only regular
+    // files, so including it would abort evidence loading and make the whole
+    // dirty workspace unreviewable. Its commit oid rides along in the status.
+    const repoRoot = await tempDir();
+    const submodulePath = 'vendor/lib';
+    await fs.mkdir(path.join(repoRoot, submodulePath), { recursive: true });
+    const data = binaryReviewData(repoRoot, submodulePath);
+    readReviewDataMock.mockResolvedValue({
+      ...data,
+      diffs: {
+        ...data.diffs,
+        unstaged: data.diffs.unstaged.map((diff) => ({
+          ...diff,
+          kind: 'unrenderable' as const,
+          isBinary: false,
+          isSubmodule: true,
+          error: null,
+        })),
+      },
+    });
+
+    await expect(readReviewWorkspaceSnapshot('source')).resolves.toBeTruthy();
+  });
+
   it('marks prepared Git evidence stale when the workspace changes before launch', async () => {
     const repoRoot = await tempDir();
     const relativePath = 'tracked.ts';
