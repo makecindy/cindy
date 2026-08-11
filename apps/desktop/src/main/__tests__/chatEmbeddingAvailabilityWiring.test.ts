@@ -15,7 +15,6 @@ describe('chat embedding availability wiring', () => {
       'setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);',
     );
   });
-
   it('keeps provider broadcasts alive when runtime reconciliation throws', () => {
     const refreshStart = makerHostSource.indexOf(
       'function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {',
