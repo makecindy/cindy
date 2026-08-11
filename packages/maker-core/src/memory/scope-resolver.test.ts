@@ -1,12 +1,10 @@
 /**
- * resolveMemoryScopeKey — worktree 归一化 (#2379) 的单元测试。
+ * resolveMemoryScopeKey — worktree 归一化 (#2379) 的单元测试 (默认 unit tier)。
  *
- * 两层覆盖:
- *  - 真实临时 git 仓库 (主工作树 + 两个 linked worktree + separate-git-dir
- *    clone, 仓根与子目录 cwd): 端到端验证「linked worktree cwd → 主仓根 +
- *    相对子路径」映射, 以及 separate-git-dir 布局不误判。
- *  - 注入 fake GitProbe: 失败/超时/非常规布局一律回落 cwd 原样; 缓存命中
- *    不重复 spawn; SSH 分支完全旁路 (不 spawn git)。
+ * 默认层只保留进程内 fake probe 全量覆盖 + 一条真实 Git smoke
+ * (engineering-conventions §3.1); 完整真实 Git 矩阵 (多 worktree /
+ * separate-git-dir / 主仓内 cwd 等组合语义) 在
+ * scope-resolver.git-integration.test.ts, 由 `pnpm test:git-integration` 执行。
  *
  * 与 scope-key.test.ts 的分工: 那边固定 buildMemoryScopeKey 的同步契约
  * (本地原样返回 + SSH 单射); 这边固定 async resolver 的归一化与回落语义。
@@ -64,6 +62,22 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
       throw makeErr();
     };
 
+  /**
+   * resolver 的两种探测: rev-parse 单次返回 toplevel/git-dir/common-dir 三行;
+   * 仅在 gitdir ≠ common-dir 且 common-dir basename 为 .git 时再调
+   * `worktree list --porcelain` 取主仓根。不传 mainRoot 表示该用例不允许
+   * 出现第二次 spawn (在更早的分支就已回落)。
+   */
+  const probeFor =
+    (toplevel: string, gitDir: string, commonDir: string, mainRoot?: string): GitProbe =>
+    async (args) => {
+      if (args.includes('worktree')) {
+        if (mainRoot === undefined) throw new Error('worktree list should not be spawned');
+        return `worktree ${mainRoot}\n`;
+      }
+      return `${toplevel}\n${gitDir}\n${commonDir}\n`;
+    };
+
   it('git 不存在 (ENOENT) → 原样返回', async () => {
     const probe = failingProbe(() => Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }));
     expect(await resolveMemoryScopeKey('/fake/no-git', null, { execGit: probe })).toBe('/fake/no-git');
@@ -83,31 +97,50 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
     );
   });
 
-  it('separate-git-dir 布局 (gitdir == common-dir 且 basename 为 .git) → 原样返回', async () => {
+  it('separate-git-dir checkout (gitdir == common-dir 且 basename 为 .git) → 原样返回', async () => {
     // `git clone --separate-git-dir=/some/storage/.git` 的 common-dir basename
     // 恰好也是 .git, 不做 gitdir ≠ common-dir 区分会把主仓根错误推导到 git
     // 存储目录 (Codex review on #2399)。
-    const probe: GitProbe = async () =>
-      '/fake/checkout\n/some/storage/.git\n/some/storage/.git\n';
+    const probe = probeFor('/fake/checkout', '/some/storage/.git', '/some/storage/.git');
     expect(await resolveMemoryScopeKey('/fake/checkout', null, { execGit: probe })).toBe(
       '/fake/checkout',
     );
   });
 
   it('common-dir 非 <root>/.git 形态 (bare/非常规布局) → 原样返回', async () => {
-    const probe: GitProbe = async () =>
-      '/fake/bare-wt\n/fake/repo.git/worktrees/x\n/fake/repo.git\n'; // common-dir basename 不是 .git
+    const probe = probeFor('/fake/bare-wt', '/fake/repo.git/worktrees/x', '/fake/repo.git');
     expect(await resolveMemoryScopeKey('/fake/bare-wt', null, { execGit: probe })).toBe(
       '/fake/bare-wt',
     );
   });
 
   it('cwd 不在 toplevel 下 (relative 逃逸) → 原样返回', async () => {
-    const probe: GitProbe = async () =>
-      '/totally/other\n/main/.git/worktrees/w\n/main/.git\n';
+    const probe = probeFor('/totally/other', '/main/.git/worktrees/w', '/main/.git', '/main');
     expect(await resolveMemoryScopeKey('/fake/escape', null, { execGit: probe })).toBe(
       '/fake/escape',
     );
+  });
+
+  it('主仓本身是 separate-git-dir 布局: linked worktree 映射到真实主 checkout', async () => {
+    // common-dir 是 git 存储目录 (/storage/.git), dirname 不是工作树;
+    // 主仓根必须来自 `worktree list --porcelain` 第一条 (Codex review 第二轮)。
+    const probe = probeFor(
+      '/fake/wt',
+      '/storage/.git/worktrees/w',
+      '/storage/.git',
+      '/real/checkout',
+    );
+    expect(await resolveMemoryScopeKey('/fake/wt/apps/a', null, { execGit: probe })).toBe(
+      path.join(path.resolve('/real/checkout'), 'apps', 'a'),
+    );
+  });
+
+  it('worktree list 取不到主仓根 → 原样返回', async () => {
+    const probe: GitProbe = async (args) => {
+      if (args.includes('worktree')) return '\n'; // 无 worktree 记录
+      return '/fake/wt\n/main/.git/worktrees/w\n/main/.git\n';
+    };
+    expect(await resolveMemoryScopeKey('/fake/wt', null, { execGit: probe })).toBe('/fake/wt');
   });
 
   it('同 cwd 重复解析只 spawn 一轮 git (正结果缓存)', async () => {
@@ -115,9 +148,15 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
     // fake 输出直接给平台绝对形态, 让断言与盘符无关。
     const abs = (p: string) => (process.platform === 'win32' ? `C:${p}` : p);
     let calls = 0;
-    const probe: GitProbe = async () => {
+    const base = probeFor(
+      abs('/repo/.cindy-worktrees/feat'),
+      abs('/repo/.git/worktrees/feat'),
+      abs('/repo/.git'),
+      abs('/repo'),
+    );
+    const probe: GitProbe = async (args, cwd) => {
       calls += 1;
-      return `${abs('/repo/.cindy-worktrees/feat')}\n${abs('/repo/.git/worktrees/feat')}\n${abs('/repo/.git')}\n`;
+      return base(args, cwd);
     };
     const first = await resolveMemoryScopeKey(abs('/repo/.cindy-worktrees/feat/apps/a'), null, {
       execGit: probe,
@@ -127,7 +166,7 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
     });
     expect(first).toBe(path.join(abs('/repo'), 'apps', 'a'));
     expect(second).toBe(first);
-    expect(calls).toBe(1); // 单次 rev-parse 拿 toplevel / git-dir / common-dir
+    expect(calls).toBe(2); // rev-parse + worktree list 各一次, 第二轮全缓存
   });
 
   it('失败结果同样缓存 (负结果不重复 spawn)', async () => {
@@ -144,25 +183,30 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
   it('TTL 过期后重新探测', async () => {
     let calls = 0;
     let tick = 0;
-    const probe: GitProbe = async () => {
+    const base = probeFor('/repo/.wt/x', '/repo/.git/worktrees/x', '/repo/.git', '/repo');
+    const probe: GitProbe = async (args, cwd) => {
       calls += 1;
-      return '/repo/.wt/x\n/repo/.git/worktrees/x\n/repo/.git\n';
+      return base(args, cwd);
     };
     const now = () => tick;
     await resolveMemoryScopeKey('/repo/.wt/x', null, { execGit: probe, now });
     tick = 30_000;
     await resolveMemoryScopeKey('/repo/.wt/x', null, { execGit: probe, now });
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     tick = 61_000;
     await resolveMemoryScopeKey('/repo/.wt/x', null, { execGit: probe, now });
-    expect(calls).toBe(2);
+    expect(calls).toBe(4);
   });
 
   it.skipIf(process.platform !== 'win32')(
     'Windows 风格路径: git 正斜杠输出 + 反斜杠 cwd 混合归一化',
     async () => {
-      const probe: GitProbe = async () =>
-        'C:/repo/.cindy-worktrees/feat\nC:/repo/.git/worktrees/feat\nC:/repo/.git\n';
+      const probe = probeFor(
+        'C:/repo/.cindy-worktrees/feat',
+        'C:/repo/.git/worktrees/feat',
+        'C:/repo/.git',
+        'C:/repo',
+      );
       const key = await resolveMemoryScopeKey('C:\\repo\\.cindy-worktrees\\feat\\apps\\a', null, {
         execGit: probe,
       });
@@ -171,118 +215,30 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
   );
 });
 
-describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓库', () => {
-  async function makeFixture() {
+// 默认 unit tier 唯一一条真实 Git smoke (§3.1): 端到端打通「真实 git 探测 +
+// 映射」主路径。组合矩阵见 scope-resolver.git-integration.test.ts。
+describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实 Git smoke', () => {
+  it('linked worktree 子目录 cwd → 主仓根 + 相对子路径', async () => {
     const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-')));
     const repoRoot = path.join(tmpRoot, 'repo');
-    const wt1 = path.join(tmpRoot, 'wt1');
-    const wt2 = path.join(tmpRoot, 'wt2');
+    const wt = path.join(tmpRoot, 'wt');
     const git = (args: string[], cwd: string) =>
       execFileSync('git', args, { cwd, stdio: 'ignore' });
-
-    await fs.mkdir(repoRoot, { recursive: true });
-    git(['init'], repoRoot);
-    git(['config', 'user.email', 'test@example.com'], repoRoot);
-    git(['config', 'user.name', 'scope-resolver-test'], repoRoot);
-    git(['commit', '--allow-empty', '-m', 'init'], repoRoot);
-    git(['worktree', 'add', '-b', 'wt1-branch', wt1], repoRoot);
-    git(['worktree', 'add', '-b', 'wt2-branch', wt2], repoRoot);
-    await fs.mkdir(path.join(repoRoot, 'apps', 'a'), { recursive: true });
-    await fs.mkdir(path.join(repoRoot, 'apps', 'b'), { recursive: true });
-    await fs.mkdir(path.join(wt1, 'apps', 'a'), { recursive: true });
-    await fs.mkdir(path.join(wt2, 'apps', 'a'), { recursive: true });
-    await fs.mkdir(path.join(wt1, 'apps', 'only-in-wt'), { recursive: true });
-
-    const cleanup = async () => {
+    try {
+      await fs.mkdir(repoRoot, { recursive: true });
+      git(['init'], repoRoot);
+      git(['config', 'user.email', 'test@example.com'], repoRoot);
+      git(['config', 'user.name', 'scope-resolver-test'], repoRoot);
+      git(['commit', '--allow-empty', '-m', 'init'], repoRoot);
+      git(['worktree', 'add', '-b', 'wt-branch', wt], repoRoot);
+      const sub = path.join(wt, 'apps', 'a');
+      await fs.mkdir(sub, { recursive: true });
+      expect(await resolveMemoryScopeKey(sub)).toBe(path.join(repoRoot, 'apps', 'a'));
+    } finally {
       try {
         await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 3 });
       } catch {
         /* Windows 上 git 只读对象偶发 EPERM — temp 目录交给 OS 清理 */
-      }
-    };
-    return { tmpRoot, repoRoot, wt1, wt2, git, cleanup };
-  }
-
-  it('linked worktree 根 cwd → 主仓根', async () => {
-    const f = await makeFixture();
-    try {
-      expect(await resolveMemoryScopeKey(f.wt1)).toBe(f.repoRoot);
-    } finally {
-      await f.cleanup();
-    }
-  });
-
-  it('worktree 子目录 cwd → 主仓根 + 相对子路径', async () => {
-    const f = await makeFixture();
-    try {
-      expect(await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'a'))).toBe(
-        path.join(f.repoRoot, 'apps', 'a'),
-      );
-    } finally {
-      await f.cleanup();
-    }
-  });
-
-  it('子目录在主仓不存在也按字符串映射 (scope key 是身份, 不是磁盘事实)', async () => {
-    const f = await makeFixture();
-    try {
-      expect(await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'only-in-wt'))).toBe(
-        path.join(f.repoRoot, 'apps', 'only-in-wt'),
-      );
-    } finally {
-      await f.cleanup();
-    }
-  });
-
-  it('两个 linked worktree 的同相对子路径命中同一 scope key', async () => {
-    const f = await makeFixture();
-    try {
-      const k1 = await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'a'));
-      const k2 = await resolveMemoryScopeKey(path.join(f.wt2, 'apps', 'a'));
-      expect(k1).toBe(k2);
-      expect(k1).toBe(path.join(f.repoRoot, 'apps', 'a'));
-    } finally {
-      await f.cleanup();
-    }
-  });
-
-  it('主仓内 cwd (根与子目录) 原样返回 — 非 worktree 场景行为不变', async () => {
-    const f = await makeFixture();
-    try {
-      expect(await resolveMemoryScopeKey(f.repoRoot)).toBe(f.repoRoot);
-      expect(await resolveMemoryScopeKey(path.join(f.repoRoot, 'apps', 'b'))).toBe(
-        path.join(f.repoRoot, 'apps', 'b'),
-      );
-    } finally {
-      await f.cleanup();
-    }
-  });
-
-  it('git clone --separate-git-dir 的 checkout 不归一化 (真实仓库, Codex review 场景)', async () => {
-    const f = await makeFixture();
-    try {
-      const storage = path.join(f.tmpRoot, 'storage', '.git');
-      const checkout = path.join(f.tmpRoot, 'separate-checkout');
-      // git 不会创建 --separate-git-dir 的父目录
-      await fs.mkdir(path.dirname(storage), { recursive: true });
-      f.git(['clone', '--separate-git-dir', storage, f.repoRoot, checkout], f.tmpRoot);
-      const sub = path.join(checkout, 'apps', 'a');
-      expect(await resolveMemoryScopeKey(checkout)).toBe(checkout);
-      expect(await resolveMemoryScopeKey(sub)).toBe(sub);
-    } finally {
-      await f.cleanup();
-    }
-  });
-
-  it('非 git 目录原样返回', async () => {
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-nogit-')));
-    try {
-      expect(await resolveMemoryScopeKey(dir)).toBe(dir);
-    } finally {
-      try {
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-      } catch {
-        /* Windows 上偶发 EBUSY — temp 目录交给 OS 清理 */
       }
     }
   });

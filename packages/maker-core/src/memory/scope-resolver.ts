@@ -143,8 +143,9 @@ export async function resolveMemoryScopeKey(
  * linked worktree cwd → `主仓根 + cwd 相对 worktree 根的子路径`。
  * 探测方式与 desktop WorktreeManager 同模式: rev-parse + path.resolve
  * 解析相对输出 (兼容不支持 --path-format 的旧 git)。单次 rev-parse 拿
- * toplevel / git-dir / git-common-dir 三个值 (输出顺序与参数一致), 每次
- * 解析只 spawn 一次 git。失败抛错由调用方回落。
+ * toplevel / git-dir / git-common-dir 三个值 (输出顺序与参数一致);
+ * 确认是 linked worktree 后再用一次 `worktree list --porcelain` 取主仓根。
+ * 失败抛错由调用方回落。
  */
 async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): Promise<string> {
   const cwd = path.normalize(workingDir);
@@ -166,10 +167,23 @@ async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): 
   // (Codex review on #2399)。
   if (samePath(gitDir, commonDir)) return workingDir;
 
-  // 主仓根只从 `<主仓>/.git` 形态的 common-dir 推导; bare repo / 非常规
-  // 布局无法可靠推断主仓根, 回落原样。
+  // bare repo 的 linked worktree (common-dir 是 `<name>.git`) 等非常规布局
+  // 无法可靠推断主仓根, 回落原样。
   if (path.basename(commonDir) !== '.git') return workingDir;
-  const mainRoot = path.dirname(commonDir);
+
+  // 主仓根不能从 common-dir 推导: 主 checkout 本身用 --separate-git-dir 建
+  // 时 common-dir 是 git 存储目录, dirname 不一定是工作树 (Codex review on
+  // #2399 第二轮)。统一用 `git worktree list --porcelain` 第一条记录 — git
+  // 保证主工作树排第一; 布局带 core.worktree 指针时取到真实主 checkout。
+  //
+  // 已知限制: `git clone --separate-git-dir` 不写 core.worktree, git 自身
+  // 也无法从 gitdir 反推真实 checkout (`git worktree list` 直接把 gitdir
+  // 父目录报为主工作树, 连从真实 checkout 里跑都一样)。这种布局下本函数
+  // 跟随 git 的 canonical 答案; 主 checkout 会话按 round-1 契约不归一化,
+  // 即该极端布局下主 checkout 与 worktree 的 memory 不共享 (与 PR 前行为
+  // 一致, 不回归)。
+  const mainRoot = await resolveMainWorktreeRoot(cwd, execGit);
+  if (!mainRoot) return workingDir;
 
   // 防御: toplevel 即主仓根时无需归一化 (gitdir ≠ common-dir 的异常布局),
   // 原样返回, 保持「本地原样返回」契约。
@@ -189,6 +203,17 @@ function resolveGitDirOutput(raw: string, cwd: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   return path.normalize(path.resolve(cwd, trimmed));
+}
+
+/**
+ * `git worktree list --porcelain` 第一条 `worktree ` 记录 = 主工作树路径
+ * (git 保证主工作树排第一)。取不到返 null (调用方回落)。
+ */
+async function resolveMainWorktreeRoot(cwd: string, execGit: GitProbe): Promise<string | null> {
+  const out = await execGit(['worktree', 'list', '--porcelain'], cwd);
+  const line = out.split('\n').find((l) => l.startsWith('worktree '));
+  if (!line) return null;
+  return resolveGitDirOutput(line.slice('worktree '.length), cwd);
 }
 
 function samePath(a: string, b: string): boolean {
