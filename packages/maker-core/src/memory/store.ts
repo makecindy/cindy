@@ -271,8 +271,12 @@ export class MakerMemoryStore {
     this.assertScopeOk();
     try {
       const all = await this.storage.list();
+      // list await 后、rebuild 前复核 (review #2388 Codex 17th P1): list 在途时
+      // 边界可能发生; not-ready 透传, FTS 不得写入旧 owner fts.db。
+      this.assertScopeOk();
       this.fts.rebuild(all);
     } catch (e) {
+      if (e instanceof MemoryError && e.code === 'not-ready') throw e;
       this.logger.warn('consolidate fts rebuild failed', { error: String(e) });
     }
 
