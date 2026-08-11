@@ -2733,10 +2733,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       state: hasInstance ? (hasRunning ? 'available' : 'instance-dependent') : 'requires-instance',
       ...(hasInstance ? {} : { reasonCode: 'INSTANCE_REQUIRED' }),
     };
+    // Keyed by the advertised (model-facing) tool names, because the registry
+    // merges this map into its own listing. Host dispatch names stay unchanged.
     const tools: Record<string, IOSSimulatorToolAvailability> = {
       check_environment: { state: 'available', backend: 'host' },
       doctor: { state: 'available', backend: 'host' },
-      list_devices: inspected.ready
+      list_simulator_devices: inspected.ready
         ? { state: 'available', backend: 'simctl' }
         : { state: 'unavailable', reasonCode: inspected.issue ?? 'ENVIRONMENT_NOT_READY' },
       list_instances: { state: 'available', backend: 'host' },
@@ -2756,9 +2758,12 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       wait_for_ui: { ...requiresInstance, backend: 'wda' },
       tap: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
       swipe: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
-      drag: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
+      drag_on_simulator: {
+        ...requiresInstance,
+        backend: hasNativeInput ? 'native-hid' : 'wda',
+      },
       long_press: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
-      key_press: { ...requiresInstance, backend: 'wda' },
+      press_simulator_key: { ...requiresInstance, backend: 'wda' },
       batch: { ...requiresInstance, backend: hasNativeInput ? 'native-hid' : 'wda' },
       touch_path: hasNativeInput
         ? { state: 'available', backend: 'native-hid' }
@@ -2774,7 +2779,7 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
           },
     };
     for (const name of [
-      'type_text',
+      'type_simulator_text',
       'press_home',
       'set_orientation',
       'set_appearance',
@@ -2793,8 +2798,8 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
       'install_app',
       'launch_app',
       'terminate_app',
-      'open_url',
-      'take_screenshot',
+      'open_simulator_url',
+      'take_simulator_screenshot',
       'capture_visual_baseline',
       'visual_diff',
       'capture_state',

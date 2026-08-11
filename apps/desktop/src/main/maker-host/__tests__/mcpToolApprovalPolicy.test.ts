@@ -138,7 +138,8 @@ describe('desktop MCP approval policy', () => {
         toolName: 'list_tools',
       }),
     ).toBe('auto-approve');
-    for (const name of ['attach_device', 'build_app', 'create_instance', 'open_url']) {
+    // Taking control of a device is itself the authorization step.
+    for (const name of ['attach_device', 'create_instance']) {
       expect(
         getDesktopMcpToolApprovalPolicy({
           serverName: 'cindy_ios_simulator',
@@ -147,10 +148,38 @@ describe('desktop MCP approval policy', () => {
         }),
       ).toBe('prompt-each-time');
     }
+    const route = { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' };
+    for (const name of ['build_app', 'open_simulator_url']) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_ios_simulator',
+          toolName: 'call_tool',
+          toolParams: { name, args: { ...route } },
+        }),
+      ).toBe('prompt-each-time');
+      // No owned route means the Host rejects it on route validation, so asking
+      // the user to authorize a device this task never attached is pure noise —
+      // the shape a mis-routed "open a web URL" call takes.
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_ios_simulator',
+          toolName: 'call_tool',
+          toolParams: { name, args: { url: 'https://example.com' } },
+        }),
+      ).toBe('auto-approve');
+    }
+    // A superseded name must not become a way around the same gate.
     expect(
       getDesktopMcpToolApprovalPolicy({
         serverName: 'cindy_ios_simulator',
-        toolParams: { name: 'build_app', args: {} },
+        toolName: 'call_tool',
+        toolParams: { name: 'open_url', args: { ...route, url: 'https://example.com' } },
+      }),
+    ).toBe('prompt-each-time');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator',
+        toolParams: { name: 'build_app', args: { ...route } },
       }),
     ).toBe('prompt-each-time');
     expect(

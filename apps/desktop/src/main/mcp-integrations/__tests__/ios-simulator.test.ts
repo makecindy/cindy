@@ -27,6 +27,7 @@ import {
   type IOSSimulatorTouchPoint,
   type WdaRunningInstance,
 } from '@cindy/ios-simulator-runtime';
+import { IOSSimulatorToolRegistry, registerIOSSimulatorTools } from '@cindy/mcps';
 import type { IOSSimulatorPublicRouteStatus } from '../../../shared/iosSimulatorIpc';
 import {
   cancelIOSSimulatorSessionOperations,
@@ -756,6 +757,20 @@ describe('iOS Simulator host', () => {
         read_build_diagnostics: { state: 'available', backend: 'host' },
       },
     });
+  });
+
+  it('reports availability under exactly the advertised simulator tool names', async () => {
+    const host = createIOSSimulatorHost({
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => localSession(id)),
+    });
+    const registry = new IOSSimulatorToolRegistry();
+    registerIOSSimulatorTools(registry, { callTool: vi.fn() });
+
+    // The registry merges this map by advertised name, so a renamed tool that
+    // kept its old availability key would silently report TOOL_NOT_REPORTED.
+    const reported = Object.keys((await host.describeTools('session-a')).tools).sort();
+    expect(reported).toEqual(registry.list().map((tool) => tool.name).sort());
   });
 
   it('removes stale orphaned xcresult bundles during ownership reconciliation', async () => {
@@ -6803,7 +6818,7 @@ describe('iOS Simulator host', () => {
           instanceCount: 1,
           runningInstanceCount: 1,
           tools: {
-            drag: { state: 'available', backend: 'wda' },
+            drag_on_simulator: { state: 'available', backend: 'wda' },
             touch_path: { state: 'unavailable', reasonCode: 'NATIVE_HID_NOT_ADMITTED' },
           },
         },

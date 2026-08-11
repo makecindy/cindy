@@ -22,7 +22,7 @@ import type {
   McpToolApprovalPolicy,
   McpToolApprovalPresentation,
 } from '@cindy/maker-core';
-import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
+import { canAutoApproveContactsMcpTool, canonicalIOSSimulatorToolName } from '@cindy/mcps';
 
 import { t } from '../i18n.js';
 
@@ -88,6 +88,56 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   'cindy_lsp',
 ]);
 
+/**
+ * 取 iOS Simulator progressive 调用的内层动作。
+ *
+ * 内层名一律过 canonical 化：改名后旧名仍是可调用的隐藏别名，别名必须命中与新名
+ * 完全相同的审批判定，否则旧名就成了绕过设备授权的口子。
+ */
+function readIOSSimulatorInnerCall(
+  context: McpToolApprovalContext,
+): { name: string | undefined; args: unknown } | undefined {
+  if (context.serverName !== 'cindy_ios_simulator') return undefined;
+  // Some Codex app-server versions omit the outer tool name but retain the
+  // validated progressive payload. Preserve the inner action's stricter policy
+  // instead of falling back to a persistable generic server prompt.
+  if (context.toolName !== 'call_tool' && context.toolName !== undefined) {
+    return undefined;
+  }
+  const params =
+    context.toolParams && typeof context.toolParams === 'object'
+      ? (context.toolParams as { name?: unknown; args?: unknown })
+      : undefined;
+  const rawName = typeof params?.name === 'string' ? params.name.trim() : '';
+  return {
+    name: rawName ? canonicalIOSSimulatorToolName(rawName) : undefined,
+    args: params?.args,
+  };
+}
+
+/**
+ * 设备级动作必须自带它要操作的那条 owned instance 路由。没有路由的调用到不了任何
+ * 设备（Host 在路由校验就拒），此时弹「授权这台设备」纯属噪音 —— 无关任务把
+ * 「打开一个网址」误路由到模拟器时正是这个形状。
+ */
+function hasIOSSimulatorInstanceRoute(args: unknown): boolean {
+  if (!args || typeof args !== 'object') return false;
+  const { instanceId, generation, leaseId } = args as {
+    instanceId?: unknown;
+    generation?: unknown;
+    leaseId?: unknown;
+  };
+  return (
+    typeof instanceId === 'string' &&
+    instanceId.trim() !== '' &&
+    typeof generation === 'number' &&
+    Number.isInteger(generation) &&
+    generation > 0 &&
+    typeof leaseId === 'string' &&
+    leaseId.trim() !== ''
+  );
+}
+
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
 function toClaudeToolName(key: string): string {
   const [serverName, toolName] = key.split('::');
@@ -118,22 +168,20 @@ export function getDesktopMcpToolApprovalPolicy(
       ? 'auto-approve'
       : 'prompt-each-time';
   }
-  if (serverName === 'cindy_ios_simulator') {
-    // Some Codex app-server versions omit the outer tool name but retain the
-    // validated progressive payload. Preserve the inner action's stricter
-    // policy instead of falling back to a persistable generic server prompt.
-    if (toolName === 'call_tool' || toolName === undefined) {
-      const innerName =
-        toolParams && typeof toolParams === 'object'
-          ? (toolParams as { name?: unknown }).name
-          : undefined;
-      return innerName === 'build_app' ||
-        innerName === 'open_url' ||
-        innerName === 'create_instance' ||
-        innerName === 'attach_device'
+  const iosSimulatorCall = readIOSSimulatorInnerCall(context);
+  if (iosSimulatorCall) {
+    const innerName = iosSimulatorCall.name;
+    // Taking control of a device is itself the authorization step, so it asks
+    // even before any route exists.
+    if (innerName === 'create_instance' || innerName === 'attach_device') {
+      return 'prompt-each-time';
+    }
+    if (innerName === 'build_app' || innerName === 'open_simulator_url') {
+      return hasIOSSimulatorInstanceRoute(iosSimulatorCall.args)
         ? 'prompt-each-time'
         : 'auto-approve';
     }
+    return 'auto-approve';
   }
   if (TRUSTED_MCP_SERVERS.has(serverName)) {
     return 'auto-approve';
@@ -148,13 +196,7 @@ export function getDesktopMcpToolApprovalPolicy(
 export function getDesktopMcpToolApprovalPresentation(
   context: McpToolApprovalContext,
 ): McpToolApprovalPresentation | undefined {
-  const innerName =
-    context.serverName === 'cindy_ios_simulator' &&
-    (context.toolName === 'call_tool' || context.toolName === undefined) &&
-    context.toolParams &&
-    typeof context.toolParams === 'object'
-      ? (context.toolParams as { name?: unknown }).name
-      : undefined;
+  const innerName = readIOSSimulatorInnerCall(context)?.name;
   if (innerName === 'build_app') {
     return {
       title: t('rightSidebar.iosSimulator.buildApproval.title'),
