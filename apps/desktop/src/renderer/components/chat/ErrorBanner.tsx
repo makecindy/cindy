@@ -48,7 +48,10 @@ import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
-import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
+import {
+  isModelImageInputUnsupportedError,
+  isPiImageInputUnsupportedError,
+} from '../../../shared/inputError';
 
 interface ErrorBannerProps {
   error: string;
@@ -292,6 +295,8 @@ export function ErrorBanner({
   let hasSpecialGuidance = true;
   if (isCodexResumeNotReadyProjectionError(error)) {
     displayError = t('chat.errorBanner.codexResumeNotReady');
+  } else if (isModelImageInputUnsupportedError(error)) {
+    displayError = t('ipcError.MODEL_IMAGE_INPUT_UNSUPPORTED');
   } else if (isPiImageInputUnsupportedError(error)) {
     displayError = t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
   } else if (isCredentialSwitchBusy) {

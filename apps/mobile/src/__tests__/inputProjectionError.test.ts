@@ -3,10 +3,11 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-i
 
 import {
   inputProjectionErrorI18nKey,
+  isModelImageInputUnsupportedProjectionError,
   isPiImageInputUnsupportedProjectionError,
 } from '@/session/inputProjectionError';
 
-describe('isPiImageInputUnsupportedProjectionError', () => {
+describe('inputProjectionError', () => {
   it('recognizes the Desktop projection marker without depending on host locale', () => {
     const error = '[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled';
     expect(isPiImageInputUnsupportedProjectionError(error)).toBe(true);
@@ -15,6 +16,12 @@ describe('isPiImageInputUnsupportedProjectionError', () => {
 
   it('leaves ordinary remote errors untouched', () => {
     expect(isPiImageInputUnsupportedProjectionError('provider unavailable')).toBe(false);
+  });
+
+  it('maps the generic model image marker without exposing provider details', () => {
+    const error = '[MODEL_IMAGE_INPUT_UNSUPPORTED] provider detail';
+    expect(isModelImageInputUnsupportedProjectionError(error)).toBe(true);
+    expect(inputProjectionErrorI18nKey(error)).toBe('message.queue.modelImageInputUnsupported');
   });
 
   it('maps the shared Codex resume marker to a locale key without exposing host diagnostics', () => {

@@ -74,6 +74,7 @@ import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER } from '../../shared/inputError.js';
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
 const log = createMakerLogger('codex-proxy');
@@ -333,6 +334,145 @@ function writeTransformedBodyDump(ctx: RequestTransformCtx, body: unknown): void
 
 function createCodexTransform(): RequestTransform {
   return createInstructionsInjectionTransform({ registry, logger: log });
+}
+
+const UNSUPPORTED_IMAGE_FALLBACK_DROP = Symbol('unsupported-image-fallback-drop');
+const UNSUPPORTED_IMAGE_INPUT_PART_TYPES = new Set([
+  'image',
+  'image_url',
+  'input_image',
+  'output_image',
+  'computer_screenshot',
+  'screenshot',
+]);
+
+interface UnsupportedImageFallbackSanitizeResult {
+  value: unknown | typeof UNSUPPORTED_IMAGE_FALLBACK_DROP;
+  changed: boolean;
+}
+
+function containsUnsupportedImageFallbackMarker(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.includes(MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsUnsupportedImageFallbackMarker);
+  }
+  if (!isPlainObject(value)) return false;
+  return Object.values(value).some(containsUnsupportedImageFallbackMarker);
+}
+
+function latestUserInputContainsUnsupportedImageFallbackMarker(input: unknown): boolean {
+  if (typeof input === 'string') return containsUnsupportedImageFallbackMarker(input);
+  if (!Array.isArray(input)) return false;
+
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (!isPlainObject(item) || item.role !== 'user') continue;
+    return containsUnsupportedImageFallbackMarker(item);
+  }
+  return false;
+}
+
+function isUnsupportedImageInputPart(value: Record<string, unknown>): boolean {
+  const type = typeof value.type === 'string' ? value.type.toLowerCase() : '';
+  return UNSUPPORTED_IMAGE_INPUT_PART_TYPES.has(type);
+}
+
+function sanitizeUnsupportedImageFallbackValue(
+  value: unknown,
+): UnsupportedImageFallbackSanitizeResult {
+  if (typeof value === 'string') {
+    const next = value.replaceAll(MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER, '');
+    return { value: next, changed: next !== value };
+  }
+
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next: unknown[] = [];
+    for (const item of value) {
+      const sanitized = sanitizeUnsupportedImageFallbackValue(item);
+      if (sanitized.value === UNSUPPORTED_IMAGE_FALLBACK_DROP) {
+        changed = true;
+        continue;
+      }
+      changed ||= sanitized.changed;
+      next.push(sanitized.value);
+    }
+    return { value: changed ? next : value, changed };
+  }
+
+  if (!isPlainObject(value)) return { value, changed: false };
+  if (isUnsupportedImageInputPart(value)) {
+    return { value: UNSUPPORTED_IMAGE_FALLBACK_DROP, changed: true };
+  }
+
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    const sanitized = sanitizeUnsupportedImageFallbackValue(child);
+    if (sanitized.value === UNSUPPORTED_IMAGE_FALLBACK_DROP) {
+      changed = true;
+      continue;
+    }
+    changed ||= sanitized.changed;
+    next[key] = sanitized.value;
+  }
+
+  const type = typeof next.type === 'string' ? next.type.toLowerCase() : '';
+  if (
+    (type === 'input_text' || type === 'output_text' || type === 'text') &&
+    typeof next.text === 'string' &&
+    next.text.trim().length === 0
+  ) {
+    return { value: UNSUPPORTED_IMAGE_FALLBACK_DROP, changed: true };
+  }
+  if (
+    Array.isArray(next.content) &&
+    next.content.length === 0 &&
+    (type === 'message' || typeof next.role === 'string')
+  ) {
+    return { value: UNSUPPORTED_IMAGE_FALLBACK_DROP, changed: true };
+  }
+
+  return { value: changed ? next : value, changed };
+}
+
+/**
+ * The Codex app-server replays prior Responses input on every turn. A retry that only omits the
+ * newest attachment therefore still resends the rejected image from history. The private marker
+ * scopes this rewrite to the one recovery turn: remove every replayed image, preserve text/tool
+ * context, and remove the marker before forwarding the request to the selected model.
+ */
+export function stripImagesForUnsupportedImageFallback(
+  body: unknown,
+): Record<string, unknown> | null {
+  if (
+    !isPlainObject(body) ||
+    !latestUserInputContainsUnsupportedImageFallbackMarker(body.input)
+  ) {
+    return null;
+  }
+
+  const sanitized = sanitizeUnsupportedImageFallbackValue(body.input);
+  if (sanitized.value === UNSUPPORTED_IMAGE_FALLBACK_DROP) return null;
+  return { ...body, input: sanitized.value };
+}
+
+function createUnsupportedImageFallbackTransform(): RequestTransform {
+  return (body, ctx) => {
+    const path = ctx.url.split('?', 1)[0] ?? ctx.url;
+    if (ctx.method !== 'POST' || (!path.endsWith('/responses') && path !== '/responses')) {
+      return null;
+    }
+    const transformed = stripImagesForUnsupportedImageFallback(body);
+    if (transformed) {
+      log.info('stripped replayed images for unsupported-image fallback', {
+        threadId: selectedThreadIdFromHeaders(ctx.headers),
+      });
+    }
+    return transformed;
+  };
 }
 
 function sessionUsesNativeOpenAIReviewer(
@@ -2283,6 +2423,7 @@ function createTransformRequestChain(
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
     createCodexTransform(),
+    createUnsupportedImageFallbackTransform(),
     // Guardian uses an isolated child thread. Resolve its parent business
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
+import { MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER } from '../../../shared/inputError.js';
 
 type Registry = {
   set(threadId: string, text: string): void;
@@ -480,6 +481,147 @@ describe('createCrossProviderCompactionCompatTransform', () => {
       { model: 'gpt-5.5', input: [{ type: 'context_compaction', id: 'cc_2' }, { type: 'compaction', encrypted_content: '' }] },
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
     )).toBeNull();
+  });
+});
+
+describe('stripImagesForUnsupportedImageFallback', () => {
+  it('removes replayed images and the private marker while preserving text history', async () => {
+    const { stripImagesForUnsupportedImageFallback } = await freshCodexProxyHost();
+    const out = stripImagesForUnsupportedImageFallback({
+      model: 'deepseek-chat',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: '提取文字信息' },
+            { type: 'input_image', image_url: 'data:image/png;base64,AAA' },
+          ],
+        },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '我来查看图片。' }],
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: `${MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER} System recovery note: explain the limitation.`,
+          }],
+        },
+      ],
+    });
+
+    expect(out).not.toBeNull();
+    expect(JSON.stringify(out)).not.toContain('input_image');
+    expect(JSON.stringify(out)).not.toContain('data:image/png');
+    expect(JSON.stringify(out)).not.toContain(MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER);
+    expect(JSON.stringify(out)).toContain('提取文字信息');
+    expect(JSON.stringify(out)).toContain('我来查看图片。');
+    expect(JSON.stringify(out)).toContain('System recovery note: explain the limitation.');
+  });
+
+  it('strips historical images while preserving an unrelated current text request', async () => {
+    const { stripImagesForUnsupportedImageFallback } = await freshCodexProxyHost();
+    const out = stripImagesForUnsupportedImageFallback({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Earlier image question' },
+            { type: 'input_image', image_url: 'data:image/png;base64,AAA' },
+          ],
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Summarize the previous answer' },
+            { type: 'input_text', text: MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER },
+          ],
+        },
+      ],
+    });
+
+    expect(JSON.stringify(out)).not.toContain('input_image');
+    expect(JSON.stringify(out)).not.toContain(MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER);
+    expect(JSON.stringify(out)).toContain('Earlier image question');
+    expect(JSON.stringify(out)).toContain('Summarize the previous answer');
+    expect(JSON.stringify(out)).not.toContain('System recovery note');
+  });
+
+  it('drops image-only replay messages instead of forwarding empty content', async () => {
+    const { stripImagesForUnsupportedImageFallback } = await freshCodexProxyHost();
+    const out = stripImagesForUnsupportedImageFallback({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url: 'https://example.test/image.png' } }],
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: `${MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER} Explain the limitation.`,
+          }],
+        },
+      ],
+    }) as { input: unknown[] };
+
+    expect(out.input).toHaveLength(1);
+    expect(JSON.stringify(out)).not.toContain('image.png');
+  });
+
+  it('does not alter normal multimodal requests or generic provider errors', async () => {
+    const { stripImagesForUnsupportedImageFallback } = await freshCodexProxyHost();
+    const body = {
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: '[MODEL_IMAGE_INPUT_UNSUPPORTED] provider error' },
+          { type: 'input_image', image_url: 'data:image/png;base64,AAA' },
+        ],
+      }],
+    };
+
+    expect(stripImagesForUnsupportedImageFallback(body)).toBeNull();
+  });
+
+  it('does not reactivate an old recovery marker after a newer user turn', async () => {
+    const { stripImagesForUnsupportedImageFallback } = await freshCodexProxyHost();
+    const body = {
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: `${MODEL_IMAGE_INPUT_UNSUPPORTED_RECOVERY_MARKER} Old recovery note.`,
+          }],
+        },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'I cannot read images.' }],
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Now use this image-capable model.' },
+            { type: 'input_image', image_url: 'data:image/png;base64,BBB' },
+          ],
+        },
+      ],
+    };
+
+    expect(stripImagesForUnsupportedImageFallback(body)).toBeNull();
   });
 });
 
@@ -1969,8 +2111,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, unsupported-image fallback, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -2190,8 +2332,8 @@ describe('codex proxy host', () => {
     setSessionProvider('session-openai-review', 'openai');
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    // active strips ×2, product prompt injection, then provider-aware Guardian rewrite.
-    const reviewerTransform = transforms[3];
+    // active strips ×2, product prompt injection, unsupported-image fallback, then provider-aware Guardian rewrite.
+    const reviewerTransform = transforms[4];
     if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
     const body = { model: 'codex-auto-review', input: [{ role: 'user', content: 'review' }] };
     const guardianHeaders = (parentThreadId: string) => ({
@@ -2258,7 +2400,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    const reviewerTransform = transforms[3];
+    const reviewerTransform = transforms[4];
     if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
     expect(reviewerTransform(
       { model: 'codex-auto-review', input: [] },
@@ -4023,7 +4165,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(13); // encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(14); // encrypted activeStrip, image generation activeStrip, instructions 注入, unsupported-image fallback, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

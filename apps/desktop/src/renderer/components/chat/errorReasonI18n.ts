@@ -2,6 +2,10 @@ import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
+import {
+  isModelImageInputUnsupportedError,
+  isPiImageInputUnsupportedError,
+} from '../../../shared/inputError';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 /**
@@ -32,3 +36,14 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
     'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',
 };
+
+/** Resolve message markers before generic terminal reasons so history matches the live banner. */
+export function errorMessageI18nKey(message: string, reason?: string): string | undefined {
+  if (isModelImageInputUnsupportedError(message)) {
+    return 'ipcError.MODEL_IMAGE_INPUT_UNSUPPORTED';
+  }
+  if (isPiImageInputUnsupportedError(message)) {
+    return 'ipcError.PI_IMAGE_INPUT_UNSUPPORTED';
+  }
+  return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
+}

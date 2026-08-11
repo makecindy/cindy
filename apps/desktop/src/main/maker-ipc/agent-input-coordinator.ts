@@ -24,8 +24,15 @@
  * 它只提交 intent payload；排序、投递模式、回滚和持久化由本模块决定。
  */
 
-import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
-import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
+import {
+  isUnsupportedResponsesImageErrorPayload,
+  litellmImageErrorPayload,
+} from '@cindy/responses-chat-bridge';
+import {
+  MODEL_IMAGE_INPUT_UNSUPPORTED_MARKER,
+  PI_IMAGE_INPUT_UNSUPPORTED_MARKER,
+  isPiImageInputUnsupportedError,
+} from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -45,8 +52,8 @@ import type {
 } from '../../shared/agentInputQueue.js';
 import {
   buildMakerUserMessage,
-  getAgentInputAttachmentBlockType,
   getAgentFacingText,
+  hasModelBoundImageInput,
   normalizeAgentInputClearBoundaryMs,
   projectionRetryText,
   sanitizeQueuedMessageForPersistence,
@@ -83,90 +90,22 @@ const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
 
-type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
-
-function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>): boolean {
-  return getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
+function friendlyImageInputUnsupportedError(raw: string | null | undefined): string {
+  if (
+    raw?.startsWith(MODEL_IMAGE_INPUT_UNSUPPORTED_MARKER) ||
+    raw?.startsWith(PI_IMAGE_INPUT_UNSUPPORTED_MARKER)
+  ) {
+    return raw;
+  }
+  return litellmImageErrorPayload(raw ?? null) ?? MODEL_IMAGE_INPUT_UNSUPPORTED_MARKER;
 }
 
-function attachmentSourceKey(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.url === 'string') return `url:${record.url}`;
-  if (typeof record.base64 === 'string') return `base64:${record.base64}`;
-  return null;
-}
-
-function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
-  const remainingFiles = item.files?.filter((file) => !isMakerImageAttachment(file));
-  const remainingImageSources = new Set(
-    (remainingFiles ?? [])
-      .filter((file) => file.category === 'image')
-      .map(attachmentSourceKey)
-      .filter((source): source is string => source !== null),
-  );
-  const chatMessage = { ...item.chatMessage };
-  const remainingChatImages = chatMessage.images?.filter((image) => {
-    const source = attachmentSourceKey(image);
-    return source !== null && remainingImageSources.has(source);
-  });
-  if (remainingChatImages && remainingChatImages.length > 0) {
-    chatMessage.images = remainingChatImages;
-  } else {
-    delete chatMessage.images;
-  }
-
-  // Renderer queue objects historically carry retryFiles as an extra presentation field even
-  // though it is not part of the main-process wire contract. Strip only attachments that become
-  // maker image blocks: GIF keeps category=image for preview, but is sent as a file block.
-  const compatibleChatMessage = chatMessage as typeof chatMessage & {
-    retryFiles?: QueuedAttachment[];
-  };
-  if (Array.isArray(compatibleChatMessage.retryFiles)) {
-    const retryFiles = compatibleChatMessage.retryFiles.filter(
-      (file) => !isMakerImageAttachment(file),
-    );
-    if (retryFiles.length > 0) compatibleChatMessage.retryFiles = retryFiles;
-    else delete compatibleChatMessage.retryFiles;
-  }
-
-  let persistedContent = item.persistedContent;
-  try {
-    const parsed = JSON.parse(persistedContent) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const record = parsed as Record<string, unknown>;
-      const remainingPersistedImages = Array.isArray(record.images)
-        ? record.images.filter((image) => {
-            const source = attachmentSourceKey(image);
-            return source !== null && remainingImageSources.has(source);
-          })
-        : [];
-      persistedContent = JSON.stringify({
-        ...record,
-        images: remainingPersistedImages,
-      });
-    }
-  } catch {
-    // Historical plain-text queue payloads contain no persisted image references.
-  }
-
-  const stripped: AgentInputQueuedMessage = {
-    ...item,
-    persistedContent,
-    chatMessage,
-  };
-  if (remainingFiles && remainingFiles.length > 0) stripped.files = remainingFiles;
-  else delete stripped.files;
-  return stripped;
-}
-
-function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
-  return (
-    getAgentFacingText(item).trim().length > 0 ||
-    (item.files?.length ?? 0) > 0 ||
-    (item.mentions?.length ?? 0) > 0 ||
-    (item.sessionRefs?.length ?? 0) > 0
-  );
+/** Normalize a provider image rejection before it crosses the main -> renderer boundary. */
+export function normalizeUnsupportedImageErrorMessage(
+  raw: string | null | undefined,
+): string | null {
+  if (!isUnsupportedResponsesImageErrorPayload(raw ?? null)) return null;
+  return friendlyImageInputUnsupportedError(raw);
 }
 
 export interface AgentInputSendOpts {
@@ -522,6 +461,12 @@ type ActiveTurnTerminalEvent =
        */
       resumableCandidate?: boolean;
       /**
+       * A provider rejected image content while the user row was still being persisted. The
+       * normal image fallback cannot start until this event becomes an active-turn recovery, so
+       * renderer projection and host broadcast stay suppressed until persistence settles.
+       */
+      unsupportedImageFallbackCandidate?: boolean;
+      /**
        * 决策还没做出时用户已经自己接手（发了新消息 / 插话）→ 结算时不再接管，回落成常规
        * 错误呈现。缺了它，用户接手之后延后结算还会再接管一次，把一条隐藏续跑指令插到他
        * 那条消息前面（greptile P1）。
@@ -752,7 +697,12 @@ function isCredentialSwitchBusySendFailure(
  */
 function markPendingTerminalSupersededByUser(active: ActiveTurn | null): void {
   const pending = active?.pendingTerminalEvent;
-  if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;
+  if (
+    pending?.type !== 'error' ||
+    (pending.resumableCandidate !== true && pending.unsupportedImageFallbackCandidate !== true)
+  ) {
+    return;
+  }
   pending.supersededByUser = true;
 }
 
@@ -2114,6 +2064,28 @@ export class AgentInputCoordinator {
     return projection;
   }
 
+  /** Transparently retry a rejected image turn without treating it as a new human action. */
+  async retryUnsupportedImageError(sessionId: string): Promise<AgentInputProjection> {
+    if (!this.canAutoFallbackUnsupportedImageError(sessionId)) return this.getProjection(sessionId);
+    const { projection } = await this.performRetryLastError(sessionId, { imageFallback: true });
+    return projection;
+  }
+
+  /** Whether an unsupported-image turn can be retried once with a truthful hidden capability note. */
+  canAutoFallbackUnsupportedImageError(sessionId: string): boolean {
+    const state = this.getState(sessionId);
+    if (!isUnsupportedResponsesImageErrorPayload(state.error ?? state.stickyError)) return false;
+    if (state.recovery?.kind !== 'active-turn') return false;
+    if (state.recovery.item.unsupportedImageFallback) return false;
+    return true;
+  }
+
+  /** The provider rejected image content before the user-message persistence boundary settled. */
+  isUnsupportedImageFallbackDeferred(sessionId: string): boolean {
+    const pending = this.getState(sessionId).activeTurn?.pendingTerminalEvent;
+    return pending?.type === 'error' && pending.unsupportedImageFallbackCandidate === true;
+  }
+
   /**
    * main 守卫自动替用户点一次「继续」（turn 被上游打断；判据与额度见
    * maker-ipc/interruptedTurnAutoResume.ts）。
@@ -2146,7 +2118,7 @@ export class AgentInputCoordinator {
    */
   private async performRetryLastError(
     sessionId: string,
-    opts?: { auto?: boolean; attemptToken?: number },
+    opts?: { auto?: boolean; attemptToken?: number; imageFallback?: boolean },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
     const recovery = state.recovery;
@@ -2171,6 +2143,13 @@ export class AgentInputCoordinator {
     // 用户只看到任务继续跑,不看到这条合成消息;2026-07-05 产品决策)。
     let continueItem: AgentInputQueuedMessage | null = null;
     let progressKnown = false;
+    const unsupportedImageError = isUnsupportedResponsesImageErrorPayload(
+      state.error ?? state.stickyError,
+    );
+    const explainUnsupportedImageFallback =
+      unsupportedImageError &&
+      recovery.kind === 'active-turn' &&
+      hasModelBoundImageInput(recovery.item);
     const previousAutoResumeInfo = opts?.auto ? state.autoResumePending : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
     let continueText = CONTINUE_AFTER_ERROR_PROMPT;
@@ -2258,6 +2237,8 @@ export class AgentInputCoordinator {
           text: continueText,
           originalSyntheticTrigger: 'continue',
           persistedContent: continueText,
+          unsupportedImageFallback: unsupportedImageError || undefined,
+          unsupportedImageFallbackExplain: explainUnsupportedImageFallback || undefined,
           autoResume: opts?.auto ? true : undefined,
           recoveryCheckpoint,
           // 人工 Retry 是新的真人介入周期，不能继承上一轮隐藏自动消息的标记；自动路径
@@ -2294,22 +2275,16 @@ export class AgentInputCoordinator {
       });
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
+    let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
+    if (!continueItem && retryItem && unsupportedImageError) {
+      retryItem = {
+        ...retryItem,
+        unsupportedImageFallback: true,
+        unsupportedImageFallbackExplain: explainUnsupportedImageFallback || undefined,
+      };
+    }
     const previousError = state.error;
     const previousStickyError = state.stickyError;
-    let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
-    if (
-      !continueItem &&
-      retryItem &&
-      isUnsupportedResponsesImageErrorPayload(state.error ?? state.stickyError)
-    ) {
-      retryItem = stripQueuedMessageImages(retryItem);
-      if (!hasRetryableQueuedContent(retryItem)) {
-        // An image-only turn has no truthful fallback. Keep the error/recovery intact so a later
-        // text message or model switch can take over instead of inventing replacement text.
-        log.debug('image-only retry skipped for unsupported Chat bridge input', { sessionId });
-        return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
-      }
-    }
     state.error = null;
     state.stickyError = null;
     // 接管态在补发这一刻结束:聊天流里的「重新连接中」活动行交棒给落库的
@@ -2361,11 +2336,11 @@ export class AgentInputCoordinator {
       this.deps.onUiRetry?.(
         sessionId,
         item.clientId,
-        opts?.auto ? 'auto' : 'manual',
+        opts?.auto || opts?.imageFallback ? 'auto' : 'manual',
         attemptToken ?? undefined,
       );
     }
-    if (!opts?.auto) this.touchUserSend(sessionId);
+    if (!opts?.auto && !opts?.imageFallback) this.touchUserSend(sessionId);
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'retry');
     this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'retry');
@@ -2656,6 +2631,7 @@ export class AgentInputCoordinator {
     type: 'done' | 'error',
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    presentation?: { suppressRecoverableImageErrorProjection?: boolean },
   ): void {
     const state = this.getState(sessionId);
     const active = state.activeTurn;
@@ -2663,6 +2639,7 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      message = normalizeUnsupportedImageErrorMessage(message) ?? message;
       if (
         active &&
         state.recovery?.kind === 'queue-head' &&
@@ -2728,6 +2705,12 @@ export class AgentInputCoordinator {
             return;
           }
         }
+        if (
+          presentation?.suppressRecoverableImageErrorProjection &&
+          this.canAutoFallbackUnsupportedImageError(sessionId)
+        ) {
+          return;
+        }
         this.emit(sessionId);
         return;
       }
@@ -2740,15 +2723,24 @@ export class AgentInputCoordinator {
         // 成功时用户已经先看过一帧红横幅，违反「接管态为真时 error 必为 null」(不变量 I1,
         // greptile P1)。判定为假（认证失效、协议错等确定性失败）时照旧立刻呈现，不受影响。
         const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals);
+        const unsupportedImageFallbackCandidate = Boolean(
+          presentation?.suppressRecoverableImageErrorProjection &&
+            isUnsupportedResponsesImageErrorPayload(message ?? null) &&
+            active.item &&
+            !active.item.unsupportedImageFallback,
+        );
         recordPendingTerminalEvent(active, {
           type: 'error',
           message,
           signals,
           ...(resumableCandidate ? { resumableCandidate: true } : {}),
+          ...(unsupportedImageFallbackCandidate
+            ? { unsupportedImageFallbackCandidate: true }
+            : {}),
         });
         // 候选态只压住**本次**的 message；既有 stickyError 是上一次未处置的错误，与本次无关，
         // 该继续显示。
-        state.error = resumableCandidate
+        state.error = resumableCandidate || unsupportedImageFallbackCandidate
           ? (state.stickyError ?? state.error)
           : (state.stickyError ?? message ?? state.error);
         state.recovery = null;
@@ -4733,6 +4725,26 @@ export class AgentInputCoordinator {
         this.markPendingExternalTerminalDone(sessionId, state);
         this.emit(sessionId);
         this.scheduleDrainAfterExternalTurnSettles(sessionId, 'scheduler-prompt-terminal-error');
+        return;
+      }
+      if (
+        outcome === 'kept' &&
+        active.item &&
+        terminalEvent.unsupportedImageFallbackCandidate === true &&
+        terminalEvent.supersededByUser !== true
+      ) {
+        // DeepSeek/LiteLLM can reject the request before the user row's persistence callback
+        // finishes. Recovery only exists now, so start the same image-free retry that the normal
+        // persisted-error path schedules in register.ts. Do not emit the transient provider error.
+        state.error = terminalEvent.message ?? state.error;
+        queueMicrotask(() => {
+          void this.retryUnsupportedImageError(sessionId).catch((error) => {
+            log.warn('deferred unsupported-image text fallback retry failed', {
+              sessionId,
+              error: errorMessage(error),
+            });
+          });
+        });
         return;
       }
       // 与 onTurnEvent 的 persisted 分支对称:两条留 recovery 的 error 路径都要给 host

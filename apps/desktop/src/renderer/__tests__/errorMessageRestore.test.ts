@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
-import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
+import { ERROR_REASON_I18N_KEYS, errorMessageI18nKey } from '@/components/chat/errorReasonI18n';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 const SESSION_ID = 's-err';
@@ -35,6 +35,12 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     expect(ERROR_REASON_I18N_KEYS['codex-auto-review-unavailable']).toBe(
       'logic.errors.codexAutoReviewUnavailable',
     );
+  });
+
+  it('localizes the model image marker in persisted history before generic reasons', () => {
+    expect(
+      errorMessageI18nKey('[MODEL_IMAGE_INPUT_UNSUPPORTED] provider detail', 'turn-failed'),
+    ).toBe('ipcError.MODEL_IMAGE_INPUT_UNSUPPORTED');
   });
 
   it('maps upstream overload to the same copy the tail banner uses', () => {

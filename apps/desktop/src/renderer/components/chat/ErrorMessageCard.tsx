@@ -20,11 +20,11 @@
 import { AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
-import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { errorMessageI18nKey } from './errorReasonI18n';
 
 export function ErrorMessageCard({ message, reason }: { message: string; reason?: string }) {
   const { t } = useTranslation();
-  const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
+  const i18nKey = errorMessageI18nKey(message, reason);
   const text = i18nKey ? t(i18nKey) : decodeRemoteErrorMessage(message);
   if (!text) return null;
   return (
