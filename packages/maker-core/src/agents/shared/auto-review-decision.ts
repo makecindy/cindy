@@ -139,6 +139,14 @@ export const AUTO_REVIEW_RETRY_BACKOFF_MS: readonly number[] = Object.freeze([10
 export const AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
+ * 调度余量:prompt 构造、`setTimeout` 抖动、事件循环排队都计入总耗时但不属于任何
+ * 一次请求。宿主的时间兜底与核心守卫都要加上它 —— 不留余量等于要求这些开销恰好
+ * 为零,真机上必然差那么几毫秒,于是最后一次重试恒定被自己的护栏挡掉
+ * (PR #2474 review 两轮都指向这一点)。
+ */
+export const AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS = 2_000;
+
+/**
  * 一轮审阅(含全部重试与退避)的总预算。
  *
  * 宿主用它决定"还够不够再跑一次",核心用它推外层守卫的上界 —— **必须同一个算法**,
@@ -156,12 +164,15 @@ export function autoReviewRetryBudgetMs(
 }
 
 /**
- * 核心侧守卫的绝对上界:按最宽一档 + 全部重试与退避推出,再留一点调度余量。
+ * 核心侧守卫的绝对上界:按最宽一档 + 全部重试与退避推出,再加**两份**调度余量 ——
+ * 一份对应宿主时间兜底自己放宽的那份,另一份留给守卫与兜底之间的竞态。
+ * 守卫必须严格晚于宿主的兜底触发,否则宿主刚放宽的余量会被守卫吃掉。
  *
  * 这是**兜底**不是常态:绝大多数请求 2s 内返回(实测 p95 ≈ 2.5s)。
  */
 const AUTO_REVIEW_DELEGATE_HARD_CEILING_MS =
-  autoReviewRetryBudgetMs(AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS) + 2_000;
+  autoReviewRetryBudgetMs(AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS)
+  + AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS * 2;
 
 /** 暴露给测试:守卫必须容得下最宽一档的全部重试,常量漂移时要红。 */
 export function getAutoReviewDelegateHardCeilingMs(): number {

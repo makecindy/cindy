@@ -4,6 +4,7 @@ import {
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   AUTO_REVIEW_RETRY_ATTEMPTS,
   AUTO_REVIEW_RETRY_BACKOFF_MS,
+  AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS,
   autoReviewRetryBudgetMs,
   type AutoReviewTimeoutPolicy,
   type AutoReviewDecision,
@@ -54,6 +55,15 @@ const REVIEW_RETRIES = AUTO_REVIEW_RETRY_ATTEMPTS - 1;
  * 与核心侧同源:核心的外层守卫按同一组常量推上界,分开维护会让守卫悄悄截断重试。
  */
 const RETRY_BACKOFF_MS = AUTO_REVIEW_RETRY_BACKOFF_MS;
+
+/**
+ * 时间兜底之上的余量:prompt 构造、`setTimeout` 调度抖动、事件循环排队都算在
+ * `elapsed` 里但不属于任何一次请求。不留余量就等于要求这些开销恰好为零
+ * (PR #2474 review),真机上必然差那么几毫秒。
+ *
+ * 核心侧的外层守卫按同一个余量放宽,否则守卫会先于兜底触发,等于余量白留。
+ */
+const RETRY_SCHEDULING_SLACK_MS = AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS;
 
 /** 单次尝试的失败形态。区分它们决定了「该不该再试一次」。 */
 type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error';
@@ -263,20 +273,25 @@ export function createAutoPermissionReviewer(
     // 单次超时按本次请求的模型能力取(强制思考的模型需要更久),缺省回到构造期策略。
     const requestTimeoutMs = deps.resolveRequestTimeoutMs?.(request)
       ?? timeoutPolicy.requestTimeoutMs;
-    // 总预算护栏:剩余时间不够再跑一次完整尝试时就不再重试,避免最后一次必然
-    // 被外层守卫截断(那次调用纯属浪费)。
+    // 重试的**意图是次数**(试满 attempts 次),不是"在某个时间窗内尽量试"。
     //
-    // 预算必须把**退避**也算进去 —— 只按 requestTimeoutMs × attempts 会让最后一次
-    // 重试恒定被自己的护栏挡掉(前两次各耗满超时后,elapsed + backoff 已经越界),
-    // 于是"声明两次重试、实际只跑一次"(PR #2474 review)。
-    const totalBudgetMs = autoReviewRetryBudgetMs(requestTimeoutMs, attempts);
+    // 早先按 `elapsed + backoff + requestTimeoutMs > totalBudgetMs` 判断,等于要求
+    // prompt 构造与定时器调度的开销恰好为零 —— 真机上永远差那么几毫秒,于是最需要
+    // 重试的连续 timeout 场景反而只跑得到两次(PR #2474 review 两轮)。
+    //
+    // 改成:循环边界只由 attempts 决定;时间预算退居**兜底**,且带明确余量 —— 只有
+    // 已经耗掉的时间超出"全部尝试 + 退避 + 余量"时才提前收手(那意味着上游卡死到
+    // 连外层守卫都快触发了,再发一次纯属浪费)。
+    const deadlineAt = startedAt
+      + autoReviewRetryBudgetMs(requestTimeoutMs, attempts)
+      + RETRY_SCHEDULING_SLACK_MS;
 
     let lastFailure: AttemptFailure = 'error';
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
         const backoff = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
-        const elapsed = Date.now() - startedAt;
-        if (elapsed + backoff + requestTimeoutMs > totalBudgetMs) break;
+        // 兜底:真实剩余时间连一次退避都放不下时才停(正常路径永远不命中)。
+        if (Date.now() + backoff >= deadlineAt) break;
         await new Promise((resolve) => setTimeout(resolve, backoff));
       }
       const result = await attemptReview(deps, request, prompt, requestTimeoutMs);

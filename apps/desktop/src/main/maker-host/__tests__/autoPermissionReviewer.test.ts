@@ -247,6 +247,25 @@ describe('createAutoPermissionReviewer', () => {
     }
   });
 
+  it('still runs every retry when real scheduling overhead eats into the budget', async () => {
+    // 回归 PR #2474 review 第二轮:预算精确等于"三次超时 + 两次退避"时,prompt 构造
+    // 与定时器调度的那几毫秒会让第三次判断越界 —— 等于要求额外开销恰好为零。
+    // 这里用真实时钟 + 极短超时,让调度开销占比足够大,把该场景逼出来。
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const requestText = vi.fn(
+      () => new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 50)),
+    );
+    const reviewer = createAutoPermissionReviewer({
+      requestText,
+      logger,
+      resolveRequestTimeoutMs: () => 20,
+    });
+
+    await expect(reviewer(request())).resolves.toBeNull();
+    // 次数由 attempts 决定,不被调度抖动侵蚀。
+    expect(requestText).toHaveBeenCalledTimes(3);
+  });
+
   it('honours a per-request timeout so slow reasoning models are not cut short', async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
     const requestText = vi.fn(async () => '{"verdict":"allow"}');
