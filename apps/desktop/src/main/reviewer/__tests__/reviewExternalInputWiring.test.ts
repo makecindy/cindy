@@ -96,6 +96,16 @@ describe('Review external input wiring', () => {
     ).toBeLessThan(registerSource.indexOf('verifyBeforePublish: async'));
   });
 
+  it('reports a failed branch load instead of claiming there is nothing to review', () => {
+    // A context-free worktree exits before the prompt is built, so the
+    // prompt-level warning never runs; without this the user is told there is
+    // no work when in fact the branch could not be loaded.
+    // Regex, not a literal: the repository checks out with CRLF on Windows.
+    expect(registerSource).toMatch(
+      /evidence\.branchUnavailableReason\s*\?\s*`Review could not load this branch's changes/,
+    );
+  });
+
   it('rechecks the exact active source identity before both launch and publish', () => {
     expect(registerSource).toContain('const readCurrentSourceIdentity = async () => {');
     expect(

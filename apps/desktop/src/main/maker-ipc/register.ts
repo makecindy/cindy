@@ -7073,7 +7073,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !request.focus
       ) {
         await cleanupPreparedArtifacts?.();
-        throwIpcError('INVALID_PARAMS', 'The current task has no reviewable content yet');
+        // "Nothing to review" and "the branch was there but could not be read"
+        // are different answers, and only the second one tells the user what to
+        // do about it. The prompt-level warning never runs on this path.
+        throwIpcError(
+          'INVALID_PARAMS',
+          evidence.branchUnavailableReason
+            ? `Review could not load this branch's changes (${evidence.branchUnavailableReason})`
+            : 'The current task has no reviewable content yet',
+        );
       }
       let builtPrompt: ReturnType<typeof buildReviewPrompt>;
       try {

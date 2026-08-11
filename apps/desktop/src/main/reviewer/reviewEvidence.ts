@@ -13,6 +13,7 @@ import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
 import { readReviewBranchDiff, readReviewData } from '../git-review/ipc.js';
 import { getTurnChangeSets, listTurnChangeSets } from '../turn-change-set/store.js';
+import type { ReviewBranchBaseCandidate } from '../../shared/gitReviewWire.js';
 import type { TurnChangeSetDetail } from '../../shared/turnChangeSet.js';
 import { readReviewRunFromAgentMeta } from '../../shared/reviewRun.js';
 import type {
@@ -107,6 +108,23 @@ function mapReviewWorkspace(
 }
 
 /**
+ * Whether a candidate is a default branch — `main`, `origin/master`, …
+ *
+ * The remote prefix comes from the candidate's own `remote` field rather than
+ * from splitting the string: `feature/main` and `origin/release/main` both end
+ * in a default-looking segment while being ordinary branches, and accepting
+ * them would reintroduce exactly the unrelated-sibling comparison this guard
+ * exists to prevent.
+ */
+function isDefaultBranchCandidate(candidate: ReviewBranchBaseCandidate): boolean {
+  const expected = candidate.remote
+    ? `${candidate.remote}/${candidate.shortName}`
+    : candidate.shortName;
+  if (candidate.refName !== expected) return false;
+  return /^(?:main|master|develop|trunk)$/i.test(candidate.shortName);
+}
+
+/**
  * The branch's own commits, read only when the tree is clean.
  *
  * With uncommitted work present that work is the review target. Once it is
@@ -114,12 +132,6 @@ function mapReviewWorkspace(
  * stand-in for the branch — reviewing it would silently cover one turn while
  * appearing to cover the whole branch.
  */
-/** `main`, `origin/master`, … — a ref whose name alone says it is a default. */
-function isDefaultBranchName(refName: string): boolean {
-  const shortName = refName.includes('/') ? refName.slice(refName.lastIndexOf('/') + 1) : refName;
-  return /^(?:main|master|develop|trunk)$/i.test(shortName);
-}
-
 async function loadReviewBranchEvidence(
   sessionId: string,
   readBranchDiff: typeof readReviewBranchDiff,
@@ -147,7 +159,7 @@ async function loadReviewBranchEvidence(
     !chosen ||
     chosen.kind === 'remote-default' ||
     chosen.kind === 'upstream' ||
-    isDefaultBranchName(chosen.refName);
+    isDefaultBranchCandidate(chosen);
   if (!baseIdentifiesItself) {
     return { branch: null, unavailableReason: 'ambiguous-base' };
   }

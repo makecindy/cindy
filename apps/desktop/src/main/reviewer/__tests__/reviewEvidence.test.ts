@@ -895,6 +895,45 @@ describe('loadReviewEvidence attachment boundaries', () => {
     expect(evidence.branchUnavailableReason).toBe('ambiguous-base');
   });
 
+  it('refuses a branch whose last segment merely looks like a default', async () => {
+    // `feature/main` is an ordinary branch. Judging by basename would let it
+    // pass as a default and reintroduce the unrelated-sibling comparison.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'feature/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'feature/main',
+          shortName: 'feature/main',
+          kind: 'local',
+          remote: null,
+          oid: 'b'.repeat(40),
+        },
+      ],
+      diffs: [],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch).toBeNull();
+    expect(evidence.branchUnavailableReason).toBe('ambiguous-base');
+  });
+
   it('accepts the branch upstream as a base', async () => {
     // An upstream is chosen by the user's own tracking config, so it is
     // meaningful even when its name looks nothing like a default.
