@@ -139,6 +139,13 @@ export class MakerMemoryManager {
    *    不再访问已被 closeAllStores 关闭的 db 句柄。
    */
   private resetInFlight = 0;
+  /**
+   * init 进行中的 db (review #2388 Codex 26th P1): db 打开后、store.init 完成
+   * 入池前不在 this.stores 里 — resetAll 只关池内 store, Windows 上 fs.rm 会
+   * 碰到这个未跟踪的 open fts.db → 跳过该 workdir 且报成功。closeAllStores
+   * 同时关闭该集合, 保证 reset 扫描前无任何 open 句柄。
+   */
+  private readonly openingStores = new Set<Database.Database>();
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -270,6 +277,16 @@ export class MakerMemoryManager {
       }
     }
     this.stores.clear();
+    // 关闭 init 进行中的 db (review #2388 Codex 26th P1): 未入池的 open 句柄
+    // 在 Windows 上会阻塞 resetAll 的 fs.rm — reset 扫描前必须全部关掉。
+    for (const db of this.openingStores) {
+      try {
+        db.close();
+      } catch (e) {
+        this.logger.warn('close opening db failed', { error: String(e) });
+      }
+    }
+    this.openingStores.clear();
   }
 
   /**
@@ -472,6 +489,9 @@ export class MakerMemoryManager {
     fs.mkdirSync(storageDir, { recursive: true });
 
     const db = this.deps.sqliteFactory(dbPath);
+    // 注册 in-flight 打开的 db (review #2388 Codex 26th P1): init 完成前不在
+    // this.stores, resetAll 需能关闭它避免 Windows fs.rm EBUSY 跳过该 workdir。
+    this.openingStores.add(db);
     const store = new MakerMemoryStore({
       storageDir,
       absWorkdir,
@@ -496,8 +516,10 @@ export class MakerMemoryManager {
       } catch {
         /* swallow */
       }
+      this.openingStores.delete(db);
       throw e;
     }
+    this.openingStores.delete(db);
     // 跨 await 复核: 期间 owner 已切换 → 丢弃刚建的旧 owner store, fail-closed,
     // 绝不入池。用实时 ownerScopeKey() 比较 (不依赖 activeScopeKey 被刷新)。
     if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
