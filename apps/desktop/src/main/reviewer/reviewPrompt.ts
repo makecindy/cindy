@@ -40,6 +40,15 @@ export interface ReviewWorkspaceEvidence {
  */
 export interface ReviewBranchEvidence {
   baseRef: string;
+  /**
+   * Where the comparison was anchored.
+   *
+   * The source HEAD alone does not pin a branch diff: fetching or moving the
+   * base advances the merge base and changes what the branch is compared
+   * against, while HEAD stays put. Freshness has to bind these too.
+   */
+  baseOid: string | null;
+  mergeBaseOid: string;
   fileCount: number;
   diffs: FileDiff[];
   capped: ReviewCappedDiffData | null;

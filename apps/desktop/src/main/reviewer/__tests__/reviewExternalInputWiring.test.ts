@@ -65,6 +65,13 @@ describe('Review external input wiring', () => {
     // A Git fingerprint is not an exemption — it cannot see ignored files,
     // so a dropped entry that is an ignored deliverable is covered by neither.
     expect(registerSource).toContain('if (changeSetContent.truncated) {');
+    // The workspace fingerprint pins HEAD, not the base being compared against,
+    // so both gates must recheck the branch baseline as well.
+    expect(
+      registerSource.match(
+        /if \(!\(await reviewBranchBaselineIsCurrent\(source\.id, evidence\.branch\)\)\)/g,
+      ),
+    ).toHaveLength(2);
     expect(registerSource).not.toContain(
       'if (changeSetContent.truncated && !evidence.workspaceFingerprint) {',
     );

@@ -309,6 +309,8 @@ describe('buildReviewPrompt', () => {
       workspace: null,
       branch: {
         baseRef: 'origin/main',
+        baseOid: 'b'.repeat(40),
+        mergeBaseOid: 'c'.repeat(40),
         fileCount: 1,
         diffs: [fileDiff({ source: 'branch', path: 'src/feature.ts' })],
         capped: null,
@@ -343,6 +345,8 @@ describe('buildReviewPrompt', () => {
       },
       branch: {
         baseRef: 'origin/main',
+        baseOid: 'b'.repeat(40),
+        mergeBaseOid: 'c'.repeat(40),
         fileCount: 1,
         diffs: [fileDiff({ source: 'branch', path: 'src/committed.ts' })],
         capped: null,

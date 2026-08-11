@@ -142,6 +142,8 @@ async function loadReviewBranchEvidence(
   return {
     branch: {
       baseRef: data.baseRef,
+      baseOid: data.baseOid,
+      mergeBaseOid: data.mergeBaseOid,
       fileCount,
       diffs,
       capped,
@@ -265,6 +267,33 @@ export async function reviewWorkspaceFingerprintIsCurrent(
   if (!expectedFingerprint) return true;
   const current = await readReviewWorkspaceSnapshot(sourceSessionId, depsInput);
   return current?.fingerprint === expectedFingerprint;
+}
+
+/**
+ * Whether the branch is still being compared against the same point.
+ *
+ * The workspace fingerprint covers the source HEAD, not the base: fetching or
+ * moving the base branch advances the merge base and changes what the branch
+ * diff means, while HEAD stays put. Without this a review could publish
+ * findings drawn from a comparison that no longer exists.
+ */
+export async function reviewBranchBaselineIsCurrent(
+  sourceSessionId: string,
+  branch: ReviewBranchEvidence | null,
+  readBranchDiff: typeof readReviewBranchDiff = readReviewBranchDiff,
+): Promise<boolean> {
+  if (!branch) return true;
+  try {
+    const current = await readBranchDiff(sourceSessionId, branch.baseRef);
+    return (
+      current.baseRef === branch.baseRef &&
+      current.baseOid === branch.baseOid &&
+      current.mergeBaseOid === branch.mergeBaseOid
+    );
+  } catch {
+    // An unreadable baseline cannot be proven unchanged.
+    return false;
+  }
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {

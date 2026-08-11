@@ -67,6 +67,7 @@ import {
   loadReviewEvidence,
   readReviewContextFingerprint,
   readReviewWorkspaceSnapshot,
+  reviewBranchBaselineIsCurrent,
   reviewWorkspaceFingerprintIsCurrent,
 } from '../reviewEvidence.js';
 
@@ -667,6 +668,70 @@ describe('loadReviewEvidence attachment boundaries', () => {
 
     expect(readReviewBranchDiffMock).not.toHaveBeenCalled();
     expect(evidence.branch).toBeNull();
+  });
+
+  it('detects a moved comparison base even though HEAD did not change', async () => {
+    // The workspace fingerprint pins the source HEAD. Fetching the base branch
+    // advances the merge base and changes what the branch diff means, without
+    // touching HEAD — so freshness has to check the baseline separately.
+    const branch = {
+      baseRef: 'origin/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      fileCount: 1,
+      diffs: [],
+      capped: null,
+    };
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/main',
+      baseOid: 'd'.repeat(40),
+      mergeBaseOid: 'e'.repeat(40),
+      candidates: [],
+      diffs: [],
+      capped: null,
+      warning: null,
+    });
+
+    await expect(reviewBranchBaselineIsCurrent('source', branch)).resolves.toBe(false);
+  });
+
+  it('accepts an unchanged comparison base', async () => {
+    const branch = {
+      baseRef: 'origin/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      fileCount: 1,
+      diffs: [],
+      capped: null,
+    };
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [],
+      diffs: [],
+      capped: null,
+      warning: null,
+    });
+
+    await expect(reviewBranchBaselineIsCurrent('source', branch)).resolves.toBe(true);
+  });
+
+  it('fails closed when the comparison base cannot be re-read', async () => {
+    readReviewBranchDiffMock.mockRejectedValue(new Error('git fetch in progress'));
+
+    await expect(
+      reviewBranchBaselineIsCurrent('source', {
+        baseRef: 'origin/main',
+        baseOid: 'b'.repeat(40),
+        mergeBaseOid: 'c'.repeat(40),
+        fileCount: 1,
+        diffs: [],
+        capped: null,
+      }),
+    ).resolves.toBe(false);
   });
 
   it('does not read the branch diff for a non-Git task', async () => {
