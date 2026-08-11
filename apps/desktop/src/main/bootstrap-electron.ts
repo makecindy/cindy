@@ -473,6 +473,7 @@ import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
 import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
 import { createResourceUsageWindow } from './resource-usage-window/window.js';
 import { registerResourceUsageWindowIpc } from './resource-usage-window/ipc.js';
+import { isResourceUsageOpenSender } from './resource-usage-window/open-sender.js';
 import { GhostPanelWindowsController } from './ghost-panel-window/controller.js';
 import { createGhostPanelWindow } from './ghost-panel-window/window.js';
 import { registerGhostPanelWindowIpc } from './ghost-panel-window/ipc.js';
@@ -1487,9 +1488,12 @@ registerGhostPanelWindowIpc(ghostPanelWindowsController);
 const resourceUsageWindowController = new ResourceUsageWindowController({
   createWindow: () => createResourceUsageWindow(mainWindowRef),
   isOpenSender: (sender) =>
-    mainWindowRef !== null &&
-    !mainWindowRef.isDestroyed() &&
-    sender === mainWindowRef.webContents,
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
 
