@@ -490,6 +490,20 @@ export class MakerMemoryManager {
         'owner scope changed during store init; retry against current scope',
       );
     }
+    // 跨 await 复核: init 等待期间并发 resetAll 已开始 (review #2388 Greptile
+    // 18th P1) — 目标目录将被删除, 不得把指向它的 store 入池 (Windows 上 open
+    // 的 fts.db 还会阻塞目录删除 / 返回指向已删目录的实例)。
+    if (this.resetInFlight > 0) {
+      try {
+        db.close();
+      } catch {
+        /* swallow */
+      }
+      throw new MemoryError(
+        'not-ready',
+        'memory reset started during store init; retry against current state',
+      );
+    }
     // 并发去重: 同 workdir 的并发 getStore 可能已把 store 提交入池, 复用池内实例。
     // 仅复用同世代的 (resetAll 后旧世代条目先关闭, 由本调用重建覆盖)。
     const existing = this.stores.get(absWorkdir);

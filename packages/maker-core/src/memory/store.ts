@@ -324,6 +324,9 @@ export class MakerMemoryStore {
         /* swallow */
       }
     }
+    // 最终 FTS 重建前复核 (review #2388 Codex 19th P1): 删除循环后仍可能跨
+    // 边界, 不得在旧 owner 的 fts.db 上 rebuild; not-ready 透传 fail-closed。
+    this.assertScopeOk();
     try { this.fts.rebuild([]); } catch { /* swallow */ }
     return { removedCount: all.length };
   }
@@ -333,10 +336,17 @@ export class MakerMemoryStore {
   /** storage 跟 fts count 不一致 → 全量 rebuild fts */
   private async sanityCheck(): Promise<void> {
     const fileCount = (await this.storage.list()).length;
+    // list await 后、访问 SQLite 前复核 (review #2388 Greptile 18th P1):
+    // 首次打开的 init 期间并发 resetAll 可能已关闭 db — 不得用已关句柄调
+    // fts.count() 抛裸 SQLite/IO 错误, 应 fail-closed 抛 not-ready。
+    this.assertScopeOk();
     const ftsCount = this.fts.count();
     if (ftsCount === -1 || ftsCount !== fileCount) {
       this.logger.info('memory fts inconsistent, rebuilding', { fileCount, ftsCount });
       const all = await this.storage.list();
+      // list await 后、rebuild 前复核 (review #2388 Codex 19th P1): 边界不得
+      // 在旧 owner 的 fts.db 上重建。
+      this.assertScopeOk();
       this.fts.rebuild(all);
     }
   }
