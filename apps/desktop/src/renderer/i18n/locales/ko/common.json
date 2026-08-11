@@ -5524,8 +5524,8 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "compression": "압축",
-        "other": "기타",
-        "nonChat": "기타 엔드포인트"
+        "ungrouped": "미분류",
+        "other": "기타 엔드포인트"
       },
       "search": {
         "placeholder": "{{source}} 모델 검색…",

@@ -5523,8 +5523,8 @@
         "realtime": "即時語音",
         "embedding": "向量",
         "compression": "壓縮",
-        "other": "其它",
-        "nonChat": "其它端點"
+        "ungrouped": "未分組",
+        "other": "其它端點"
       },
       "search": {
         "placeholder": "搜尋 {{source}} 的模型…",

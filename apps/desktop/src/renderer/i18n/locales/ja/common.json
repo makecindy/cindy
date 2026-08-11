@@ -5524,8 +5524,8 @@
         "realtime": "リアルタイム音声",
         "embedding": "埋め込み",
         "compression": "圧縮",
-        "other": "その他",
-        "nonChat": "その他のエンドポイント"
+        "ungrouped": "未分類",
+        "other": "その他のエンドポイント"
       },
       "search": {
         "placeholder": "{{source}} のモデルを検索…",

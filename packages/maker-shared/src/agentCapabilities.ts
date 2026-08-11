@@ -49,17 +49,17 @@ export interface MobileRuntimeDraft {
 /**
  * 手机端的粗分类取值。**没有 `china`**:「国内」只由目录的 `group:'china'` 产生,而手机端
  * 这条链上只有 model id(descriptor 不透传 group,见桌面 providerModels.toDescriptor),
- * 拿不到该信号,所以国产模型在这里归入 `other`。这只影响跨厂商切换提示里显示的分类名,
+ * 拿不到该信号,所以国产模型在这里归入 `ungrouped`。这只影响跨厂商切换提示里显示的分类名,
  * 不影响可选性与分组展示(手机端不按厂商分组)。
  */
-export type MobileModelCategory = 'anthropic' | 'gpt' | 'gpt-budget' | 'google' | 'other';
+export type MobileModelCategory = 'anthropic' | 'gpt' | 'gpt-budget' | 'google' | 'ungrouped';
 
 export const MOBILE_MODEL_CATEGORY_LABEL: Record<MobileModelCategory, string> = {
   anthropic: 'Anthropic',
   gpt: 'GPT',
   'gpt-budget': 'GPT 折扣',
   google: 'Google',
-  other: '其它厂商',
+  ungrouped: '未分组',
 };
 
 export interface MobileModelSwitchConfirmation {
@@ -205,7 +205,7 @@ export function reconcileRuntimeDraftWithCapabilities<T extends MobileRuntimeDra
 
 /**
  * 手机端跨厂商切换提示用的粗分类(只服务 buildMobileModelSwitchConfirmation,不做展示分组)。
- * 与桌面 `@cindy/model-providers` 的 `categorize` 同一取向:认不出厂商就落 `other`,不猜。
+ * 与桌面 `@cindy/model-providers` 的 `categorize` 同一取向:认不出厂商就落 `ungrouped`,不猜。
  * 提示语会把分类名直接读给用户看(「X 和 Y 的消息格式可能不兼容」),猜错就是错的断言。
  *
  * 本包按设计零依赖(见 docs/dev-rules/architecture-invariants.md 的依赖方向),不能反向引用
@@ -222,7 +222,7 @@ export function categorizeMobileModel(id: string): MobileModelCategory {
   if (lower.startsWith('codex/')) return 'gpt-budget';
   if (lower.startsWith('gpt-') || tail.startsWith('gpt-')) return 'gpt';
   if (lower.startsWith('gemini-') || tail.startsWith('gemini-')) return 'google';
-  return 'other';
+  return 'ungrouped';
 }
 
 export function isMobileHistoryCompatibleModelSwitch(

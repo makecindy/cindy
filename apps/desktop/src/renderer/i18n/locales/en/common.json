@@ -5526,8 +5526,8 @@
         "realtime": "Realtime Audio",
         "embedding": "Embeddings",
         "compression": "Compression",
-        "other": "Other",
-        "nonChat": "Other Endpoints"
+        "ungrouped": "Ungrouped",
+        "other": "Other Endpoints"
       },
       "search": {
         "placeholder": "Search {{source}} models…",

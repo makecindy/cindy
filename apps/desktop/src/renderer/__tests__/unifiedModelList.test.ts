@@ -259,32 +259,49 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
   });
 });
 
-describe('折叠态 v1 → v2 迁移(分类 other 的语义已让给「认不出厂商的对话模型」)', () => {
+describe('折叠态 v1/v2 → v3 迁移(other 恢复旧语义,新增 ungrouped)', () => {
   const V1 = 'xdt:modelListCollapsedGroups:v1';
   const V2 = 'xdt:modelListCollapsedGroups:v2';
+  const V3 = 'xdt:modelListCollapsedGroups:v3';
 
   afterEach(() => {
     window.localStorage.removeItem(V1);
     window.localStorage.removeItem(V2);
+    window.localStorage.removeItem(V3);
   });
 
-  it('v1 的 other 搬到 non-chat,其余分组原样保留 —— 不让旧的「收起」落到新的对话组上', () => {
-    window.localStorage.setItem(V1, JSON.stringify({ other: true, image: false, china: true }));
-    expect(loadCollapsedMap()).toEqual({ 'non-chat': true, image: false, china: true });
+  it('v2 的 non-chat 恢复成 other,旧 other 搬到 ungrouped,其余分组原样保留', () => {
+    window.localStorage.setItem(
+      V2,
+      JSON.stringify({ 'non-chat': true, other: false, image: false, china: true }),
+    );
+    expect(loadCollapsedMap()).toEqual({
+      other: true,
+      ungrouped: false,
+      image: false,
+      china: true,
+    });
   });
 
-  it('v1 没记过 other 时不凭空造键', () => {
-    window.localStorage.setItem(V1, JSON.stringify({ embedding: false }));
-    expect(loadCollapsedMap()).toEqual({ embedding: false });
+  it('v1 的 other 保留旧语义,不搬到 ungrouped', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true, embedding: false }));
+    expect(loadCollapsedMap()).toEqual({ other: true, embedding: false });
   });
 
-  it('v2 已存在时直接用它,不再回读 v1', () => {
+  it('v2 已存在时优先迁移 v2,不再回读 v1', () => {
     window.localStorage.setItem(V1, JSON.stringify({ other: true }));
     window.localStorage.setItem(V2, JSON.stringify({ image: true }));
     expect(loadCollapsedMap()).toEqual({ image: true });
   });
 
-  it('两代都没有 → 空表(全部跟随默认)', () => {
+  it('v3 已存在时直接使用,不再回读旧版本', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V2, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V3, JSON.stringify({ ungrouped: true }));
+    expect(loadCollapsedMap()).toEqual({ ungrouped: true });
+  });
+
+  it('三代都没有 → 空表(全部跟随默认)', () => {
     expect(loadCollapsedMap()).toEqual({});
   });
 });

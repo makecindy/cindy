@@ -229,8 +229,8 @@ describe('agent capabilities shared model', () => {
     expect(categorizeMobileModel('openai/gpt-5.5')).toBe('gpt');
     expect(categorizeMobileModel('google/gemini-3.5-flash')).toBe('google');
     // 认不出厂商就落中性组,不猜产地(手机端这条链拿不到目录 group)。
-    expect(categorizeMobileModel('qwen/qwen3.7-max')).toBe('other');
-    expect(categorizeMobileModel('mistral-large-latest')).toBe('other');
+    expect(categorizeMobileModel('qwen/qwen3.7-max')).toBe('ungrouped');
+    expect(categorizeMobileModel('mistral-large-latest')).toBe('ungrouped');
   });
 
   it('切换确认框把折扣路由读成「GPT 折扣」,不读成「GPT」', () => {
@@ -242,6 +242,18 @@ describe('agent capabilities shared model', () => {
       fromCategory: 'anthropic',
       toCategory: 'gpt-budget',
       toLabel: 'GPT 折扣',
+    });
+  });
+
+  it('切到未知厂商模型时显示「未分组」,不再显示含厂商断言的旧兜底名', () => {
+    expect(buildMobileModelSwitchConfirmation({
+      currentModelId: 'claude-sonnet-4-6',
+      targetModelId: 'moonshot/kimi-k3',
+      messageCount: 12,
+    })).toMatchObject({
+      fromCategory: 'anthropic',
+      toCategory: 'ungrouped',
+      toLabel: '未分组',
     });
   });
 });

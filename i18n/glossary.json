@@ -1624,6 +1624,18 @@
         "ko": "프로세스"
       },
       "note": "OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。"
+    },
+    {
+      "id": "ungrouped",
+      "status": "proposed",
+      "en": "Ungrouped",
+      "translations": {
+        "zh-CN": "未分组",
+        "zh-TW": "未分組",
+        "ja": "未分類",
+        "ko": "미분류"
+      },
+      "note": "模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话的 Other Endpoints（其它端点）分开。"
     }
   ]
 }
