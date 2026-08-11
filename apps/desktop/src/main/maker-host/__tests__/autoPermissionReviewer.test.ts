@@ -34,7 +34,10 @@ describe('buildAutoPermissionReviewPrompt', () => {
     const prompt = buildAutoPermissionReviewPrompt(request());
 
     expect(prompt).toContain('The user selected Auto because they do not want routine interruptions.');
-    expect(prompt).toContain('Prefer block over ask whenever a safer retry can avoid interrupting the user.');
+    // 「能 block 就别打扰」仍在,但被限定为「STEP 1 没命中的动作」—— 否则它会
+    // 压过凭证外传等红线,把本该让用户看见的动作静默拦掉(实测三轮全中)。
+    expect(prompt).toContain('Prefer block over ask');
+    expect(prompt).toContain('ONLY for actions that did not match STEP 1');
     expect(prompt).toContain('Fix the type error and run tests');
     expect(prompt).toContain('npx tsc --noEmit');
     expect(prompt).toContain('/repo');
@@ -52,7 +55,10 @@ describe('buildAutoPermissionReviewPrompt', () => {
 
     expect(prompt).toContain('"workspaceRoot":"/repo"');
     expect(prompt).toContain('"readOnlyReferenceRoots":["/extra-docs"]');
-    expect(prompt).toContain('never allow an action that writes, deletes, or modifies anything inside them');
+    // 读与写必须分成两句独立表述。写在同一句里时模型会串行理解成「这些目录里
+    // 的操作都要拦」,连读参考资料都被判 block(实测 nano 上 5/5 全错)。
+    expect(prompt).toContain('READING anything inside them is routine reference work');
+    expect(prompt).toContain('WRITING, deleting, or modifying anything inside them');
     expect(prompt).toContain('edits inside workspaceRoot');
   });
 
@@ -143,10 +149,11 @@ describe('createAutoPermissionReviewer', () => {
     expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('npx tsc --noEmit');
   });
 
-  it('returns null on malformed output or request failure so core can silently block', async () => {
+  it('returns null on malformed output or request failure so core can hand over to the user', async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
+    const malformedRequestText = vi.fn(async () => 'not json');
     const malformed = createAutoPermissionReviewer({
-      requestText: vi.fn(async () => 'not json'),
+      requestText: malformedRequestText,
       logger,
     });
     const failed = createAutoPermissionReviewer({
@@ -158,13 +165,65 @@ describe('createAutoPermissionReviewer', () => {
 
     await expect(malformed(request())).resolves.toBeNull();
     await expect(failed(request())).resolves.toBeNull();
+    // 解析失败是该模型在这条 prompt 上的稳定行为,重试只会重复烧钱 —— 只试一次。
+    expect(malformedRequestText).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(
-      'auto permission reviewer returned malformed output',
-      expect.any(Object),
+      'auto permission reviewer attempt failed',
+      expect.objectContaining({ failure: 'malformed' }),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      'auto permission reviewer failed',
-      expect.objectContaining({ error: 'offline' }),
+      'auto permission reviewer attempt failed',
+      expect.objectContaining({ failure: 'error', error: 'offline' }),
+    );
+  });
+
+  it('retries a transient failure and returns the recovered verdict', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const requestText = vi.fn()
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValueOnce('{"verdict":"allow","reason":"Routine test"}');
+    const reviewer = createAutoPermissionReviewer({ requestText, logger });
+
+    await expect(reviewer(request())).resolves.toEqual({
+      verdict: 'allow',
+      reason: 'Routine test',
+    });
+    expect(requestText).toHaveBeenCalledTimes(2);
+    expect(logger.debug).toHaveBeenCalledWith(
+      'auto permission reviewer recovered after retry',
+      expect.objectContaining({ attempt: 2 }),
+    );
+  });
+
+  it('gives up after the retry budget and reports the final failure', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const requestText = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const reviewer = createAutoPermissionReviewer({ requestText, logger });
+
+    await expect(reviewer(request())).resolves.toBeNull();
+    // 1 次首发 + 2 次重试。
+    expect(requestText).toHaveBeenCalledTimes(3);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'auto permission reviewer exhausted attempts',
+      expect.objectContaining({ failure: 'error' }),
+    );
+  });
+
+  it('honours a per-request timeout so slow reasoning models are not cut short', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const requestText = vi.fn(async () => '{"verdict":"allow"}');
+    const resolveRequestTimeoutMs = vi.fn(() => 30_000);
+    const reviewer = createAutoPermissionReviewer({
+      requestText,
+      logger,
+      resolveRequestTimeoutMs,
+    });
+
+    await expect(reviewer(request())).resolves.toEqual({ verdict: 'allow' });
+    expect(resolveRequestTimeoutMs).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'current-model' }),
     );
   });
 
@@ -190,18 +249,24 @@ describe('createAutoPermissionReviewer', () => {
   it('enforces its own deadline even when requestText never settles', async () => {
     vi.useFakeTimers();
     const logger = { debug: vi.fn(), warn: vi.fn() };
-    const reviewer = createAutoPermissionReviewer({
-      requestText: vi.fn(() => new Promise<string | null>(() => {})),
-      logger,
-    });
+    const requestText = vi.fn(() => new Promise<string | null>(() => {}));
+    const reviewer = createAutoPermissionReviewer({ requestText, logger });
 
     const pending = reviewer(request());
-    await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs);
+    // 每次尝试都拿完整的 requestTimeoutMs;超时可重试,故要推进整个重试预算
+    // (3 次尝试 + 退避)才会最终放弃。
+    await vi.advanceTimersByTimeAsync(
+      DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs * 3 + 1_000,
+    );
 
     await expect(pending).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledWith(
-      'auto permission reviewer timed out',
-      expect.objectContaining({ durationMs: DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs }),
+      'auto permission reviewer attempt failed',
+      expect.objectContaining({ failure: 'timeout' }),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      'auto permission reviewer exhausted attempts',
+      expect.objectContaining({ failure: 'timeout' }),
     );
   });
 

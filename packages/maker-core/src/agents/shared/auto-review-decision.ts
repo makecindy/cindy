@@ -43,8 +43,9 @@ export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
  * apps/desktop/src/main/im/shared/turnRetryNotice.ts。
  */
 const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
-  'Auto-review is temporarily unavailable, so actions that need review are being denied. '
-  + 'Switch this task to Default permissions if you want to approve them yourself.';
+  'Auto-review could not reach a decision (network or service hiccup), so actions that '
+  + 'need review are being handed to you to confirm. Switch this task to Default '
+  + 'permissions if you would rather not be interrupted.';
 
 /**
  * 判定一条 AgentEvent 的 error message 是否就是「自动审批不可用」提示。
@@ -105,19 +106,38 @@ export type AutoReviewDelegate = (
 export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
 const MAX_AUTO_REVIEW_REASON_CHARS = 240;
 /**
- * Auto-review is deliberately bounded: a reviewer outage must still deny a
- * gray action. Keep the host request deadline below the core guard so a valid
- * answer at the request deadline can return before the outer guard fires.
+ * Auto-review is deliberately bounded: a reviewer outage must still resolve the
+ * gray action instead of hanging the tool callback. Keep the host request
+ * deadline below the core guard so a valid answer at the request deadline can
+ * return before the outer guard fires.
+ *
+ * **两个数必须一起改。** delegate 侧现在会做重试(见 desktop 的
+ * createAutoPermissionReviewer),而重试全部发生在 `delegateTimeoutMs` 之内 ——
+ * 外层守卫若先触发,重试就完全失去意义(白等、白花钱,结果照样是不可用)。
+ * 上限取「宿主侧最慢的一档 × 重试次数 + 退避」再留余量。
  */
 export interface AutoReviewTimeoutPolicy {
   requestTimeoutMs: number;
   delegateTimeoutMs: number;
 }
 
+/**
+ * 紧凑档(能关思考的模型)的默认策略。宿主侧每次尝试都用完整的
+ * `requestTimeoutMs`(不按次数切分 —— 切分会把本来能成功的慢响应也判成超时),
+ * 总耗时由 AUTO_REVIEW_DELEGATE_HARD_CEILING_MS 兜住。
+ */
 export const DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY: Readonly<AutoReviewTimeoutPolicy> = Object.freeze({
   requestTimeoutMs: 12_000,
   delegateTimeoutMs: 13_000,
 });
+
+/**
+ * 核心侧守卫的绝对上界。宿主侧对强制思考的模型会放宽到 30s 单次;加上重试与
+ * 退避,最坏情况约 30s + 余量 —— 外层守卫必须容得下,否则宽裕额度形同虚设。
+ *
+ * 这是**兜底**不是常态:绝大多数请求 2s 内返回(实测 p95 ≈ 2.5s)。
+ */
+const AUTO_REVIEW_DELEGATE_HARD_CEILING_MS = 35_000;
 const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 export function getAutoReviewActionTextLength(action: ReviewableAction): number {
@@ -184,8 +204,16 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
 
 /**
  * 原生 reviewer 不可用时的统一裁决入口：明显安全和明显红线仍由本地规则确定，
- * 只有中间灰区才调用当前会话模型。delegate 缺失、超时、抛错或返回非法结果时
- * 灰区一律 `block`，不会退化成逐条弹窗。
+ * 只有中间灰区才调用当前会话模型。
+ *
+ * **审阅器故障时降级为 `ask`，不再静默 `block`。** 宿主侧已先做过重试
+ * （见 desktop 的 createAutoPermissionReviewer），走到这里意味着重试也没救回来。
+ * 此时静默拒绝是最差的选择：用户既看不到发生了什么，一批本来完全正常的灰区操作
+ * 又被连续否掉，Auto 档表现得像坏了。降级成 `ask` 把决定权交回用户 ——
+ * 安全边界不降低（未经用户点头仍然不会执行），但用户至少知道该点头还是拒绝。
+ *
+ * 与「模型判定危险」的 `block` 仍然严格区分：那个继续静默，因为 Auto 的本意
+ * 就是不打扰；只有 `unavailable` 才升级成打扰。
  */
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
@@ -214,8 +242,8 @@ export async function resolveAutoReviewDecision(
   }
   if (!delegate) {
     return {
-      verdict: 'block',
-      reason: 'Automatic review is unavailable. Choose a safer, workspace-scoped alternative.',
+      verdict: 'ask',
+      reason: 'Automatic review is unavailable, so this action needs your confirmation.',
       unavailable: true,
     };
   }
@@ -224,9 +252,12 @@ export async function resolveAutoReviewDecision(
     const decision = await Promise.race([
       delegate(request),
       new Promise<typeof AUTO_REVIEW_TIMEOUT>((resolve) => {
+        // 用硬上界而非紧凑档的 delegateTimeoutMs:宿主侧对强制思考的模型会放宽
+        // 单次超时并叠加重试,守卫必须容得下最慢的那一档,否则重试与放宽额度
+        // 都会被这里提前切断。
         timeout = setTimeout(
           () => resolve(AUTO_REVIEW_TIMEOUT),
-          DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs,
+          AUTO_REVIEW_DELEGATE_HARD_CEILING_MS,
         );
       }),
     ]);
@@ -249,15 +280,15 @@ export async function resolveAutoReviewDecision(
       };
     }
   } catch {
-    // Reviewer outages must not turn Auto into Ask or hold the tool callback open.
+    // 审阅器故障不得吊住 tool callback;下面统一降级收口。
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-  // 走到这里 = delegate 存在但没给出可用结果(超时 / 抛错 / 返回非法)。与「模型判定危险」
-  // 不同,这是审阅器本身没跑起来,必须让上层能区分出来。
+  // 走到这里 = delegate 存在但没给出可用结果(重试后仍超时 / 抛错 / 返回非法)。
+  // 与「模型判定危险」不同,这是审阅器本身没跑起来 —— 交给用户确认,而不是替他拒绝。
   return {
-    verdict: 'block',
-    reason: 'Automatic review could not complete. Choose a safer, workspace-scoped alternative.',
+    verdict: 'ask',
+    reason: 'Automatic review could not complete, so this action needs your confirmation.',
     unavailable: true,
   };
 }

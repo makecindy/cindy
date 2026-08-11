@@ -151,29 +151,33 @@ describe('resolveAutoReviewDecision', () => {
     expect(called).toBe(false);
   });
 
-  it('silently blocks when the reviewer is absent, throws, or returns invalid output', async () => {
+  // 审阅器故障降级为 ask 而不是静默 block:宿主侧已先重试过,走到这里说明确实
+  // 没救回来。此时静默拒绝最差 —— 用户看不到发生了什么,一批正常的灰区操作被
+  // 连续否掉,Auto 档表现得像坏了。交给用户确认,安全边界不降低。
+  it('hands over to the user when the reviewer is absent, throws, or returns invalid output', async () => {
     const gray = request({ kind: 'exec', command: 'npx tsc --noEmit' });
-    await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({ verdict: 'block' });
+    await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({ verdict: 'ask' });
     await expect(resolveAutoReviewDecision(gray, async () => {
       throw new Error('offline');
-    })).resolves.toMatchObject({ verdict: 'block' });
+    })).resolves.toMatchObject({ verdict: 'ask' });
     await expect(resolveAutoReviewDecision(
       gray,
       async () => ({ verdict: 'unknown' } as never),
-    )).resolves.toMatchObject({ verdict: 'block' });
+    )).resolves.toMatchObject({ verdict: 'ask' });
   });
 
-  it('silently blocks when the reviewer never settles', async () => {
+  it('hands over to the user when the reviewer never settles', async () => {
     vi.useFakeTimers();
     const pending = resolveAutoReviewDecision(
       request({ kind: 'exec', command: 'npx tsc --noEmit' }),
       async () => new Promise<never>(() => {}),
     );
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs);
+    // 守卫上界要容得下宿主侧最慢一档 + 重试,故推进量大于紧凑档的 delegateTimeoutMs。
+    await vi.advanceTimersByTimeAsync(40_000);
 
     await expect(pending).resolves.toMatchObject({
-      verdict: 'block',
+      verdict: 'ask',
       reason: expect.stringContaining('could not complete'),
     });
   });
@@ -187,7 +191,7 @@ describe('resolveAutoReviewDecision', () => {
 
     it('flags a missing reviewer as unavailable', async () => {
       await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({
-        verdict: 'block',
+        verdict: 'ask',
         unavailable: true,
       });
     });
@@ -195,21 +199,21 @@ describe('resolveAutoReviewDecision', () => {
     it('flags a throwing reviewer as unavailable', async () => {
       await expect(resolveAutoReviewDecision(gray, async () => {
         throw new Error('offline');
-      })).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+      })).resolves.toMatchObject({ verdict: 'ask', unavailable: true });
     });
 
     it('flags invalid reviewer output as unavailable', async () => {
       await expect(resolveAutoReviewDecision(
         gray,
         async () => ({ verdict: 'unknown' } as never),
-      )).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+      )).resolves.toMatchObject({ verdict: 'ask', unavailable: true });
     });
 
     it('flags a reviewer timeout as unavailable', async () => {
       vi.useFakeTimers();
       const pending = resolveAutoReviewDecision(gray, async () => new Promise<never>(() => {}));
-      await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs);
-      await expect(pending).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+      await vi.advanceTimersByTimeAsync(40_000);
+      await expect(pending).resolves.toMatchObject({ verdict: 'ask', unavailable: true });
     });
 
     it('allows a valid delegate response after eight seconds but before the shared outer deadline', async () => {
@@ -296,7 +300,7 @@ describe('createAutoReviewUnavailableNotice', () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toContain(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
     // 兜底英文必须跟在 code 后面:未落地 i18n 的宿主(远端 / IM)直接显示它。
-    expect(emitted[0]).toContain('Auto-review is temporarily unavailable');
+    expect(emitted[0]).toContain('Auto-review could not reach a decision');
 
     notice.reset();
     notice.notify();

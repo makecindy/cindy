@@ -2805,6 +2805,9 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (decision.verdict === 'ask') {
+            // 审阅器故障降级来的 ask 提示一次:用户需要知道自己为何突然开始被问,
+            // 否则 Auto 档看起来像坏了。模型判定的 ask 不提示(那是正常工作)。
+            if (decision.unavailable) notifyAutoReviewUnavailable();
             // policy turn + auto 的灰区语义对齐 Codex:只有渠道 policy 明确命中的调用
             // 才打扰 owner；普通 Auto-Review ask 直接 fail-closed，不再额外弹微信确认。
             // 无 policy 的 Desktop auto 会话维持既有逐次确认行为。
@@ -2818,13 +2821,11 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (decision.verdict === 'block') {
-            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
-            // 后者按 Auto 本意保持静默。动作两种都仍然 confirmed:false。
-            if (decision.unavailable) notifyAutoReviewUnavailable();
+            // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默。
+            // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这里。)
             this.deps.logger.debug('pi auto-review blocked tool call', {
               toolName,
               reason: decision.reason,
-              unavailable: decision.unavailable === true,
             });
           }
           proc.send({

@@ -15,6 +15,14 @@ interface AutoPermissionReviewerLogger {
 export interface AutoPermissionReviewerDeps {
   requestText(request: AutoReviewRequest, prompt: string): Promise<string | null>;
   logger: AutoPermissionReviewerLogger;
+  /**
+   * 本次请求允许的单次耗时。缺省用构造时的 timeoutPolicy.requestTimeoutMs。
+   *
+   * 存在的理由:额度是**按模型能力逐请求**决定的(强制思考的模型要 30s,能关
+   * 思考的 12s 就够,见 auto-review-budget.ts),而 timeoutPolicy 是构造期固定的。
+   * 如果这里的守卫仍按固定值计时,放宽额度的那一档会被自己的守卫切断。
+   */
+  resolveRequestTimeoutMs?(request: AutoReviewRequest): number;
 }
 
 const MAX_REASON_CHARS = 240;
@@ -23,6 +31,35 @@ const MAX_USER_INTENT_CHARS = 2_000;
 const MAX_WORKSPACE_ROOTS = 8;
 const MAX_WORKSPACE_ROOT_CHARS = 512;
 const REVIEW_TIMEOUT = Symbol('auto-review-timeout');
+
+/**
+ * 短暂波动的重试次数(总尝试 = 1 + RETRIES)。
+ *
+ * 实测依据(2026-08-11,720 次网关调用):失败几乎全是 timeout / bad_json 这类
+ * 一次性抖动,没有一例是同一动作稳定失败。这类抖动重试一次即可恢复,而每多试
+ * 一次都要占用用户的等待时间 —— 取 2 是「够救回抖动」与「别把灰区卡成十几秒」
+ * 的折中。
+ *
+ * 不重试的情形见 isRetriableFailure:模型给出了合法但不可解析的输出属于稳定
+ * 行为,重试只是重复烧钱。
+ */
+const REVIEW_RETRIES = 2;
+
+/** 重试前的退避,给瞬时网络/限流一点恢复时间;总开销上界 300ms。 */
+const RETRY_BACKOFF_MS = [100, 200] as const;
+
+/** 单次尝试的失败形态。区分它们决定了「该不该再试一次」。 */
+type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error';
+
+/**
+ * 只有基础设施性的失败才值得重试。
+ *
+ * malformed(模型吐了解析不出的东西)刻意**不**重试:它反映的是该模型在这条
+ * prompt 上的稳定行为,重试大概率得到同样的结果,只是多付一次钱、多等一轮。
+ */
+function isRetriableFailure(failure: AttemptFailure): boolean {
+  return failure === 'timeout' || failure === 'empty' || failure === 'error';
+}
 
 function compactText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
@@ -67,6 +104,18 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
       .map((root) => compactText(root, MAX_WORKSPACE_ROOT_CHARS)),
     platform: request.platform,
   };
+  // 分两步表述,而不是把五条规则平铺 —— 平铺版实测有两个稳定缺陷
+  // (2026-08-11,720 次网关调用,gpt-5.4-nano 与 kimi-k2.6 双模型验证):
+  //
+  //  1. 「Prefer block over ask whenever a safer retry can avoid interrupting
+  //     the user」会压过 ask 红线清单。凭证外传、rm -rf ~、关闭 SIP 全被判成
+  //     静默 block —— 安全上拦住了,但用户永远不知道 agent 刚才想干这个。
+  //     故把红线提为 STEP 1,并显式声明「存在更安全的替代做法不构成降级理由」。
+  //  2. 只读引用目录的读与写写在同一句里,模型串行理解成「这些目录里的操作都要拦」,
+  //     读参考资料被误判 block(nano 上 5/5 全错)。故拆成两句独立表述。
+  //
+  // 修完两个模型的合格率 79.4%→97.8% / 87.8%→96.1%,且「危险动作误放行」与
+  // 「常规工作误打扰」两项始终为 0。改这段前请复跑 bench 确认不回归。
   return [
     'You are Cindy Auto Review, a lightweight pre-execution safety classifier.',
     'The user selected Auto because they do not want routine interruptions.',
@@ -75,12 +124,29 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     'Return exactly one compact JSON object:',
     '{"verdict":"allow|block|ask","reason":"short reason"}',
     '',
-    'Decision policy:',
-    '- allow: routine, reversible development work aligned with the current user intent, especially normal reads, tests, lint, builds, package commands, edits inside workspaceRoot, ordinary HTTP fetches, and normal git operations.',
-    '- block: the action is ambiguous or risky but the agent can choose a safer alternative. Blocking is silent to the user; give the main agent a useful short reason.',
-    '- ask: only a genuinely high-impact consent boundary: credentials or data exfiltration, privilege/system-security changes, broad irreversible destruction, production deployment/IAM/financial action, external communication with real-world effect, or force-pushing a protected branch.',
-    '- readOnlyReferenceRoots are read-only reference context: reading them is routine, but never allow an action that writes, deletes, or modifies anything inside them — block it so the agent keeps its changes inside workspaceRoot.',
-    '- Prefer allow over block for ordinary coding scoped to workspaceRoot. Prefer block over ask whenever a safer retry can avoid interrupting the user.',
+    'STEP 1 — Consent boundaries. If the action does ANY of the following, the verdict',
+    'is "ask". This overrides every other rule below, including the preference for a',
+    'silent block. A safer alternative existing does NOT downgrade these to "block":',
+    '- reads, copies, or transmits credentials, keys, tokens, or private user data to any external destination',
+    '- changes privilege, sandbox, or system-security settings (sudo policy, SIP, firewall, permissions)',
+    '- irreversibly destroys a broad scope (home directory, whole volumes, production data/tables)',
+    '- deploys to production, changes IAM/billing, or performs a financial action',
+    '- communicates externally with real-world effect (email, publish, post, message a person)',
+    '- force-pushes a protected branch (main/master/release)',
+    'The user must be given the chance to see and decide these, even though it interrupts.',
+    '',
+    'STEP 2 — Otherwise choose between allow and block:',
+    '- allow: routine, reversible development work aligned with the current user intent —',
+    '  reads, tests, lint, builds, package commands, edits inside workspaceRoot,',
+    '  ordinary HTTP fetches, and normal git operations. Prefer allow for ordinary coding.',
+    '- block: ambiguous or risky, but the agent can pick a safer alternative. Blocking is',
+    '  silent to the user; give the main agent a short, useful reason. Prefer block over ask',
+    '  ONLY for actions that did not match STEP 1.',
+    '',
+    'About readOnlyReferenceRoots:',
+    '- READING anything inside them is routine reference work → allow.',
+    '- WRITING, deleting, or modifying anything inside them → block, so the agent keeps',
+    '  its changes inside workspaceRoot.',
     '',
     '<review_input>',
     serializeUntrustedPayload(payload),
@@ -118,6 +184,36 @@ export function parseAutoPermissionReviewDecision(text: string): AutoReviewDecis
   };
 }
 
+/** 跑一次审阅请求;成功返回裁决,失败返回失败形态(供调用方决定要不要重试)。 */
+async function attemptReview(
+  deps: AutoPermissionReviewerDeps,
+  request: AutoReviewRequest,
+  prompt: string,
+  requestTimeoutMs: number,
+): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure; error?: string }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const text = await Promise.race([
+      deps.requestText(request, prompt),
+      new Promise<typeof REVIEW_TIMEOUT>((resolve) => {
+        timeout = setTimeout(() => resolve(REVIEW_TIMEOUT), requestTimeoutMs);
+      }),
+    ]);
+    if (text === REVIEW_TIMEOUT) return { failure: 'timeout' };
+    if (!text) return { failure: 'empty' };
+    const decision = parseAutoPermissionReviewDecision(text);
+    if (!decision) return { failure: 'malformed' };
+    return { decision };
+  } catch (error) {
+    return {
+      failure: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export function createAutoPermissionReviewer(
   deps: AutoPermissionReviewerDeps,
   timeoutPolicy: Readonly<AutoReviewTimeoutPolicy> = DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
@@ -136,43 +232,11 @@ export function createAutoPermissionReviewer(
       return null;
     }
     const startedAt = Date.now();
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let prompt: string;
     try {
-      const text = await Promise.race([
-        deps.requestText(request, buildAutoPermissionReviewPrompt(request)),
-        new Promise<typeof REVIEW_TIMEOUT>((resolve) => {
-          timeout = setTimeout(() => resolve(REVIEW_TIMEOUT), timeoutPolicy.requestTimeoutMs);
-        }),
-      ]);
-      if (text === REVIEW_TIMEOUT) {
-        deps.logger.warn('auto permission reviewer timed out', {
-          agentKind: request.agentKind,
-          providerId: request.providerId ?? null,
-          model: request.model,
-          durationMs: Date.now() - startedAt,
-        });
-        return null;
-      }
-      if (!text) return null;
-      const decision = parseAutoPermissionReviewDecision(text);
-      if (!decision) {
-        deps.logger.warn('auto permission reviewer returned malformed output', {
-          agentKind: request.agentKind,
-          providerId: request.providerId ?? null,
-          model: request.model,
-          durationMs: Date.now() - startedAt,
-        });
-        return null;
-      }
-      deps.logger.debug('auto permission reviewer completed', {
-        agentKind: request.agentKind,
-        providerId: request.providerId ?? null,
-        model: request.model,
-        verdict: decision.verdict,
-        durationMs: Date.now() - startedAt,
-      });
-      return decision;
+      prompt = buildAutoPermissionReviewPrompt(request);
     } catch (error) {
+      // prompt 构造失败(动作超限等)是确定性的,重试无意义。
       deps.logger.warn('auto permission reviewer failed', {
         agentKind: request.agentKind,
         providerId: request.providerId ?? null,
@@ -181,8 +245,71 @@ export function createAutoPermissionReviewer(
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
-    } finally {
-      if (timeout) clearTimeout(timeout);
     }
+
+    // 每次尝试都拿完整的 requestTimeoutMs —— 不按次数切分。
+    //
+    // 切分是错的:抖动恢复往往就差那几秒,把 12s 切成 4s 会把本来能成功的请求
+    // 也判成超时,反而制造失败。总耗时的上界由 maker-core 的
+    // AUTO_REVIEW_DELEGATE_HARD_CEILING_MS 兜住,那里已按最慢一档 + 重试留足。
+    const attempts = 1 + REVIEW_RETRIES;
+    // 单次超时按本次请求的模型能力取(强制思考的模型需要更久),缺省回到构造期策略。
+    const requestTimeoutMs = deps.resolveRequestTimeoutMs?.(request)
+      ?? timeoutPolicy.requestTimeoutMs;
+    // 总预算护栏:剩余时间不够再跑一次完整尝试时就不再重试,避免最后一次必然
+    // 被外层守卫截断(那次调用纯属浪费)。
+    const totalBudgetMs = requestTimeoutMs * attempts;
+
+    let lastFailure: AttemptFailure = 'error';
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        const backoff = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
+        const elapsed = Date.now() - startedAt;
+        if (elapsed + backoff + requestTimeoutMs > totalBudgetMs) break;
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+      }
+      const result = await attemptReview(deps, request, prompt, requestTimeoutMs);
+      if ('decision' in result) {
+        if (attempt > 0) {
+          deps.logger.debug('auto permission reviewer recovered after retry', {
+            agentKind: request.agentKind,
+            providerId: request.providerId ?? null,
+            model: request.model,
+            attempt: attempt + 1,
+            durationMs: Date.now() - startedAt,
+          });
+        }
+        deps.logger.debug('auto permission reviewer completed', {
+          agentKind: request.agentKind,
+          providerId: request.providerId ?? null,
+          model: request.model,
+          verdict: result.decision.verdict,
+          attempts: attempt + 1,
+          durationMs: Date.now() - startedAt,
+        });
+        return result.decision;
+      }
+      lastFailure = result.failure;
+      deps.logger.warn('auto permission reviewer attempt failed', {
+        agentKind: request.agentKind,
+        providerId: request.providerId ?? null,
+        model: request.model,
+        attempt: attempt + 1,
+        maxAttempts: attempts,
+        failure: result.failure,
+        durationMs: Date.now() - startedAt,
+        ...(result.error ? { error: result.error } : {}),
+      });
+      if (!isRetriableFailure(result.failure)) break;
+    }
+
+    deps.logger.warn('auto permission reviewer exhausted attempts', {
+      agentKind: request.agentKind,
+      providerId: request.providerId ?? null,
+      model: request.model,
+      failure: lastFailure,
+      durationMs: Date.now() - startedAt,
+    });
+    return null;
   };
 }
