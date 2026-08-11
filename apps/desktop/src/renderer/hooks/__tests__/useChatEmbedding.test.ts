@@ -55,7 +55,7 @@ describe('useChatEmbedding', () => {
     expect(hook.result.current.isCustomized).toBe(true);
 
     hook.unmount();
-    expect(listeners).toHaveLength(0);
+    expect(listeners.size).toBe(0);
   });
 
   it('maps IPC failures to localized chat embedding messages', () => {
