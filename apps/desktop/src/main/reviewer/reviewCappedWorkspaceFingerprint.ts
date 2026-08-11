@@ -5,6 +5,7 @@ import path from 'node:path';
 import { isReviewSensitiveCredentialPath } from '@cindy/maker-core';
 
 import { isPathInside } from '../git-review/fsPathGuard.js';
+import { sameFileIdentity } from '../utils/fileIdentity.js';
 
 const MAX_CAPPED_WORKSPACE_PATHS = 10_000;
 const MAX_CAPPED_WORKSPACE_BYTES = 512 * 1024 * 1024;
@@ -26,8 +27,7 @@ function addRecord(hash: Hash, ...parts: Array<string | number>): void {
 
 function stableStatMatches(before: Stats, after: Stats): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
+    sameFileIdentity(before, after) &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs &&

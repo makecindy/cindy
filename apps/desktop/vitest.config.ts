@@ -5,6 +5,13 @@ import { parseVitestCliExclude } from './src/test/vitest/cliExclude';
 
 const clientBuildEnv = desktopClientBuildEnv({ allowEnvOverride: false });
 const cliTestExclude = parseVitestCliExclude(process.argv.slice(2));
+const [nodeMajor = 0, nodeMinor = 0] = process.versions.node
+  .split('.')
+  .slice(0, 2)
+  .map((part) => Number.parseInt(part, 10));
+// Node 22.18 起默认启用可擦除 TypeScript 语法；仓库 engines 仍支持 22.12+。
+// 较早的 22.x 需要显式 flag，才能 raw require CommonJS migration companion .ts。
+const needsExperimentalStripTypes = nodeMajor === 22 && nodeMinor < 18;
 const desktopTestInclude = [
   'src/main/__tests__/**/*.test.ts',
   'src/main/**/__tests__/**/*.test.ts',
@@ -89,7 +96,12 @@ export default defineConfig({
     // 根 manifest 会用同一个 nodeWebstorageEnabled() 判据把 unit tier 留在 forks,
     // 两者不会同时生效;不需要 flag 的 Node(本机与 CI 的 22)上压根没有 webstorage 全局。
     poolOptions: {
-      forks: { execArgv: ['--no-experimental-webstorage'] },
+      forks: {
+        execArgv: [
+          '--no-experimental-webstorage',
+          ...(needsExperimentalStripTypes ? ['--experimental-strip-types'] : []),
+        ],
+      },
     },
     // Main-process code is pure Node — no DOM needed. Renderer tests (if/when
     // added) should switch to 'jsdom' via per-file `// @vitest-environment`.

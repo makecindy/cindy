@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 
 import { isKeychainIdentityMarkerArtifact, type KeychainIdentityIo } from './devKeychainName.js';
+import { samePathAndHandleFileIdentity } from './utils/fileIdentity.js';
 
 export interface KeychainMarkerIoDeps {
   /** 身份标记文件的绝对路径(profileDir 下的 KEYCHAIN_IDENTITY_MARKER_FILE)。 */
@@ -134,7 +135,7 @@ export function createKeychainMarkerIo(deps: KeychainMarkerIoDeps): KeychainIden
         try {
           const now = statPath(markerPath);
           if (now.isSymbolicLink()) return 'changed';
-          if (now.dev !== opened.dev || now.ino !== opened.ino) return 'changed';
+          if (!samePathAndHandleFileIdentity(now, opened)) return 'changed';
         } catch {
           return 'changed';
         }

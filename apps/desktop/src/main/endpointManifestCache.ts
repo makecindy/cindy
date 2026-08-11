@@ -32,6 +32,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { SupportedLocale } from '../shared/locale.js';
+import { samePathAndHandleFileIdentity } from './utils/fileIdentity.js';
 
 export const ENDPOINT_MANIFEST_CACHE_FILE_NAME = 'endpoint-manifest-cache.json';
 
@@ -100,15 +101,15 @@ function openReadOnlyNonBlocking(file: string): number {
 function readRegularFileWithin(file: string, maxBytes: number): string | null {
   let fd: number | null = null;
   try {
-    const pre = fs.lstatSync(file);
-    if (!pre.isFile() || pre.size > maxBytes) return null;
+    const pre = fs.lstatSync(file, { bigint: true });
+    if (!pre.isFile() || pre.size > BigInt(maxBytes)) return null;
     fd = openReadOnlyNonBlocking(file);
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > maxBytes) return null;
-    // best-effort:两端 ino 都拿得到才比对(Windows 上可能是 0)。
-    if (pre.ino && stat.ino && (pre.ino !== stat.ino || pre.dev !== stat.dev)) return null;
-    const buffer = Buffer.allocUnsafe(stat.size);
-    const read = fs.readSync(fd, buffer, 0, stat.size, 0);
+    const stat = fs.fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || stat.size > BigInt(maxBytes)) return null;
+    if (!samePathAndHandleFileIdentity(pre, stat)) return null;
+    const size = Number(stat.size);
+    const buffer = Buffer.allocUnsafe(size);
+    const read = fs.readSync(fd, buffer, 0, size, 0);
     return buffer.subarray(0, read).toString('utf8');
   } catch {
     return null;

@@ -27,6 +27,7 @@ import {
 } from '../appSessionState.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { createLogger } from '../logger.js';
+import { samePathAndHandleFileIdentity } from '../utils/fileIdentity.js';
 import * as ledger from './ledger.js';
 import type { LedgerDb } from './ledger.js';
 
@@ -371,8 +372,7 @@ async function readJournalRecord(
     opened = await handle.stat();
     if (
       !opened.isFile() ||
-      before.dev !== opened.dev ||
-      before.ino !== opened.ino ||
+      !samePathAndHandleFileIdentity(before, opened) ||
       opened.size > MAX_JOURNAL_BYTES
     ) {
       return null;

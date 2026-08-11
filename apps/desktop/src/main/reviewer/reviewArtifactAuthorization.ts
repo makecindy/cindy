@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { reviewFileLinkLayoutIsSafe } from '@cindy/maker-core';
 
+import { sameFileIdentity } from '../utils/fileIdentity.js';
+
 export interface ReviewArtifactAuthorizationAttachment {
   name: string;
   path?: string;
@@ -62,8 +64,7 @@ export function reviewArtifactPathIdentityMatches(
   actual: Stats,
 ): boolean {
   return (
-    expected.dev === actual.dev &&
-    expected.ino === actual.ino &&
+    sameFileIdentity(expected, actual) &&
     expected.size === actual.size &&
     expected.mode === actual.mode &&
     expected.mtimeMs === actual.mtimeMs &&

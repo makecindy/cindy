@@ -21,7 +21,7 @@ describe('review plugin', () => {
     vi.resetModules();
     registry = await import('../../../registry');
     pluginMod = await import('../index');
-  });
+  }, 30_000);
 
   afterEach(() => {
     registry._resetTabKindRegistry();

@@ -21,6 +21,7 @@ import {
   type ReviewProcessAliveProbe,
 } from './reviewRunRecovery.js';
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
+import { sameFileIdentity } from '../utils/fileIdentity.js';
 
 const MAX_SNAPSHOT_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SNAPSHOT_TOTAL_BYTES = 128 * 1024 * 1024;
@@ -47,8 +48,7 @@ export interface PreparedStableReviewArtifacts<T> {
 
 export function reviewArtifactSnapshotStatMatches(before: Stats, after: Stats): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
+    sameFileIdentity(before, after) &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs &&

@@ -32,6 +32,7 @@ import { isAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachme
 import type { AttachmentIntegrity, AttachmentOssRef } from '../../shared/attachmentOssRef.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { sameFileIdentity } from '../utils/fileIdentity.js';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety.js';
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
 import {
@@ -112,8 +113,7 @@ function tempOwnerRecordPath(ownerRoot: string): string {
 
 function statMatches(before: Stats, after: Stats): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
+    sameFileIdentity(before, after) &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs &&

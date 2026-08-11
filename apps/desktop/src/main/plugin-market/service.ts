@@ -374,7 +374,12 @@ async function customMarketIconKey(
       return null;
     }
     const stat = openedIconStat ?? (await fs.promises.lstat(iconPath, { bigint: true }));
-    iconFingerprint = `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    // Node/Windows 对同一 NTFS 文件的路径 stat 报 dev=0，句柄 stat 则报卷序列号。
+    // 图标已由单句柄身份闸验证；投影键必须让读前路径 stat 与读后句柄 stat 使用
+    // 同一设备占位，否则每次合法物化都会被误判为投影变化。来源路径已进入 source
+    // token，非零 FileId 仍区分同一来源内的文件。
+    const stableDevice = process.platform === 'win32' ? 'win32' : stat.dev.toString();
+    iconFingerprint = `${stableDevice}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
   } catch (error) {
     projectionUncertain = !isDeterministicLocalIconReadFailure(error);
     iconFingerprint = `unreadable:${(error as NodeJS.ErrnoException)?.code ?? 'unknown'}`;
