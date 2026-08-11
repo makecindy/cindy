@@ -175,6 +175,26 @@ describe('claimLegacyOwnerNamespace', () => {
     ).resolves.toBe('legacy-hook');
   });
 
+  it('does not permanently defer when a pid is reused by another app shortly after exit', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 2_500,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'migrated' });
+  });
+
   it('keeps deferring when a reused pid now belongs to another Cindy process', async () => {
     const root = await tempRoot();
     const startedAtMs = 1_000_000;
