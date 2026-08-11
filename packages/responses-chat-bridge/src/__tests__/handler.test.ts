@@ -144,6 +144,65 @@ describe('createResponsesChatHandler', () => {
     });
   });
 
+  it('rejects a required tool_choice when the only tool is a dropped web_search', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const warn = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl, logger: { warn } });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'search' }],
+        tools: [{ type: 'web_search' }],
+        tool_choice: 'required',
+      },
+      res: res as never,
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.chunks.join('')).toContain('unsupported_feature');
+    expect(res.chunks.join('')).toContain('tool_choice.web_search');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps a required tool_choice when another tool survives beside web_search', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools).toEqual([
+        { type: 'function', function: { name: 'exec', parameters: { type: 'object' } } },
+      ]);
+      expect(body.tool_choice).toBe('required');
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'do it' }],
+        tools: [
+          { type: 'function', name: 'exec', parameters: { type: 'object' } },
+          { type: 'web_search' },
+        ],
+        tool_choice: 'required',
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+  });
+
   it('keeps a same-named retained function tool selectable beside web_search', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));

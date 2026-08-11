@@ -845,11 +845,22 @@ export function translateResponsesRequestWithContext(
   const developerRole = capabilities.developerRole ?? 'system';
   const toolContext = ChatBridgeToolContext.fromRequest(input);
   reportDroppedTools(input.tools, opts.onDroppedTool);
-  if (
-    hasDroppedWebSearchTool(input.tools)
-    && explicitlySelectsDroppedWebSearch(input.tools, input.tool_choice)
-  ) {
-    throw new UnsupportedResponsesFeatureError('tool_choice.web_search');
+  if (hasDroppedWebSearchTool(input.tools)) {
+    // Ordinary/auto requests keep degrading (web_search removed, other tools preserved). Stay
+    // fail-closed only when the request can be satisfied *solely* by the dropped web_search:
+    // either it explicitly selects web_search, or it demands `required` while every convertible
+    // tool was dropped, leaving no tool the upstream could call. Otherwise `required` is silently
+    // relaxed and a search-less provider answers as though no tool were requested.
+    const requiresDroppedWebSearch =
+      explicitlySelectsDroppedWebSearch(input.tools, input.tool_choice)
+      || (
+        input.tool_choice === 'required'
+        && capabilities.forceAutoToolChoice !== true
+        && toolContext.chatTools === undefined
+      );
+    if (requiresDroppedWebSearch) {
+      throw new UnsupportedResponsesFeatureError('tool_choice.web_search');
+    }
   }
   const messages = translateInput(input.input, {
     developerRole,
