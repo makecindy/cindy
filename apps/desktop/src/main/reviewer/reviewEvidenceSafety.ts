@@ -78,18 +78,28 @@ export function sanitizeReviewChangeSet(
   const diffs = filterSensitive<FileDiff>(changeSet.diffs, omitted);
   const files = filterSensitive<TurnChangeFileSummary>(changeSet.files, omitted);
   const omittedSensitiveFiles = omitted.size;
-  return {
-    value: {
-      ...changeSet,
-      diffs,
-      files,
-      incompleteReasons:
-        omittedSensitiveFiles > 0 && !changeSet.incompleteReasons.includes('sensitive-file')
-          ? [...changeSet.incompleteReasons, 'sensitive-file']
-          : changeSet.incompleteReasons,
-    },
-    omittedSensitiveFiles,
+  const value: TurnChangeSetDetail = {
+    ...changeSet,
+    diffs,
+    files,
+    incompleteReasons:
+      omittedSensitiveFiles > 0 && !changeSet.incompleteReasons.includes('sensitive-file')
+        ? [...changeSet.incompleteReasons, 'sensitive-file']
+        : changeSet.incompleteReasons,
   };
+  // `fileCount` still counts the removed entries. Record which file identities
+  // went away so a later completeness check can tell deliberate redaction from
+  // a summary that lost files it can no longer name. Identity is used rather
+  // than the source-prefixed evidence key so one file removed from both `files`
+  // and `diffs` counts once, matching how `fileCount` counts it.
+  if (omittedSensitiveFiles > 0) {
+    const redacted = new Set<string>();
+    for (const entry of [...changeSet.files, ...changeSet.diffs]) {
+      if (hasSensitivePath(entry)) redacted.add(changeEntryIdentity(entry));
+    }
+    redactedChangeEntries.set(value, redacted);
+  }
+  return { value, omittedSensitiveFiles };
 }
 
 /** Used for local freshness hashing; sensitive status paths never enter the digest input. */
@@ -112,15 +122,38 @@ function isSafeRelativeChangePath(rawPath: string): boolean {
 export interface ReviewChangeSetContentPaths {
   paths: string[];
   /**
-   * True when the change set records more files than it can enumerate, so the
+   * True when the change set records more files than it can account for, so the
    * returned paths cannot be a complete baseline for it.
    *
    * Persisted details are rebuilt through `toSummary()`, which caps `files` at
    * 50 entries while keeping the true `fileCount`. Callers that rely on these
    * paths for freshness must fail closed rather than publish a conclusion whose
    * baseline silently omitted the 51st file onward.
+   *
+   * Deliberate redaction is not truncation: `sanitizeReviewChangeSet` removes
+   * credential entries on purpose and records `sensitive-file`, so those files
+   * are accounted for even though they are absent by design.
    */
   truncated: boolean;
+}
+
+/** Distinct file identity, so a rename's two path names still count as one file. */
+function changeEntryIdentity(entry: { path: string; oldPath: string | null }): string {
+  return `${entry.path}\0${entry.oldPath ?? ''}`;
+}
+
+/**
+ * Entries `sanitizeReviewChangeSet` deliberately removed, keyed by file identity.
+ *
+ * Redaction keeps the original `fileCount` while dropping credential entries,
+ * which from the outside looks identical to summary truncation. Recording the
+ * removals as they happen is the only way to tell the two apart afterwards —
+ * once sanitized, the entries are simply gone.
+ */
+const redactedChangeEntries = new WeakMap<TurnChangeSetDetail, Set<string>>();
+
+function redactedChangeEntryCount(changeSet: TurnChangeSetDetail): number {
+  return redactedChangeEntries.get(changeSet)?.size ?? 0;
 }
 
 /**
@@ -144,10 +177,11 @@ export function reviewChangeSetContentPaths(
   if (!changeSet) return { paths: [], truncated: false };
   const root = path.resolve(changeSet.cwd || workingDir);
   const paths = new Set<string>();
-  const named = new Set<string>();
+  // Count file identities, not path names: a rename names two paths for one
+  // recorded file, and counting names would let a rename mask a missing file.
+  const seen = new Set<string>();
   const collect = (rawPath: string | null | undefined): void => {
     if (typeof rawPath !== 'string' || !isSafeRelativeChangePath(rawPath)) return;
-    named.add(rawPath);
     if (isReviewSensitiveCredentialPath(rawPath)) return;
     const absolute = path.resolve(root, ...rawPath.split(/[\\/]/));
     const relative = path.relative(root, absolute);
@@ -156,18 +190,16 @@ export function reviewChangeSetContentPaths(
     paths.add(absolute);
   };
 
-  for (const file of changeSet.files) {
-    collect(file.path);
-    collect(file.oldPath);
-  }
-  // `diffs` is parsed from the full unified patch and can still describe files
-  // the summarized `files` array dropped.
-  for (const diff of changeSet.diffs) {
-    collect(diff.path);
-    collect(diff.oldPath);
+  for (const entry of [...changeSet.files, ...changeSet.diffs]) {
+    // `files` and `diffs` truncate independently, so an entry missing from the
+    // summarized list may still be described by the full unified patch.
+    seen.add(changeEntryIdentity(entry));
+    collect(entry.path);
+    collect(entry.oldPath);
   }
 
-  // Compare against distinct names actually seen: a rename contributes two
-  // names for one recorded file, so counting raw entries would misjudge this.
-  return { paths: [...paths], truncated: named.size < changeSet.fileCount };
+  return {
+    paths: [...paths],
+    truncated: seen.size + redactedChangeEntryCount(changeSet) < changeSet.fileCount,
+  };
 }

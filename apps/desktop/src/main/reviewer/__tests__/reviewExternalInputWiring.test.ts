@@ -60,9 +60,14 @@ describe('Review external input wiring', () => {
     expect(registerSource).toContain(
       'const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];',
     );
-    // A change set that cannot enumerate its own files is not a usable
+    // A change set that cannot account for its own files is not a usable
     // baseline; publishing against it would skip the truncated remainder.
-    expect(registerSource).toContain('changeSetContent.truncated');
+    // A Git fingerprint is not an exemption — it cannot see ignored files,
+    // so a dropped entry that is an ignored deliverable is covered by neither.
+    expect(registerSource).toContain('if (changeSetContent.truncated) {');
+    expect(registerSource).not.toContain(
+      'if (changeSetContent.truncated && !evidence.workspaceFingerprint) {',
+    );
     expect(registerSource).toContain(
       'const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };',
     );

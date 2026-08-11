@@ -7081,11 +7081,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             evidence.changeSet,
             sourceWorkingDir,
           );
-          // A change set that cannot enumerate all of its own files cannot serve
-          // as a baseline. Refuse instead of publishing a conclusion whose
+          // A change set that cannot account for all of its own files cannot
+          // serve as a baseline. Refuse instead of publishing a conclusion whose
           // freshness check silently skipped everything past the summarized
-          // prefix. Git evidence, when present, still covers tracked files.
-          if (changeSetContent.truncated && !evidence.workspaceFingerprint) {
+          // prefix.
+          //
+          // A Git fingerprint is not an exemption: it hashes tracked evidence
+          // only, so a dropped entry that happens to be an ignored deliverable
+          // is covered by neither side — exactly the gap this change closes.
+          if (changeSetContent.truncated) {
             throw new ReviewPreconditionError({
               code: 'artifact-unavailable',
               message:

@@ -60,16 +60,19 @@ export const REVIEW_SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS = [
     source: String.raw`(?:^|[\\/])apps[\\/](?:claude-code|codex|pi|ripgrep)-bin(?:[\\/]|$)`,
     flags: "i",
   },
-  // Cindy downloads harness binaries into `tools/<kind>/updates/<version>/
-  // <platform>/` at its own repository root (see .gitignore); the payloads are
-  // executables, never reviewable source.
+  // Cindy downloads harness binaries to `tools/<kind>/updates/<semver>/
+  // <platform>-<arch>/` and gitignores them; they are executables, never
+  // reviewable source. Left readable, a single focused directory blows the
+  // bounded content fingerprint — the payloads are ~570 MB against a 512 MB
+  // budget.
   //
-  // Require that full shape rather than any `tools/<kind>/updates` prefix. This
-  // list also removes matches from the reviewer's diff and read scope, so a
-  // reviewed repository that legitimately keeps source at
-  // `tools/codex/updates/migrate.ts` must stay reviewable.
+  // This list also strips matches from the reviewer's diff and read scope, so
+  // the rule is deliberately narrow: it demands the complete downloaded shape,
+  // including a semver version segment. A reviewed repository keeping its own
+  // source at `tools/codex/updates/migrate.ts`, or even at
+  // `tools/codex/updates/v2/darwin-arm64/`, stays fully reviewable.
   {
-    source: String.raw`(?:^|[\\/])tools[\\/](?:claude|codex|pi|ripgrep)[\\/]updates[\\/][^\\/]+[\\/](?:darwin|linux|win32)-[^\\/]+(?:[\\/]|$)`,
+    source: String.raw`(?:^|[\\/])tools[\\/](?:claude|codex|pi|ripgrep)[\\/]updates[\\/]\d+\.\d+\.\d+[^\\/]*[\\/](?:darwin|linux|win32)-[^\\/]+(?:[\\/]|$)`,
     flags: "i",
   },
   { source: String.raw`(?:^|[\\/])\.vite(?:[\\/]|$)`, flags: "i" },
@@ -94,12 +97,13 @@ export const REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/apps/pi-bin/**",
   "**/apps/ripgrep-bin/**",
   // Match the path rule above: only the downloaded
-  // `updates/<version>/<platform>-<arch>/` payloads, so a reviewed repository
-  // keeping its own source under these names stays searchable.
-  "**/tools/claude/updates/*/*-*/**",
-  "**/tools/codex/updates/*/*-*/**",
-  "**/tools/pi/updates/*/*-*/**",
-  "**/tools/ripgrep/updates/*/*-*/**",
+  // `updates/<semver>/<platform>-<arch>/` payloads, so a reviewed repository
+  // keeping its own source under these names stays searchable. Globs cannot
+  // express the semver segment, so these stay slightly broader than the regex.
+  "**/tools/claude/updates/*/{darwin,linux,win32}-*/**",
+  "**/tools/codex/updates/*/{darwin,linux,win32}-*/**",
+  "**/tools/pi/updates/*/{darwin,linux,win32}-*/**",
+  "**/tools/ripgrep/updates/*/{darwin,linux,win32}-*/**",
   "**/.vite/**",
   "**/.ssh/**",
   "**/.aws/**",

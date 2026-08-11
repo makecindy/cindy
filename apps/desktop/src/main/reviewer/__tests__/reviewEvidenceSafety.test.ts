@@ -244,4 +244,45 @@ describe('review change set content paths', () => {
         .truncated,
     ).toBe(false);
   });
+
+  it('does not let a rename hide a file the summary dropped', () => {
+    // Counting path names would reach 2 here (new.ts + old.ts) and call a
+    // 2-file change set complete. Counting file identities keeps it at 1.
+    expect(
+      reviewChangeSetContentPaths(
+        changeSet([file('new.ts', 'old.ts')], '/repo', { fileCount: 2 }),
+        '/repo',
+      ).truncated,
+    ).toBe(true);
+  });
+
+  it('treats deliberately redacted credential files as accounted for', () => {
+    // sanitizeReviewChangeSet drops credential entries but keeps fileCount, so
+    // a redacted change set looks truncated from the outside. Reviewing the
+    // remaining deliverables must stay possible.
+    const sanitized = sanitizeReviewChangeSet(
+      changeSet([file('src/a.ts'), file('.env')], '/repo', {
+        diffs: [fileDiff({ path: 'src/a.ts' }), fileDiff({ path: '.env' })],
+      }),
+    );
+
+    const result = reviewChangeSetContentPaths(sanitized.value, '/repo');
+
+    expect(sanitized.value?.incompleteReasons).toContain('sensitive-file');
+    expect(result.paths).toEqual([abs('/repo', 'src/a.ts')]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('still fails closed when redaction cannot explain the whole shortfall', () => {
+    // One entry was redacted, but the change set claims three files — the third
+    // is simply missing and no baseline can cover it.
+    const sanitized = sanitizeReviewChangeSet(
+      changeSet([file('src/a.ts'), file('.env')], '/repo', {
+        fileCount: 3,
+        diffs: [fileDiff({ path: 'src/a.ts' }), fileDiff({ path: '.env' })],
+      }),
+    );
+
+    expect(reviewChangeSetContentPaths(sanitized.value, '/repo').truncated).toBe(true);
+  });
 });

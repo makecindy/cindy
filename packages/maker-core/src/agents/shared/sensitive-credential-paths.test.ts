@@ -77,6 +77,10 @@ describe("Review credential path policy", () => {
       "/userrepo/tools/codex/updates/migrate.ts",
       "/userrepo/tools/claude/updates/index.ts",
       "/userrepo/tools/ripgrep/updates/v2/schema.sql",
+      // Even the platform-shaped layout stays reviewable unless the version
+      // segment is a real semver, which is what Cindy's downloader writes.
+      "/userrepo/tools/codex/updates/v2/darwin-arm64/main.ts",
+      "/userrepo/tools/claude/updates/next/linux-x64/index.ts",
     ]) {
       expect(isReviewSensitiveCredentialPath(allowed)).toBe(false);
     }
@@ -125,10 +129,10 @@ describe("Review credential path policy", () => {
         "**/.git/**",
         "**/node_modules/**",
         "**/apps/codex-bin/**",
-        "**/tools/claude/updates/*/*-*/**",
-        "**/tools/codex/updates/*/*-*/**",
-        "**/tools/pi/updates/*/*-*/**",
-        "**/tools/ripgrep/updates/*/*-*/**",
+        "**/tools/claude/updates/*/{darwin,linux,win32}-*/**",
+        "**/tools/codex/updates/*/{darwin,linux,win32}-*/**",
+        "**/tools/pi/updates/*/{darwin,linux,win32}-*/**",
+        "**/tools/ripgrep/updates/*/{darwin,linux,win32}-*/**",
         "**/.vite/**",
         "**/credentials.json",
         "**/auth.json",
