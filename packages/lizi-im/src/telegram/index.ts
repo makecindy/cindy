@@ -1802,8 +1802,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 让最终消息拥有独立 message id，避免群 relay 与迟到过程更新覆盖它。
    *
    * Rich 不能用时返回 null，由调用方安全回落 HTML/Markdown 新发；404 代表方法
-   * 不可用，实例级熔断。其它错误（包括 429 退避失败、权限和网络）必须抛出，
-   * 因为这时无法判断 Telegram 是否已经接收，不能再发一份 HTML 造成重复。
+   * 不可用，实例级熔断。
+   *
+   * 降级判据是「**Telegram 有没有应答**」，不是错误码大小：4xx 都意味着报文完整
+   * 往返、这条 Rich 没有落地，HTML 补发不会造成重复。**429 也在此列**
+   * (2026-08-11 review)：`callSend` 已按 `retry_after` 退避重试过，仍拿到 429 就是
+   * 明确拒绝；而 `turnRunner` 的终态路径只把 `finalize()` 的异常记成 non-fatal
+   * 警告、**不会再调一次**，抛出去等于让用户永远停在过程消息上。HTML 那条路自身
+   * 也走 `callSend`，会再遵守一次 `retry_after`。
+   *
+   * 只有拿不到应答的情况（网络中断、超时、5xx）才抛出：那时无法判断 Telegram
+   * 是否已经接收，补发 HTML 可能造成两份答案。
    */
   private async sendRichFinal(
     userId: string,
@@ -1825,13 +1834,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.recordOwnEcho(userId, markdown, sent);
       return encodeMessageId(String(sent.chat.id), String(sent.message_id));
     } catch (err) {
-      if (
-        err instanceof TelegramApiError &&
-        (err.errorCode === 400 || err.errorCode === 404)
-      ) {
-        // 404 = API method missing; 400 = this rich payload cannot be parsed.
-        // Both are definite rejections, so the HTML fallback cannot duplicate a
-        // message Telegram already accepted.
+      if (err instanceof TelegramApiError && err.errorCode >= 400 && err.errorCode < 500) {
+        // 4xx = Telegram 完整应答后拒绝了这条 Rich, 它没有落地, HTML 补发不会
+        // 造成重复。404 另外表示方法本身不可用 —— 实例级熔断, 后续不再尝试。
+        // 429(退避重试后仍限流)同样在此: 抛出去只会让答案永久停在过程消息。
         if (err.errorCode === 404) {
           this.richSendDisabled = true;
         }

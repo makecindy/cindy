@@ -1315,6 +1315,52 @@ describe('TelegramIM', () => {
     expect((richSends.at(-1)?.params.rich_message as { markdown?: string }).markdown).toBe('看完了');
   });
 
+  it('Rich 新发 429(退避后仍限流)降级 HTML, 答案不停在过程消息', async () => {
+    // turnRunner 的终态路径只把 finalize() 异常记成 non-fatal 警告、不会重试,
+    // 所以 Rich 的 429 抛出去 = 用户永远停在"工作中"。callSend 已按 retry_after
+    // 退避过, 仍 429 就是明确拒绝 —— 这条 Rich 没落地, HTML 补发不会重复。
+    await connect();
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendRichMessage') {
+        api.calls.push({ method, params: params ?? {} });
+        throw new TelegramApiError('sendRichMessage', 429, 'Too Many Requests', 0);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID, '⚙️ 工作中 · 8m');
+    vi.useFakeTimers();
+    try {
+      // callSend 对 429 会按 retry_after 退避重试一次, 之后才交回这里降级。
+      const finalized = handle.finalize('flood 下也必须送到的答案');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await finalized;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // HTML 新发承载了答案。
+    const answer = api.calls.find(
+      (c) => c.method === 'sendMessage' && String(c.params.text ?? '').includes('必须送到的答案'),
+    );
+    expect(answer).toBeDefined();
+    // 429 不是方法缺失, 不该熔断: 下一轮仍会尝试 Rich。
+    const richBefore = api.calls.filter((c) => c.method === 'sendRichMessage').length;
+    const handle2 = await im.startStreamingText(OWNER_ID);
+    vi.useFakeTimers();
+    try {
+      const second = handle2.finalize('第二轮');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await second;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBeGreaterThan(
+      richBefore,
+    );
+  });
+
   it('Rich 新发 404(方法不可用)实例级 latch, 后续不再尝试', async () => {
     await connect();
     const originalCall = api.call.bind(api);
@@ -2057,9 +2103,11 @@ describe('TelegramIM', () => {
           .map((c) => String(c.params.text ?? ''))
           .filter((text) => text.includes('完整答案')),
       ).toEqual([]);
-      // Rich 429 退避期间 owner 变了 → isLiveConnection 失效 → 抛回原始 429。
-      expect(outcome).toBeInstanceOf(TelegramApiError);
-      expect((outcome as TelegramApiError).errorCode).toBe(429);
+      // Rich 的 429 是明确拒绝 → 降级 HTML; 而 HTML 补送前的身份核验发现 owner
+      // 已换, 于是整轮收口作废。关键不变量是"一个字都没发给旧主人"(上面已断言),
+      // 错误类型只需证明它是被生命周期拦下的, 不是普通发送失败。
+      expect(outcome).toBeInstanceOf(Error);
+      expect(String(outcome)).toMatch(/round abandoned/);
     } finally {
       vi.useRealTimers();
     }

@@ -344,6 +344,52 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.sent).toEqual(['⚙️ 工作中 · 4m']);
   });
 
+  it('首段未确认时, 尾段成功也不清理载体(尾段证明不了首段送达)', async () => {
+    // 首段 DNS 失败(未知回执) → 计数推进防重复; 重试跳过首段、尾段成功。
+    // 一个全局"确认过"布尔会被尾段置真并误删现场, 用户只剩尾段。
+    let firstBroken = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown.startsWith('⚙️')) return 'carrier-msg';
+        if (markdown === '第一段' && firstBroken) {
+          throw new Error('getaddrinfo ENOTFOUND api.telegram.org');
+        }
+        return 'msg-x';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 9m');
+
+    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/ENOTFOUND/);
+    firstBroken = false;
+    // 重试: 首段被跳过(计数已推进), 第二段发出并成功。
+    await handle.finalize('第一段|第二段');
+
+    expect(h.sent).toContain('第二段');
+    // 首段从未确认 → 载体必须留着。
+    expect(h.deleted).toEqual([]);
+  });
+
+  it('首段未确认时暂停图片上传, 不把载体 id 当锚点', async () => {
+    // messageIdValue 这时还是过程载体 ID: 把图挂上去, 载体一旦被删图就没了。
+    let broken = true;
+    const h = makeHarness({
+      extractImageUrls: () => ['cindy-media://blobs/a.png'],
+      sendImpl: async (markdown) => {
+        if (markdown.startsWith('⚙️')) return 'carrier-msg';
+        if (broken) throw new Error('socket hang up');
+        return 'final-msg';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 3m');
+
+    await expect(handle.finalize('带图的答案')).rejects.toThrow(/socket hang up/);
+    // 重试时首段被跳过(未知回执已计数), 但没有真实终稿 id —— 必须拒绝上传。
+    await expect(handle.finalize('带图的答案')).rejects.toThrow(/unconfirmed/);
+    expect(h.uploadAnchors).toEqual([]);
+    expect(h.deleted).toEqual([]);
+  });
+
   it('多批图片: 后批失败后重试从断点续传, 不重复已发附件', async () => {
     const uploaded: Array<{ start: number; count: number }> = [];
     let failSecondBatch = true;
@@ -370,33 +416,47 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     ]);
   });
 
-  it('重试后清理的是原始过程载体, 不是已经送达的终稿', async () => {
-    // 首段成功后 messageIdValue 已指向终稿; 若重试时从它重算清理目标,
-    // 会把答案删掉而留下过程载体。
-    let failTail = true;
+  it('清理的是原始过程载体, 不是已经送达的终稿', async () => {
+    // 首段成功后 messageIdValue 已指向终稿; 若从它重算清理目标, 会把答案删掉
+    // 而留下过程载体。全程确认(无未知回执)时才走到清理。
     const h = makeHarness({
       chunk: (text) => text.split('|'),
-      sendImpl: async (markdown) => {
-        if (markdown === '第二段' && failTail) throw new Error('sendMessage failed: 500');
+      sendImpl: async (markdown) =>
         // 过程载体与终稿必须是不同的 messageId, 否则这条断言没有意义。
-        return markdown.startsWith('⚙️') ? 'carrier-msg' : 'final-msg';
-      },
+        markdown.startsWith('⚙️') ? 'carrier-msg' : 'final-msg',
     });
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 12m');
     const carrierId = handle.messageId;
     expect(carrierId).toBe('carrier-msg');
 
-    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/500/);
-    // 首段已落地, handle 现在指向终稿而非过程载体。
-    expect(handle.messageId).not.toBe(carrierId);
-    expect(h.deleted).toEqual([]);
-
-    failTail = false;
     await handle.finalize('第一段|第二段');
 
-    // 删的必须是最初那条过程消息。
+    // 首段落地后 handle 指向终稿; 删的必须是最初那条过程消息。
+    expect(handle.messageId).not.toBe(carrierId);
     expect(h.deleted).toEqual([carrierId]);
     expect(h.deleted).not.toContain(handle.messageId);
+  });
+
+  it('尾段回执未知时保留载体: 重试跳过它, 但正文未完整确认', async () => {
+    // 尾段 500 属于回执未知 —— 不重投(避免重复), 但也不能据此宣称收口。
+    let failTail = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown === '第二段' && failTail) throw new Error('sendMessage failed: 500');
+        return markdown.startsWith('⚙️') ? 'carrier-msg' : 'final-msg';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 12m');
+
+    await expect(handle.finalize('第一段|第二段')).rejects.toThrow(/500/);
+    failTail = false;
+    // 重试: 第二段已计数(防重复)故被跳过, 但它始终没拿到回执。
+    await handle.finalize('第一段|第二段');
+
+    // 第二段只发过一次(没有重投), 且因未确认而保留现场。
+    expect(h.sent.filter((t) => t === '第二段')).toHaveLength(1);
+    expect(h.deleted).toEqual([]);
   });
 
   it('Rich 终稿新发成功时既不走 HTML 补送也不编辑过程消息', async () => {

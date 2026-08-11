@@ -138,14 +138,28 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
    */
   private deliveredImages = 0;
   /**
-   * 本轮**从未拿到过任何一次成功回执**。
+   * **首段**(承载答案主体、且是图片锚点的那条)是否已确认送达。
    *
-   * `deliveredChunks` 在未知回执下也会推进(防重复), 于是重试可能跳过全部分段
-   * 直接 markFinalSent 并删掉过程载体 —— 若那次其实没送达, 聊天里既没有答案也
-   * 没有故障现场(2026-08-11 review)。清理因此要额外看这个标记: 只有真正确认过
-   * 一次成功送达, 才允许动过程载体。
+   * 必须与后续分段分开记: `deliveredChunks` 在未知回执下也会推进(防重复), 于是
+   * 首段 DNS 失败、尾段重试成功的轮次里, 一个全局"确认过"的布尔会被尾段置真 ——
+   * 但那证明不了首段曾被 Telegram 接受, 用户可能只剩尾段, 而过程载体还被删了
+   * (2026-08-11 review)。
+   *
+   * 它同时是两件事的前置:
+   *   1. **清理过程载体** —— 正文主体没确认就不动现场;
+   *   2. **图片上传锚点** —— `messageIdValue` 只在首段确认时才指向真实终稿,
+   *      否则它还是过程载体 ID(会把图挂到随后可能被删的消息上)或空串
+   *      (`decodeMessageId` 直接抛错)。
    */
-  private hasConfirmedDelivery = false;
+  private firstChunkConfirmed = false;
+  /**
+   * 回执未知的分段序号(0-based)。
+   *
+   * 这些段**不会重投**(重投会让已落地的那份变成重复), 但它们的存在证明这一轮
+   * 正文没有完整确认 —— 清理过程载体因此要等这个集合为空。它是"宁可留现场,
+   * 不敢删"的判据, 不是待办队列。
+   */
+  private readonly unconfirmedChunks = new Set<number>();
   /**
    * 本轮**过程载体**的 messageId, 在首次 finalize 进入终稿路径时冻结。
    *
@@ -243,7 +257,10 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     try {
       return await this.deps.sendFinal!(finalText, reuseReplyTarget);
     } catch (err) {
-      if (!isDefiniteRejection(err)) this.deliveredChunks = chunkCount;
+      if (!isDefiniteRejection(err)) {
+        this.deliveredChunks = chunkCount;
+        this.unconfirmedChunks.add(0);
+      }
       throw err;
     }
   }
@@ -304,8 +321,9 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
           this.messageIdValue = messageId;
           this.flushed = text;
           this.deliveredChunks = chunkCount;
-          // 拿到了真实 messageId = 确认送达, 清理载体从此安全。
-          this.hasConfirmedDelivery = true;
+          // 拿到真实 messageId = 首段确认送达: 清理载体与图片锚点从此都安全。
+          this.firstChunkConfirmed = true;
+          this.unconfirmedChunks.delete(0);
         };
         const sendFirstChunk = async (
           attempt: () => Promise<string>,
@@ -315,8 +333,12 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
           try {
             markFirstChunk(await attempt(), text, chunkCount);
           } catch (err) {
-            // 拿不到应答 = 可能已落地: 记成已投递, 重试只补后续分段与图片。
-            if (!isDefiniteRejection(err)) this.deliveredChunks = chunkCount;
+            // 拿不到应答 = 可能已落地: 记成已投递(防重复), 但**不算确认** ——
+            // 没有真实 messageId, 既不能删载体也不能拿它当图片锚点。
+            if (!isDefiniteRejection(err)) {
+              this.deliveredChunks = chunkCount;
+              this.unconfirmedChunks.add(0);
+            }
             throw err;
           }
         };
@@ -351,13 +373,19 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       // 聊天里不可能出现它。这时必须把计数退回去, 否则重试会跳过一段确定未送达的
       // 正文, 随后照样 markFinalSent 并清掉过程载体 —— 答案就此缺段。
       while (this.deliveredChunks < chunks.length) {
-        const chunk = chunks[this.deliveredChunks]!;
+        const index = this.deliveredChunks;
+        const chunk = chunks[index]!;
         this.deliveredChunks += 1;
         try {
           await this.deps.send(chunk);
-          this.hasConfirmedDelivery = true;
+          this.unconfirmedChunks.delete(index);
         } catch (err) {
-          if (isDefiniteRejection(err)) this.deliveredChunks -= 1;
+          if (isDefiniteRejection(err)) {
+            this.deliveredChunks -= 1;
+          } else {
+            // 计入未确认: 尾段的成功回执不能证明它送达, 更不能证明首段送达。
+            this.unconfirmedChunks.add(index);
+          }
           throw err;
         }
       }
@@ -370,6 +398,15 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
         ...imageUrls,
         ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
       ];
+      // 首段未确认就没有可用的锚点: `messageIdValue` 这时要么还是**过程载体
+      // ID**(图会挂到随后可能被删的"工作中"消息上), 要么是空串
+      // (`decodeMessageId` 直接抛错, 附件永远收不了口)。宁可推迟上传 ——
+      // 正文本身也还没确认, 这一轮整体就没收口(2026-08-11 review)。
+      if (!this.firstChunkConfirmed && allImageRefs.length > 0) {
+        throw new Error(
+          'telegram final image upload deferred: first chunk delivery unconfirmed (no final message id)',
+        );
+      }
       if (this.deliveredImages < allImageRefs.length) {
         await this.deps.uploadImages(this.messageIdValue, allImageRefs, {
           startIndex: this.deliveredImages,
@@ -390,14 +427,17 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     }
 
     if (!staleMessageId) return;
-    // 只有**确认过**至少一次成功回执才动过程载体。
+    // 正文**完整确认**才动过程载体 —— 两个条件都要:
+    //
+    //   1. 首段确认(拿到过真实 messageId): 它承载答案主体。尾段的成功回执证明
+    //      不了首段被接受, 用一个全局布尔会让"首段 DNS 失败 + 尾段重试成功"的
+    //      轮次误删现场, 用户只剩尾段;
+    //   2. 没有未确认的后续分段: 有缺口就说明这一轮没收全。
     //
     // deliveredChunks 在未知回执下也会推进(防重复), 所以它到达 chunks.length
-    // 并不等于内容真的出现在聊天里 —— 例如 fetch 在请求写出前就失败(DNS/连接
-    // 建立失败), 重试会跳过全部分段直接走到这里。此时若删掉过程载体, 用户既
-    // 看不到答案也看不到故障现场(2026-08-11 review)。
-    // 留着载体最坏是多一条"工作中", 上游仍持有完整正文可再收口。
-    if (!this.hasConfirmedDelivery) return;
+    // 并不等于内容真的出现在聊天里。留着载体最坏是多一条"工作中", 上游仍持有
+    // 完整正文可再收口; 删错了则既没答案也没现场(2026-08-11 review)。
+    if (!this.firstChunkConfirmed || this.unconfirmedChunks.size > 0) return;
     // Answer is already accepted; cleanup is best-effort and cannot make the
     // final delivery fail. If delete fails, both messages may remain.
     if (!this.lifecycle.beginCleanup()) return;
