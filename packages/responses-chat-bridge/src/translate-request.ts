@@ -698,15 +698,37 @@ function hasDroppedWebSearchTool(tools: ResponsesRequest['tools']): boolean {
   ));
 }
 
-function explicitlySelectsWebSearch(choice: unknown): boolean {
+function hasRetainedTool(
+  tools: ResponsesRequest['tools'],
+  kind: 'function' | 'custom',
+  name: string,
+  namespace?: string,
+): boolean {
+  for (const tool of tools ?? []) {
+    if (!isPlainObject(tool)) continue;
+    if (tool.type === kind && tool.name === name && namespace === undefined) return true;
+    if (tool.type === 'namespace' && tool.name === namespace) {
+      const children = Array.isArray(tool.tools) ? tool.tools : tool.children;
+      if (Array.isArray(children) && children.some((child) => (
+        isPlainObject(child) && child.type === kind && child.name === name
+      ))) return true;
+    }
+  }
+  return false;
+}
+
+function explicitlySelectsDroppedWebSearch(
+  tools: ResponsesRequest['tools'],
+  choice: unknown,
+): boolean {
   if (!isPlainObject(choice)) return false;
   if (choice.type === 'web_search') return true;
-  if (
-    (choice.type === 'function' || choice.type === 'custom')
-    && choice.name === 'web_search'
-  ) return true;
+  if (choice.type !== 'function' && choice.type !== 'custom') return false;
   const nestedFunction = isPlainObject(choice.function) ? choice.function : undefined;
-  return nestedFunction?.name === 'web_search';
+  const name = typeof choice.name === 'string' ? choice.name : nestedFunction?.name;
+  if (name !== 'web_search') return false;
+  const namespace = typeof choice.namespace === 'string' ? choice.namespace : undefined;
+  return !hasRetainedTool(tools, choice.type, name, namespace);
 }
 
 function translateToolChoice(
@@ -823,7 +845,10 @@ export function translateResponsesRequestWithContext(
   const developerRole = capabilities.developerRole ?? 'system';
   const toolContext = ChatBridgeToolContext.fromRequest(input);
   reportDroppedTools(input.tools, opts.onDroppedTool);
-  if (hasDroppedWebSearchTool(input.tools) && explicitlySelectsWebSearch(input.tool_choice)) {
+  if (
+    hasDroppedWebSearchTool(input.tools)
+    && explicitlySelectsDroppedWebSearch(input.tools, input.tool_choice)
+  ) {
     throw new UnsupportedResponsesFeatureError('tool_choice.web_search');
   }
   const messages = translateInput(input.input, {

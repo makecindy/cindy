@@ -144,6 +144,43 @@ describe('createResponsesChatHandler', () => {
     });
   });
 
+  it('keeps a same-named retained function tool selectable beside web_search', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tools).toEqual([
+        { type: 'function', function: { name: 'web_search', parameters: { type: 'object' } } },
+      ]);
+      expect(body.tool_choice).toEqual({
+        type: 'function',
+        function: { name: 'web_search' },
+      });
+      return streamResponse([
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]);
+    }) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+
+    await handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'call the function' }],
+        tools: [
+          { type: 'function', name: 'web_search', parameters: { type: 'object' } },
+          { type: 'web_search' },
+        ],
+        tool_choice: { type: 'function', name: 'web_search' },
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+  });
+
   it('preserves the upstream base query when applying the chat path', async () => {
     const fetchImpl = vi.fn(async () =>
       streamResponse([
