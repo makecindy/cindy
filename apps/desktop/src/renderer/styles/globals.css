@@ -1043,6 +1043,7 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .session-running-dot,
 [data-app-hidden='true'] .thinking-dot,
 [data-app-hidden='true'] .ghost-card-sweep,
+[data-app-hidden='true'] .brand-loading-mark-sheen::before,
 [data-app-hidden='true'] .ghost-bubble-face,
 [data-app-hidden='true'] .agent-island-mascot-character,
 [data-app-hidden='true'] .agent-island-mascot-keyboard,
@@ -1171,6 +1172,56 @@ body.resizing-pane [data-ghost-webview] {
 .msg-stream-items > *:has([data-fixed-menu-anchor]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
+}
+
+/* 会话切换 shell-first 帧的品牌加载指示(BrandLoadingMark):
+   wordmark 低亮常驻 + 亮带经同形 mask 在字标形状内扫过(Codex Desktop
+   startup loader 同构表现)。两条硬约束:
+   ① 延迟浮现 —— 指示器整体 200ms 后才淡入(brand-loading-appear,both 起始
+      透明)。多数会话下一帧就挂载完,指示器从未可见,小会话不闪 loading;
+   ② compositor-only —— 扫光用 sheen 伪层的 transform 位移(而非
+      background-position):消息树构建阻塞主线程时 transform 动画不冻结。
+   reduced-motion:两个动画全停,wordmark 直接静态显示(见下方 reduce 块)。 */
+.brand-loading-mark {
+  opacity: 0;
+  animation: brand-loading-appear var(--motion-base) ease-out 200ms both;
+}
+.brand-loading-mark > img {
+  opacity: 0.35;
+}
+.brand-loading-mark-sheen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    transparent 10%,
+    var(--text-primary) 50%,
+    transparent 90%
+  );
+  transform: translateX(-120%);
+  animation: brand-loading-sheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes brand-loading-appear {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes brand-loading-sheen {
+  to {
+    transform: translateX(350%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-loading-mark {
+    animation: none;
+    opacity: 1;
+  }
+  .brand-loading-mark-sheen::before {
+    animation: none;
+    transform: translateX(-120%);
+  }
 }
 
 /* 意识卡片 running 扫光(卡槽③):主机盖在意识画布上的斜向光带。

@@ -751,6 +751,17 @@ export class Maker {
   }
 
   /**
+   * Return the close cause for the exact runtime Session instance.
+   *
+   * A missing explicit cause means the vendor/Session closed itself. Keep this
+   * keyed by instance rather than business session id: a replacement can be
+   * created before a late close notification from the old instance arrives.
+   */
+  getSessionCloseReason(session: Session): MakerSessionCloseReason {
+    return this.closeReasons.get(session) ?? 'unexpected';
+  }
+
+  /**
    * Maker 进程级 shutdown — app.before-quit / 信号 / 崩溃 hook 调一次。
    *
    * **强制退出语义** (与 normal logout 路径不同): agent.dispose() 和 session.close()
@@ -777,6 +788,14 @@ export class Maker {
     const agentEntries = Object.entries(this.agents);
 
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
+
+    // shutdown() calls detach() directly instead of closeSession(), so record
+    // the explicit cause before any asynchronous close callback can run. This
+    // prevents app exit from looking like an unexpected provider rebuild and
+    // accidentally preserving an automatic retry lease.
+    for (const session of sessSnapshot) {
+      if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+    }
 
     // **agent.dispose 优先排队**: 微任务 ordering 不是强保证 (dispose 内部还有 await
     // hostPromise 等 hop), 但先排队意味着 SIGTERM 那一步至少不会被 session-close

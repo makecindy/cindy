@@ -304,7 +304,11 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // 保证同一会话逐轮请求带同一份工具列表(前缀稳定)。
     const serverSideTools = provider.serverSideTools?.(realModel);
 
-    const downstreamStreaming = parsed.stream !== false;
+    // Anthropic Messages 语义:**只有显式 `stream:true` 才是 SSE**,字段缺失等同非流式。
+    // Claude Code 的非流式 fallback 走 SDK 的 `messages.create()`,它**不带 stream 字段**
+    // (2026-08-10 用随包 cc 二进制实测),按 `stream !== false` 判会把 fallback 误当流式、
+    // 回一个 SSE,CLI 随即报 "empty or malformed response (HTTP 200)"。
+    const downstreamStreaming = parsed.stream === true;
     const responsesReq = translateRequest(parsed, {
       model: realModel,
       promptCacheKey: sessionId,
@@ -325,7 +329,9 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         headers: {
           ...providerHeaders,
           'content-type': 'application/json',
-          accept: downstreamStreaming ? 'text/event-stream' : 'application/json',
+          // 恒 SSE:上游只接受流式(见 translateRequest 的 stream 注释),非流式调用方
+          // 由下游缓冲满足。
+          accept: 'text/event-stream',
         },
         body: JSON.stringify(responsesReq),
         signal: abort.signal,
@@ -390,8 +396,9 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const upstreamContentType = upstream.headers.get('content-type') ?? '';
     const upstreamIsSse = upstreamContentType.toLowerCase().includes('event-stream');
 
-    // Claude Code 的 stream watchdog 会以 stream:false 做 fallback。该调用方要求一个完整
-    // Anthropic Message JSON;上游正常会返回 Responses JSON,但仍兼容忽略 stream:false 的 SSE 源。
+    // 非流式调用方(Claude Code 流式失败后的 fallback,请求体不带 stream 字段)要求一个
+    // 完整的 Anthropic Message JSON。上游恒回 SSE(只接受流式),所以这里缓冲整流后组装;
+    // 同时兼容个别上游直接给 Responses JSON 的情况。
     if (!downstreamStreaming) {
       const translator = new SseTranslator(wireModel);
       const collector = new AnthropicMessageCollector();

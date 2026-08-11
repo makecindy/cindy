@@ -85,6 +85,14 @@ import type {
   VoiceInputRefinerTransport,
 } from '../shared/voiceInputRefinerProfiles';
 import { isIpcErrorCode, type IpcErrorCode } from '../shared/ipc-errors';
+import {
+  isSidebarLegacyRendererOwnerClaim,
+  isSidebarSettingsSnapshot,
+  type SidebarLegacyRendererOwnerClaim,
+  type SidebarPinnedOrderMutation,
+  type SidebarSettingsSnapshot,
+} from '../shared/sidebarSettings';
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
 import type { BrowserBackendHealth, BrowserBackendRecoveryResult } from '../shared/browserBackend';
@@ -4378,38 +4386,85 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<ReviewPushResult> => ipcRenderer.invoke('git-review:push', params),
   },
 
-  // sidebar 偏好(置顶手动顺序)走 main 进程 electron-store,跨 dev / installed 共享
-  sidebarSettingsLoadPinnedOrderSync: (): string[] => {
-    const value = ipcRenderer.sendSync('sidebar-settings:load-pinned-order-sync');
-    return Array.isArray(value) ? (value as string[]) : [];
-  },
-  sidebarSettingsSavePinnedOrder: (order: readonly string[]): Promise<void> =>
-    ipcRenderer.invoke('sidebar-settings:save-pinned-order', Array.from(order)),
-  sidebarSettingsOnPinnedOrderChanged: (cb: (order: string[]) => void): (() => void) =>
-    fanOutSidebarPinnedOrderChanged((payload) => {
-      if (
-        Array.isArray(payload) &&
-        payload.every((entry): entry is string => typeof entry === 'string')
-      ) {
-        cb(payload);
-      }
-    }),
+  // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.
   sidebarSettings: {
-    loadHiddenProjectKeys: (): string[] => {
-      const value = ipcRenderer.sendSync('sidebar-settings:load-hidden-project-keys-sync');
-      return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
-        ? Array.from(value)
-        : [];
+    claimLegacyRendererOwner: (): SidebarLegacyRendererOwnerClaim => {
+      const value: unknown = ipcRenderer.sendSync(
+        'sidebar-settings:claim-renderer-legacy-owner-sync',
+      );
+      return isSidebarLegacyRendererOwnerClaim(value)
+        ? value
+        : {
+            dataOwnerId: null,
+            ownerGeneration: 0,
+            claimed: false,
+            canInitialize: false,
+            pinnedLegacyConsumed: false,
+          };
     },
-    setProjectHidden: (projectKey: string, hidden: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('sidebar-settings:set-project-hidden', projectKey, hidden),
-    onHiddenProjectKeysChanged: (cb: (projectKeys: string[]) => void): (() => void) =>
-      fanOutSidebarHiddenProjectKeysChanged((payload) => {
+    loadSnapshot: (): SidebarSettingsSnapshot => {
+      const value: unknown = ipcRenderer.sendSync('sidebar-settings:load-snapshot-sync');
+      return isSidebarSettingsSnapshot(value)
+        ? {
+            dataOwnerId: value.dataOwnerId,
+            ownerGeneration: value.ownerGeneration,
+            pinnedOrderIsAuthoritative: value.pinnedOrderIsAuthoritative,
+            pinnedOrder: Array.from(value.pinnedOrder),
+            hiddenProjectKeys: Array.from(value.hiddenProjectKeys),
+          }
+        : {
+            dataOwnerId: null,
+            ownerGeneration: 0,
+            pinnedOrderIsAuthoritative: false,
+            pinnedOrder: [],
+            hiddenProjectKeys: [],
+          };
+    },
+    mutatePinnedOrder: async (
+      mutation: SidebarPinnedOrderMutation,
+      ownerStamp: DataOwnerPushStamp,
+    ): Promise<string[]> => {
+      const result: unknown = await ipcRenderer.invoke('sidebar-settings:save-pinned-order', {
+        ...ownerStamp,
+        mutation,
+      });
+      if (!Array.isArray(result) || !result.every((entry) => typeof entry === 'string')) {
+        throw new Error('invalid sidebar pinned order response');
+      }
+      return Array.from(result);
+    },
+    onPinnedOrderChanged: (
+      cb: (order: string[], ownerStamp: DataOwnerPushStamp) => void,
+    ): (() => void) =>
+      fanOutSidebarPinnedOrderChanged((payload, ownerStamp) => {
         if (
           Array.isArray(payload) &&
-          payload.every((entry): entry is string => typeof entry === 'string')
+          payload.every((entry): entry is string => typeof entry === 'string') &&
+          isDataOwnerPushStamp(ownerStamp)
         ) {
-          cb(Array.from(payload));
+          cb(Array.from(payload), ownerStamp);
+        }
+      }),
+    setProjectHidden: (
+      projectKey: string,
+      hidden: boolean,
+      ownerStamp: DataOwnerPushStamp,
+    ): Promise<boolean> =>
+      ipcRenderer.invoke('sidebar-settings:set-project-hidden', {
+        ...ownerStamp,
+        projectKey,
+        hidden,
+      }),
+    onHiddenProjectKeysChanged: (
+      cb: (projectKeys: string[], ownerStamp: DataOwnerPushStamp) => void,
+    ): (() => void) =>
+      fanOutSidebarHiddenProjectKeysChanged((payload, ownerStamp) => {
+        if (
+          Array.isArray(payload) &&
+          payload.every((entry): entry is string => typeof entry === 'string') &&
+          isDataOwnerPushStamp(ownerStamp)
+        ) {
+          cb(Array.from(payload), ownerStamp);
         }
       }),
   },
