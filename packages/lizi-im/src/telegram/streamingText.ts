@@ -138,6 +138,15 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
    */
   private deliveredImages = 0;
   /**
+   * 本轮**从未拿到过任何一次成功回执**。
+   *
+   * `deliveredChunks` 在未知回执下也会推进(防重复), 于是重试可能跳过全部分段
+   * 直接 markFinalSent 并删掉过程载体 —— 若那次其实没送达, 聊天里既没有答案也
+   * 没有故障现场(2026-08-11 review)。清理因此要额外看这个标记: 只有真正确认过
+   * 一次成功送达, 才允许动过程载体。
+   */
+  private hasConfirmedDelivery = false;
+  /**
    * 本轮**过程载体**的 messageId, 在首次 finalize 进入终稿路径时冻结。
    *
    * 不能在每次尝试里从 `messageIdValue` 重算: 首段一旦新发成功, 那个字段就指向
@@ -295,6 +304,8 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
           this.messageIdValue = messageId;
           this.flushed = text;
           this.deliveredChunks = chunkCount;
+          // 拿到了真实 messageId = 确认送达, 清理载体从此安全。
+          this.hasConfirmedDelivery = true;
         };
         const sendFirstChunk = async (
           attempt: () => Promise<string>,
@@ -344,6 +355,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
         this.deliveredChunks += 1;
         try {
           await this.deps.send(chunk);
+          this.hasConfirmedDelivery = true;
         } catch (err) {
           if (isDefiniteRejection(err)) this.deliveredChunks -= 1;
           throw err;
@@ -378,6 +390,14 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     }
 
     if (!staleMessageId) return;
+    // 只有**确认过**至少一次成功回执才动过程载体。
+    //
+    // deliveredChunks 在未知回执下也会推进(防重复), 所以它到达 chunks.length
+    // 并不等于内容真的出现在聊天里 —— 例如 fetch 在请求写出前就失败(DNS/连接
+    // 建立失败), 重试会跳过全部分段直接走到这里。此时若删掉过程载体, 用户既
+    // 看不到答案也看不到故障现场(2026-08-11 review)。
+    // 留着载体最坏是多一条"工作中", 上游仍持有完整正文可再收口。
+    if (!this.hasConfirmedDelivery) return;
     // Answer is already accepted; cleanup is best-effort and cannot make the
     // final delivery fail. If delete fails, both messages may remain.
     if (!this.lifecycle.beginCleanup()) return;

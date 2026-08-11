@@ -321,6 +321,29 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.reposted).toEqual(['第一段', '第一段']);
   });
 
+  it('从未确认送达时不清理过程载体(既没答案也没现场是最坏结果)', async () => {
+    // fetch 在请求写出前就失败(DNS/连接建立失败): deliveredChunks 被推满防重复,
+    // 但内容其实从未出现在聊天里。此时删掉载体会让用户什么都看不到。
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        if (markdown.startsWith('⚙️')) return 'carrier-msg';
+        throw new Error('getaddrinfo ENOTFOUND api.telegram.org');
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 4m');
+
+    await expect(handle.finalize('唯一的答案')).rejects.toThrow(/ENOTFOUND/);
+
+    // 重试: deliveredChunks 已被推满(防重复), 于是全部分段被跳过、不再有 I/O,
+    // 这次 finalize 正常返回。但从未确认过任何一次送达 —— 绝不能删载体, 否则
+    // 用户既看不到答案也看不到"工作中"的故障现场。
+    await handle.finalize('唯一的答案');
+    expect(h.deleted).toEqual([]);
+    // 载体还在, 上游仍可凭它判断这一轮没收口。
+    expect(h.sent).toEqual(['⚙️ 工作中 · 4m']);
+  });
+
   it('多批图片: 后批失败后重试从断点续传, 不重复已发附件', async () => {
     const uploaded: Array<{ start: number; count: number }> = [];
     let failSecondBatch = true;
