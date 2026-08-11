@@ -9010,17 +9010,9 @@
     "dropHint": "Drop to Open the Session Here",
     "loadingTask": "Loading Session…",
     "resizeAria": "Resize Session Panes",
-    "openInSplit": "Open in Split",
-    "openSide": {
-      "left": "Open Session on Left",
-      "right": "Open Session on Right",
-      "top": "Open Session Above",
-      "bottom": "Open Session Below"
-    },
     "alreadyOpen": "This session is already open in the split. Choose another session.",
     "limitReached": "A split can contain up to {{count}} sessions. Close one pane and try again.",
-    "addUnavailable": "This session can’t be opened in the current split. Open a session in the main area and try again.",
-    "workerUnavailable": "A Worker can’t open in a separate pane. Open its Lead session instead."
+    "addUnavailable": "This session can’t be opened in the current split. Open a session in the main area and try again."
   },
   "extraDirs": {
     "menuAria": "Composer actions",

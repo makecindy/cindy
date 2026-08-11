@@ -287,9 +287,9 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).toContain('startSessionDrag');
   });
 
-  it('wires split creation into both sidebar rendering modes', () => {
-    expect(sessionItemSource).toContain('<OpenInSplitMenu');
-    expect(sessionCardSource).toContain('<OpenInSplitMenu');
+  it('does not expose split creation in either sidebar rendering mode', () => {
+    expect(sessionItemSource).not.toContain('<OpenInSplitMenu');
+    expect(sessionCardSource).not.toContain('<OpenInSplitMenu');
   });
 
   it('PR-123 greptile: card 路径的绑定徽章与 Timer 进反白体系', () => {
