@@ -4424,6 +4424,7 @@
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
+      "resourceUsage": "리소스 사용량",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"

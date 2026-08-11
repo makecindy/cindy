@@ -4423,6 +4423,7 @@
     "close": "關閉",
     "menuItems": {
       "settings": "設定",
+      "resourceUsage": "資源用量",
       "help": "幫助",
       "issues": "問題反饋",
       "checkForUpdates": "檢查更新"

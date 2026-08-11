@@ -4426,6 +4426,7 @@
     "close": "Close",
     "menuItems": {
       "settings": "Settings",
+      "resourceUsage": "Resource Usage",
       "help": "Help",
       "issues": "Issues",
       "checkForUpdates": "Check for Updates"

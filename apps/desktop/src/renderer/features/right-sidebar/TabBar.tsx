@@ -20,7 +20,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   Bot,
   FolderTree,
   Globe,
@@ -131,7 +130,6 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'orca-workers': UsersRound,
   subagents: Bot,
   'background-tasks': ListTodo,
-  'resource-usage': Activity,
 };
 
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
@@ -143,7 +141,6 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
   subagents: 'rightSidebar.tabs.kinds.subagents',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
-  'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
 };
 
 /**

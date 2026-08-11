@@ -1,6 +1,6 @@
 /** 「资源用量」：单层紧凑进程表，数据与终止授权均由 main 提供。 */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -215,13 +215,16 @@ function EntryRow({
 function LocalResourceUsageBody({
   active,
   shellVisible,
+  onFirstSample,
 }: {
   state: ResourceUsageState;
   active?: boolean;
   shellVisible?: boolean;
+  onFirstSample?: () => void;
 }) {
   const { t } = useTranslation();
   const visible = (active ?? true) && (shellVisible ?? true);
+  const firstSampleReportedRef = useRef(false);
   const [sample, setSample] = useState<ProcessMonitorSample | null>(null);
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [pendingKill, setPendingKill] = useState<ProcessUsageEntry | null>(null);
@@ -244,6 +247,18 @@ function LocalResourceUsageBody({
       releaseProcessMonitorSubscription();
     };
   }, [visible]);
+
+  useEffect(() => {
+    if (visible) return;
+    setSelectedPid(null);
+    setPendingKill(null);
+  }, [visible]);
+
+  useEffect(() => {
+    if (sample === null || firstSampleReportedRef.current) return;
+    firstSampleReportedRef.current = true;
+    onFirstSample?.();
+  }, [onFirstSample, sample]);
 
   useEffect(() => {
     if (selectedPid == null || !sample) return;
@@ -414,6 +429,7 @@ export function ResourceUsageBody({
   ctx: TabKindHostContext;
   active?: boolean;
   shellVisible?: boolean;
+  onFirstSample?: () => void;
 }) {
   const { t } = useTranslation();
 

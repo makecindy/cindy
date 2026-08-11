@@ -4424,6 +4424,7 @@
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
+      "resourceUsage": "リソース使用量",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
