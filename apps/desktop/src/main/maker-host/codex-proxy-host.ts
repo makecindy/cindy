@@ -388,7 +388,7 @@ const GUARDIAN_PROVIDER_SEARCH_TOOL_TYPES = new Set(['web_search', 'x_search']);
  * tools must not let that reviewer initiate an unrelated upstream network
  * action with the approval context.
  */
-function stripGuardianProviderSearchTools(
+function stripProviderSearchTools(
   body: Record<string, unknown>,
 ): Record<string, unknown> {
   if (!Array.isArray(body.tools)) return body;
@@ -427,7 +427,7 @@ function createProviderAwareGuardianReviewerTransform(
       toModel: mainModel,
       providerId: getSessionProvider(sessionId),
     });
-    return stripGuardianProviderSearchTools({ ...body, model: mainModel });
+    return stripProviderSearchTools({ ...body, model: mainModel });
   };
 }
 
@@ -700,10 +700,13 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
       // Keep the already parsed body if the defensive strip result cannot be parsed.
     }
   }
-  if (opts.requestModelOverride && isPlainObject(body)) {
-    body = stripGuardianProviderSearchTools({
+  // Chat Completions has no Responses-native search tool. Codex can attach it
+  // automatically even for an ordinary turn, so remove it before translating
+  // a provider-routed chat request instead of failing the entire request.
+  if (isPlainObject(body) && (opts.requestModelOverride || opts.bridge === 'chat')) {
+    body = stripProviderSearchTools({
       ...body,
-      model: opts.requestModelOverride,
+      ...(opts.requestModelOverride ? { model: opts.requestModelOverride } : {}),
     });
   }
   if (opts.instructions && isPlainObject(body)) {
