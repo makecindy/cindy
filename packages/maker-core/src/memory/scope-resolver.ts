@@ -20,7 +20,9 @@
  *    SSH 直接委托 buildMemoryScopeKey (不在控制端解析远端 git); 本地先归一化。
  *
  * 回落 (一律返回 cwd 原样, 与既有行为完全一致): 非 git 目录 / git 不可用 /
- * 探测超时 / bare repo / 非常规 common-dir 布局 / cwd 不在 toplevel 下。
+ * 探测超时 / bare repo / 非 linked-worktree 布局 (普通 clone / submodule /
+ * --separate-git-dir checkout, gitdir == common-dir) / 非常规 common-dir 布局 /
+ * cwd 不在 toplevel 下。
  * 非仓库目录由 `.git` 标记上溯预检直接短路, 连 git 进程都不 spawn
  * (hasGitMarkerUpward, 与 rev-parse 上溯语义一致)。
  *
@@ -125,7 +127,7 @@ export async function resolveMemoryScopeKey(
 
   const value = (async () => {
     // 非仓库目录预检 (默认探测路径): 没有 .git 标记时 git rev-parse 必然失败,
-    // 直接回落, 省掉两次进程 spawn (也避开 Windows 临时目录的 EPERM 竞争)。
+    // 直接回落, 省掉一次进程 spawn (也避开 Windows 临时目录的 EPERM 竞争)。
     // 注入了 execGit 的调用方显式接管探测, 跳过预检。
     if (!execGit && !(await hasGitMarkerUpward(path.normalize(workingDir)).catch(() => true))) {
       return workingDir;
@@ -139,26 +141,38 @@ export async function resolveMemoryScopeKey(
 
 /**
  * linked worktree cwd → `主仓根 + cwd 相对 worktree 根的子路径`。
- * 探测方式与 desktop WorktreeManager 同模式: 双 rev-parse + path.resolve
- * 解析相对输出 (兼容不支持 --path-format 的旧 git)。失败抛错由调用方回落。
+ * 探测方式与 desktop WorktreeManager 同模式: rev-parse + path.resolve
+ * 解析相对输出 (兼容不支持 --path-format 的旧 git)。单次 rev-parse 拿
+ * toplevel / git-dir / git-common-dir 三个值 (输出顺序与参数一致), 每次
+ * 解析只 spawn 一次 git。失败抛错由调用方回落。
  */
 async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): Promise<string> {
   const cwd = path.normalize(workingDir);
-  const [toplevelRaw, commonDirRaw] = await Promise.all([
-    execGit(['rev-parse', '--show-toplevel'], cwd),
-    execGit(['rev-parse', '--git-common-dir'], cwd),
-  ]);
-  const toplevel = resolveGitDirOutput(toplevelRaw, cwd);
-  const commonDir = resolveGitDirOutput(commonDirRaw, cwd);
-  if (!toplevel || !commonDir) return workingDir;
+  const out = await execGit(
+    ['rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir'],
+    cwd,
+  );
+  const [toplevelRaw, gitDirRaw, commonDirRaw] = out.split('\n');
+  const toplevel = resolveGitDirOutput(toplevelRaw ?? '', cwd);
+  const gitDir = resolveGitDirOutput(gitDirRaw ?? '', cwd);
+  const commonDir = resolveGitDirOutput(commonDirRaw ?? '', cwd);
+  if (!toplevel || !gitDir || !commonDir) return workingDir;
+
+  // 只在真正的 linked worktree 上归一化: gitdir ≠ common-dir
+  // (linked worktree 的 gitdir 是 `<主仓>/.git/worktrees/<name>`)。
+  // 普通 clone / submodule / `git clone --separate-git-dir` 的 gitdir 与
+  // common-dir 相同 — separate-git-dir 的 common-dir basename 恰好也是
+  // `.git`, 不先排除会把主仓根错误推导到 git 存储目录, 静默打开无关 Store
+  // (Codex review on #2399)。
+  if (samePath(gitDir, commonDir)) return workingDir;
 
   // 主仓根只从 `<主仓>/.git` 形态的 common-dir 推导; bare repo / 非常规
-  // 布局 (gitdir 指向自定义位置) 无法可靠推断主仓根, 回落原样。
+  // 布局无法可靠推断主仓根, 回落原样。
   if (path.basename(commonDir) !== '.git') return workingDir;
   const mainRoot = path.dirname(commonDir);
 
-  // 主工作树 / 普通 clone: toplevel 即主仓根, 无需归一化, 原样返回
-  // (「本地原样返回」契约对非 worktree 场景完全保持)。
+  // 防御: toplevel 即主仓根时无需归一化 (gitdir ≠ common-dir 的异常布局),
+  // 原样返回, 保持「本地原样返回」契约。
   if (samePath(toplevel, mainRoot)) return workingDir;
 
   // linked worktree: 子路径映射回主仓根下 (该路径在主仓可以不存在 —
