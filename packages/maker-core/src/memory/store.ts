@@ -187,6 +187,9 @@ export class MakerMemoryStore {
   // ── 检索 ─────────────────────────────────────────────────────────────────
 
   async search(query: string, opts?: SearchOptions): Promise<SearchHit[]> {
+    // 读守卫 (review #2388 Codex 10th P2): 与 list/read/getIndex 一致,
+    // 边界不得把旧 owner 的 FTS 检索结果返回给新会话。
+    this.assertScopeOk();
     await this.init();
     return this.fts.search(query, opts);
   }

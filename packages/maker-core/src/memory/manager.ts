@@ -172,17 +172,11 @@ export class MakerMemoryManager {
         this.rebindEnabled();
       }
       // 换根/首次锚定后新 owner 若关闭了 maker memory (enabled=false), 调用方
-      // 可能已持过期的 isEnabled()=true 通过检查 (withStore / session opts 快照)
-      // — 这里必须 fail-closed, 不得继续打开新 owner 的 store (review #2388
-      // Codex 5th P1: rebind 到 disabled owner 后应立即停止)。
-      // 仅在 host 提供 reloadEnabled (desktop) 时判定: 静态宿主/测试无 rebind
-      // 语义, initialEnabled=false 属正常 disabled 态, 由调用方 isEnabled 拦截。
-      if (this.deps.reloadEnabled && !this.enabled) {
-        throw new MemoryError(
-          'not-ready',
-          'maker memory disabled for current owner scope; refusing to open store',
-        );
-      }
+      // 可能已持过期的 isEnabled()=true 通过检查 — 打开 store 路径必须
+      // fail-closed (见 getStore 的 disabled 检查)。
+      // 注意 disabled 检查**不**放在这里: resetAll/resetDigests 等清理路径也走
+      // ensureOwnerScope, 用户关闭 memory 后仍需能清空已有记忆 — 重置入口按
+      // 「不论 makerEnabled 值都能清」语义工作 (review #2388 Codex 10th P2)。
     }
     if (this.resolvedBasePath === null) {
       this.logger.warn('maker memory owner scope unavailable — refusing ephemeral fallback', {
@@ -347,13 +341,30 @@ export class MakerMemoryManager {
    * key 语义: 本地会话传 workdir 绝对路径; SSH remote 会话传
    * buildMemoryScopeKey 产出的 `ssh:<hostId>:<path>` 复合键 (调用方负责,
    * manager 不自己判远端) — 见 storage.ts buildMemoryScopeKey。
+   *
+   * opts.skipDisabledCheck: 清理路径 (resetWorkdir) 用 — 用户关闭 maker memory
+   * 后仍需能清空已有记忆, 重置入口按「不论 makerEnabled 值都能清」语义工作
+   * (review #2388 Codex 10th P2)。
    */
-  async getStore(absWorkdir: string): Promise<MakerMemoryStore> {
+  async getStore(
+    absWorkdir: string,
+    opts?: { skipDisabledCheck?: boolean },
+  ): Promise<MakerMemoryStore> {
     if (!absWorkdir || absWorkdir.length === 0) {
       throw new Error('MakerMemoryManager.getStore: absWorkdir required');
     }
     // owner 作用域守卫: 缺 owner 直接拒绝 (不建临时库), scope 变化则换根。
     this.ensureOwnerScope();
+    // 打开 store 路径的 disabled 检查 (review #2388 Codex 5th P1): 调用方
+    // 可能已持过期 isEnabled()=true 快照 (withStore / session opts) 通过检查,
+    // 换根后 enabled=false 不得继续打开新 owner store; 仅 host 提供
+    // reloadEnabled 时判定 (静态宿主无 rebind 语义, disabled 由 isEnabled 拦)。
+    if (!opts?.skipDisabledCheck && this.deps.reloadEnabled && !this.enabled) {
+      throw new MemoryError(
+        'not-ready',
+        'maker memory disabled for current owner scope; refusing to open store',
+      );
+    }
     const cached = this.stores.get(absWorkdir);
     if (cached) return cached.store;
 
@@ -427,9 +438,9 @@ export class MakerMemoryManager {
 
   // ── 重置 ─────────────────────────────────────────────────────────────────
 
-  /** 清空某 workdir 全部 memory (UI 调) */
+  /** 清空某 workdir 全部 memory (UI 调) — 清理路径, 绕过 disabled 检查 */
   async resetWorkdir(absWorkdir: string): Promise<{ removedCount: number }> {
-    const store = await this.getStore(absWorkdir);
+    const store = await this.getStore(absWorkdir, { skipDisabledCheck: true });
     return store.resetAll();
   }
 

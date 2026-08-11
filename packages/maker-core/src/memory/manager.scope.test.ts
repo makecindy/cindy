@@ -357,4 +357,28 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     await expect(manager.getStore(WORKDIR)).rejects.toThrow(/memory:not-ready/);
     manager.dispose();
   });
+
+  it('disabled owner 下 resetAll/resetWorkdir 仍可清空 (review Codex 10th P2)', async () => {
+    let currentScope = 'cloud:disabled:2';
+    let enabledForOwner = false;
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => currentScope,
+      reloadEnabled: () => enabledForOwner,
+      initialEnabled: false,
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+    // 打开 store 被拒 (disabled) — 正常工具/会话路径
+    await expect(manager.getStore(WORKDIR)).rejects.toThrow(/memory:not-ready/);
+    // 清理路径仍允许: 用户关闭 memory 后要能删掉已有记忆
+    const viaManager = await manager.resetAll();
+    expect(viaManager.removedCount).toBe(0);
+    const viaWorkdir = await manager.resetWorkdir(WORKDIR);
+    expect(viaWorkdir.removedCount).toBe(0);
+    manager.dispose();
+  });
 });
