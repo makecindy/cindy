@@ -1453,18 +1453,67 @@ function cmdsubTokens(text: string): string[] {
   return tokens;
 }
 
-/** Evaluate a constant integer expression made of literals and arithmetic. */
+/**
+ * Evaluate a constant integer expression made of literals and arithmetic
+ * (`60*2`, `0x3c*2`, `(1+2)*3`). A hand-written recursive-descent parser is
+ * used instead of eval: the expression is validated character-by-character
+ * before any evaluation runs.
+ */
 function evalConstantInt(expr: string): number | null {
-  const normalized = expr
+  const text = expr
     .replace(/\s+/g, '')
     .replace(/0x([0-9a-fA-F]+)/g, (_, hex) => String(parseInt(hex, 16)));
-  if (!/^[\d()+\-*/%]+$/.test(normalized)) return null;
-  try {
-    const value = Function(`"use strict"; return (${normalized});`)();
-    return typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
-  } catch {
-    return null;
-  }
+  if (!/^[\d()+\-*/%]+$/.test(text)) return null;
+  let index = 0;
+  const peek = (): string => text[index] ?? '';
+  const expect = (char: string): boolean => {
+    if (peek() === char) {
+      index += 1;
+      return true;
+    }
+    return false;
+  };
+  const parseAddSub = (): number | null => {
+    let value = parseMulDiv();
+    while (value !== null && (peek() === '+' || peek() === '-')) {
+      const op = text[index]!;
+      index += 1;
+      const rhs = parseMulDiv();
+      if (rhs === null) return null;
+      value = op === '+' ? value + rhs : value - rhs;
+    }
+    return value;
+  };
+  const parseMulDiv = (): number | null => {
+    let value = parseUnary();
+    while (value !== null && (peek() === '*' || peek() === '/' || peek() === '%')) {
+      const op = text[index]!;
+      index += 1;
+      const rhs = parseUnary();
+      if (rhs === null) return null;
+      if (op === '*') value *= rhs;
+      else value = rhs === 0 ? NaN : op === '/' ? value / rhs : value % rhs;
+    }
+    return value;
+  };
+  const parseUnary = (): number | null => {
+    if (expect('-')) {
+      const value = parseUnary();
+      return value === null ? null : -value;
+    }
+    if (expect('(')) {
+      const value = parseAddSub();
+      if (value === null || !expect(')')) return null;
+      return value;
+    }
+    const start = index;
+    while (peek() >= '0' && peek() <= '9') index += 1;
+    if (start === index) return null;
+    return parseInt(text.slice(start, index), 10);
+  };
+  const result = parseAddSub();
+  if (result === null || index !== text.length) return null;
+  return Number.isFinite(result) ? Math.trunc(result) : null;
 }
 
 /**
@@ -1505,7 +1554,9 @@ function decodedCharCodePieces(value: string): string[] {
   )) {
     pushReversed(match[1] ?? '');
   }
-  for (const match of value.matchAll(/\b(?:chr|String\.fromCharCode)\(([^)]*)\)/g)) {
+  for (const match of value.matchAll(
+    /\b(?:chr|String\.fromCharCode)\(((?:[^()]|\([^()]*\))*)\)/g,
+  )) {
     const numbers = (match[1] ?? '')
       .split(',')
       .map((part) => part.trim())

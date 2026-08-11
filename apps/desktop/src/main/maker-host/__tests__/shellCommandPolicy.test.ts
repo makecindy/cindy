@@ -310,6 +310,18 @@ os.system(chr(60*2)+chr(99)+chr(114)+chr(117)+chr(110)+chr(32)+chr(115)+chr(105)
 PY`,
     `python3 - <<'PY'
 import os
+os.system(chr((60*2))+chr(99)+chr(114)+chr(117)+chr(110))
+PY`,
+    `python3 - <<'PY'
+import os
+os.system(chr(2*60)+chr(99)+chr(114)+chr(117)+chr(110))
+PY`,
+    `python3 - <<'PY'
+import os
+os.system(chr(120%120+120)+chr(99)+chr(114)+chr(117)+chr(110))
+PY`,
+    `python3 - <<'PY'
+import os
 os.system("".join(chr(c) for c in [60*2, 99, 114, 117, 110, 32, 115, 105, 109, 99, 116, 108]))
 PY`,
     `python3 - <<'PY'
@@ -498,6 +510,12 @@ PY`,
     `python3 - <<'PY'
 def g(n): return n
 print(chr(g(65)))
+PY`,
+    `python3 - <<'PY'
+print(chr(-1))
+PY`,
+    `python3 - <<'PY'
+print(chr(60*))
 PY`,
     `python3 - <<'PY'
 print("\\x78foo")
