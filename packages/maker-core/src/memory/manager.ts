@@ -106,6 +106,8 @@ export interface SetEnabledResult {
 interface PooledEntry {
   store: MakerMemoryStore;
   db: Database.Database;
+  /** 入池时的池世代 — resetAll 后 +1, getStore 命中旧世代时惰性关闭重建 */
+  generation: number;
 }
 
 const MEMORY_SUBDIR = 'maker-memory';
@@ -121,6 +123,21 @@ export class MakerMemoryManager {
    * 注入的 ownerScopeKey 保证脱敏（不落明文 owner id）。
    */
   private activeScopeKey: string | null = null;
+  /**
+   * 池世代 (review #2388 Greptile 16th): resetAll 清空全部 workdir 后 +1,
+   * 池内所有旧世代 store 惰性失效 — getStore 命中旧世代时 close + 重建。
+   * 不立即关闭任何 store: 已返回给调用方的实例 (可能正在使用) 不被误伤。
+   */
+  private poolGeneration = 0;
+  /**
+   * resetAll 进行中标志: 期间并发 getStore 一律拒绝 (not-ready)。
+   * 两个目的:
+   *  - 删除目录时池中 db 若仍打开 (better-sqlite3 占用 fts.db) 会 EBUSY —
+   *    resetAll 开头 closeAllStores 清池, 期间拒绝新入池, 删除无占用;
+   *  - 消除 resetAll 与并发 getStore 同 workdir 的固有竞态 (Greptile 13th/16th
+   *    反复追的「清理实时池 vs 误关在用 store」在无并发时不再存在)。
+   */
+  private resetInFlight = false;
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -379,8 +396,23 @@ export class MakerMemoryManager {
         'maker memory disabled for current owner scope; refusing to open store',
       );
     }
+    // resetAll 进行中 (review #2388 Greptile 16th): 删除期间入池会导致目录被删后
+    // 残留失效条目 / EBUSY — 并发 getStore 一律拒绝, 调用方重试。
+    if (this.resetInFlight) {
+      throw new MemoryError('not-ready', 'memory reset in progress; retry shortly');
+    }
     const cached = this.stores.get(absWorkdir);
-    if (cached) return cached.store;
+    if (cached) {
+      // 旧世代 (resetAll 后) 的缓存条目惰性失效: close + 移除, 走重建;
+      // 不立即关闭已返回给调用方的实例 (review #2388 Greptile 16th)。
+      if (cached.generation === this.poolGeneration) return cached.store;
+      try {
+        cached.db.close();
+      } catch {
+        /* swallow */
+      }
+      this.stores.delete(absWorkdir);
+    }
 
     // 异步初始化期间的竞态锚点 (review #2388 P1): 整个流程用入口捕获的 scope +
     // root, 不再跨 await re-read 动态根; 完成后复核 scope 未变才提交入池。
@@ -442,16 +474,24 @@ export class MakerMemoryManager {
       );
     }
     // 并发去重: 同 workdir 的并发 getStore 可能已把 store 提交入池, 复用池内实例。
+    // 仅复用同世代的 (resetAll 后旧世代条目先关闭, 由本调用重建覆盖)。
     const existing = this.stores.get(absWorkdir);
     if (existing) {
+      if (existing.generation === this.poolGeneration) {
+        try {
+          db.close();
+        } catch {
+          /* swallow */
+        }
+        return existing.store;
+      }
       try {
-        db.close();
+        existing.db.close();
       } catch {
         /* swallow */
       }
-      return existing.store;
     }
-    this.stores.set(absWorkdir, { store, db });
+    this.stores.set(absWorkdir, { store, db, generation: this.poolGeneration });
     this.logger.debug('memory store opened', { workdir: absWorkdir, sanitized });
     return store;
   }
@@ -551,74 +591,58 @@ export class MakerMemoryManager {
     // 竞态锚点 (review #2388 P1): 捕获 scope + root, 跨 await 不再 re-read 动态根;
     // 每次目录删除前复核, owner 已切换则中止, 绝不递归删新 owner 的 maker-memory。
     const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
-    const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
-    // 入口池快照 (review #2388 Greptile 12th): 删除 await 期间 owner 可能切换,
-    // 新 owner 的并发 getStore 会换根重建 store 入池 — 结尾只能关闭/移除**本
-    // 次操作开始时**的 entry, 绝不碰新加入的 store。
-    const storeSnapshot = [...this.stores.entries()];
-    let total = 0;
-    // 还没 open 的 workdir 文件也要清: 扫 basePath/maker-memory 下所有目录
-    const fs = await import('node:fs/promises');
-    this.assertScopeUnchanged(scopeAtEntry);
-    let entries: string[] = [];
+    // 置位并发拒绝 (review #2388 Greptile 16th): 删除期间不得有新 store 入池。
+    this.resetInFlight = true;
     try {
-      entries = await fs.readdir(memoryRoot);
-    } catch {
-      return { removedCount: 0 };
-    }
-    for (const entry of entries) {
-      const dir = path.join(memoryRoot, entry);
+      // 先关闭并清空池 — 池中 db 打开着会占 fts.db 导致 fs.rm EBUSY;
+      // 入口时已存在的 store 在清空语义下关闭合理 (已返回实例在 reset 后本就失效)。
+      this.closeAllStores();
+      const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
+      let total = 0;
+      // 还没 open 的 workdir 文件也要清: 扫 basePath/maker-memory 下所有目录
+      const fs = await import('node:fs/promises');
+      this.assertScopeUnchanged(scopeAtEntry);
+      let entries: string[] = [];
       try {
-        const stat = await fs.stat(dir);
-        if (!stat.isDirectory()) continue;
-        this.assertScopeUnchanged(scopeAtEntry);
-        await fs.rm(dir, { recursive: true, force: true });
-        total += 1;
-        // 目录已删 — 池中指向它的 store 全部失效 (review #2388 Greptile 13th):
-        // 删除 await 期间同 owner 的并发 getStore 可能打开该 workdir 入池,
-        // 快照清理碰不到它, 这里按 sanitized 目录名匹配实时池移除, 防止后续
-        // getStore 复用指向已删目录的条目。
-        // 先复核 scope (review #2388 Greptile 14th): fs.rm 的 await 窗口后若
-        // owner 已切换 (换根清池, 新 owner 的并发 getStore 可能同 workdir 入池),
-        // 不得按目录名关闭/移除新 owner 正在使用的 store — 立即中止 fail-closed。
-        this.assertScopeUnchanged(scopeAtEntry);
-        for (const [workdirKey, { db: staleDb }] of [...this.stores]) {
-          if (memoryScopeDirName(workdirKey) !== entry) continue;
-          try {
-            staleDb.close();
-          } catch {
-            /* swallow */
-          }
-          this.stores.delete(workdirKey);
-        }
-      } catch (e) {
-        if (e instanceof MemoryError && e.code === 'not-ready') throw e;
-        this.logger.warn('resetAll: failed to remove workdir memory dir', {
-          dir,
-          error: String(e),
-        });
+        entries = await fs.readdir(memoryRoot);
+      } catch {
+        return { removedCount: 0 };
       }
+      for (const entry of entries) {
+        const dir = path.join(memoryRoot, entry);
+        try {
+          const stat = await fs.stat(dir);
+          if (!stat.isDirectory()) continue;
+          this.assertScopeUnchanged(scopeAtEntry);
+          await fs.rm(dir, { recursive: true, force: true });
+          total += 1;
+        } catch (e) {
+          if (e instanceof MemoryError && e.code === 'not-ready') throw e;
+          this.logger.warn('resetAll: failed to remove workdir memory dir', {
+            dir,
+            error: String(e),
+          });
+        }
+      }
+      // 删除后复核 (review #2388 Greptile 5th): 目标 root 在入口已固定为操作开始时
+      // owner (不会误删新 owner), 但删除期间 owner 若已切换, 结果不可信 ——
+      // fail-closed 抛 not-ready, 调用方不得按「成功清空」对待。
+      if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
+        this.logger.warn('resetAll crossed owner boundary; aborting as not-ready', {
+          scopeAtEntry,
+        });
+        throw new MemoryError(
+          'not-ready',
+          'owner scope changed during resetAll; result is partial and must not be trusted',
+        );
+      }
+      // 池世代兜底失效 (review #2388 Greptile 13th/16th): 即使有漏网旧条目,
+      // getStore 命中旧世代也会 close + 重建, 不残留指向已删目录的条目。
+      this.poolGeneration += 1;
+      return { removedCount: total };
+    } finally {
+      this.resetInFlight = false;
     }
-    // 仅关闭/移除入口快照内的 entry — 已失效 (旧 owner) 的 db 全部 close;
-    // 若 scope 未变则等价于清空池; 若已切换, 快照内 db 可能已被 closeAllStores
-    // 关闭 (幂等), 且**不得**动并发新加入的新 owner store。
-    for (const [workdir, { db }] of storeSnapshot) {
-      try { db.close(); } catch { /* swallow */ }
-      if (this.stores.get(workdir)?.db === db) this.stores.delete(workdir);
-    }
-    // 删除后复核 (review #2388 Greptile 5th): 目标 root 在入口已固定为操作开始时
-    // owner (不会误删新 owner), 但删除期间 owner 若已切换, 结果不可信 ——
-    // fail-closed 抛 not-ready, 调用方不得按「成功清空」对待。
-    if (this.deps.ownerScopeKey && this.deps.ownerScopeKey() !== scopeAtEntry) {
-      this.logger.warn('resetAll crossed owner boundary; aborting as not-ready', {
-        scopeAtEntry,
-      });
-      throw new MemoryError(
-        'not-ready',
-        'owner scope changed during resetAll; result is partial and must not be trusted',
-      );
-    }
-    return { removedCount: total };
   }
 
   // ── Review (LLM 自审) ────────────────────────────────────────────────────

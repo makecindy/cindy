@@ -408,4 +408,32 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(manager.isEnabled()).toBe(false);
     manager.dispose();
   });
+
+  it('resetAll 清空目录并重建 store (review Greptile 16th)', async () => {
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => 'cloud:abc:1',
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+    const storeA = await manager.getStore(WORKDIR);
+    await storeA.write({
+      type: 'project', name: 'a', title: 'A', description: 'd', body: 'b',
+    });
+    expect(existsSync(memoryDirFor(rootA))).toBe(true);
+
+    // resetAll: 开头关闭入口池 (避免 fs.rm EBUSY) + 并发拒绝 → 删除全部目录
+    const result = await manager.resetAll();
+    expect(result.removedCount).toBeGreaterThan(0);
+    expect(existsSync(memoryDirFor(rootA))).toBe(false);
+
+    // 再次 getStore: 池已清空 → 全新 store + 目录重建
+    const storeB = await manager.getStore(WORKDIR);
+    expect(storeB).not.toBe(storeA);
+    expect(existsSync(memoryDirFor(rootA))).toBe(true);
+    manager.dispose();
+  });
 });

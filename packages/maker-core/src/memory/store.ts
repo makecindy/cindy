@@ -109,8 +109,13 @@ export class MakerMemoryStore {
   async init(): Promise<void> {
     if (this.initialized) return;
     await this.storage.init(this.deps.absWorkdir);
+    // storage.init await 后、FTS 副作用前复核 (review #2388 Codex 18th P1):
+    // 首次打开的 getStore 无 withStore 后置检查, 边界不得在此创建旧 owner 的 fts.db。
+    this.assertScopeOk();
     this.fts.init();
     await this.sanityCheck();
+    // sanityCheck 内部多次 await (storage.list + fts.rebuild) 后复核。
+    this.assertScopeOk();
     this.initialized = true;
   }
 
