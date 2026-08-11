@@ -5525,7 +5525,7 @@
         "embedding": "埋め込み",
         "compression": "圧縮",
         "ungrouped": "未分類",
-        "other": "その他のエンドポイント"
+        "other": "その他"
       },
       "search": {
         "placeholder": "{{source}} のモデルを検索…",

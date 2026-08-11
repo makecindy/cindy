@@ -5525,7 +5525,7 @@
         "embedding": "임베딩",
         "compression": "압축",
         "ungrouped": "미분류",
-        "other": "기타 엔드포인트"
+        "other": "기타"
       },
       "search": {
         "placeholder": "{{source}} 모델 검색…",

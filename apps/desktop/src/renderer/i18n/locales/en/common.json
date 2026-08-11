@@ -5527,7 +5527,7 @@
         "embedding": "Embeddings",
         "compression": "Compression",
         "ungrouped": "Ungrouped",
-        "other": "Other Endpoints"
+        "other": "Other"
       },
       "search": {
         "placeholder": "Search {{source}} models…",

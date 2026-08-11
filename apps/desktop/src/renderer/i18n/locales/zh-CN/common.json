@@ -5521,7 +5521,7 @@
         "embedding": "向量",
         "compression": "压缩",
         "ungrouped": "未分组",
-        "other": "其它端点"
+        "other": "其它"
       },
       "search": {
         "placeholder": "搜索 {{source}} 的模型…",
