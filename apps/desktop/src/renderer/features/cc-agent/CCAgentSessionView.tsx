@@ -181,6 +181,7 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -588,19 +589,17 @@ export function CCAgentSessionView({
         return openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY);
       })
       .catch(() => undefined);
-    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged(
-      (payload, ownerStamp) => {
-        if (
-          disposed ||
-          !isDataOwnerPushCurrent(ownerStamp) ||
-          payload.runId === null ||
-          payload.sessionId !== sessionId
-        ) {
-          return;
-        }
-        void openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY).catch(() => undefined);
-      },
-    );
+    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
+      if (
+        disposed ||
+        !isDataOwnerPushCurrent(ownerStamp) ||
+        payload.runId === null ||
+        payload.sessionId !== sessionId
+      ) {
+        return;
+      }
+      void openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY).catch(() => undefined);
+    });
     return () => {
       disposed = true;
       unsubscribe();
@@ -1456,6 +1455,43 @@ export function CCAgentSessionView({
     remoteDeviceId,
     sessionId,
     t,
+  ]);
+  useEffect(() => {
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type !== 'command') return false;
+      if (action.commandId === 'approval.approve') {
+        if (pendingPermission) {
+          respondToPermission({ behavior: 'allow' });
+          return true;
+        }
+        if (pendingPlanReview) {
+          respondToPlanReview(pendingPlanReview.requestId, true);
+          return true;
+        }
+        return false;
+      }
+      if (action.commandId === 'approval.decline') {
+        if (pendingPermission) {
+          respondToPermission({
+            behavior: 'deny',
+            message: 'User denied',
+            decisionClassification: 'user_reject',
+          });
+          return true;
+        }
+        if (pendingPlanReview) {
+          cancelPlanReview(pendingPlanReview.requestId);
+          return true;
+        }
+      }
+      return false;
+    });
+  }, [
+    cancelPlanReview,
+    pendingPermission,
+    pendingPlanReview,
+    respondToPermission,
+    respondToPlanReview,
   ]);
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
   const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
@@ -4638,10 +4674,11 @@ export function CCAgentSessionView({
                       // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
                       // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
                       // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
-                      compactChannel !== null
-                        && !(realAgentKind === 'pi' && !!session?.remoteHostId)
-                        && session != null && agentStatus.contextTokens > 0
-                        && !(compactChannel === 'compact-session' && agentStatus.isRunning)
+                      compactChannel !== null &&
+                      !(realAgentKind === 'pi' && !!session?.remoteHostId) &&
+                      session != null &&
+                      agentStatus.contextTokens > 0 &&
+                      !(compactChannel === 'compact-session' && agentStatus.isRunning)
                         ? handleCompactRequest
                         : undefined
                     }

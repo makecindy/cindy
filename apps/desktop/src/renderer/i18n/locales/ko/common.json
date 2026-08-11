@@ -3241,6 +3241,18 @@
         "openAria": "Work Louder Codex Micro 설정 열기",
         "back": "키보드 단축키로 돌아가기",
         "retry": "다시 시도",
+        "device": {
+          "title": "기기",
+          "firmware": "펌웨어 {{version}}",
+          "inputMonitoring": {
+            "label": "입력 모니터링",
+            "granted": "macOS가 Cindy의 키보드 입력 수신을 허용했습니다.",
+            "denied": "macOS가 키보드 입력을 차단하고 있습니다. 시스템 설정에서 Cindy를 허용하세요.",
+            "unknown": "Cindy가 아직 macOS 입력 모니터링 권한을 확인하지 않았습니다.",
+            "not-required": "이 플랫폼에서는 입력 모니터링이 필요하지 않습니다.",
+            "open": "시스템 설정 열기"
+          }
+        },
         "errors": {
           "load": "Codex Micro 설정을 불러오지 못했습니다",
           "save": "Codex Micro 설정을 저장하지 못했습니다"
@@ -3259,7 +3271,11 @@
             "connected": "USB가 연결되었습니다. Cindy가 키 입력을 수신하고 작업 조명을 동기화합니다.",
             "not-detected": "데이터 전송을 지원하는 USB 케이블로 연결하세요. ChatGPT가 장치를 사용 중이면 종료하세요.",
             "error": "Cindy가 키보드와 통신하지 못해 자동으로 다시 시도하고 있습니다.",
-            "unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요."
+            "unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요.",
+            "connection-timeout": "Work Louder 서비스가 시간 내에 응답하지 않았습니다. Cindy가 자동으로 다시 시도합니다.",
+            "connection-failed": "Work Louder 서비스를 시작하지 못했습니다. Cindy가 자동으로 다시 시도합니다.",
+            "permission-required": "macOS가 키보드 접근을 거부했습니다. 입력 모니터링에서 Cindy를 허용한 뒤 다시 시도하세요.",
+            "sdk-unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요."
           }
         },
         "lighting": {
@@ -3289,15 +3305,87 @@
           "source": {
             "label": "작업 순서",
             "description": "AG00~AG05는 최근 활성 작업 6개 순서이며 고정 순서는 사용하지 않습니다.",
-            "value": "최근 6개"
+            "value": "최근 6개",
+            "options": {
+              "recent": "최근 작업",
+              "pinned": "고정한 작업",
+              "priority": "우선 작업",
+              "custom": "사용자 지정"
+            }
           },
           "singleTap": {
             "label": "한 번 눌러 Cindy 활성화",
-            "description": "한 번 누르면 해당 작업을 열고 Cindy를 활성화합니다. 끄면 두 번 눌러야 합니다.",
+            "description": "켜면 한 번 눌러 작업을 열고 Cindy를 앞으로 가져옵니다. 꺼도 한 번 누르면 백그라운드에서 작업이 전환되며, 350밀리초 안에 같은 키를 다시 누르면 Cindy가 앞으로 옵니다.",
             "aria": "Agent 키를 한 번 눌러 Cindy 활성화"
           },
+          "newTask": "새 작업",
           "slot": "최근 {{position}}번째",
           "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기"
+        },
+        "commandKeys": {
+          "title": "명령 키",
+          "keycap": "키캡 선택",
+          "builtIn": "키캡 기본 동작 사용"
+        },
+        "microphone": {
+          "title": "마이크",
+          "mode": {
+            "label": "마이크 모드",
+            "description": "마이크 키를 눌러 말하기로 사용할지, 음성 채팅 전환으로 사용할지 선택합니다.",
+            "options": {
+              "push-to-talk": "눌러서 말하기",
+              "voice-chat": "음성 채팅"
+            }
+          },
+          "separate": {
+            "label": "마이크 키 분리",
+            "description": "ACT10과 ACT11을 하나의 MIC 키로 합치지 않고 따로 사용합니다."
+          }
+        },
+        "analog": {
+          "title": "조이스틱",
+          "description": "조이스틱 각 방향의 동작을 선택합니다.",
+          "directions": {
+            "up": "위",
+            "right": "오른쪽",
+            "down": "아래",
+            "left": "왼쪽"
+          }
+        },
+        "encoder": {
+          "title": "인코더",
+          "mode": {
+            "label": "인코더 모드",
+            "description": "인코더를 돌리거나 눌렀을 때 제어할 기능을 선택합니다.",
+            "options": {
+              "composer-navigation": "입력창 이동",
+              "reasoning": "추론 강도",
+              "conversation-scroll": "대화 스크롤",
+              "custom": "사용자 지정"
+            }
+          },
+          "gestures": {
+            "left": "왼쪽으로 돌리기",
+            "right": "오른쪽으로 돌리기",
+            "click": "누르기",
+            "longPress": "길게 누르기"
+          },
+          "customDescription": "이 인코더 제스처의 동작을 선택합니다."
+        },
+        "actions": {
+          "choose": "동작 선택",
+          "none": "동작 없음",
+          "tasks": "작업",
+          "commands": "명령",
+          "keycaps": "키캡",
+          "skills": "스킬"
+        },
+        "layout": {
+          "reset": {
+            "title": "키 배치 초기화",
+            "description": "작업 순서나 조명 설정은 유지하고 키캡, 조이스틱, 인코더, 마이크 할당을 초기 상태로 되돌립니다.",
+            "button": "배치 초기화"
+          }
         }
       },
       "errors": {

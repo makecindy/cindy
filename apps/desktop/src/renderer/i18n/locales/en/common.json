@@ -3242,6 +3242,18 @@
         "openAria": "Open Work Louder Codex Micro settings",
         "back": "Back to keyboard shortcuts",
         "retry": "Try again",
+        "device": {
+          "title": "Device",
+          "firmware": "Firmware {{version}}",
+          "inputMonitoring": {
+            "label": "Input Monitoring",
+            "granted": "macOS allows Cindy to receive keyboard input.",
+            "denied": "macOS is blocking keyboard input. Allow Cindy in System Settings.",
+            "unknown": "Cindy has not checked the macOS Input Monitoring permission yet.",
+            "not-required": "Input Monitoring is not required on this platform.",
+            "open": "Open System Settings"
+          }
+        },
         "errors": {
           "load": "Failed to load Codex Micro settings",
           "save": "Failed to save Codex Micro settings"
@@ -3260,7 +3272,11 @@
             "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
             "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
             "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
-            "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy."
+            "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+            "connection-timeout": "The Work Louder service did not respond in time. Cindy will retry automatically.",
+            "connection-failed": "The Work Louder service failed to start. Cindy will retry automatically.",
+            "permission-required": "macOS denied keyboard access. Allow Cindy in Input Monitoring, then try again.",
+            "sdk-unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy."
           }
         },
         "lighting": {
@@ -3290,15 +3306,87 @@
           "source": {
             "label": "Task order",
             "description": "AG00–AG05 follow the six most recently active tasks. Pinned order is ignored.",
-            "value": "Most recent 6"
+            "value": "Most recent 6",
+            "options": {
+              "recent": "Most recent",
+              "pinned": "Pinned",
+              "priority": "Priority",
+              "custom": "Custom"
+            }
           },
           "singleTap": {
             "label": "Focus Cindy with a single tap",
-            "description": "Open the assigned task and focus Cindy with one tap instead of a double tap.",
+            "description": "When enabled, one tap opens the task and brings Cindy forward. When disabled, one tap still switches tasks in the background; a second tap within 350 ms brings Cindy forward.",
             "aria": "Focus Cindy with a single Agent-key tap"
           },
+          "newTask": "New task",
           "slot": "Recent {{position}}",
           "slotAria": "AG{{slot}} opens recent task {{position}}"
+        },
+        "commandKeys": {
+          "title": "Command keys",
+          "keycap": "Choose a keycap",
+          "builtIn": "Use the keycap's built-in action"
+        },
+        "microphone": {
+          "title": "Microphone",
+          "mode": {
+            "label": "Microphone mode",
+            "description": "Choose whether the microphone key is push-to-talk or a voice-chat toggle.",
+            "options": {
+              "push-to-talk": "Push to talk",
+              "voice-chat": "Voice chat"
+            }
+          },
+          "separate": {
+            "label": "Use separate microphone keys",
+            "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
+          }
+        },
+        "analog": {
+          "title": "Joystick",
+          "description": "Choose the action for each joystick direction.",
+          "directions": {
+            "up": "Up",
+            "right": "Right",
+            "down": "Down",
+            "left": "Left"
+          }
+        },
+        "encoder": {
+          "title": "Encoder",
+          "mode": {
+            "label": "Encoder mode",
+            "description": "Choose what turning and pressing the encoder controls.",
+            "options": {
+              "composer-navigation": "Navigate the composer",
+              "reasoning": "Reasoning effort",
+              "conversation-scroll": "Scroll the conversation",
+              "custom": "Custom"
+            }
+          },
+          "gestures": {
+            "left": "Turn left",
+            "right": "Turn right",
+            "click": "Press",
+            "longPress": "Long press"
+          },
+          "customDescription": "Choose the action for this encoder gesture."
+        },
+        "actions": {
+          "choose": "Choose an action",
+          "none": "No action",
+          "tasks": "Tasks",
+          "commands": "Commands",
+          "keycaps": "Keycaps",
+          "skills": "Skills"
+        },
+        "layout": {
+          "reset": {
+            "title": "Reset key layout",
+            "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",
+            "button": "Reset layout"
+          }
         }
       },
       "errors": {

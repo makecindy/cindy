@@ -1,65 +1,117 @@
 import type { AgentIslandSessionActivity } from '../../shared/agentIsland.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
-  WORKLOUDER_CODEX_DEFAULT_SETTINGS,
+  WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+  WORKLOUDER_CODEX_KEYCAP_ACTIONS,
+  cloneWorkLouderCodexSettings,
+  createWorkLouderCodexDefaultSettings,
   workLouderCodexAutoDimMs,
+  type WorkLouderCodexAction,
+  type WorkLouderCodexAgentSlotState,
+  type WorkLouderCodexAnalogDirection,
+  type WorkLouderCodexCommandSlot,
+  type WorkLouderCodexConnectionReason,
   type WorkLouderCodexConnectionStatus,
+  type WorkLouderCodexDeviceState,
+  type WorkLouderCodexRendererAction,
   type WorkLouderCodexSettings,
   type WorkLouderCodexState,
+  type WorkLouderCodexTaskOption,
 } from '../../shared/workLouderCodex.js';
 import {
   applyWorkLouderCodexLightingBrightness,
   createWorkLouderCodexOffFrame,
   createWorkLouderCodexLightingFrame,
   isWorkLouderCodexLightingFrameOff,
+  type WorkLouderCodexHidEvent,
+  type WorkLouderCodexJoystickEvent,
   type WorkLouderCodexLightingFrame,
 } from './protocol.js';
+import type { WorkLouderCodexTaskCatalog } from './taskSlots.js';
 
 const TASK_SLOT_REFRESH_DEBOUNCE_MS = 250;
-const AGENT_KEY_DOUBLE_TAP_MS = 500;
+const AGENT_KEY_DOUBLE_TAP_MS = 350;
+const ENCODER_LONG_PRESS_MS = 500;
+const JOYSTICK_ACTIVATION_DISTANCE = 0.5;
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface WorkLouderCodexLightingSink {
   update(frame: WorkLouderCodexLightingFrame): void;
+  /** Legacy Agent-only hook retained for old host fakes and compatibility tests. */
   setAgentKeyPressHandler(handler: ((slot: number) => void) | null): void;
   setDeviceActivityHandler(handler: (() => void) | null): void;
   setConnectionStatusHandler(
     handler: ((status: WorkLouderCodexConnectionStatus) => void) | null,
   ): void;
+  setHidInputHandler?(handler: ((event: WorkLouderCodexHidEvent) => void) | null): void;
+  setJoystickInputHandler?(handler: ((event: WorkLouderCodexJoystickEvent) => void) | null): void;
+  setDeviceStateHandler?(handler: ((device: WorkLouderCodexDeviceState) => void) | null): void;
+  setConnectionReasonHandler?(
+    handler: ((reason: WorkLouderCodexConnectionReason) => void) | null,
+  ): void;
   dispose(): Promise<void>;
 }
 
-/** Keeps task LEDs and their physical key targets on the same six-slot projection. */
+type TaskCatalogLoader = () => Promise<WorkLouderCodexTaskCatalog | readonly string[]>;
+
+/** Keeps task LEDs, physical controls, and the settings projection on one state machine. */
 export class WorkLouderCodexLightingController {
   private lastFrameKey = '';
   private slotSessionIds: string[] = [];
   private latestActivity: readonly AgentIslandSessionActivity[] = [];
+  private taskCatalog: WorkLouderCodexTaskCatalog = { recent: [], pinned: [], options: [] };
+  private agentSlots: WorkLouderCodexAgentSlotState[] = emptyAgentSlots();
   private slotRefreshVersion = 0;
   private taskSlotsEnabled = false;
   private slotRefreshTimer: Timer | null = null;
   private slotRefreshInFlight: Promise<void> | null = null;
   private slotRefreshInFlightVersion: number | null = null;
   private slotRefreshQueued = false;
-  private settings: WorkLouderCodexSettings = { ...WORKLOUDER_CODEX_DEFAULT_SETTINGS };
+  private settings: WorkLouderCodexSettings = createWorkLouderCodexDefaultSettings();
   private connectionStatus: WorkLouderCodexConnectionStatus = 'connecting';
+  private connectionReason: WorkLouderCodexConnectionReason = null;
+  private device: WorkLouderCodexDeviceState = {
+    ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+    inputMonitoringPermission: process.platform === 'darwin' ? 'unknown' : 'not-required',
+  };
   private stateListeners = new Set<(state: WorkLouderCodexState) => void>();
   private autoDimTimer: Timer | null = null;
   private lightingDimmed = false;
   private lastBaseFrameKey = '';
   private pendingAgentKeyTap: { slot: number; at: number } | null = null;
+  private encoderLongPressTimer: Timer | null = null;
+  private encoderPressed = false;
+  private encoderLongPressed = false;
+  private joystickDirection: WorkLouderCodexAnalogDirection | null = null;
+  private started = false;
 
   constructor(
     private readonly sink: WorkLouderCodexLightingSink,
-    private readonly activateSession: (sessionId: string) => void,
-    private readonly loadSlotSessionIds: () => Promise<readonly string[]> = async () => [],
-  ) {
-    sink.setConnectionStatusHandler((status) => this.handleConnectionStatus(status));
-    sink.setDeviceActivityHandler(() => this.handleDeviceActivity());
-    sink.setAgentKeyPressHandler((slot) => this.handleAgentKeyPress(slot));
+    private readonly activateSession: (sessionId: string, focus?: boolean) => void,
+    private readonly loadTaskCatalog: TaskCatalogLoader = async () => [],
+    private readonly dispatchRendererAction: (action: WorkLouderCodexRendererAction) => void = () =>
+      undefined,
+  ) {}
+
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    this.sink.setConnectionStatusHandler((status) => this.handleConnectionStatus(status));
+    this.sink.setConnectionReasonHandler?.((reason) => this.handleConnectionReason(reason));
+    this.sink.setDeviceStateHandler?.((device) => this.handleDeviceState(device));
+    this.sink.setDeviceActivityHandler(() => this.handleDeviceActivity());
+    if (this.sink.setHidInputHandler) {
+      this.sink.setAgentKeyPressHandler(null);
+      this.sink.setHidInputHandler((event) => this.handleHidInput(event));
+      this.sink.setJoystickInputHandler?.((event) => this.handleJoystickInput(event));
+    } else {
+      this.sink.setAgentKeyPressHandler((slot) => this.handleAgentKeyPress(slot));
+    }
   }
 
   updateSessionActivity(activity: readonly AgentIslandSessionActivity[]): void {
     this.latestActivity = activity;
+    if (this.settings.agentSource === 'priority') this.publishAgentSlots();
     this.updateLightingFrame(true);
     this.scheduleTaskSlotRefresh();
   }
@@ -67,8 +119,14 @@ export class WorkLouderCodexLightingController {
   getState(): WorkLouderCodexState {
     return {
       connectionStatus: this.connectionStatus,
-      settings: { ...this.settings },
-      agentSource: 'recent',
+      connectionReason: this.connectionReason,
+      device: { ...this.device },
+      settings: cloneWorkLouderCodexSettings(this.settings),
+      agentSlots: this.agentSlots.map((slot) => ({
+        ...slot,
+        action: cloneAction(slot.action),
+      })),
+      taskOptions: this.taskCatalog.options.map((task) => ({ ...task })),
       agentSlotCount: WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
     };
   }
@@ -80,9 +138,10 @@ export class WorkLouderCodexLightingController {
   }
 
   applySettings(settings: WorkLouderCodexSettings): void {
-    this.settings = { ...settings };
+    this.settings = cloneWorkLouderCodexSettings(settings);
     this.pendingAgentKeyTap = null;
     this.lightingDimmed = false;
+    this.publishAgentSlots();
     const frame = this.updateLightingFrame();
     this.resetAutoDimTimer(frame);
     this.emitState();
@@ -98,10 +157,12 @@ export class WorkLouderCodexLightingController {
     const refreshVersion = ++this.slotRefreshVersion;
     const refresh = (async () => {
       try {
-        const sessionIds = await this.loadSlotSessionIds();
+        const catalog = normalizeTaskCatalog(await this.loadTaskCatalog());
         if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
-        this.slotSessionIds = sessionIds.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+        this.taskCatalog = catalog;
+        this.publishAgentSlots();
         this.updateLightingFrame(true);
+        this.emitState();
       } finally {
         if (this.slotRefreshInFlightVersion !== refreshVersion) return;
         this.slotRefreshInFlight = null;
@@ -118,36 +179,275 @@ export class WorkLouderCodexLightingController {
   }
 
   async resumeTaskSlots(): Promise<void> {
+    this.start();
     this.clearSlotRefreshTimer();
     const refreshVersion = ++this.slotRefreshVersion;
     try {
-      const sessionIds = await this.loadSlotSessionIds();
+      const catalog = normalizeTaskCatalog(await this.loadTaskCatalog());
       if (refreshVersion !== this.slotRefreshVersion) return;
-      this.slotSessionIds = sessionIds.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+      this.taskCatalog = catalog;
     } catch (error) {
       if (refreshVersion !== this.slotRefreshVersion) return;
-      // Keep the keyboard alive with an empty mapping. Later activity updates will retry
-      // the account-scoped query instead of leaving the keys disabled for this login.
-      this.slotSessionIds = [];
+      this.taskCatalog = { recent: [], pinned: [], options: [] };
       this.taskSlotsEnabled = true;
+      this.publishAgentSlots();
       this.updateLightingFrame(true);
       this.scheduleTaskSlotRefresh();
       throw error;
     }
     this.taskSlotsEnabled = true;
+    this.publishAgentSlots();
     this.updateLightingFrame(true);
+    this.emitState();
   }
 
   suspendTaskSlots(): void {
     this.clearSlotRefreshTimer();
+    this.clearEncoderLongPressTimer();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
     this.slotRefreshQueued = false;
+    this.taskCatalog = { recent: [], pinned: [], options: [] };
+    this.agentSlots = emptyAgentSlots();
     this.slotSessionIds = [];
     this.pendingAgentKeyTap = null;
+    this.joystickDirection = null;
     this.clearAutoDimTimer();
     this.lightingDimmed = false;
     this.updateLightingFrame();
+    this.emitState();
+  }
+
+  dispose(): Promise<void> {
+    this.clearSlotRefreshTimer();
+    this.clearEncoderLongPressTimer();
+    this.clearAutoDimTimer();
+    this.slotRefreshVersion += 1;
+    this.taskSlotsEnabled = false;
+    this.slotRefreshQueued = false;
+    this.started = false;
+    this.sink.setAgentKeyPressHandler(null);
+    this.sink.setHidInputHandler?.(null);
+    this.sink.setJoystickInputHandler?.(null);
+    this.sink.setDeviceStateHandler?.(null);
+    this.sink.setConnectionReasonHandler?.(null);
+    this.sink.setDeviceActivityHandler(null);
+    this.sink.setConnectionStatusHandler(null);
+    this.stateListeners.clear();
+    return this.sink.dispose();
+  }
+
+  private handleHidInput(event: WorkLouderCodexHidEvent): void {
+    this.handleDeviceActivity();
+    const agentMatch = /^AG0([0-5])$/.exec(event.key);
+    if (agentMatch) {
+      if (event.act === 1) this.handleAgentKeyPress(Number(agentMatch[1]));
+      return;
+    }
+    if (event.key.startsWith('ENC')) {
+      this.handleEncoderInput(event);
+      return;
+    }
+    if (/^ACT(?:0[6-9]|1[0-2])$/.test(event.key)) this.handleCommandKeyInput(event);
+  }
+
+  private handleAgentKeyPress(slot: number): void {
+    this.handleDeviceActivity();
+    if (!this.taskSlotsEnabled || slot < 0 || slot >= WORKLOUDER_CODEX_AGENT_SLOT_COUNT) return;
+    const action = this.agentSlots[slot]?.action;
+    if (!action) {
+      this.dispatchRendererAction({ type: 'command', commandId: 'newTask' });
+      void this.refreshTaskSlots().catch(() => undefined);
+      return;
+    }
+    if (action.type === 'task') {
+      const now = Date.now();
+      const previous = this.pendingAgentKeyTap;
+      const isDoubleTap = previous?.slot === slot && now - previous.at <= AGENT_KEY_DOUBLE_TAP_MS;
+      this.pendingAgentKeyTap = isDoubleTap ? null : { slot, at: now };
+      this.activateSession(action.sessionId, this.settings.singleTapAgentKeys || isDoubleTap);
+    } else {
+      this.pendingAgentKeyTap = null;
+      this.executeAction(action, true);
+    }
+    void this.refreshTaskSlots().catch(() => {
+      // The current press always uses the published mapping; refresh affects later presses only.
+    });
+  }
+
+  private handleCommandKeyInput(event: WorkLouderCodexHidEvent): void {
+    const slot = this.commandSlotForKey(event.key);
+    if (!slot) return;
+    const assignment = this.settings.layout.slots[slot];
+    if (assignment.keycapId === 'MIC' || assignment.keycapId === 'MIC1') {
+      if (event.act === 1 || event.act === 0) {
+        this.dispatchRendererAction({
+          type: 'voice',
+          mode: this.settings.layout.voiceButtonMode,
+          phase: event.act === 1 ? 'press' : 'release',
+        });
+      }
+      return;
+    }
+    if (event.act !== 1) return;
+    const action =
+      assignment.action ?? WORKLOUDER_CODEX_KEYCAP_ACTIONS[assignment.keycapId] ?? null;
+    if (action) this.executeAction(action, true);
+  }
+
+  private commandSlotForKey(key: string): WorkLouderCodexCommandSlot | null {
+    if (!this.settings.layout.separateMicrophoneKeys && (key === 'ACT10' || key === 'ACT11')) {
+      return key === 'ACT10' ? 'ACT10_ACT11' : null;
+    }
+    return /^ACT(?:0[6-9]|1[0-2])$/.test(key) ? (key as WorkLouderCodexCommandSlot) : null;
+  }
+
+  private handleEncoderInput(event: WorkLouderCodexHidEvent): void {
+    if (event.act === 2 && (event.key === 'ENC_CW' || event.key === 'ENC_CC')) {
+      const clockwise = event.key === 'ENC_CW';
+      switch (this.settings.layout.encoderMode) {
+        case 'custom':
+          this.executeNullableAction(
+            this.settings.layout.encoder[clockwise ? 'right' : 'left'],
+            true,
+          );
+          break;
+        case 'reasoning':
+          this.dispatchRendererAction({
+            type: 'command',
+            commandId: clockwise
+              ? 'composer.decreaseReasoningEffort'
+              : 'composer.increaseReasoningEffort',
+          });
+          break;
+        case 'conversation-scroll':
+          this.dispatchRendererAction({
+            type: 'command',
+            commandId: clockwise ? 'conversation.scrollUp' : 'conversation.scrollDown',
+          });
+          break;
+        case 'composer-navigation':
+          this.dispatchRendererAction({
+            type: 'keyboard',
+            key: clockwise ? 'ArrowUp' : 'ArrowDown',
+          });
+          break;
+      }
+      return;
+    }
+    if (event.act === 1 && !this.encoderPressed) {
+      this.encoderPressed = true;
+      this.encoderLongPressed = false;
+      this.clearEncoderLongPressTimer();
+      this.encoderLongPressTimer = setTimeout(() => {
+        this.encoderLongPressTimer = null;
+        if (!this.encoderPressed) return;
+        this.encoderLongPressed = true;
+        if (this.settings.layout.encoderMode === 'custom') {
+          this.executeNullableAction(this.settings.layout.encoder.longPress, true);
+        } else {
+          this.dispatchRendererAction({ type: 'command', commandId: 'settings' });
+        }
+      }, ENCODER_LONG_PRESS_MS);
+      this.encoderLongPressTimer.unref?.();
+      return;
+    }
+    if (event.act !== 0 || !this.encoderPressed) return;
+    this.encoderPressed = false;
+    this.clearEncoderLongPressTimer();
+    if (this.encoderLongPressed) {
+      this.encoderLongPressed = false;
+      return;
+    }
+    switch (this.settings.layout.encoderMode) {
+      case 'custom':
+        this.executeNullableAction(this.settings.layout.encoder.click, true);
+        break;
+      case 'conversation-scroll':
+        this.dispatchRendererAction({ type: 'command', commandId: 'conversation.scrollBottom' });
+        break;
+      case 'composer-navigation':
+      case 'reasoning':
+        this.dispatchRendererAction({ type: 'keyboard', key: 'Enter' });
+        break;
+    }
+  }
+
+  private handleJoystickInput(event: WorkLouderCodexJoystickEvent): void {
+    this.handleDeviceActivity();
+    const direction = joystickDirection(event);
+    if (direction === this.joystickDirection) return;
+    this.joystickDirection = direction;
+    if (!direction) return;
+    this.executeNullableAction(this.settings.layout.analogStick[direction], true);
+  }
+
+  private executeNullableAction(action: WorkLouderCodexAction | null, focusTask: boolean): void {
+    if (action) this.executeAction(action, focusTask);
+  }
+
+  private executeAction(action: WorkLouderCodexAction, focusTask: boolean): void {
+    if (action.type === 'task') {
+      this.activateSession(action.sessionId, focusTask);
+    } else if (action.type === 'keycap') {
+      const resolved = WORKLOUDER_CODEX_KEYCAP_ACTIONS[action.keycapId];
+      if (resolved) this.executeAction(resolved, focusTask);
+    } else {
+      this.dispatchRendererAction(action);
+    }
+  }
+
+  private publishAgentSlots(): void {
+    const actions = this.agentActionsForCurrentSource();
+    const titleById = new Map(
+      this.taskCatalog.options.map((task) => [task.id, task.title] as const),
+    );
+    this.agentSlots = Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, slot) => {
+      const action = actions[slot] ?? null;
+      const sessionId = action?.type === 'task' ? action.sessionId : null;
+      return {
+        slot,
+        sessionId,
+        title: sessionId ? (titleById.get(sessionId) ?? sessionId) : actionTitle(action),
+        action: cloneAction(action),
+      };
+    });
+    this.slotSessionIds = this.agentSlots.map((slot) => slot.sessionId ?? '');
+  }
+
+  private agentActionsForCurrentSource(): Array<WorkLouderCodexAction | null> {
+    if (this.settings.agentSource === 'custom') {
+      return this.settings.customAgentKeys.map(cloneAction);
+    }
+    const tasks =
+      this.settings.agentSource === 'pinned'
+        ? this.taskCatalog.pinned
+        : this.settings.agentSource === 'priority'
+          ? this.priorityTasks()
+          : this.taskCatalog.recent;
+    return tasks
+      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
+      .map((task) => ({ type: 'task', sessionId: task.id }));
+  }
+
+  private priorityTasks(): WorkLouderCodexTaskOption[] {
+    const optionById = new Map(this.taskCatalog.options.map((task) => [task.id, task] as const));
+    const recentRank = new Map(
+      this.taskCatalog.options.map((task, index) => [task.id, index] as const),
+    );
+    const prioritized = this.latestActivity
+      .filter((activity) => optionById.has(activity.sessionId))
+      .toSorted((left, right) => {
+        const scoreDiff = activityPriority(right) - activityPriority(left);
+        return (
+          scoreDiff ||
+          (recentRank.get(left.sessionId) ?? 999) - (recentRank.get(right.sessionId) ?? 999)
+        );
+      })
+      .map((activity) => optionById.get(activity.sessionId)!)
+      .filter((task, index, rows) => rows.findIndex((row) => row.id === task.id) === index);
+    const included = new Set(prioritized.map((task) => task.id));
+    return [...prioritized, ...this.taskCatalog.recent.filter((task) => !included.has(task.id))];
   }
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
@@ -155,9 +455,7 @@ export class WorkLouderCodexLightingController {
     const baseFrameKey = JSON.stringify(baseFrame);
     const baseFrameChanged = baseFrameKey !== this.lastBaseFrameKey;
     this.lastBaseFrameKey = baseFrameKey;
-    if (wakeOnBaseFrameChange && baseFrameChanged) {
-      this.lightingDimmed = false;
-    }
+    if (wakeOnBaseFrameChange && baseFrameChanged) this.lightingDimmed = false;
     const brightnessAdjusted = applyWorkLouderCodexLightingBrightness(
       baseFrame,
       this.settings.lightingBrightness,
@@ -172,52 +470,17 @@ export class WorkLouderCodexLightingController {
     return brightnessAdjusted;
   }
 
-  dispose(): Promise<void> {
-    this.clearSlotRefreshTimer();
-    this.clearAutoDimTimer();
-    this.slotRefreshVersion += 1;
-    this.taskSlotsEnabled = false;
-    this.slotRefreshQueued = false;
-    this.sink.setAgentKeyPressHandler(null);
-    this.sink.setDeviceActivityHandler(null);
-    this.sink.setConnectionStatusHandler(null);
-    this.stateListeners.clear();
-    return this.sink.dispose();
-  }
-
-  private handleAgentKeyPress(slot: number): void {
-    this.handleDeviceActivity();
-    if (!this.taskSlotsEnabled) return;
-    if (!this.settings.singleTapAgentKeys) {
-      const now = Date.now();
-      const previous = this.pendingAgentKeyTap;
-      this.pendingAgentKeyTap = { slot, at: now };
-      if (!previous || previous.slot !== slot || now - previous.at > AGENT_KEY_DOUBLE_TAP_MS)
-        return;
-      this.pendingAgentKeyTap = null;
-    }
-    const sessionId = this.slotSessionIds[slot];
-    if (sessionId) this.activateSession(sessionId);
-    void this.refreshTaskSlots().catch(() => {
-      // The pressed key always uses the published mapping; refresh only affects later presses.
-    });
-  }
-
   private scheduleTaskSlotRefresh(immediate = false): void {
     if (!this.taskSlotsEnabled) return;
     if (immediate) this.clearSlotRefreshTimer();
     if (this.slotRefreshTimer) return;
     if (immediate) {
-      void this.refreshTaskSlots().catch(() => {
-        // Keep the last published mapping if the account database is temporarily unavailable.
-      });
+      void this.refreshTaskSlots().catch(() => undefined);
       return;
     }
     this.slotRefreshTimer = setTimeout(() => {
       this.slotRefreshTimer = null;
-      void this.refreshTaskSlots().catch(() => {
-        // Keep the last published mapping if the account database is temporarily unavailable.
-      });
+      void this.refreshTaskSlots().catch(() => undefined);
     }, TASK_SLOT_REFRESH_DEBOUNCE_MS);
   }
 
@@ -227,9 +490,35 @@ export class WorkLouderCodexLightingController {
     this.slotRefreshTimer = null;
   }
 
+  private clearEncoderLongPressTimer(): void {
+    if (!this.encoderLongPressTimer) return;
+    clearTimeout(this.encoderLongPressTimer);
+    this.encoderLongPressTimer = null;
+  }
+
   private handleConnectionStatus(status: WorkLouderCodexConnectionStatus): void {
     if (status === this.connectionStatus) return;
     this.connectionStatus = status;
+    if (status === 'connected') {
+      this.connectionReason = null;
+      if (process.platform === 'darwin') {
+        this.device = { ...this.device, inputMonitoringPermission: 'granted' };
+      }
+    }
+    this.emitState();
+  }
+
+  private handleConnectionReason(reason: WorkLouderCodexConnectionReason): void {
+    if (reason === this.connectionReason) return;
+    this.connectionReason = reason;
+    if (reason === 'permission-required' && process.platform === 'darwin') {
+      this.device = { ...this.device, inputMonitoringPermission: 'denied' };
+    }
+    this.emitState();
+  }
+
+  private handleDeviceState(device: WorkLouderCodexDeviceState): void {
+    this.device = { ...device };
     this.emitState();
   }
 
@@ -261,4 +550,73 @@ export class WorkLouderCodexLightingController {
     const state = this.getState();
     for (const listener of this.stateListeners) listener(state);
   }
+}
+
+function emptyAgentSlots(): WorkLouderCodexAgentSlotState[] {
+  return Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, slot) => ({
+    slot,
+    sessionId: null,
+    title: null,
+    action: null,
+  }));
+}
+
+function normalizeTaskCatalog(
+  value: WorkLouderCodexTaskCatalog | readonly string[],
+): WorkLouderCodexTaskCatalog {
+  if (isTaskCatalog(value)) {
+    return {
+      recent: value.recent.map((task) => ({ ...task })),
+      pinned: value.pinned.map((task) => ({ ...task })),
+      options: value.options.map((task) => ({ ...task })),
+    };
+  }
+  const options = value.map((id) => ({ id, title: id, pinned: false }));
+  return { recent: options.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT), pinned: [], options };
+}
+
+function isTaskCatalog(
+  value: WorkLouderCodexTaskCatalog | readonly string[],
+): value is WorkLouderCodexTaskCatalog {
+  return !Array.isArray(value);
+}
+
+function cloneAction(action: WorkLouderCodexAction | null): WorkLouderCodexAction | null {
+  return action ? { ...action } : null;
+}
+
+function actionTitle(action: WorkLouderCodexAction | null): string | null {
+  if (!action) return null;
+  switch (action.type) {
+    case 'command':
+      return action.commandId;
+    case 'skill':
+      return action.name;
+    case 'keycap':
+      return action.keycapId;
+    case 'composer-text':
+      return action.text;
+    case 'external-url':
+      return action.url;
+    case 'task':
+      return action.sessionId;
+  }
+}
+
+function activityPriority(activity: AgentIslandSessionActivity): number {
+  if (activity.phase === 'needs-interaction') return 5;
+  if (activity.attention) return 4;
+  if (activity.phase === 'error') return 3;
+  if (activity.phase === 'running') return 2;
+  return 1;
+}
+
+function joystickDirection(
+  event: WorkLouderCodexJoystickEvent,
+): WorkLouderCodexAnalogDirection | null {
+  if (event.distance < JOYSTICK_ACTIVATION_DISTANCE) return null;
+  if (event.angle >= 0.625 && event.angle < 0.875) return 'up';
+  if (event.angle >= 0.125 && event.angle < 0.375) return 'down';
+  if (event.angle >= 0.375 && event.angle < 0.625) return 'left';
+  return 'right';
 }

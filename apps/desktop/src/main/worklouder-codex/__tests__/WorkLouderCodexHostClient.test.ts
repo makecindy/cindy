@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
+import { WORKLOUDER_CODEX_EMPTY_DEVICE_STATE } from '../../../shared/workLouderCodex.js';
 import {
   WorkLouderCodexHostClient,
   type WorkLouderCodexChildLike,
@@ -120,7 +121,7 @@ describe('WorkLouderCodexHostClient', () => {
       ]),
     );
 
-    child.emit('message', { kind: 'agent-key', slot: 4 });
+    child.emit('message', { kind: 'hid', event: { key: 'AG04', act: 1 } });
 
     expect(onAgentKeyPress).toHaveBeenCalledWith(4);
   });
@@ -149,6 +150,42 @@ describe('WorkLouderCodexHostClient', () => {
       'connected',
       'not-detected',
     ]);
+  });
+
+  it('forwards HID, joystick, device, and connection reasons from the host', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    const onHid = vi.fn();
+    const onJoystick = vi.fn();
+    const onDevice = vi.fn();
+    const onReason = vi.fn();
+    client.setHidInputHandler(onHid);
+    client.setJoystickInputHandler(onJoystick);
+    client.setDeviceStateHandler(onDevice);
+    client.setConnectionReasonHandler(onReason);
+
+    const device = {
+      ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+      deviceType: 'codex-micro' as const,
+      isUsbConnection: true,
+    };
+    child.emit('message', { kind: 'hid', event: { key: 'ACT12', act: 1 } });
+    child.emit('message', { kind: 'joystick', event: { angle: 0.25, distance: 1 } });
+    child.emit('message', { kind: 'device', device });
+    child.emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'connection-timeout',
+    });
+
+    expect(onHid).toHaveBeenCalledWith({ key: 'ACT12', act: 1 });
+    expect(onJoystick).toHaveBeenCalledWith({ angle: 0.25, distance: 1 });
+    expect(onDevice).toHaveBeenCalledWith(device);
+    expect(onReason).toHaveBeenLastCalledWith('connection-timeout');
   });
 
   it('reports unavailable when the official SDK cannot be resolved', () => {
@@ -190,6 +227,54 @@ describe('WorkLouderCodexHostClient', () => {
 
       expect(fork).toHaveBeenCalledTimes(2);
       expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'apply', frame });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('kills and restarts a host whose native HID connection never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const onStatus = vi.fn();
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+        connectTimeoutMs: 100,
+      });
+      client.setConnectionStatusHandler(onStatus);
+      client.setAgentKeyPressHandler(vi.fn());
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(onStatus).toHaveBeenLastCalledWith('error');
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels the connection watchdog after the first state message', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork: () => child,
+        log: logger(),
+        connectTimeoutMs: 100,
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      child.emit('message', { kind: 'state', status: 'connected' });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(child.kill).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

@@ -11,10 +11,7 @@ import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { Sidebar } from '@/components/sidebar/Sidebar';
-import {
-  getSplitSessionIds,
-  useSplitGroup,
-} from '@/features/cc-agent/splitGroupStore';
+import { getSplitSessionIds, useSplitGroup } from '@/features/cc-agent/splitGroupStore';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
@@ -58,6 +55,7 @@ import { didUserCloseDetachedSidebarWindow } from '@/lib/rsbWindowTransitions';
 import { routeSidebarCommand } from '@/features/right-sidebar/lib/detachedSidebarRouting';
 import { openTerminalFromShortcut } from '@/features/right-sidebar/lib/openTerminalShortcut';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
+import { openUrlInSidebarBrowser } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { useSidebarResize } from '@/hooks/useSidebarResize';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { useSidebarPeek } from '@/hooks/useSidebarPeek';
@@ -69,7 +67,10 @@ import {
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useUpdateNotice } from '@/hooks/useUpdateNotice';
 import { syncNotificationsEnabledToMain } from '@/hooks/useNotificationSettings';
-import { isAgentIslandSupported, toggleAgentIslandSoundEnabled } from '@/hooks/useAgentIslandSettings';
+import {
+  isAgentIslandSupported,
+  toggleAgentIslandSoundEnabled,
+} from '@/hooks/useAgentIslandSettings';
 import { requestNewWorkerFromShortcut } from '@/features/cc-agent/lib/newWorkerShortcut';
 // chat-data-localization F1 V0.4 / M-FE6
 import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
@@ -83,6 +84,7 @@ import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { cleanupLegacyGlobalKeys } from '@/lib/sessionLayoutPrefs';
 import {
   onRequestRightSidebarVisibility,
@@ -431,15 +433,12 @@ export function MainLayout() {
   }, [sidebarPeek.peekState, isRailMode, handleRailModeChange]);
 
   const routeSessionId = resolveAgentIslandVisibleSessionIdFromPath(location.pathname);
-  const splitVisibleSessionIds = useMemo(
-    () => {
-      const splitSessionIds = getSplitSessionIds(splitGroup.root);
-      return routeSessionId && splitSessionIds.length >= 2
-        ? [...new Set([routeSessionId, ...splitSessionIds])]
-        : [];
-    },
-    [routeSessionId, splitGroup.root],
-  );
+  const splitVisibleSessionIds = useMemo(() => {
+    const splitSessionIds = getSplitSessionIds(splitGroup.root);
+    return routeSessionId && splitSessionIds.length >= 2
+      ? [...new Set([routeSessionId, ...splitSessionIds])]
+      : [];
+  }, [routeSessionId, splitGroup.root]);
 
   const syncAgentIslandVisibleSession = useCallback(() => {
     if (!isAgentIslandSupported()) return;
@@ -571,11 +570,16 @@ export function MainLayout() {
       if (!payload || typeof payload !== 'object') return;
       const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
       if (
-        typeof requestId !== 'string' || !requestId ||
-        typeof ghostId !== 'string' || !ghostId ||
-        typeof ghostName !== 'string' || !ghostName ||
-        typeof name !== 'string' || !name ||
-        typeof prompt !== 'string' || !prompt
+        typeof requestId !== 'string' ||
+        !requestId ||
+        typeof ghostId !== 'string' ||
+        !ghostId ||
+        typeof ghostName !== 'string' ||
+        !ghostName ||
+        typeof name !== 'string' ||
+        !name ||
+        typeof prompt !== 'string' ||
+        !prompt
       ) {
         return;
       }
@@ -1083,7 +1087,7 @@ export function MainLayout() {
     [rightSidebarSessionId],
   );
 
-  useAppShortcut('open-terminal', () => {
+  const openTerminalForCurrentTask = useCallback((): boolean => {
     const sessionId = rightSidebarSessionId;
     if (!rightSidebarAvailable || !sessionId) return false;
     openTerminalShortcutAbortRef.current?.abort();
@@ -1114,7 +1118,79 @@ export function MainLayout() {
         }
       });
     return true;
-  });
+  }, [rightSidebarAvailable, rightSidebarSessionId]);
+
+  useAppShortcut('open-terminal', openTerminalForCurrentTask);
+
+  useEffect(() => {
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'keyboard') {
+        const target =
+          document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+        target.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: action.key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        return true;
+      }
+      if (action.type !== 'command') return false;
+      switch (action.commandId) {
+        case 'newTask':
+          navigate('/cc-agent/new');
+          return true;
+        case 'settings':
+          navigate('/settings?tab=shortcuts&workLouderCodex=1');
+          return true;
+        case 'manageTasks':
+          navigate('/cc-agent/scheduled');
+          return true;
+        case 'openSkills':
+          navigate('/skillhub/local');
+          return true;
+        case 'feedback':
+          navigate('/issues');
+          return true;
+        case 'openFolder':
+          navigate('/cc-agent/new');
+          return true;
+        case 'navigateBack':
+          navigate(-1);
+          return true;
+        case 'navigateForward':
+          navigate(1);
+          return true;
+        case 'toggleSidebar':
+          handleToggleSidebar();
+          return true;
+        case 'toggleTerminal':
+          return openTerminalForCurrentTask();
+        case 'openBrowserTab': {
+          const sessionId = rightSidebarSessionIdRef.current;
+          if (!sessionId) return false;
+          void openUrlInSidebarBrowser(sessionId, 'about:blank')
+            .catch((error) => applicationMenuLog.warn('Codex Micro browser action failed', error));
+          return true;
+        }
+        case 'toggleReviewTab': {
+          const sessionId = rightSidebarSessionIdRef.current;
+          if (!sessionId) return false;
+          void ensureHydrated(sessionId)
+            .then(async () => {
+              if (rightSidebarSessionIdRef.current !== sessionId) return;
+              requestRightSidebarVisibility('open', { sessionId });
+              await addOrFocusSingletonTab(sessionId, 'review', null);
+            })
+            .catch((error) => applicationMenuLog.warn('Codex Micro review action failed', error));
+          return true;
+        }
+        default:
+          return false;
+      }
+    });
+  }, [handleToggleSidebar, navigate, openTerminalForCurrentTask]);
 
   // ⌘W / Ctrl+W ('close-tab-or-window', 不可改绑): 用户"在右侧栏内"且有激活
   // tab → 只关那个 tab (与点 tab 上的 × 同路径, terminal 走 onBeforeClose

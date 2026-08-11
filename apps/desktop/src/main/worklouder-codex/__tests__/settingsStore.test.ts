@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createWorkLouderCodexDefaultSettings } from '../../../shared/workLouderCodex.js';
+
 const electronMock = vi.hoisted(() => ({
   userDataDir: '',
 }));
@@ -38,22 +40,14 @@ describe('Work Louder Codex settings store', () => {
   });
 
   it('uses the shipped defaults for missing or invalid persisted values', () => {
-    expect(__testing.normalize(undefined)).toEqual({
-      lightingBrightness: 100,
-      lightingAutoDim: '3-minutes',
-      singleTapAgentKeys: true,
-    });
+    expect(__testing.normalize(undefined)).toEqual(createWorkLouderCodexDefaultSettings());
     expect(
       __testing.normalize({
         lightingBrightness: '50',
         lightingAutoDim: 'sometimes',
         singleTapAgentKeys: 1,
       }),
-    ).toEqual({
-      lightingBrightness: 100,
-      lightingAutoDim: '3-minutes',
-      singleTapAgentKeys: true,
-    });
+    ).toEqual(createWorkLouderCodexDefaultSettings());
   });
 
   it('rounds and clamps persisted brightness while preserving valid options', () => {
@@ -64,6 +58,7 @@ describe('Work Louder Codex settings store', () => {
         singleTapAgentKeys: false,
       }),
     ).toEqual({
+      ...createWorkLouderCodexDefaultSettings(),
       lightingBrightness: 50,
       lightingAutoDim: '30-seconds',
       singleTapAgentKeys: false,
@@ -83,6 +78,7 @@ describe('Work Louder Codex settings store', () => {
     });
 
     expect(next).toEqual({
+      ...createWorkLouderCodexDefaultSettings(),
       lightingBrightness: 60,
       lightingAutoDim: '1-minute',
       singleTapAgentKeys: false,
@@ -95,6 +91,9 @@ describe('Work Louder Codex settings store', () => {
           'utf-8',
         ),
       ),
-    ).toEqual(next);
+    ).toEqual({
+      lightingBrightness: 60,
+      lightingAutoDim: '1-minute',
+    });
   });
 });

@@ -3241,6 +3241,18 @@
         "openAria": "開啟 Work Louder Codex Micro 設定",
         "back": "返回鍵盤快捷鍵",
         "retry": "重試",
+        "device": {
+          "title": "裝置",
+          "firmware": "韌體 {{version}}",
+          "inputMonitoring": {
+            "label": "輸入監控權限",
+            "granted": "macOS 允許 Cindy 接收鍵盤輸入。",
+            "denied": "macOS 正在阻擋鍵盤輸入，請在系統設定中允許 Cindy。",
+            "unknown": "Cindy 尚未檢查 macOS 的輸入監控權限。",
+            "not-required": "此平台不需要輸入監控權限。",
+            "open": "開啟系統設定"
+          }
+        },
         "errors": {
           "load": "讀取 Codex Micro 設定失敗",
           "save": "儲存 Codex Micro 設定失敗"
@@ -3259,7 +3271,11 @@
             "connected": "USB 已連線，Cindy 正在監聽按鍵並同步任務燈效。",
             "not-detected": "請用支援資料傳輸的 USB 線連接鍵盤；如果 ChatGPT 正在占用裝置，請先關閉。",
             "error": "Cindy 暫時無法與鍵盤通訊，正在自動重試。",
-            "unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。"
+            "unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。",
+            "connection-timeout": "Work Louder 服務未在期限內回應，Cindy 會自動重試。",
+            "connection-failed": "Work Louder 服務啟動失敗，Cindy 會自動重試。",
+            "permission-required": "macOS 拒絕鍵盤存取，請在輸入監控中允許 Cindy 後重試。",
+            "sdk-unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。"
           }
         },
         "lighting": {
@@ -3289,15 +3305,87 @@
           "source": {
             "label": "任務順序",
             "description": "AG00～AG05 依最近 6 個活躍任務排列，置頂不會改變順序。",
-            "value": "最近 6 個"
+            "value": "最近 6 個",
+            "options": {
+              "recent": "最近任務",
+              "pinned": "置頂任務",
+              "priority": "優先任務",
+              "custom": "自訂"
+            }
           },
           "singleTap": {
             "label": "按一下啟用 Cindy",
-            "description": "按一下就開啟對應任務並啟用 Cindy；關閉後需要連按兩下。",
+            "description": "開啟後按一下就開啟任務並啟用 Cindy。關閉後按一下仍會在背景切換任務；350 毫秒內再按同一個鍵才會啟用 Cindy。",
             "aria": "按一下 Agent 鍵啟用 Cindy"
           },
+          "newTask": "新任務",
           "slot": "最近第 {{position}} 個",
           "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務"
+        },
+        "commandKeys": {
+          "title": "命令鍵",
+          "keycap": "選擇鍵帽",
+          "builtIn": "使用鍵帽預設動作"
+        },
+        "microphone": {
+          "title": "麥克風",
+          "mode": {
+            "label": "麥克風模式",
+            "description": "選擇麥克風鍵使用按住說話，或切換語音對話。",
+            "options": {
+              "push-to-talk": "按住說話",
+              "voice-chat": "語音對話"
+            }
+          },
+          "separate": {
+            "label": "拆分麥克風鍵",
+            "description": "保持 ACT10 和 ACT11 分開，不合併為一個 MIC 鍵。"
+          }
+        },
+        "analog": {
+          "title": "搖桿",
+          "description": "分別設定搖桿四個方向的動作。",
+          "directions": {
+            "up": "上",
+            "right": "右",
+            "down": "下",
+            "left": "左"
+          }
+        },
+        "encoder": {
+          "title": "旋鈕",
+          "mode": {
+            "label": "旋鈕模式",
+            "description": "選擇旋轉和按下旋鈕時控制的功能。",
+            "options": {
+              "composer-navigation": "導覽輸入框",
+              "reasoning": "推理強度",
+              "conversation-scroll": "捲動對話",
+              "custom": "自訂"
+            }
+          },
+          "gestures": {
+            "left": "向左旋轉",
+            "right": "向右旋轉",
+            "click": "按下",
+            "longPress": "長按"
+          },
+          "customDescription": "設定這個旋鈕手勢要執行的動作。"
+        },
+        "actions": {
+          "choose": "選擇動作",
+          "none": "無動作",
+          "tasks": "任務",
+          "commands": "命令",
+          "keycaps": "鍵帽",
+          "skills": "技能"
+        },
+        "layout": {
+          "reset": {
+            "title": "恢復鍵位配置",
+            "description": "恢復鍵帽、搖桿、旋鈕和麥克風分配，不變更任務順序或燈光設定。",
+            "button": "恢復配置"
+          }
         }
       },
       "errors": {

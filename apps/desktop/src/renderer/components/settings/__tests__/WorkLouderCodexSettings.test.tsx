@@ -3,8 +3,15 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+  createWorkLouderCodexDefaultSettings,
+} from '../../../../shared/workLouderCodex';
+
 const mocks = vi.hoisted(() => ({
   setSettings: vi.fn(),
+  resetSettings: vi.fn(),
+  openInputMonitoringSettings: vi.fn(),
   reload: vi.fn(),
 }));
 
@@ -16,19 +23,36 @@ vi.mock('@/hooks/useWorkLouderCodex', () => ({
   useWorkLouderCodex: () => ({
     state: {
       connectionStatus: 'connected',
+      connectionReason: null,
+      device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
       settings: {
+        ...createWorkLouderCodexDefaultSettings(),
         lightingBrightness: 70,
-        lightingAutoDim: '3-minutes',
-        singleTapAgentKeys: true,
       },
-      agentSource: 'recent',
+      agentSlots: Array.from({ length: 6 }, (_, slot) => ({
+        slot,
+        sessionId: null,
+        title: null,
+        action: null,
+      })),
+      taskOptions: [],
       agentSlotCount: 6,
     },
     loading: false,
     saving: false,
     error: null,
     setSettings: mocks.setSettings,
+    resetSettings: mocks.resetSettings,
+    openInputMonitoringSettings: mocks.openInputMonitoringSettings,
     reload: mocks.reload,
+  }),
+}));
+
+vi.mock('@/features/skillhub/hooks/useSkillhub', () => ({
+  useSkillhub: () => ({
+    skills: [],
+    bootstrapped: true,
+    refresh: vi.fn(),
   }),
 }));
 
@@ -45,12 +69,16 @@ describe('WorkLouderCodexSettings', () => {
       <WorkLouderCodexEntry
         state={{
           connectionStatus: 'connected',
-          settings: {
-            lightingBrightness: 100,
-            lightingAutoDim: '3-minutes',
-            singleTapAgentKeys: true,
-          },
-          agentSource: 'recent',
+          connectionReason: null,
+          device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
+          settings: createWorkLouderCodexDefaultSettings(),
+          agentSlots: Array.from({ length: 6 }, (_, slot) => ({
+            slot,
+            sessionId: null,
+            title: null,
+            action: null,
+          })),
+          taskOptions: [],
           agentSlotCount: 6,
         }}
         loading={false}
@@ -94,7 +122,7 @@ describe('WorkLouderCodexSettings', () => {
         name: 'settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria',
       }),
     );
-    expect(mocks.setSettings).toHaveBeenCalledWith({ singleTapAgentKeys: false });
+    expect(mocks.setSettings).toHaveBeenCalledWith({ singleTapAgentKeys: true });
   });
 
   it('restores all device settings to their defaults', () => {
@@ -102,10 +130,6 @@ describe('WorkLouderCodexSettings', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.reset' }));
 
-    expect(mocks.setSettings).toHaveBeenCalledWith({
-      lightingBrightness: 100,
-      lightingAutoDim: '3-minutes',
-      singleTapAgentKeys: true,
-    });
+    expect(mocks.resetSettings).toHaveBeenCalledOnce();
   });
 });

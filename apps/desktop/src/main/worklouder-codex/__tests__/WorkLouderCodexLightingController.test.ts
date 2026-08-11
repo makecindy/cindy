@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  createWorkLouderCodexDefaultSettings,
+  type WorkLouderCodexSettings,
+} from '../../../shared/workLouderCodex.js';
 import { WorkLouderCodexLightingController } from '../WorkLouderCodexLightingController.js';
 import { isWorkLouderCodexLightingFrameOff } from '../protocol.js';
+
+function settings(patch: Partial<WorkLouderCodexSettings>): WorkLouderCodexSettings {
+  return { ...createWorkLouderCodexDefaultSettings(), ...patch };
+}
 
 describe('WorkLouderCodexLightingController', () => {
   it('deduplicates activity updates that produce the same lighting frame', () => {
@@ -68,7 +76,7 @@ describe('WorkLouderCodexLightingController', () => {
     ]);
     keyHandlerRef.current?.(1);
 
-    expect(activateSession).toHaveBeenCalledWith('waiting-session');
+    expect(activateSession).toHaveBeenCalledWith('waiting-session', false);
   });
 
   it('uses the published assignment for the current press and refreshes only later presses', async () => {
@@ -106,12 +114,12 @@ describe('WorkLouderCodexLightingController', () => {
     sink.update.mockClear();
     keyHandlerRef.current?.(0);
 
-    expect(activateSession).toHaveBeenCalledWith('first');
+    expect(activateSession).toHaveBeenCalledWith('first', false);
     expect(loadSlotSessionIds).toHaveBeenCalledTimes(2);
     resolveRefresh?.(['second']);
     await vi.waitFor(() => expect(sink.update).toHaveBeenCalledTimes(1));
     keyHandlerRef.current?.(0);
-    expect(activateSession).toHaveBeenLastCalledWith('second');
+    expect(activateSession).toHaveBeenLastCalledWith('second', true);
     expect(loadSlotSessionIds).toHaveBeenCalledTimes(3);
   });
 
@@ -156,11 +164,13 @@ describe('WorkLouderCodexLightingController', () => {
     const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [
       'running-session',
     ]);
-    controller.applySettings({
-      lightingBrightness: 50,
-      lightingAutoDim: 'off',
-      singleTapAgentKeys: true,
-    });
+    controller.applySettings(
+      settings({
+        lightingBrightness: 50,
+        lightingAutoDim: 'off',
+        singleTapAgentKeys: true,
+      }),
+    );
     await controller.resumeTaskSlots();
     sink.update.mockClear();
 
@@ -196,11 +206,13 @@ describe('WorkLouderCodexLightingController', () => {
       const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [
         'running-session',
       ]);
-      controller.applySettings({
-        lightingBrightness: 100,
-        lightingAutoDim: '30-seconds',
-        singleTapAgentKeys: true,
-      });
+      controller.applySettings(
+        settings({
+          lightingBrightness: 100,
+          lightingAutoDim: '30-seconds',
+          singleTapAgentKeys: true,
+        }),
+      );
       await controller.resumeTaskSlots();
       controller.updateSessionActivity([
         {
@@ -221,7 +233,7 @@ describe('WorkLouderCodexLightingController', () => {
     }
   });
 
-  it('requires two presses of the same Agent key when single-tap activation is disabled', async () => {
+  it('switches tasks in the background first and focuses Cindy on the second tap', async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
@@ -240,25 +252,26 @@ describe('WorkLouderCodexLightingController', () => {
         'first',
         'second',
       ]);
-      controller.applySettings({
-        lightingBrightness: 100,
-        lightingAutoDim: 'off',
-        singleTapAgentKeys: false,
-      });
+      controller.applySettings(
+        settings({
+          lightingBrightness: 100,
+          lightingAutoDim: 'off',
+          singleTapAgentKeys: false,
+        }),
+      );
       await controller.resumeTaskSlots();
 
       keyHandlerRef.current?.(0);
-      expect(activateSession).not.toHaveBeenCalled();
+      expect(activateSession).toHaveBeenLastCalledWith('first', false);
       vi.setSystemTime(1_350);
       keyHandlerRef.current?.(0);
-      expect(activateSession).toHaveBeenCalledOnce();
-      expect(activateSession).toHaveBeenCalledWith('first');
+      expect(activateSession).toHaveBeenLastCalledWith('first', true);
 
       vi.setSystemTime(2_000);
       keyHandlerRef.current?.(0);
       vi.setSystemTime(2_200);
       keyHandlerRef.current?.(1);
-      expect(activateSession).toHaveBeenCalledOnce();
+      expect(activateSession).toHaveBeenLastCalledWith('second', false);
     } finally {
       vi.useRealTimers();
     }

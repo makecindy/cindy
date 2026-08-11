@@ -330,14 +330,30 @@ export function openMainWindowVoiceSettings(tab: 'voice-input' | 'providers'): v
  * 主进程内部发起的会话聚焦(workspace 槽 focus:true)。复用 deep link 的
  * 前台 + renderer dispatch 通道,行为与用户点 cindy://session/<id> 一致。
  */
-export function openMainWindowSession(sessionId: string): void {
-  dispatchDeepLink({ type: 'session', id: sessionId });
+export function openMainWindowSession(sessionId: string, options?: { focus?: boolean }): void {
+  dispatchDeepLink({ type: 'session', id: sessionId }, options?.focus !== false);
 }
 
-function dispatchDeepLink(payload: DeepLinkPayload): void {
+/** Sends a typed internal event to the primary renderer without broadcasting to utility windows. */
+export function sendMainWindowMessage(channel: string, payload: unknown): boolean {
+  const win = mainWindowRef;
+  if (
+    !win ||
+    win.isDestroyed() ||
+    !win.webContents ||
+    win.webContents.isDestroyed() ||
+    win.webContents.isLoading()
+  ) {
+    return false;
+  }
+  win.webContents.send(channel, payload);
+  return true;
+}
+
+function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   // 纯前台意图:main 进程内消化。冷启动时窗口还没建,app 启动流程本身会前台,直接丢弃。
   if (payload.type === 'focus') {
-    focusMainWindow();
+    if (shouldFocus) focusMainWindow();
     return;
   }
   const win = mainWindowRef;
@@ -362,7 +378,7 @@ function dispatchDeepLink(payload: DeepLinkPayload): void {
   // 已运行场景:listener 必然挂着(MainLayout 已 mount),直接 send,不进 pending。
   // 同时把窗口拉前台 — open-url / second-instance 本身不会唤起,用户点链接的
   // 意图就是要看到 app。
-  focusMainWindow();
+  if (shouldFocus) focusMainWindow();
   win.webContents.send('deep-link:navigate', payload);
 }
 
@@ -421,14 +437,19 @@ function findAbsolutePathAfterFlag(argv: readonly string[], flag: string): strin
     if (typeof arg !== 'string') continue;
     if (arg === flag) {
       const next = argv[i + 1];
-      if (typeof next === 'string' && next.length > 0 && isAbsoluteFilesystemPath(next)) return next;
+      if (typeof next === 'string' && next.length > 0 && isAbsoluteFilesystemPath(next))
+        return next;
 
       // Electron's Windows second-instance argv can interleave Chromium switches
       // between our custom flag and Explorer's folder path. Recover by taking the
       // first absolute path after the flag instead of returning a Chromium flag.
       for (let j = i + 1; j < argv.length; j++) {
         const candidate = argv[j];
-        if (typeof candidate === 'string' && candidate.length > 0 && isAbsoluteFilesystemPath(candidate)) {
+        if (
+          typeof candidate === 'string' &&
+          candidate.length > 0 &&
+          isAbsoluteFilesystemPath(candidate)
+        ) {
           return candidate;
         }
       }
@@ -471,9 +492,7 @@ export function registerDeepLinkProtocol(): void {
     if (process.defaultApp) {
       // dev:用 Electron 解释器跑 main 入口
       if (process.argv.length >= 2) {
-        app.setAsDefaultProtocolClient(scheme, process.execPath, [
-          path.resolve(process.argv[1]),
-        ]);
+        app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
       } else {
         app.setAsDefaultProtocolClient(scheme);
       }

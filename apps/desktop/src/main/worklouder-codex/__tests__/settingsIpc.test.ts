@@ -4,13 +4,13 @@ import type {
   WorkLouderCodexSettings,
   WorkLouderCodexState,
 } from '../../../shared/workLouderCodex.js';
+import {
+  WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+  createWorkLouderCodexDefaultSettings,
+} from '../../../shared/workLouderCodex.js';
 import { createWorkLouderCodexSettingsIpc } from '../settingsIpc.js';
 
-const DEFAULT_SETTINGS: WorkLouderCodexSettings = {
-  lightingBrightness: 100,
-  lightingAutoDim: '3-minutes',
-  singleTapAgentKeys: true,
-};
+const DEFAULT_SETTINGS: WorkLouderCodexSettings = createWorkLouderCodexDefaultSettings();
 
 const EVENT = { senderFrame: 'fake' };
 
@@ -18,7 +18,7 @@ function makeIpc(options?: {
   assertTrustedSender?: (event: unknown) => void;
   writeThrows?: boolean;
 }) {
-  let settings = { ...DEFAULT_SETTINGS };
+  let settings = createWorkLouderCodexDefaultSettings();
   const assertTrustedSender = vi.fn(options?.assertTrustedSender ?? (() => undefined));
   const writeSettings = vi.fn((patch: Partial<WorkLouderCodexSettings>) => {
     if (options?.writeThrows) throw new Error('EACCES: /internal/private/path readonly');
@@ -30,17 +30,40 @@ function makeIpc(options?: {
   });
   const getState = vi.fn((): WorkLouderCodexState => ({
     connectionStatus: 'connected',
+    connectionReason: null,
+    device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
     settings: { ...settings },
-    agentSource: 'recent',
+    agentSlots: Array.from({ length: 6 }, (_, slot) => ({
+      slot,
+      sessionId: null,
+      title: null,
+      action: null,
+    })),
+    taskOptions: [],
     agentSlotCount: 6,
   }));
+  const resetSettings = vi.fn(() => {
+    settings = createWorkLouderCodexDefaultSettings();
+    return { ...settings };
+  });
+  const openInputMonitoringSettings = vi.fn(async () => undefined);
   const ipc = createWorkLouderCodexSettingsIpc({
     assertTrustedSender,
     getState,
     writeSettings,
+    resetSettings,
     applySettings,
+    openInputMonitoringSettings,
   });
-  return { ipc, assertTrustedSender, getState, writeSettings, applySettings };
+  return {
+    ipc,
+    assertTrustedSender,
+    getState,
+    writeSettings,
+    resetSettings,
+    applySettings,
+    openInputMonitoringSettings,
+  };
 }
 
 describe('Work Louder Codex settings IPC business body', () => {
@@ -93,13 +116,34 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(applySettings).toHaveBeenCalledWith({
       lightingBrightness: 40,
       lightingAutoDim: 'off',
+      agentSource: 'recent',
+      customAgentKeys: [null, null, null, null, null, null],
       singleTapAgentKeys: false,
+      layout: DEFAULT_SETTINGS.layout,
     });
-    expect(state.settings).toEqual({
+    expect(state.settings).toMatchObject({
       lightingBrightness: 40,
       lightingAutoDim: 'off',
       singleTapAgentKeys: false,
     });
+  });
+
+  it('resets all settings through the dedicated reset operation', () => {
+    const { ipc, resetSettings, applySettings } = makeIpc();
+
+    const state = ipc.reset(EVENT);
+
+    expect(resetSettings).toHaveBeenCalledOnce();
+    expect(applySettings).toHaveBeenCalledWith(DEFAULT_SETTINGS);
+    expect(state.settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('opens macOS Input Monitoring settings only for trusted callers', async () => {
+    const { ipc, openInputMonitoringSettings } = makeIpc();
+
+    await ipc.openInputMonitoringSettings(EVENT);
+
+    expect(openInputMonitoringSettings).toHaveBeenCalledOnce();
   });
 
   it('converts persistence failures to INTERNAL without leaking file paths', () => {

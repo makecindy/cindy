@@ -3,7 +3,11 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkLouderCodexState } from '../../../shared/workLouderCodex';
+import {
+  WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+  createWorkLouderCodexDefaultSettings,
+  type WorkLouderCodexState,
+} from '../../../shared/workLouderCodex';
 import { useWorkLouderCodex } from '../useWorkLouderCodex';
 
 function state(
@@ -12,12 +16,19 @@ function state(
 ): WorkLouderCodexState {
   return {
     connectionStatus,
+    connectionReason: null,
+    device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
     settings: {
+      ...createWorkLouderCodexDefaultSettings(),
       lightingBrightness,
-      lightingAutoDim: '3-minutes',
-      singleTapAgentKeys: true,
     },
-    agentSource: 'recent',
+    agentSlots: Array.from({ length: 6 }, (_, slot) => ({
+      slot,
+      sessionId: null,
+      title: null,
+      action: null,
+    })),
+    taskOptions: [],
     agentSlotCount: 6,
   };
 }
@@ -35,6 +46,8 @@ function deferred<T>() {
 function installApi(api: {
   getState: () => Promise<WorkLouderCodexState>;
   setSettings: (patch: unknown) => Promise<WorkLouderCodexState>;
+  resetSettings: () => Promise<WorkLouderCodexState>;
+  openInputMonitoringSettings: () => Promise<void>;
   onStateChanged: (callback: (next: WorkLouderCodexState) => void) => () => void;
 }): void {
   Object.defineProperty(window, 'electronAPI', {
@@ -55,6 +68,8 @@ describe('useWorkLouderCodex', () => {
     installApi({
       getState: vi.fn(() => initial.promise),
       setSettings: vi.fn(),
+      resetSettings: vi.fn(),
+      openInputMonitoringSettings: vi.fn(),
       onStateChanged: vi.fn((callback) => {
         onStateChanged = callback;
         return vi.fn();
@@ -77,6 +92,8 @@ describe('useWorkLouderCodex', () => {
     installApi({
       getState: vi.fn(async () => state('connected')),
       setSettings: vi.fn(() => saving.promise),
+      resetSettings: vi.fn(),
+      openInputMonitoringSettings: vi.fn(),
       onStateChanged: vi.fn((callback) => {
         onStateChanged = callback;
         return vi.fn();

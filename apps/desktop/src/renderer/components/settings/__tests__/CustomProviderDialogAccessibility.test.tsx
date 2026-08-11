@@ -155,9 +155,7 @@ describe('CustomProviderDialog accessibility', () => {
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
-    expect(
-      screen.queryByText('settings.providers.custom.fields.apiKeySaved'),
-    ).toBeNull();
+    expect(screen.queryByText('settings.providers.custom.fields.apiKeySaved')).toBeNull();
     expect(apiKey.getAttribute('placeholder')).toBe(
       'settings.providers.custom.fields.apiKeyPlaceholder',
     );
@@ -238,10 +236,14 @@ describe('CustomProviderDialog accessibility', () => {
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
-    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.authMode.none' }));
+    await user.click(
+      screen.getByRole('button', { name: 'settings.providers.custom.authMode.none' }),
+    );
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://old.example.test/v1');
-    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.authMode.apiKey' }));
+    await user.click(
+      screen.getByRole('button', { name: 'settings.providers.custom.authMode.apiKey' }),
+    );
 
     const restoredApiKey = await screen.findByPlaceholderText(
       'settings.providers.custom.fields.apiKeyEditPlaceholder',
@@ -261,7 +263,9 @@ describe('CustomProviderDialog accessibility', () => {
         },
       },
     };
-    customProviderMocks.readCustomProviderKey.mockRejectedValue(new Error('safeStorage unavailable'));
+    customProviderMocks.readCustomProviderKey.mockRejectedValue(
+      new Error('safeStorage unavailable'),
+    );
 
     const user = userEvent.setup();
     render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
@@ -344,9 +348,7 @@ describe('CustomProviderDialog accessibility', () => {
     render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
 
-    expect(
-      screen.queryByText('settings.providers.custom.fields.requestPath'),
-    ).toBeNull();
+    expect(screen.queryByText('settings.providers.custom.fields.requestPath')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
     await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());

@@ -74,6 +74,8 @@ type RawReleaseNotesPayload = import('../shared/releaseNotesContent').RawRelease
 type WorkLouderCodexSettingsPatch =
   import('../shared/workLouderCodex').WorkLouderCodexSettingsPatch;
 type WorkLouderCodexState = import('../shared/workLouderCodex').WorkLouderCodexState;
+type WorkLouderCodexRendererAction =
+  import('../shared/workLouderCodex').WorkLouderCodexRendererAction;
 
 interface NewMakerWorktreeBranchPreferenceSnapshot {
   baseRepo: string;
@@ -1815,7 +1817,10 @@ interface ElectronAPI {
   workLouderCodex: {
     getState: () => Promise<WorkLouderCodexState>;
     setSettings: (patch: WorkLouderCodexSettingsPatch) => Promise<WorkLouderCodexState>;
+    resetSettings: () => Promise<WorkLouderCodexState>;
+    openInputMonitoringSettings: () => Promise<void>;
     onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
+    onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
   };
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────

@@ -1,5 +1,9 @@
 import type { AgentIslandSessionActivity } from '../../shared/agentIsland.js';
-import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
+import {
+  WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  type WorkLouderCodexConnectionReason,
+  type WorkLouderCodexDeviceState,
+} from '../../shared/workLouderCodex.js';
 
 export { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
 
@@ -44,11 +48,29 @@ export type WorkLouderCodexHostRequest =
   | { kind: 'stop' };
 
 export type WorkLouderCodexHostMessage =
-  | { kind: 'state'; status: 'connected' | 'not-detected' | 'error' }
+  | {
+      kind: 'state';
+      status: 'connected' | 'not-detected' | 'error';
+      reason?: Exclude<WorkLouderCodexConnectionReason, 'sdk-unavailable'>;
+    }
+  /** Legacy utility-host message retained for older host fakes and upgrades. */
   | { kind: 'agent-key'; slot: number }
+  | { kind: 'device'; device: WorkLouderCodexDeviceState }
+  | { kind: 'hid'; event: WorkLouderCodexHidEvent }
+  | { kind: 'joystick'; event: WorkLouderCodexJoystickEvent }
   | { kind: 'activity' }
   | { kind: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; message: string }
   | { kind: 'stopped' };
+
+export interface WorkLouderCodexHidEvent {
+  key: string;
+  act: 0 | 1 | 2;
+}
+
+export interface WorkLouderCodexJoystickEvent {
+  angle: number;
+  distance: number;
+}
 
 const COLORS = {
   running: 0x4c6fff,
@@ -121,11 +143,50 @@ export function projectWorkLouderCodexSlotActivity(
 
 /** Accept only press events for the six official Agent keys (AG00 through AG05). */
 export function parseWorkLouderCodexAgentKeyPress(value: unknown): number | null {
-  if (!value || typeof value !== 'object') return null;
-  const event = value as { key?: unknown; act?: unknown };
-  if (event.act !== 1 || typeof event.key !== 'string') return null;
+  const event = parseWorkLouderCodexHidEvent(value);
+  if (!event || event.act !== 1) return null;
   const match = /^AG0([0-5])$/.exec(event.key);
   return match ? Number(match[1]) : null;
+}
+
+export function parseWorkLouderCodexHidEvent(value: unknown): WorkLouderCodexHidEvent | null {
+  if (!value || typeof value !== 'object') return null;
+  const event = value as { key?: unknown; act?: unknown };
+  if (
+    typeof event.key !== 'string' ||
+    event.key.length > 32 ||
+    (event.act !== 0 && event.act !== 1 && event.act !== 2)
+  ) {
+    return null;
+  }
+  if (
+    !/^AG0[0-5]$/.test(event.key) &&
+    !/^ACT(?:0[6-9]|1[0-2])$/.test(event.key) &&
+    !/^ENC[A-Z0-9_]*$/.test(event.key)
+  ) {
+    return null;
+  }
+  return { key: event.key, act: event.act };
+}
+
+export function parseWorkLouderCodexJoystickEvent(
+  value: unknown,
+): WorkLouderCodexJoystickEvent | null {
+  if (!value || typeof value !== 'object') return null;
+  const event = value as { angle?: unknown; distance?: unknown };
+  if (
+    typeof event.angle !== 'number' ||
+    !Number.isFinite(event.angle) ||
+    event.angle < 0 ||
+    event.angle > 1 ||
+    typeof event.distance !== 'number' ||
+    !Number.isFinite(event.distance) ||
+    event.distance < 0 ||
+    event.distance > 1
+  ) {
+    return null;
+  }
+  return { angle: event.angle, distance: event.distance };
 }
 
 export function isWorkLouderCodexLightingFrameOff(frame: WorkLouderCodexLightingFrame): boolean {
@@ -182,11 +243,26 @@ export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLoude
       slot < WORKLOUDER_CODEX_AGENT_SLOT_COUNT
     );
   }
+  if (message.kind === 'hid')
+    return parseWorkLouderCodexHidEvent((message as { event?: unknown }).event) !== null;
+  if (message.kind === 'joystick') {
+    return parseWorkLouderCodexJoystickEvent((message as { event?: unknown }).event) !== null;
+  }
+  if (message.kind === 'device')
+    return isWorkLouderCodexDeviceState((message as { device?: unknown }).device);
   if (message.kind === 'state') {
-    return (
+    const validStatus =
       message.status === 'connected' ||
       message.status === 'not-detected' ||
-      message.status === 'error'
+      message.status === 'error';
+    const reason = (message as { reason?: unknown }).reason;
+    return (
+      validStatus &&
+      (reason === undefined ||
+        reason === null ||
+        reason === 'connection-timeout' ||
+        reason === 'connection-failed' ||
+        reason === 'permission-required')
     );
   }
   if (message.kind === 'log') {
@@ -199,6 +275,28 @@ export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLoude
     );
   }
   return false;
+}
+
+function isWorkLouderCodexDeviceState(value: unknown): value is WorkLouderCodexDeviceState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const device = value as WorkLouderCodexDeviceState;
+  return (
+    (device.deviceType === null ||
+      device.deviceType === 'codex-micro' ||
+      device.deviceType === 'creator-micro-2') &&
+    (device.isUsbConnection === null || typeof device.isUsbConnection === 'boolean') &&
+    (device.firmwareVersion === null || typeof device.firmwareVersion === 'string') &&
+    (device.batteryPercentage === null ||
+      (typeof device.batteryPercentage === 'number' &&
+        Number.isFinite(device.batteryPercentage) &&
+        device.batteryPercentage >= 0 &&
+        device.batteryPercentage <= 100)) &&
+    (device.isCharging === null || typeof device.isCharging === 'boolean') &&
+    (device.inputMonitoringPermission === 'granted' ||
+      device.inputMonitoringPermission === 'denied' ||
+      device.inputMonitoringPermission === 'unknown' ||
+      device.inputMonitoringPermission === 'not-required')
+  );
 }
 
 function isLightingVisibleActivity(activity: AgentIslandSessionActivity): boolean {

@@ -12,6 +12,8 @@ export interface WorkLouderCodexViewState {
   saving: boolean;
   error: 'load' | 'save' | null;
   setSettings(patch: WorkLouderCodexSettingsPatch): Promise<void>;
+  resetSettings(): Promise<void>;
+  openInputMonitoringSettings(): Promise<void>;
   reload(): Promise<void>;
 }
 
@@ -111,5 +113,45 @@ export function useWorkLouderCodex(): WorkLouderCodexViewState {
     [state],
   );
 
-  return { state, loading, saving, error, setSettings, reload };
+  const resetSettings = useCallback(async () => {
+    const api = window.electronAPI?.workLouderCodex;
+    if (!api) {
+      if (mountedRef.current) setError('save');
+      return;
+    }
+    const requestId = ++mutationIdRef.current;
+    if (mountedRef.current) {
+      setSaving(true);
+      setError(null);
+    }
+    try {
+      const next = await api.resetSettings();
+      if (!mountedRef.current || requestId !== mutationIdRef.current) return;
+      confirmedSettingsRef.current = { ...next.settings };
+      setState(next);
+    } catch {
+      if (mountedRef.current && requestId === mutationIdRef.current) setError('save');
+    } finally {
+      if (mountedRef.current && requestId === mutationIdRef.current) setSaving(false);
+    }
+  }, []);
+
+  const openInputMonitoringSettings = useCallback(async () => {
+    try {
+      await window.electronAPI?.workLouderCodex?.openInputMonitoringSettings();
+    } catch {
+      if (mountedRef.current) setError('load');
+    }
+  }, []);
+
+  return {
+    state,
+    loading,
+    saving,
+    error,
+    setSettings,
+    resetSettings,
+    openInputMonitoringSettings,
+    reload,
+  };
 }

@@ -56,12 +56,10 @@ import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
-import {
-  isRemoteSessionSticky,
-  subscribeTurnChangeSetUpdated,
-} from '@/lib/makerTransport';
+import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
+import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
 import { cn } from '@/lib/utils';
 import {
@@ -1991,8 +1989,8 @@ function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
     resultIsLaunchReceipt:
-      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined
-      || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
+      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
+        undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
   });
   return status === 'running';
 }
@@ -2888,9 +2886,9 @@ export function MessageStream({
   const restoreDefaultViewportRef = useRef(
     Boolean(
       restoringRef.current &&
-        restoreSnapshotRef.current?.windowAnchorKey === null &&
-        restoreSnapshotRef.current?.isNearBottom === false &&
-        restoreSnapshotRef.current?.viewportTopKey,
+      restoreSnapshotRef.current?.windowAnchorKey === null &&
+      restoreSnapshotRef.current?.isNearBottom === false &&
+      restoreSnapshotRef.current?.viewportTopKey,
     ),
   );
   // 两段式默认窗口的当前尺寸(FIRST_PAINT → 空闲期扩到 INITIAL)。只影响
@@ -2987,7 +2985,8 @@ export function MessageStream({
         return next;
       });
     });
-    void window.electronAPI.maker.listTurnChangeSets(sessionId)
+    void window.electronAPI.maker
+      .listTurnChangeSets(sessionId)
       .then((next) => {
         if (cancelled) return;
         setTurnChangeSets((current) => {
@@ -3126,23 +3125,26 @@ export function MessageStream({
     }
 
     const startIdx = snapRenderWindowStartIdx(allRenderItems, idx);
-    const windowItemCount = resolveAnchoredWindowItemCount(
-      startIdx,
-      idx,
-      anchoredForwardItems,
-    );
+    const windowItemCount = resolveAnchoredWindowItemCount(startIdx, idx, anchoredForwardItems);
     return {
       items: allRenderItems.slice(startIdx, startIdx + windowItemCount),
       startIdx,
     };
-  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems, anchoredForwardItems, firstMountDeferred]);
+  }, [
+    allRenderItems,
+    firstVisibleItemKey,
+    defaultWindowItems,
+    anchoredForwardItems,
+    firstMountDeferred,
+  ]);
 
   // If a restored default-tail anchor fell out of the tail while this session
   // was backgrounded, permanently fall back to the bounded default window for
   // this mount. This also prevents expandWindow from treating the stale key as
   // a user-created anchored window.
   useLayoutEffect(() => {
-    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null) return;
+    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null)
+      return;
     const snap = restoreSnapshotRef.current;
     if (!snap?.viewportTopKey) return;
     if (allRenderItems.length === 0) return;
@@ -4306,6 +4308,30 @@ export function MessageStream({
     }, CHIP_JUMP_SAFETY_MS);
   }, [beginProgrammaticScroll, cancelFocusJump, finishChipJump, finishProgrammaticScroll, refreshViewportAnchor]);
 
+  useEffect(() => {
+    return subscribeWorkLouderCodexAction((action) => {
+      if (action.type !== 'command') return false;
+      if (action.commandId === 'conversation.scrollBottom') {
+        scrollToBottomSmooth();
+        return true;
+      }
+      if (
+        action.commandId !== 'conversation.scrollUp' &&
+        action.commandId !== 'conversation.scrollDown'
+      ) {
+        return false;
+      }
+      const el = scrollRef.current;
+      if (!el) return false;
+      const direction = action.commandId === 'conversation.scrollUp' ? -1 : 1;
+      el.scrollBy({
+        top: direction * Math.max(160, el.clientHeight * 0.7),
+        behavior: 'smooth',
+      });
+      return true;
+    });
+  }, [scrollToBottomSmooth]);
+
   // F2: messages diff → 按角色累计 unreadCount
   //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、
   //     贴底不计、assistant/ask_user/plan_review 计；#2194 起非本端发送的 user 也计。
@@ -4348,9 +4374,7 @@ export function MessageStream({
       visibleLastItem,
       realLastItem,
       userMessageId: (item) =>
-        item?.type === 'message' && item.message.role === 'user'
-          ? item.message.clientId
-          : null,
+        item?.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
     });
     const lastUserMsg =
       tailUserMessageId === null
@@ -4409,7 +4433,14 @@ export function MessageStream({
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
-  }, [visibleRenderItems, bottomPadding, pinToBottom, firstVisibleItemKey, windowCoversEnd, allRenderItems]);
+  }, [
+    visibleRenderItems,
+    bottomPadding,
+    pinToBottom,
+    firstVisibleItemKey,
+    windowCoversEnd,
+    allRenderItems,
+  ]);
 
   // ── 还原浏览位置(layout effect,在上面的 pin-to-bottom effect 之后跑) ──
   // mount 首帧 + 还原期间窗口变化时把视口摆回锚点。settle(图片/markdown 异步加载
@@ -4857,7 +4888,11 @@ export function MessageStream({
       // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
       // 向下 append 不改变已有内容的滚动偏移，不需要 F-SYNC-2 delta 补偿。
       // 扩到覆盖末尾后直接清除锚点，回到默认贴底窗口。
-      if (!windowCoversEnd && delta > SCROLL_DIRECTION_DEAD_ZONE_PX && distanceFromBottom < threshold) {
+      if (
+        !windowCoversEnd &&
+        delta > SCROLL_DIRECTION_DEAD_ZONE_PX &&
+        distanceFromBottom < threshold
+      ) {
         const nextForward = anchoredForwardItems + RENDER_WINDOW_GROWTH_ITEMS;
         // 最后一批照常渲染：不在此处清除锚点。用户真正滚到窗口底部后，
         // 上面 effectiveNearBottom + windowCoversEnd 分支会自然清除锚点、

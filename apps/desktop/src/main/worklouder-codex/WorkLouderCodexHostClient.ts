@@ -1,10 +1,17 @@
 import {
   isWorkLouderCodexHostMessage,
   isWorkLouderCodexLightingFrameOff,
+  parseWorkLouderCodexAgentKeyPress,
+  type WorkLouderCodexHidEvent,
   type WorkLouderCodexHostRequest,
+  type WorkLouderCodexJoystickEvent,
   type WorkLouderCodexLightingFrame,
 } from './protocol.js';
-import type { WorkLouderCodexConnectionStatus } from '../../shared/workLouderCodex.js';
+import type {
+  WorkLouderCodexConnectionReason,
+  WorkLouderCodexConnectionStatus,
+  WorkLouderCodexDeviceState,
+} from '../../shared/workLouderCodex.js';
 import type { WorkLouderCodexLightingSink } from './WorkLouderCodexLightingController.js';
 
 export interface WorkLouderCodexChildLike {
@@ -34,6 +41,7 @@ export interface WorkLouderCodexHostClientDeps {
   resolveSdk(): WorkLouderSdkLocation | null;
   fork(sdkEntry: string): WorkLouderCodexChildLike;
   log: WorkLouderCodexLoggerLike;
+  connectTimeoutMs?: number;
   disposeTimeoutMs?: number;
 }
 
@@ -45,6 +53,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private child: WorkLouderCodexChildLike | null = null;
   private latestFrame: WorkLouderCodexLightingFrame | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private consecutiveCrashes = 0;
   private lastStatus: 'connected' | 'not-detected' | 'error' | null = null;
   private disposed = false;
@@ -54,16 +63,50 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private disposeTimer: ReturnType<typeof setTimeout> | null = null;
   private agentKeyPressHandler: ((slot: number) => void) | null = null;
   private deviceActivityHandler: (() => void) | null = null;
+  private hidInputHandler: ((event: WorkLouderCodexHidEvent) => void) | null = null;
+  private joystickInputHandler: ((event: WorkLouderCodexJoystickEvent) => void) | null = null;
+  private deviceStateHandler: ((device: WorkLouderCodexDeviceState) => void) | null = null;
+  private connectionReasonHandler: ((reason: WorkLouderCodexConnectionReason) => void) | null =
+    null;
   private connectionStatusHandler: ((status: WorkLouderCodexConnectionStatus) => void) | null =
     null;
   private connectionStatus: WorkLouderCodexConnectionStatus = 'connecting';
+  private connectionReason: WorkLouderCodexConnectionReason = null;
   private wantsHidInput = false;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
 
   setAgentKeyPressHandler(handler: ((slot: number) => void) | null): void {
     this.agentKeyPressHandler = handler;
-    this.wantsHidInput = handler !== null;
+    this.updateHidListeningIntent();
+  }
+
+  setHidInputHandler(handler: ((event: WorkLouderCodexHidEvent) => void) | null): void {
+    this.hidInputHandler = handler;
+    this.updateHidListeningIntent();
+  }
+
+  setJoystickInputHandler(handler: ((event: WorkLouderCodexJoystickEvent) => void) | null): void {
+    this.joystickInputHandler = handler;
+    this.updateHidListeningIntent();
+  }
+
+  setDeviceStateHandler(handler: ((device: WorkLouderCodexDeviceState) => void) | null): void {
+    this.deviceStateHandler = handler;
+  }
+
+  setConnectionReasonHandler(
+    handler: ((reason: WorkLouderCodexConnectionReason) => void) | null,
+  ): void {
+    this.connectionReasonHandler = handler;
+    handler?.(this.connectionReason);
+  }
+
+  private updateHidListeningIntent(): void {
+    this.wantsHidInput =
+      this.agentKeyPressHandler !== null ||
+      this.hidInputHandler !== null ||
+      this.joystickInputHandler !== null;
     if (this.wantsHidInput) this.requestHidListening();
   }
 
@@ -111,6 +154,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+    this.clearConnectWatchdog();
     const child = this.child;
     if (!child) return Promise.resolve();
 
@@ -135,6 +179,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
     if (!sdk) {
+      this.updateConnectionReason('sdk-unavailable');
       this.updateConnectionStatus('unavailable');
       if (!this.unavailableLogged) {
         this.unavailableLogged = true;
@@ -144,6 +189,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     let child: WorkLouderCodexChildLike | null = null;
     try {
+      this.updateConnectionReason(null);
       this.updateConnectionStatus('connecting');
       const startedChild = this.deps.fork(sdk.entry);
       child = startedChild;
@@ -157,6 +203,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       });
       const initRequest: WorkLouderCodexHostRequest = { kind: 'init', sdkEntry: sdk.entry };
       startedChild.postMessage(initRequest);
+      this.startConnectWatchdog(startedChild);
       this.deps.log.info('Codex Micro lighting host started', { sdkSource: sdk.source });
       return startedChild;
     } catch (error) {
@@ -171,6 +218,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deps.log.warn('failed to start Codex Micro lighting host', {
         error: error instanceof Error ? error.message : String(error),
       });
+      this.updateConnectionReason('connection-failed');
       this.updateConnectionStatus('error');
       this.scheduleRestart();
       return null;
@@ -207,15 +255,33 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deps.log[message.level](`[host] ${message.message}`);
       return;
     }
-    if (message.kind === 'agent-key') {
-      this.deps.log.debug('Codex Micro Agent key pressed', { slot: message.slot });
-      this.agentKeyPressHandler?.(message.slot);
+    if (message.kind === 'hid') {
+      this.clearConnectWatchdog();
+      this.hidInputHandler?.(message.event);
+      const slot = parseWorkLouderCodexAgentKeyPress(message.event);
+      if (slot !== null) {
+        this.deps.log.debug('Codex Micro Agent key pressed', { slot });
+        this.agentKeyPressHandler?.(slot);
+      }
+      return;
+    }
+    if (message.kind === 'joystick') {
+      this.clearConnectWatchdog();
+      this.joystickInputHandler?.(message.event);
+      return;
+    }
+    if (message.kind === 'device') {
+      this.clearConnectWatchdog();
+      this.deviceStateHandler?.(message.device);
       return;
     }
     if (message.kind === 'activity') {
       this.deviceActivityHandler?.();
       return;
     }
+    if (message.kind !== 'state') return;
+    this.clearConnectWatchdog();
+    this.updateConnectionReason(message.reason ?? null);
     if (message.status === this.lastStatus) return;
     this.lastStatus = message.status;
     this.updateConnectionStatus(message.status);
@@ -231,6 +297,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
 
   private handleExit(child: WorkLouderCodexChildLike, code: number): void {
     if (this.child !== child) return;
+    this.clearConnectWatchdog();
     this.child = null;
     this.lastStatus = null;
     if (this.disposed) {
@@ -238,6 +305,9 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       return;
     }
     this.deps.log.warn('Codex Micro lighting host exited', { code });
+    if (this.connectionReason !== 'connection-timeout') {
+      this.updateConnectionReason('connection-failed');
+    }
     this.updateConnectionStatus('error');
     this.scheduleRestart();
   }
@@ -268,7 +338,32 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.restartTimer.unref?.();
   }
 
+  private startConnectWatchdog(child: WorkLouderCodexChildLike): void {
+    this.clearConnectWatchdog();
+    this.connectWatchdogTimer = setTimeout(() => {
+      this.connectWatchdogTimer = null;
+      if (this.child !== child || this.disposed) return;
+      this.deps.log.warn('Codex Micro lighting host connection timed out');
+      this.updateConnectionReason('connection-timeout');
+      this.updateConnectionStatus('error');
+      try {
+        child.kill();
+      } catch {
+        // The watchdog owns recovery even if the native host already disappeared.
+      }
+      this.handleExit(child, 1);
+    }, this.deps.connectTimeoutMs ?? 5_000);
+    this.connectWatchdogTimer.unref?.();
+  }
+
+  private clearConnectWatchdog(): void {
+    if (!this.connectWatchdogTimer) return;
+    clearTimeout(this.connectWatchdogTimer);
+    this.connectWatchdogTimer = null;
+  }
+
   private completeDispose(child: WorkLouderCodexChildLike): void {
+    this.clearConnectWatchdog();
     if (this.disposeTimer) {
       clearTimeout(this.disposeTimer);
       this.disposeTimer = null;
@@ -290,5 +385,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (status === this.connectionStatus) return;
     this.connectionStatus = status;
     this.connectionStatusHandler?.(status);
+  }
+
+  private updateConnectionReason(reason: WorkLouderCodexConnectionReason): void {
+    if (reason === this.connectionReason) return;
+    this.connectionReason = reason;
+    this.connectionReasonHandler?.(reason);
   }
 }

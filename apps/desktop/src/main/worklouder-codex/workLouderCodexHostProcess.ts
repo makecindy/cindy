@@ -9,7 +9,8 @@ import { createRequire } from 'node:module';
 import {
   createWorkLouderCodexOffFrame,
   isWorkLouderCodexLightingFrameOff,
-  parseWorkLouderCodexAgentKeyPress,
+  parseWorkLouderCodexHidEvent,
+  parseWorkLouderCodexJoystickEvent,
   type WorkLouderCodexHostMessage,
   type WorkLouderCodexHostRequest,
   type WorkLouderCodexLightingFrame,
@@ -24,6 +25,12 @@ interface WorkLouderDevice {
   isUsbConnection?: boolean;
 }
 
+interface WorkLouderDeviceStatus {
+  firmwareVersion?: string;
+  batteryPercentage?: number;
+  isCharging?: boolean;
+}
+
 interface WorkLouderComm {
   connect(device: WorkLouderDevice): Promise<boolean>;
   disconnect(): Promise<void>;
@@ -35,10 +42,12 @@ interface WorkLouderApi {
   ): Promise<boolean>;
   sendThreadsLighting(threads: WorkLouderCodexLightingFrame['threads']): Promise<boolean>;
   onHidReceived?(listener: (event: unknown) => void): (() => void) | void;
+  onJoystickMove?(listener: (event: unknown) => void): (() => void) | void;
+  getDeviceStatus?(): Promise<WorkLouderDeviceStatus>;
 }
 
 interface WorkLouderSdk {
-  DeviceType: { CodexMicro: unknown };
+  DeviceType: { CodexMicro: unknown; CreatorMicroV2?: unknown };
   WLDeviceDiscovery: new (logger?: WorkLouderLogger) => {
     findWLDevices(filter?: unknown[]): WorkLouderDevice[];
   };
@@ -62,6 +71,7 @@ let sdkEntry: string | null = null;
 let comm: WorkLouderComm | null = null;
 let api: WorkLouderApi | null = null;
 let unsubscribeHid: (() => void) | null = null;
+let unsubscribeJoystick: (() => void) | null = null;
 let latestFrame: WorkLouderCodexLightingFrame | null = null;
 let applyPending = false;
 let listenPending = false;
@@ -194,7 +204,7 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
       hostLog('error', `lighting apply failed: ${message}`);
     }
     await disconnect();
-    post({ kind: 'state', status: 'error' });
+    post({ kind: 'state', status: 'error', reason: classifyConnectionError(message) });
     scheduleRetry();
   }
 }
@@ -217,7 +227,7 @@ async function listenForAgentKeys(): Promise<void> {
       hostLog('error', `HID listening failed: ${message}`);
     }
     await disconnect();
-    post({ kind: 'state', status: 'error' });
+    post({ kind: 'state', status: 'error', reason: classifyConnectionError(message) });
     scheduleRetry();
   }
 }
@@ -234,31 +244,92 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   if (api) return api;
   const loaded = loadSdk();
   const discovery = new loaded.WLDeviceDiscovery(sdkLogger);
-  const devices = discovery
-    .findWLDevices([loaded.DeviceType.CodexMicro])
-    .toSorted((left, right) => Number(right.isUsbConnection) - Number(left.isUsbConnection));
-  const device = devices[0];
-  if (!device) return null;
+  const candidates = [
+    ...discovery.findWLDevices([loaded.DeviceType.CodexMicro]).map((device) => ({
+      device,
+      deviceType: 'codex-micro' as const,
+    })),
+    ...(loaded.DeviceType.CreatorMicroV2 === undefined
+      ? []
+      : discovery.findWLDevices([loaded.DeviceType.CreatorMicroV2]).map((device) => ({
+          device,
+          deviceType: 'creator-micro-2' as const,
+        }))),
+  ].toSorted(
+    (left, right) => Number(right.device.isUsbConnection) - Number(left.device.isUsbConnection),
+  );
+  const candidate = candidates[0];
+  if (!candidate) return null;
   const nextComm = new loaded.WLDeviceCommImpl(sdkLogger);
-  if (!(await nextComm.connect(device))) return null;
+  if (!(await nextComm.connect(candidate.device))) return null;
   comm = nextComm;
   const nextApi = new loaded.RPCApiOAI(nextComm, sdkLogger);
   if (typeof nextApi.onHidReceived === 'function') {
     const unsubscribe = nextApi.onHidReceived((event) => {
-      const now = Date.now();
-      if (now - lastActivityPostedAt >= 250) {
-        lastActivityPostedAt = now;
-        post({ kind: 'activity' });
-      }
-      const slot = parseWorkLouderCodexAgentKeyPress(event);
-      if (slot !== null) post({ kind: 'agent-key', slot });
+      postActivity();
+      const parsed = parseWorkLouderCodexHidEvent(event);
+      if (parsed) post({ kind: 'hid', event: parsed });
     });
     unsubscribeHid = typeof unsubscribe === 'function' ? unsubscribe : null;
   } else {
-    hostLog('warn', 'Work Louder SDK does not expose Agent key events');
+    hostLog('warn', 'Work Louder SDK does not expose HID key events');
+  }
+  if (typeof nextApi.onJoystickMove === 'function') {
+    const unsubscribe = nextApi.onJoystickMove((event) => {
+      postActivity();
+      const parsed = parseWorkLouderCodexJoystickEvent(event);
+      if (parsed) post({ kind: 'joystick', event: parsed });
+    });
+    unsubscribeJoystick = typeof unsubscribe === 'function' ? unsubscribe : null;
   }
   api = nextApi;
+  await postDeviceStatus(nextApi, candidate.deviceType, candidate.device.isUsbConnection === true);
   return nextApi;
+}
+
+function postActivity(): void {
+  const now = Date.now();
+  if (now - lastActivityPostedAt < 250) return;
+  lastActivityPostedAt = now;
+  post({ kind: 'activity' });
+}
+
+async function postDeviceStatus(
+  deviceApi: WorkLouderApi,
+  deviceType: 'codex-micro' | 'creator-micro-2',
+  isUsbConnection: boolean,
+): Promise<void> {
+  let status: WorkLouderDeviceStatus = {};
+  if (typeof deviceApi.getDeviceStatus === 'function') {
+    try {
+      status = await deviceApi.getDeviceStatus();
+    } catch (error) {
+      hostLog('warn', `device status unavailable: ${safeErrorMessage(error)}`);
+    }
+  }
+  post({
+    kind: 'device',
+    device: {
+      deviceType,
+      isUsbConnection,
+      firmwareVersion:
+        typeof status.firmwareVersion === 'string' ? status.firmwareVersion.slice(0, 128) : null,
+      batteryPercentage:
+        typeof status.batteryPercentage === 'number' && Number.isFinite(status.batteryPercentage)
+          ? Math.max(0, Math.min(100, status.batteryPercentage))
+          : null,
+      isCharging: typeof status.isCharging === 'boolean' ? status.isCharging : null,
+      inputMonitoringPermission: process.platform === 'darwin' ? 'unknown' : 'not-required',
+    },
+  });
+}
+
+function classifyConnectionError(message: string): 'connection-failed' | 'permission-required' {
+  return /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(
+    message,
+  )
+    ? 'permission-required'
+    : 'connection-failed';
 }
 
 function scheduleRetry(): void {
@@ -290,6 +361,15 @@ async function disconnect(): Promise<void> {
   if (unsubscribe) {
     try {
       unsubscribe();
+    } catch {
+      // Subscription teardown is best effort before closing the HID transport.
+    }
+  }
+  const unsubscribeStick = unsubscribeJoystick;
+  unsubscribeJoystick = null;
+  if (unsubscribeStick) {
+    try {
+      unsubscribeStick();
     } catch {
       // Subscription teardown is best effort before closing the HID transport.
     }

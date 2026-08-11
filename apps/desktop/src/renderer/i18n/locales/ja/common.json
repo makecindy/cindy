@@ -3241,6 +3241,18 @@
         "openAria": "Work Louder Codex Micro の設定を開く",
         "back": "キーボードショートカットに戻る",
         "retry": "再試行",
+        "device": {
+          "title": "デバイス",
+          "firmware": "ファームウェア {{version}}",
+          "inputMonitoring": {
+            "label": "入力モニタリング",
+            "granted": "macOS は Cindy のキーボード入力の受信を許可しています。",
+            "denied": "macOS がキーボード入力をブロックしています。システム設定で Cindy を許可してください。",
+            "unknown": "Cindy は macOS の入力モニタリング権限をまだ確認していません。",
+            "not-required": "このプラットフォームでは入力モニタリングは必要ありません。",
+            "open": "システム設定を開く"
+          }
+        },
         "errors": {
           "load": "Codex Micro の設定を読み込めませんでした",
           "save": "Codex Micro の設定を保存できませんでした"
@@ -3259,7 +3271,11 @@
             "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
             "not-detected": "データ通信対応の USB ケーブルで接続してください。ChatGPT がデバイスを使用している場合は終了してください。",
             "error": "Cindy はキーボードと通信できませんでした。自動的に再試行しています。",
-            "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。"
+            "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
+            "connection-timeout": "Work Louder サービスが時間内に応答しませんでした。Cindy は自動的に再試行します。",
+            "connection-failed": "Work Louder サービスを起動できませんでした。Cindy は自動的に再試行します。",
+            "permission-required": "macOS がキーボードへのアクセスを拒否しました。入力モニタリングで Cindy を許可してから再試行してください。",
+            "sdk-unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。"
           }
         },
         "lighting": {
@@ -3289,15 +3305,87 @@
           "source": {
             "label": "タスクの順序",
             "description": "AG00～AG05 は最近アクティブだった 6 件のタスク順です。ピン留め順は使いません。",
-            "value": "最近の 6 件"
+            "value": "最近の 6 件",
+            "options": {
+              "recent": "最近のタスク",
+              "pinned": "ピン留めしたタスク",
+              "priority": "優先タスク",
+              "custom": "カスタム"
+            }
           },
           "singleTap": {
             "label": "1 回押して Cindy をアクティブにする",
-            "description": "1 回押すと対応するタスクを開いて Cindy をアクティブにします。オフの場合は 2 回押します。",
+            "description": "オンにすると 1 回押すだけでタスクを開いて Cindy を前面に表示します。オフの場合も 1 回押すとタスクを切り替え、350 ミリ秒以内に同じキーをもう一度押すと Cindy を前面に表示します。",
             "aria": "Agent キーを 1 回押して Cindy をアクティブにする"
           },
+          "newTask": "新しいタスク",
           "slot": "最近の {{position}} 件目",
           "slotAria": "AG{{slot}} で最近の {{position}} 件目のタスクを開く"
+        },
+        "commandKeys": {
+          "title": "コマンドキー",
+          "keycap": "キーキャップを選択",
+          "builtIn": "キーキャップの組み込みアクションを使用"
+        },
+        "microphone": {
+          "title": "マイク",
+          "mode": {
+            "label": "マイクモード",
+            "description": "マイクキーをプッシュ・トゥ・トークにするか、ボイスチャットの切り替えにするかを選択します。",
+            "options": {
+              "push-to-talk": "プッシュ・トゥ・トーク",
+              "voice-chat": "ボイスチャット"
+            }
+          },
+          "separate": {
+            "label": "マイクキーを分ける",
+            "description": "ACT10 と ACT11 を 1 つの MIC キーにまとめず、別々に使います。"
+          }
+        },
+        "analog": {
+          "title": "ジョイスティック",
+          "description": "ジョイスティックの各方向に割り当てるアクションを選択します。",
+          "directions": {
+            "up": "上",
+            "right": "右",
+            "down": "下",
+            "left": "左"
+          }
+        },
+        "encoder": {
+          "title": "エンコーダー",
+          "mode": {
+            "label": "エンコーダーモード",
+            "description": "エンコーダーの回転と押下で操作する機能を選択します。",
+            "options": {
+              "composer-navigation": "コンポーザーを移動",
+              "reasoning": "推論強度",
+              "conversation-scroll": "会話をスクロール",
+              "custom": "カスタム"
+            }
+          },
+          "gestures": {
+            "left": "左に回す",
+            "right": "右に回す",
+            "click": "押す",
+            "longPress": "長押し"
+          },
+          "customDescription": "このエンコーダージェスチャーのアクションを選択します。"
+        },
+        "actions": {
+          "choose": "アクションを選択",
+          "none": "アクションなし",
+          "tasks": "タスク",
+          "commands": "コマンド",
+          "keycaps": "キーキャップ",
+          "skills": "スキル"
+        },
+        "layout": {
+          "reset": {
+            "title": "キー配置をリセット",
+            "description": "タスク順序やライト設定を変えずに、キーキャップ、ジョイスティック、エンコーダー、マイクの割り当てを初期状態に戻します。",
+            "button": "配置をリセット"
+          }
         }
       },
       "errors": {
