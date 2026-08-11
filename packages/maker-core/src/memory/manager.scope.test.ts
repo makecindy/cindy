@@ -436,4 +436,28 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(existsSync(memoryDirFor(rootA))).toBe(true);
     manager.dispose();
   });
+
+  it('resetAll 后旧 store 任何操作抛 not-ready, 不碰已关 db (review Greptile 20th P1)', async () => {
+    const sqlite = trackingSqlite();
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => 'cloud:abc:1',
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+    const store = await manager.getStore(WORKDIR);
+    await store.write({
+      type: 'project', name: 'a', title: 'A', description: 'd', body: 'b',
+    });
+    // resetAll 完整执行 → 旧 store 的 db 已被 closeAllStores 关闭
+    await manager.resetAll();
+    // 调用方持有的旧世代 store: 读/搜均 fail-closed 抛 not-ready,
+    // 不得访问已关句柄抛裸 database is closed
+    await expect(store.list()).rejects.toThrow(/memory:not-ready/);
+    await expect(store.search('a')).rejects.toThrow(/memory:not-ready/);
+    await expect(store.getIndex()).rejects.toThrow(/memory:not-ready/);
+    manager.dispose();
+  });
 });

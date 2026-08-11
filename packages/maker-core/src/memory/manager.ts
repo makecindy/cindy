@@ -239,13 +239,22 @@ export class MakerMemoryManager {
    * store 操作复核点 (注入 store 的 scopeCheck, 每次公开操作/写盘前调用):
    * 1. resetAll 进行中 → 抛 not-ready (review #2388 Greptile 17th): 在途操作
    *    在下一复核点中止, 不再访问已被 closeAllStores 关闭的 db 句柄;
-   * 2. owner scope 变化 → 抛 not-ready (assertScopeUnchanged)。
+   * 2. store 创建后 resetAll 已完整执行 → 其 db 已被 closeAllStores 关闭
+   *    (review #2388 Greptile 20th P1): 调用方持有的旧世代 store 任何操作
+   *    都不得访问已关句柄, fail-closed 抛 not-ready 而非裸 database is closed;
+   * 3. owner scope 变化 → 抛 not-ready (assertScopeUnchanged)。
    */
-  private assertStoreOperable(scopeAtEntry: string | null): void {
+  private assertStoreOperable(scopeAtEntry: string | null, generationAtCreation: number): void {
     if (this.resetInFlight > 0) {
       throw new MemoryError(
         'not-ready',
         'memory reset in progress; store operation aborted',
+      );
+    }
+    if (this.poolGeneration !== generationAtCreation) {
+      throw new MemoryError(
+        'not-ready',
+        'memory was reset after this store was created; retry with a fresh store',
       );
     }
     this.assertScopeUnchanged(scopeAtEntry);
@@ -462,7 +471,7 @@ export class MakerMemoryManager {
       // 后置复核无法撤销已发生的写操作 —— 锚定 store 创建时 scope, 每次
       // write/delete/consolidate 前复核, scope 已变即抛 not-ready。
       ...(this.deps.ownerScopeKey
-        ? { scopeCheck: () => this.assertStoreOperable(scopeAtEntry) }
+        ? { scopeCheck: () => this.assertStoreOperable(scopeAtEntry, generationAtEntry) }
         : {}),
     });
     try {
