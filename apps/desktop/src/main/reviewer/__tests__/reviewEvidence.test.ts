@@ -895,6 +895,45 @@ describe('loadReviewEvidence attachment boundaries', () => {
     expect(evidence.branchUnavailableReason).toBe('ambiguous-base');
   });
 
+  it('accepts origin/main when the remote publishes no HEAD', async () => {
+    // Candidates carry `shortName === refName`, so the remote prefix has to be
+    // stripped rather than re-attached; getting that backwards rejects the most
+    // ordinary base there is and silently drops the review back to one turn.
+    const repoRoot = await tempDir();
+    readReviewDataMock.mockResolvedValue(cleanGitReviewData(repoRoot));
+    readReviewBranchDiffMock.mockResolvedValue({
+      scope: null,
+      baseRef: 'origin/main',
+      baseOid: 'b'.repeat(40),
+      mergeBaseOid: 'c'.repeat(40),
+      candidates: [
+        {
+          refName: 'origin/main',
+          shortName: 'origin/main',
+          kind: 'remote',
+          remote: 'origin',
+          oid: 'b'.repeat(40),
+        },
+      ],
+      diffs: [branchFileDiff('src/a.ts')],
+      capped: null,
+      warning: null,
+    });
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir: repoRoot,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.branch?.baseRef).toBe('origin/main');
+  });
+
   it('refuses a branch whose last segment merely looks like a default', async () => {
     // `feature/main` is an ordinary branch. Judging by basename would let it
     // pass as a default and reintroduce the unrelated-sibling comparison.

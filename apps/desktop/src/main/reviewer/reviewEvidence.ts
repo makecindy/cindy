@@ -117,11 +117,12 @@ function mapReviewWorkspace(
  * exists to prevent.
  */
 function isDefaultBranchCandidate(candidate: ReviewBranchBaseCandidate): boolean {
-  const expected = candidate.remote
-    ? `${candidate.remote}/${candidate.shortName}`
-    : candidate.shortName;
-  if (candidate.refName !== expected) return false;
-  return /^(?:main|master|develop|trunk)$/i.test(candidate.shortName);
+  // `shortName` mirrors `refName`, so strip the recorded remote rather than
+  // trusting either field to already be bare.
+  const prefix = candidate.remote ? `${candidate.remote}/` : '';
+  if (prefix && !candidate.refName.startsWith(prefix)) return false;
+  const bare = candidate.refName.slice(prefix.length);
+  return /^(?:main|master|develop|trunk)$/i.test(bare);
 }
 
 /**
