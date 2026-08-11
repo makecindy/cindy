@@ -7092,6 +7092,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // here — those commits are already represented by the selected
           // evidence, and binding unreviewed paths would let an unrelated turn
           // refuse the review or invalidate its result.
+          //
+          // The accepted cost: a branch review does not bind an ignored file
+          // the latest turn happened to produce, so editing that file mid-review
+          // will not invalidate the result. Binding it would mean an unrelated
+          // turn — one whose content is not being reviewed — could refuse the
+          // review outright or expire it. Between "an unreviewed file went
+          // unwatched" and "an unreviewed file blocked a valid review", this
+          // takes the first. Reviewing that deliverable is still available by
+          // attaching it explicitly, which puts it in reviewReadPaths.
           const changeSetIsReviewed = !evidence.workspace?.dirty && !evidence.branch;
           const changeSetContent = changeSetIsReviewed
             ? reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)
