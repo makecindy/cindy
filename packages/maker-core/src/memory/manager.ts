@@ -605,6 +605,9 @@ export class MakerMemoryManager {
     try {
       entries = await fs.readdir(memoryRoot);
     } catch {
+      // 异常早退路径也复核 (review #2388 Greptile 24th P1): readdir await 期间
+      // owner 切换 → 不得把部分完成的跨边界重置报为成功, 抛 not-ready 让调用方重试。
+      this.assertScopeUnchanged(scopeAtEntry);
       return { removedCount: total };
     }
     for (const entry of entries) {

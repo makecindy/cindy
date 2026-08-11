@@ -165,6 +165,13 @@ export interface MemoryStorageMeta {
 
 export class MemoryStorage {
   private indexCache: string | null = null;
+  /**
+   * 派生索引 (MEMORY.md) 失效标记 (review #2388 Codex 23rd P1/P2): shard
+   * write/delete 已落盘但其后的 rebuildIndex 被 owner 边界中止时置位 —
+   * 文件与索引不一致; 下次安全打开 (init) 时 repairIndexIfDirty 惰性修复,
+   * 防止同 owner 后续 session 把 stale 索引读进 system prompt。
+   */
+  private derivedIndexDirty = false;
 
   constructor(
     /** 已就绪的目录绝对路径, e.g. <userData>/maker-memory/<sanitized-workdir>/ */
@@ -308,7 +315,8 @@ export class MemoryStorage {
     await fs.writeFile(fullPath, fileText, 'utf8');
     // shard write 后、索引重建前复核 (review #2388 Codex 12th P1): writeFile
     // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
-    this.beforeFileWrite?.();
+    // not-ready 时文件已落盘但 MEMORY.md 未更新 → 标记派生索引 dirty (Codex 23rd)。
+    this.guardAfterMutation();
     await this.rebuildIndex();
     // rebuildIndex 自身多次 await 后、返回前复核 (review #2388 Codex 13th P1)。
     this.beforeFileWrite?.();
@@ -335,10 +343,46 @@ export class MemoryStorage {
       throw new MemoryError('io-error', `unlink failed: ${(e as Error).message}`);
     }
     // unlink 后复核 — await 窗口后边界可能发生, 不得继续在旧 owner 下重建索引。
-    this.beforeFileWrite?.();
+    // not-ready 时文件已删但 MEMORY.md 仍列出 → 标记派生索引 dirty (Codex 23rd)。
+    this.guardAfterMutation();
     await this.rebuildIndex();
     // rebuildIndex 内部多次 await 后、返回前复核。
     this.beforeFileWrite?.();
+  }
+
+  /**
+   * 变更后复核辅助 (review #2388 Codex 23rd P1/P2): shard 已落盘但其后
+   * rebuildIndex 被 owner 边界中止 → 文件与 MEMORY.md 不一致, 标记派生索引
+   * dirty; 下次安全打开 (init) 时 repairIndexIfDirty 惰性重建, 防止同 owner
+   * 后续 session 把 stale 索引读进 system prompt。
+   */
+  private guardAfterMutation(): void {
+    try {
+      this.beforeFileWrite?.();
+    } catch (e) {
+      if (e instanceof MemoryError && e.code === 'not-ready') {
+        this.derivedIndexDirty = true;
+        this.indexCache = null;
+      }
+      throw e;
+    }
+  }
+
+  private markIndexDirty(): void {
+    this.derivedIndexDirty = true;
+    this.indexCache = null;
+  }
+
+  /** 派生索引 (MEMORY.md) 是否因中止的写/删而失效 */
+  isIndexDirty(): boolean {
+    return this.derivedIndexDirty;
+  }
+
+  /** 惰性修复: 上次变更被边界中止 → 重建 MEMORY.md 恢复一致 (幂等) */
+  async repairIndexIfDirty(): Promise<void> {
+    if (!this.derivedIndexDirty) return;
+    await this.rebuildIndex();
+    this.derivedIndexDirty = false;
   }
 
   /** 当前 MEMORY.md 内容 (索引文本, 给 system prompt 拼). 不存在返空串 */
@@ -369,6 +413,18 @@ export class MemoryStorage {
    *   ...
    */
   async rebuildIndex(): Promise<void> {
+    try {
+      await this.rebuildIndexInner();
+    } catch (e) {
+      // 重建被 owner 边界中止 → 索引未更新, 标记 dirty (review #2388 Codex 23rd)
+      if (e instanceof MemoryError && e.code === 'not-ready') {
+        this.markIndexDirty();
+      }
+      throw e;
+    }
+  }
+
+  private async rebuildIndexInner(): Promise<void> {
     const records = await this.list();
     const grouped = new Map<MemoryType, MemoryRecord[]>();
     for (const rec of records) {
