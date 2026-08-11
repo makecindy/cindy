@@ -17,3 +17,4 @@ import './review';
 import './orca-workers';
 import './subagents';
 import './background-tasks';
+import './resource-usage';
