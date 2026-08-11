@@ -340,6 +340,7 @@ import {
 import { VoiceInputPointerHintLayer } from '@/voice-input/VoiceInputPointerHintLayer';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
+import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
@@ -3065,6 +3066,9 @@ export function ChatInput({
   const localVoiceShortcutHandledAtRef = useRef(0);
   const globalVoiceShortcutStartHandledAtRef = useRef(0);
   const globalVoiceShortcutSuppressReleaseFromLocalRef = useRef(false);
+  const workLouderVoiceGestureRef = useRef<ReturnType<
+    typeof createWorkLouderCodexVoiceGesture
+  > | null>(null);
 
   useEffect(() => {
     voiceShortcutRef.current = voiceInputSettings.shortcut;
@@ -6496,6 +6500,22 @@ export function ChatInput({
   );
 
   useEffect(() => {
+    const gesture = createWorkLouderCodexVoiceGesture({
+      longPressMs: VOICE_INPUT_LONG_PRESS_MS,
+      getState: () => voiceInputStateRef.current,
+      start: () => handleVoiceInputStartRef.current(),
+      stop: () => voiceInputStopRef.current(),
+    });
+    workLouderVoiceGestureRef.current = gesture;
+    return () => {
+      gesture.dispose();
+      if (workLouderVoiceGestureRef.current === gesture) {
+        workLouderVoiceGestureRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type === 'skill') {
         if (!editor || editor.isDestroyed || composerMutationLocked) return false;
@@ -6510,15 +6530,18 @@ export function ChatInput({
       if (action.type === 'voice') {
         if (action.mode === 'voice-chat') {
           if (action.phase !== 'press') return true;
-          if (voiceInput.isBusy) void handleVoiceInputPlainStop();
-          else void handleVoiceInputStart();
+          const currentState = voiceInputStateRef.current;
+          if (currentState === 'listening' || voiceInput.isBusy) {
+            void handleVoiceInputPlainStop();
+          } else if (isVoiceInputIdleLike(currentState)) {
+            void handleVoiceInputStart();
+          }
           return true;
         }
-        if (action.phase === 'press') {
-          if (!voiceInput.isBusy) void handleVoiceInputStart();
-        } else if (voiceInput.isListening) {
-          void handleVoiceInputPlainStop();
-        }
+        workLouderVoiceGestureRef.current?.handle({
+          mode: 'push-to-talk',
+          phase: action.phase,
+        });
         return true;
       }
       if (action.type !== 'command') return false;
