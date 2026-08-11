@@ -182,6 +182,30 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.sent).toEqual(['⚙️ 工作中 · 5m', '第二段', '第三段']);
   });
 
+  it('分段中途失败后重试不重发任何已出站的段落', async () => {
+    let failTail = true;
+    const h = makeHarness({
+      chunk: (text) => text.split('|'),
+      sendImpl: async (markdown) => {
+        // 第二段第一次抛错 —— 无法区分 Telegram 到底收到没有。
+        if (markdown === '第二段' && failTail) throw new Error('sendMessage failed: 429');
+        return 'msg-x';
+      },
+    });
+    const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 8m');
+
+    await expect(handle.finalize('第一段|第二段|第三段')).rejects.toThrow(/429/);
+    expect(h.reposted).toEqual(['第一段']);
+
+    failTail = false;
+    await handle.finalize('第一段|第二段|第三段');
+
+    // 首段与第二段都不再重发(第二段回执不确定, 按已出站处理), 只补第三段。
+    // 重复内容用户一眼可见, 不确定回执下宁可不重复。
+    expect(h.reposted).toEqual(['第一段']);
+    expect(h.sent).toEqual(['⚙️ 工作中 · 8m', '第二段', '第三段']);
+  });
+
   it('Rich 终稿新发成功时既不走 HTML 补送也不编辑过程消息', async () => {
     const sendFinal = vi.fn(async () => 'rich-2');
     const h = makeHarness();

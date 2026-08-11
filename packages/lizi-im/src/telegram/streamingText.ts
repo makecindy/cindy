@@ -88,6 +88,13 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
   private done = false;
   /** terminal I/O is serialized so duplicate done events cannot mint two finals. */
   private finalizing: Promise<void> | null = null;
+  /**
+   * 本轮终稿已经落地的分段数。跨 finalize 重试保留 —— 已经出现在聊天里的段落
+   * 不再重发, 重试只补未送达的部分(设计稿 §5.1 的 FINAL_PARTIAL)。
+   */
+  private deliveredChunks = 0;
+  /** 受管图片是否已收口; 与分段同理, 成功过就不重传。 */
+  private imagesDelivered = false;
   private readonly lifecycle: TelegramMessageLifecycle;
   private extraImageAbsPaths: string[] = [];
   /**
@@ -199,38 +206,58 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     }
 
     try {
-      // Rich 是终稿的新消息，不是对过程载体的原位升级。它可保留表格、公式等
-      // 结构化排版；仅当没有需要旁路上传的受管图片时尝试，失败为「本条不支持」
-      // 才安全降级到 HTML/Markdown。
-      const richMessageId =
-        imageUrls.length === 0 && this.extraImageAbsPaths.length === 0 && this.deps.sendFinal
-          ? await this.deps.sendFinal(finalText, staleMessageId !== '')
-          : null;
-      if (richMessageId) {
-        this.messageIdValue = richMessageId;
-        this.flushed = finalText;
-      } else {
-        // Hermes-style close: always mint a fresh final message. If a process
-        // carrier already exists, repost keeps its frozen reply target; if the
-        // turn was lazy and has no carrier, send consumes the normal target lease.
-        this.messageIdValue = staleMessageId
-          ? await (this.deps.repost ?? this.deps.send)(seed)
-          : await this.deps.send(seed);
-        this.flushed = seed;
-        for (const chunk of chunks.slice(1)) {
-          await this.deps.send(chunk);
+      // 分段投递进度跨重试保留: 已经出现在聊天里的段落绝不重发。一次 finalize
+      // 里首段成功、尾段失败时, 上游重试必须从 deliveredChunks 之后继续 ——
+      // 否则用户会看到重复的首段(长答案里就是重复整篇正文)。
+      if (this.deliveredChunks === 0) {
+        // Rich 是终稿的新消息，不是对过程载体的原位升级。它可保留表格、公式等
+        // 结构化排版；仅当没有需要旁路上传的受管图片时尝试，失败为「本条不支持」
+        // 才安全降级到 HTML/Markdown。
+        const richMessageId =
+          imageUrls.length === 0 && this.extraImageAbsPaths.length === 0 && this.deps.sendFinal
+            ? await this.deps.sendFinal(finalText, staleMessageId !== '')
+            : null;
+        if (richMessageId) {
+          this.messageIdValue = richMessageId;
+          this.flushed = finalText;
+          // Rich 一条消息就承载了完整正文, 没有后续分段。
+          this.deliveredChunks = chunks.length;
+        } else {
+          // Hermes-style close: always mint a fresh final message. If a process
+          // carrier already exists, repost keeps its frozen reply target; if the
+          // turn was lazy and has no carrier, send consumes the normal target lease.
+          this.messageIdValue = staleMessageId
+            ? await (this.deps.repost ?? this.deps.send)(seed)
+            : await this.deps.send(seed);
+          this.flushed = seed;
+          this.deliveredChunks = 1;
         }
+      }
+      // 逐段推进计数: 中途抛错时前面几段的进度已经记下, 重试从这里接着走。
+      //
+      // 计数在 send **发起前**推进, 不在成功后 —— 一次抛错的 send 无法区分
+      // 「Telegram 没收到」和「收到了但回执丢在路上」。把它记成已投递, 最坏是
+      // 这一段没出现(上游仍持有完整正文可再收口); 反过来记成未投递则会在重试时
+      // 把用户已经看见的一段再发一遍, 长答案里就是整篇重复。宁可不重复。
+      while (this.deliveredChunks < chunks.length) {
+        const chunk = chunks[this.deliveredChunks]!;
+        this.deliveredChunks += 1;
+        await this.deps.send(chunk);
       }
       // extraImageAbsPaths(tool_result 账本图)与正文图都交 uploadImages 收口;
       // 去重职责在 index.ts 的 uploadImages 实现里(absPath / url 双口径)。
-      await this.deps.uploadImages(this.messageIdValue, [
-        ...imageUrls,
-        ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
-      ]);
+      if (!this.imagesDelivered) {
+        await this.deps.uploadImages(this.messageIdValue, [
+          ...imageUrls,
+          ...this.extraImageAbsPaths.map((absPath) => `abs:${absPath}`),
+        ]);
+        this.imagesDelivered = true;
+      }
       this.lifecycle.markFinalSent(intent);
     } catch (err) {
       // The process carrier remains visible and no cleanup runs. A later
-      // explicit finalize may retry the same delivery key.
+      // explicit finalize may retry the same delivery key, resuming from
+      // deliveredChunks so already-visible content is never duplicated.
       this.lifecycle.markFinalFailed(intent);
       throw err;
     }
