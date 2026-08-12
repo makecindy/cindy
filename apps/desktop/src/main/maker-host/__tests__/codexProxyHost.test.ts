@@ -2722,8 +2722,11 @@ describe('codex proxy host', () => {
 
     current = {
       model: 'x-ai/grok-4.5',
-      tools: [{ type: 'namespace', name: 'multi_agent_v1', tools: [] }],
-      tool_choice: { type: 'namespace', name: 'multi_agent_v1' },
+      tools: [
+        { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+        { type: 'web_search', external_web_access: false },
+      ],
+      tool_choice: { type: 'web_search' },
       parallel_tool_calls: true,
       input: 'hello',
     };
@@ -2734,6 +2737,44 @@ describe('codex proxy host', () => {
     expect(current).toEqual({ model: 'x-ai/grok-4.5', input: 'hello' });
 
     clearSessionProvider('session-xd-grok');
+  });
+
+  it('sanitizes Gateway Grok tools for an implicit XD session', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-implicit-xd-grok', 'thread-implicit-xd-grok', 'PRODUCT_PROMPT');
+
+    const proxyOptions = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+    const transforms = proxyOptions?.transformRequest ?? [];
+    const routingTransform = proxyOptions?.routingTransform;
+    let current: unknown = {
+      model: 'x-ai/grok-4.5',
+      tools: [
+        { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+        { type: 'function', name: 'exec_command' },
+      ],
+      input: 'hello',
+    };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-implicit-xd-grok' },
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'x-ai/grok-4.5',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      input: 'hello',
+    });
+    await expect(routingTransform(current, ctx)).resolves.toBeNull();
   });
 
   it('keeps Gateway Grok tools when an OAuth session falls back to ChatGPT', async () => {

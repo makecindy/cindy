@@ -1369,7 +1369,10 @@ const XAI_SUPPORTED_TOOL_TYPES = new Set([
   'shell',
 ]);
 
-function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown> | null {
+function sanitizeXaiTools(
+  body: Record<string, unknown>,
+  dropDisabledWebSearch = false,
+): Record<string, unknown> | null {
   if (!Array.isArray(body.tools)) return null;
 
   let changed = false;
@@ -1380,6 +1383,10 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
       continue;
     }
     if (tool.type === 'web_search') {
+      if (dropDisabledWebSearch && tool.external_web_access === false) {
+        changed = true;
+        continue;
+      }
       const nextTool: Record<string, unknown> = { type: 'web_search' };
       for (const key of ['filters', 'enable_image_understanding', 'enable_image_search']) {
         if (key in tool) nextTool[key] = tool[key];
@@ -1413,18 +1420,29 @@ function isXdGatewayGrokRequest(
   const path = ctx.url.split('?', 1)[0] ?? ctx.url;
   if (ctx.method !== 'POST' || (!path.endsWith('/responses') && path !== '/responses')) return false;
 
-  const sessionId = sessionIdFromTransformCtx(ctx);
-  if (!sessionId || getSessionProvider(sessionId) !== 'xd') return false;
-  const routing = getSessionRoutingDescriptor(sessionId, 'codex', body.model);
-  if (
-    routing?.authStrategy !== 'gateway-key'
-    || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses'
-  ) {
-    return false;
-  }
-
   const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
-  return authInjection !== 'oauth-bearer' || Boolean(_readGatewayKey());
+  const sessionId = sessionIdFromTransformCtx(ctx);
+  const canUseExplicitSessionRoute = Boolean(sessionId && (
+    authInjection === 'oauth-bearer'
+    || isUserProviderSession(sessionId)
+    || isHostInjectedAuthSession(sessionId, 'codex')
+  ));
+  const routing = canUseExplicitSessionRoute && sessionId
+    ? getSessionRoutingDescriptor(sessionId, 'codex', body.model)
+    : null;
+  const gatewayKey = _readGatewayKey();
+  const resolvedRoute = routing && sessionId
+    && (authInjection === 'oauth-bearer' || authInjection === 'provider-oauth')
+    ? resolveSessionRouteDecision(sessionId, 'codex', gatewayKey, body.model)
+    : null;
+
+  if (routing) {
+    return routing.authStrategy === 'gateway-key'
+      && (routing.wireProtocol ?? 'openai-responses') === 'openai-responses'
+      && (authInjection === 'env-key' || resolvedRoute !== null);
+  }
+  return authInjection === 'env-key'
+    || (authInjection === 'provider-oauth' && gatewayDefaultRouteDecision('codex', gatewayKey) !== null);
 }
 
 /**
@@ -1773,7 +1791,7 @@ function createXaiResponsesCompatTransform(
     if (!isPlainObject(body)) return null;
     // XD Gateway 的 Grok 只复用已由 422 证明必要的 tools schema 清理；直连 xAI 的
     // instructions/history/reasoning/search 改写没有网关运行证据，不能扩大到这条路由。
-    if (isXdGatewayGrokRequest(body, ctx, frozenAuthInjection)) return sanitizeXaiTools(body);
+    if (isXdGatewayGrokRequest(body, ctx, frozenAuthInjection)) return sanitizeXaiTools(body, true);
     const sessionId = sessionIdFromTransformCtx(ctx);
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const inferredProviderId =
