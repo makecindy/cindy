@@ -46,14 +46,20 @@ export interface MobileRuntimeDraft {
   fastMode: boolean;
 }
 
-export type MobileModelCategory = 'anthropic' | 'gpt' | 'gpt-budget' | 'google' | 'china';
+/**
+ * 手机端的粗分类取值。**没有 `china`**:「中国」只由目录的 `group:'china'` 产生,而手机端
+ * 这条链上只有 model id(descriptor 不透传 group,见桌面 providerModels.toDescriptor),
+ * 拿不到该信号,所以国产模型在这里归入 `ungrouped`。这只影响跨厂商切换提示里显示的分类名,
+ * 不影响可选性与分组展示(手机端不按厂商分组)。
+ */
+export type MobileModelCategory = 'anthropic' | 'gpt' | 'gpt-budget' | 'google' | 'ungrouped';
 
 export const MOBILE_MODEL_CATEGORY_LABEL: Record<MobileModelCategory, string> = {
   anthropic: 'Anthropic',
   gpt: 'GPT',
   'gpt-budget': 'GPT 折扣',
   google: 'Google',
-  china: 'China',
+  ungrouped: '未分组',
 };
 
 export interface MobileModelSwitchConfirmation {
@@ -197,12 +203,26 @@ export function reconcileRuntimeDraftWithCapabilities<T extends MobileRuntimeDra
   };
 }
 
+/**
+ * 手机端跨厂商切换提示用的粗分类(只服务 buildMobileModelSwitchConfirmation,不做展示分组)。
+ * 与桌面 `@cindy/model-providers` 的 `categorize` 同一取向:认不出厂商就落 `ungrouped`,不猜。
+ * 提示语会把分类名直接读给用户看(「X 和 Y 的消息格式可能不兼容」),猜错就是错的断言。
+ *
+ * 本包按设计零依赖(见 docs/dev-rules/architecture-invariants.md 的依赖方向),不能反向引用
+ * model-providers,故保持独立副本;改一侧记得同步另一侧。
+ */
 export function categorizeMobileModel(id: string): MobileModelCategory {
-  if (id.startsWith('claude-')) return 'anthropic';
-  if (id.startsWith('gpt-')) return 'gpt';
-  if (id.startsWith('codex/')) return 'gpt-budget';
-  if (id.startsWith('gemini-')) return 'google';
-  return 'china';
+  const lower = id.toLowerCase();
+  // 命名空间形态(anthropic/claude-opus-5、openai/gpt-5.5)与裸 id 都要认:目录下发的 id
+  // 本来就带命名空间,只认裸 id 会让整批模型掉进兜底分类。
+  const tail = lower.slice(lower.lastIndexOf('/') + 1);
+  if (lower.startsWith('claude-') || tail.startsWith('claude-')) return 'anthropic';
+  // 折扣路由必须判在 gpt 之前:`codex/gpt-5.5` 的尾段就是 `gpt-5.5`,顺序反了会被认成
+  // 'gpt',于是切换确认框把「GPT 折扣」模型读成「GPT」。桌面 categorize 同一处理。
+  if (lower.startsWith('codex/')) return 'gpt-budget';
+  if (lower.startsWith('gpt-') || tail.startsWith('gpt-')) return 'gpt';
+  if (lower.startsWith('gemini-') || tail.startsWith('gemini-')) return 'google';
+  return 'ungrouped';
 }
 
 export function isMobileHistoryCompatibleModelSwitch(

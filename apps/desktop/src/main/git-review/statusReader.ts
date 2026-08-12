@@ -201,6 +201,7 @@ export function parsePorcelainV2Status(stdout: string, baseScope: ReviewScope): 
   if (scope.isDetached) writeDisabledReasons.push('detached');
   if (scope.isUnborn) writeDisabledReasons.push('unborn');
   if (unmergedCount > 0) writeDisabledReasons.push('unmerged');
+  if (scope.source === 'remote') writeDisabledReasons.push('remote-ssh');
 
   return {
     scope,
@@ -275,7 +276,9 @@ export async function readStatus(scope: ReviewScope): Promise<ReviewStatus> {
     maxStdoutBytes: STATUS_MAX_STDOUT_BYTES,
   });
   const status = parsePorcelainV2Status(stdout, scope);
-  status.inProgress = await readInProgressState(scope.repoRoot);
+  // SSH review is read-only regardless of merge/rebase markers. Never probe a
+  // controlled-side path with the controller's local fs APIs.
+  status.inProgress = scope.source === 'remote' ? [] : await readInProgressState(scope.repoRoot);
   if (status.inProgress.length > 0) status.writeDisabledReasons.push('in-progress');
   return status;
 }

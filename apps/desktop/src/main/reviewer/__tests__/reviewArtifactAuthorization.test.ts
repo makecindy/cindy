@@ -46,6 +46,43 @@ describe('authorizeReviewExplicitArtifacts', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it('grants an explicit scoped pnpm mirror but rejects an additional outside link', async () => {
+    if (process.platform === 'win32') return;
+    const workingDir = await tempDir();
+    const packageRoot = path.join(workingDir, 'packages', 'maker-core');
+    const sourcePath = path.join(packageRoot, 'src', 'index.ts');
+    const mirrorPath = path.join(
+      workingDir,
+      'node_modules',
+      '@cindy',
+      'maker-core',
+      'src',
+      'index.ts',
+    );
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.mkdir(path.dirname(mirrorPath), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, 'package.json'), '{"name":"@cindy/maker-core"}');
+    await fs.writeFile(sourcePath, 'export const value = 1;');
+    await fs.link(sourcePath, mirrorPath);
+    const artifactPath = await fs.realpath(sourcePath);
+    const confirm = vi.fn(async () => true);
+    const authorize = () =>
+      authorizeReviewExplicitArtifacts({
+        workingDir,
+        focus: sourcePath,
+        attachments: [],
+        resolvePath: async () => ({ absPath: artifactPath, managed: false }),
+        confirm,
+      });
+
+    await expect(authorize()).resolves.toMatchObject({ paths: [artifactPath] });
+    expect(confirm).not.toHaveBeenCalled();
+
+    const outsideDir = await tempDir();
+    await fs.link(sourcePath, path.join(outsideDir, 'third-link.ts'));
+    await expect(authorize()).rejects.toThrow(/multiply linked/i);
+  });
+
   it('rejects a pre-existing hard-linked artifact before confirmation', async () => {
     if (process.platform === 'win32') return;
     const workingDir = await tempDir();

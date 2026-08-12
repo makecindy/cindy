@@ -185,13 +185,14 @@ const worktreeMock = vi.hoisted(() => ({
     | null
     | { isGitRepo: boolean; isInsideWorktree: boolean; gitInstalled: boolean; repoRoot?: string; currentBranch?: string },
   createResult: null as null | { ok: true; meta: { path: string } } | { ok: false; error: { kind: string; message?: string } },
+  suggestedName: 'imported-wt' as string | null,
   createCalls: [] as Array<{ sessionId: string; baseRepo: string; name: string; sourceBranch: string }>,
   removeCalls: [] as string[],
 }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({
   detectCwd: async () =>
     worktreeMock.detect ?? { isGitRepo: false, isInsideWorktree: false, gitInstalled: true },
-  suggestName: async () => 'imported-wt',
+  suggestName: async () => worktreeMock.suggestedName ?? '',
   createWorktree: async (req: { sessionId: string; baseRepo: string; name: string; sourceBranch: string }) => {
     worktreeMock.createCalls.push(req);
     return worktreeMock.createResult ?? { ok: false, error: { kind: 'unknown', message: 'no mock' } };
@@ -454,6 +455,7 @@ describe('sessionShareImport', () => {
     legacyImageMock.removeSessionCalls = [];
     worktreeMock.detect = null;
     worktreeMock.createResult = null;
+    worktreeMock.suggestedName = 'imported-wt';
     worktreeMock.createCalls = [];
     worktreeMock.removeCalls = [];
     await fsp.rm(projectsRoot, { recursive: true, force: true });
@@ -1231,6 +1233,33 @@ describe('sessionShareImport', () => {
     expect(fs.existsSync(path.join(projectsRoot, key, `${SID}.jsonl`))).toBe(true);
     // 成功路径不回滚
     expect(worktreeMock.removeCalls).toHaveLength(0);
+  });
+
+  it('useWorktree: suggest-name failure leaves name empty for Main generation', async () => {
+    const wtPath = path.join(tmpRoot, 'wt', 'generated-name');
+    await fsp.mkdir(wtPath, { recursive: true });
+    worktreeMock.detect = {
+      isGitRepo: true,
+      isInsideWorktree: false,
+      gitInstalled: true,
+      repoRoot: newWorkdir,
+      currentBranch: 'dev',
+    };
+    worktreeMock.suggestedName = null;
+    worktreeMock.createResult = { ok: true, meta: { path: wtPath } };
+
+    const filePath = await writeBundleFile(await buildBundle());
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) return;
+    await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+      useWorktree: true,
+    });
+
+    expect(worktreeMock.createCalls[0]?.name).toBe('');
   });
 
   it('useWorktree: non-git directory rejects with SHARE_WORKTREE_NOT_GIT before any write', async () => {

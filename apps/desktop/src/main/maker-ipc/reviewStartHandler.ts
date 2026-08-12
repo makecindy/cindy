@@ -221,7 +221,7 @@ function terminalErrorDetails(event: AgentEvent): {
     : { failureCode: 'provider-failed' };
 }
 
-class ReviewPreconditionError extends Error {
+export class ReviewPreconditionError extends Error {
   constructor(readonly reason: ReviewFailureReason) {
     super(reason.message);
     this.name = 'ReviewPreconditionError';

@@ -3,10 +3,40 @@ import test from "node:test";
 
 import {
   applyDesktopDevStartupConfig,
+  desktopUserDataDirForRegion,
+  desktopUserDataDirNameForRegion,
   resolveDesktopDevRegion,
   resolveDesktopDevStartupConfig,
   stripDesktopDevRegionArgs,
 } from "../shared/desktop-dev-region.mjs";
+
+test("desktop shared userData follows the region identity", () => {
+  assert.equal(desktopUserDataDirNameForRegion(), "CindyGlobal");
+  assert.equal(desktopUserDataDirNameForRegion("global"), "CindyGlobal");
+  assert.equal(desktopUserDataDirNameForRegion("cn"), "Cindy");
+  assert.equal(desktopUserDataDirNameForRegion("dev"), "CindyDev");
+  assert.throws(() => desktopUserDataDirNameForRegion("us"), /expected cn, global or dev/);
+});
+
+test("desktop userData path follows platform appData rules and selected region", () => {
+  assert.equal(
+    desktopUserDataDirForRegion("global", "darwin", {}, "/Users/tester"),
+    "/Users/tester/Library/Application Support/CindyGlobal",
+  );
+  assert.equal(
+    desktopUserDataDirForRegion("cn", "linux", { XDG_CONFIG_HOME: "/tmp/config" }, "/home/tester"),
+    "/tmp/config/Cindy",
+  );
+  assert.equal(
+    desktopUserDataDirForRegion(
+      "dev",
+      "win32",
+      { APPDATA: "C:\\Users\\tester\\AppData\\Roaming" },
+      "C:\\Users\\tester",
+    ),
+    "C:\\Users\\tester\\AppData\\Roaming\\CindyDev",
+  );
+});
 
 test("desktop dev region defaults to global and keeps the legacy env fallback", () => {
   assert.equal(resolveDesktopDevRegion([], {}), "global");

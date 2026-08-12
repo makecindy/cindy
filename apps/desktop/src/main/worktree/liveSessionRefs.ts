@@ -1,9 +1,11 @@
 /**
  * live-session 引用判定（WorktreePool 与 WorktreeManager 删除路径共用）。
  *
- * 语义：某 worktree 路径若仍被任何**未删除**会话的 workingDir / worktreePath 指向，
- * 就视为"在用"，删除/淘汰路径必须保留它。查询失败时返回 null，消费方按
- * "无法确认 → 视为在用"的保守方向处理——所有分支都倾向保留而非删除。
+ * 语义：某 worktree 路径若仍被其它会话的 workingDir / worktreePath 指向，就视为"在用"，
+ * 删除/淘汰路径必须保留它。显式归档/删除回收可提供运行态观察器：archived/deleted 只在确认
+ * 对应 runtime 已关闭后才不再阻挡；其它调用方没有观察器时保守保留 archived，但继续忽略
+ * deleted。查询失败时返回 null，消费方按"无法确认 → 视为在用"的保守方向处理。未知或 NULL
+ * status 同样按在用处理。
  *
  * 原实现内联在 WorktreePool.ts（MR1），P0 重构把它抽出来给
  * removeWorktreeForSession 的删除守卫复用，并支持排除会话自身
@@ -11,7 +13,7 @@
  */
 
 import path from 'node:path';
-import { ne } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
@@ -47,9 +49,11 @@ export interface LoadLiveSessionPathKeysOptions {
   contextPath?: string;
   /**
    * 排除的会话 id：显式删除/归档会话时，该会话自己的 workingDir/worktreePath
-   * 不构成"仍在用"（归档会话 status 仍非 deleted，不排除会永远挡住自己的回收）。
+   * 不构成"仍在用"；显式回收观察器存在时，其它终态会话仍需运行态证明才能排除。
    */
   excludeSessionId?: string;
+  /** 终态会话只有在该观察器明确返回 false 时才不再视为 live。 */
+  isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
 }
 
 export async function loadLiveSessionPathKeys(
@@ -60,16 +64,27 @@ export async function loadLiveSessionPathKeys(
     const rows = await db
       .select({
         id: sessions.id,
+        status: sessions.status,
         workingDir: sessions.workingDir,
         worktreePath: sessions.worktreePath,
       })
       .from(sessions)
-      .where(ne(sessions.status, 'deleted'));
+      .where(
+        opts.isSessionRuntimeAlive
+          ? sql`${sessions.workingDir} IS NOT NULL OR ${sessions.worktreePath} IS NOT NULL`
+          : sql`${sessions.status} != 'deleted' OR ${sessions.status} IS NULL`,
+      );
 
     const keys = new Set<string>();
     for (const row of rows) {
-      // 排除放在 JS 层而非 SQL:语义单测无需解析 drizzle 条件表达式。
       if (opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
+      const isTerminal = row.status === 'archived' || row.status === 'deleted';
+      if (!opts.isSessionRuntimeAlive && row.status === 'deleted') {
+        continue;
+      }
+      if (isTerminal && opts.isSessionRuntimeAlive?.(row.id) === false) {
+        continue;
+      }
       const workingDirKey = pathKey(row.workingDir);
       const worktreePathKey = pathKey(row.worktreePath);
       if (workingDirKey) keys.add(workingDirKey);

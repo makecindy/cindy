@@ -40,6 +40,7 @@ import {
   type AttachedNotify,
 } from './session-registry.js';
 import { encodeMessage } from './codec.js';
+import { prepareRemoteClaudeEnv } from './remote-claude-env.js';
 
 
 /**
@@ -132,7 +133,7 @@ export function wireSdkHandlers(server: ManagerServer, registry: SessionRegistry
         sessionId: p.sessionId!,
         cwd: p.cwd!,
         model: p.model!,
-        env: p.env as Record<string, string>,
+        env: prepareRemoteClaudeEnv(p.env as Record<string, string>),
         ...(p.mcpServers ? { mcpServers: p.mcpServers } : {}),
         ...(p.permissionMode ? { permissionMode: p.permissionMode } : {}),
         ...(p.systemPrompt !== undefined ? { systemPrompt: p.systemPrompt } : {}),

@@ -40,7 +40,7 @@ L0  花名册（system 段常驻召回）
 
 - 每条 = `{id, name, command, recall}`；`recall = whenToUse ?? description`。
 - 单条 recall 上限为协议常量 `GHOST_MANIFEST_SUMMARY_MAX_CHARS`（= 300，正本在
-  协议仓 `packages/plugin-protocol/src/manifest.ts`，desktop 经
+  本仓 `packages/plugin-protocol/src/manifest.ts`，desktop 经
   `apps/desktop/src/shared/ghost.ts` re-export）。
 - 序列化前逐字段折叠空白（`replace(/\s+/g, " ")` + trim）并防御截断
   （name ≤ 64、command ≤ 32、recall ≤ 300）；条目按 id 排序；最多 16 条、
@@ -161,7 +161,7 @@ L0  花名册（system 段常驻召回）
   `apps/desktop/src/main/mcp-integrations/ghost.ts`
 - 可见性唯一真源：`apps/desktop/src/main/cindy-brain/ghostVisibility.ts`
 - 作者契约（FORGE_GUIDE）：`apps/desktop/src/main/cindy-brain/forge.ts`
-- 摘要上限常量：协议仓 `packages/plugin-protocol/src/manifest.ts`（desktop 经
+- 摘要上限常量：本仓 `packages/plugin-protocol/src/manifest.ts`（desktop 经
   `apps/desktop/src/shared/ghost.ts` re-export）
 - 三 harness 注入落点：`packages/maker-core/src/agents/claude-code/index.ts`
   （buildQuery）、`packages/maker-core/src/agents/codex/index.ts`

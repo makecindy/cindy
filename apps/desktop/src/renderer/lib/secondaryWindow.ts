@@ -18,7 +18,8 @@ export function isSecondaryWindow(): boolean {
 
 /**
  * 副窗口启动时要定位到的 sessionId(由 main/secondary-windows.ts 写进启动参数
- * `?bootSession=<id>`)。SecondaryWindowBootGate 读它,经 resolveSessionRoute 解析
+ * `?bootSession=<id>`，可选 `?bootDevice=<id>`)。SecondaryWindowBootGate 读它,经
+ * resolveSessionRoute 解析
  * 出 canonical route(普通 / Orca lead / worker)后再 navigate,避免 main 端写死
  * 单 session 路由导致 Orca 会话退化成单栏。
  *
@@ -27,6 +28,16 @@ export function isSecondaryWindow(): boolean {
 export function getBootSessionId(): string | null {
   try {
     const id = new URLSearchParams(window.location.search).get('bootSession');
+    return id && id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Device-link origin carried by a task drag into a secondary window. */
+export function getBootDeviceId(): string | null {
+  try {
+    const id = new URLSearchParams(window.location.search).get('bootDevice');
     return id && id.length > 0 ? id : null;
   } catch {
     return null;

@@ -1849,6 +1849,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             message: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
           };
         } else {
+          // AI `ask` and deterministic red-line verdicts are never persisted.
+          // 审阅器故障降级来的 ask 额外发一条会话级提示:用户需要知道自己为什么
+          // 突然开始被问,否则 Auto 档看起来像坏了。
+          if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
           // UI 的「允许一次」只影响当前请求，不写跨轮次批准记忆。
           forcePrompt = true;
         }
@@ -2967,6 +2971,9 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // UI 的「允许一次」只影响当前请求，不写跨轮次批准记忆。
                 remoteForcePrompt = true;
               }
+              // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
+              if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+              remoteForcePrompt = true;
             } else {
               if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
                 return { kind: 'permission', behavior: 'allow' };

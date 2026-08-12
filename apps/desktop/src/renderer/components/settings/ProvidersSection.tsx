@@ -1726,6 +1726,7 @@ export function ProvidersSection() {
   const [dialog, setDialog] = useState<
     null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
   >(null);
+  const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
   const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
@@ -2242,6 +2243,7 @@ export function ProvidersSection() {
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
               <button
+                ref={addProviderButtonRef}
                 type="button"
                 onClick={() => setWizard({})}
                 className="flex h-9 w-full items-center justify-center gap-1.5 rounded-full border border-dashed text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
@@ -2465,6 +2467,7 @@ export function ProvidersSection() {
         <CustomProviderDialog
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           existingIds={providers.map((p) => p.id)}
+          returnFocusRef={dialog.mode === 'create' ? addProviderButtonRef : undefined}
           onClose={() => setDialog(null)}
           onSaved={() => {
             setDialog(null);

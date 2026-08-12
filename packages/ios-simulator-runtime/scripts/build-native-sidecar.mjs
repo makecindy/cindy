@@ -12,6 +12,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import {
+  IOS_SIMULATOR_HELPER_BUILD_RESULT_FILENAME,
+  decideNativeSidecarBuild,
+  parseMachOArchitectures,
+} from "./native-sidecar-build-policy.mjs";
+
 const execFileAsync = promisify(execFile);
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -42,6 +48,10 @@ const helperStagingRoot = path.join(
 );
 const helperBundleName = "Cindy iOS Simulator Helper.app";
 const executableName = "ios-simulator-sidecar";
+const helperBuildResult = path.join(
+  helperStagingRoot,
+  IOS_SIMULATOR_HELPER_BUILD_RESULT_FILENAME,
+);
 
 if (process.platform !== "darwin") {
   console.log("[ios-simulator-sidecar] skipped: macOS-only native helper");
@@ -78,6 +88,33 @@ const simulatorKitFrameworks = path.join(
   "Library",
   "PrivateFrameworks",
 );
+const simulatorKitBinary = path.join(
+  simulatorKitFrameworks,
+  "SimulatorKit.framework",
+  "SimulatorKit",
+);
+
+async function inspectSimulatorKitArchitectures() {
+  const { stdout } = await execFileAsync(
+    "xcrun",
+    ["lipo", "-archs", simulatorKitBinary],
+    { maxBuffer: 1024 * 1024 },
+  );
+  const architectures = parseMachOArchitectures(stdout);
+  if (architectures.length === 0) {
+    throw new Error("SimulatorKit architecture inspection returned no slices");
+  }
+  return architectures;
+}
+
+async function writeHelperBuildResult(result) {
+  await mkdir(helperStagingRoot, { recursive: true });
+  await writeFile(
+    helperBuildResult,
+    `${JSON.stringify(result, null, 2)}\n`,
+    "utf8",
+  );
+}
 
 async function compileArchitecture(targetArchitecture, output) {
   const outputDir = path.dirname(output);
@@ -210,20 +247,46 @@ async function buildRawBinary() {
       "[ios-simulator-sidecar] build failed: raw output requires one architecture",
     );
   }
+  const simulatorKitArchitectures = await inspectSimulatorKitArchitectures();
+  decideNativeSidecarBuild({
+    outputMode,
+    targetArchitecture: architecture,
+    simulatorKitArchitectures,
+  });
   const output = path.join(nativeOutputRoot, architecture, executableName);
   await compileArchitecture(architecture, output);
   console.log(`[ios-simulator-sidecar] built ${output}`);
 }
 
 async function buildHelperBundle() {
-  const tempRoot = await mkdtemp(
-    path.join(os.tmpdir(), "cindy-ios-simulator-helper-"),
-  );
   const helperBundle = path.join(helperStagingRoot, helperBundleName);
   const contents = path.join(helperBundle, "Contents");
   const executable = path.join(contents, "MacOS", executableName);
 
   await rm(helperStagingRoot, { recursive: true, force: true });
+  const simulatorKitArchitectures = await inspectSimulatorKitArchitectures();
+  const decision = decideNativeSidecarBuild({
+    outputMode,
+    targetArchitecture: architecture,
+    simulatorKitArchitectures,
+  });
+  if (decision.action === "unsupported") {
+    await writeHelperBuildResult({
+      schemaVersion: 1,
+      status: "unsupported",
+      targetArchitecture: architecture,
+      reason: decision.reason,
+      simulatorKitArchitectures,
+    });
+    console.warn(
+      `[ios-simulator-sidecar] skipped helper ${architecture}: SimulatorKit provides ${simulatorKitArchitectures.join("+") || "no compatible slices"}; packaged app will use WDA/MJPEG`,
+    );
+    return;
+  }
+
+  const tempRoot = await mkdtemp(
+    path.join(os.tmpdir(), "cindy-ios-simulator-helper-"),
+  );
   await mkdir(path.dirname(executable), { recursive: true });
   try {
     const thinOutputs = [];
@@ -250,6 +313,12 @@ async function buildHelperBundle() {
       helperInfoPlist(),
       "utf8",
     );
+    await writeHelperBuildResult({
+      schemaVersion: 1,
+      status: "built",
+      targetArchitecture: architecture,
+      simulatorKitArchitectures,
+    });
     console.log(
       `[ios-simulator-sidecar] built helper ${helperBundle} (${targetArchitectures.join("+")})`,
     );

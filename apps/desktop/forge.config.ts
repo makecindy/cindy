@@ -19,6 +19,7 @@ import {
   brandExecutableName,
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
+import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 
 const _require = createRequire(__filename);
@@ -681,54 +682,6 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
-const IOS_SIMULATOR_HELPER_BUNDLE = 'Cindy iOS Simulator Helper.app';
-const IOS_SIMULATOR_HELPER_EXECUTABLE = 'ios-simulator-sidecar';
-
-/**
- * Forge first copies the Host-owned helper through extraResource, then this
- * postPackage step moves it into the canonical nested-code location. Raw dev
- * binaries and the temporary helper staging directory must not remain in the
- * final application bundle.
- */
-function stageMacIOSSimulatorHelper(buildPath: string, platform: string): void {
-  if (platform !== 'darwin' && platform !== 'mas') return;
-  const apps = fs.readdirSync(buildPath).filter((name) => name.endsWith('.app'));
-  if (apps.length !== 1) {
-    throw new Error(
-      `[forge:postPackage] expected one macOS app while staging iOS Simulator helper, found ${apps.length}`,
-    );
-  }
-
-  const appContents = path.join(buildPath, apps[0], 'Contents');
-  const resourceRoot = path.join(appContents, 'Resources', 'ios-simulator');
-  const sourceBundle = path.join(resourceRoot, 'helper', IOS_SIMULATOR_HELPER_BUNDLE);
-  const destinationBundle = path.join(appContents, 'Helpers', IOS_SIMULATOR_HELPER_BUNDLE);
-  const sourceExecutable = path.join(
-    sourceBundle,
-    'Contents',
-    'MacOS',
-    IOS_SIMULATOR_HELPER_EXECUTABLE,
-  );
-  if (!fs.existsSync(sourceExecutable)) {
-    throw new Error(
-      `[forge:postPackage] staged iOS Simulator helper executable missing at ${sourceExecutable}`,
-    );
-  }
-
-  fs.mkdirSync(path.dirname(destinationBundle), { recursive: true });
-  fs.rmSync(destinationBundle, { recursive: true, force: true });
-  fs.renameSync(sourceBundle, destinationBundle);
-  fs.rmSync(path.join(resourceRoot, 'helper'), { recursive: true, force: true });
-  fs.rmSync(path.join(resourceRoot, 'native'), { recursive: true, force: true });
-  fs.chmodSync(
-    path.join(destinationBundle, 'Contents', 'MacOS', IOS_SIMULATOR_HELPER_EXECUTABLE),
-    0o755,
-  );
-  console.log(
-    `[forge:postPackage] staged ${IOS_SIMULATOR_HELPER_BUNDLE} in ${apps[0]}/Contents/Helpers`,
-  );
-}
-
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
   return `${targetPlatform}-${targetArch}`;
 }
@@ -935,6 +888,7 @@ function ensureMacIOSSimulatorWdaArchive(platform: ForgePlatform): void {
 const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
+const MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 
 function swiftTargetTriple(cpuArch: 'arm64' | 'x86_64', deploymentTarget: string): string {
   return `${cpuArch}-apple-${deploymentTarget}`;
@@ -1151,6 +1105,35 @@ function buildMacComputerPermissionGuideHelper(platform: ForgePlatform, arch: Fo
   fs.chmodSync(dest, 0o755);
   const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
   console.log(`[forge:prePackage] macOS computer permission guide helper (${swiftArchLabel(arch, MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
+}
+
+function buildMacSessionDragReleaseHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const src = path.join(
+    __dirname,
+    'native',
+    'session-drag-release',
+    'macos-session-drag-release-helper.swift',
+  );
+  const destDir = path.join(__dirname, 'resources', 'tools', 'session-drag-release');
+  const dest = path.join(destDir, 'xdt-macos-session-drag-release-helper');
+  if (!fs.existsSync(src)) {
+    throw new Error(`[forge] macOS session drag release helper source missing at ${src}`);
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET,
+    ['-O'],
+    'session drag release helper',
+  );
+  fs.chmodSync(dest, 0o755);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log(
+    `[forge:prePackage] macOS session drag release helper (${swiftArchLabel(arch, MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`,
+  );
 }
 
 // MakerNSIS is Windows-only (native dependency), conditionally require to
@@ -1433,6 +1416,7 @@ const config: ForgeConfig = {
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
+      buildMacSessionDragReleaseHelper(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，
@@ -1442,7 +1426,7 @@ const config: ForgeConfig = {
         const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
         console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
         signPackagedExes(buildPath);
-        stageMacIOSSimulatorHelper(buildPath, opts.platform);
+        stageMacIOSSimulatorHelper(buildPath, opts.platform, opts.arch);
         applyMacPackagedDisplayName(buildPath, opts.platform);
       }
     },
@@ -1515,6 +1499,12 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/preload/preload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
+          entry: 'src/preload/resourceUsagePreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

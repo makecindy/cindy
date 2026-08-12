@@ -54,6 +54,13 @@ export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
 export type { TelegramBehaviorConfig } from './telegram/index.js';
 export { TELEGRAM_PERSONAL_CAPABILITIES } from './telegram/presentationCapabilities.js';
 export type { TelegramDriverCapabilities } from './telegram/presentationCapabilities.js';
+export { createTelegramMessageLifecycle } from './telegram/messageLifecycle.js';
+export { TelegramFinalUnconfirmedError } from './telegram/streamingText.js';
+export type {
+  TelegramFinalIntent,
+  TelegramMessageLifecycle,
+  TelegramMessageLifecyclePhase,
+} from './telegram/messageLifecycle.js';
 export { WecomIM, createWecomIM } from './wecom/index.js';
 export type { WecomIMOptions } from './wecom/index.js';
 export {

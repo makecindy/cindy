@@ -1445,6 +1445,63 @@
           "empty": "沒有匹配的模型",
           "confirm": "填入所選模型（{{count}}）"
         },
+        "runtimeFill": {
+          "action": "填入其他 Runtime",
+          "reviewTitle": "填入其他 Runtime",
+          "reviewSubtitle": "先查看欄位差異；每個 Runtime 仍會獨立儲存。",
+          "confirmTitle": "確認覆蓋",
+          "confirmSubtitle": "選擇要從 {{source}} 複製的欄位。",
+          "source": "來源",
+          "columns": { "field": "欄位", "source": "來源值", "target": "目前值" },
+          "fields": {
+            "endpointBundle": "端點與 API 協議",
+            "baseUrl": "基礎 URL",
+            "requestPath": "請求路徑",
+            "wireProtocol": "API 協議",
+            "apiKey": "API 金鑰",
+            "models": "模型",
+            "headers": "進階請求標頭",
+            "modelsUrl": "模型列表端點"
+          },
+          "values": {
+            "empty": "空白",
+            "default": "預設／推斷",
+            "configured": "已設定",
+            "secretSet": "已設定（值已隱藏）",
+            "models_one": "{{count}} 個模型",
+            "models_other": "{{count}} 個模型",
+            "headers_one": "{{count}} 個請求標頭",
+            "headers_other": "{{count}} 個請求標頭"
+          },
+          "targetConflict_one": "{{count}} 個既有欄位不同",
+          "targetConflict_other": "{{count}} 個既有欄位不同",
+          "targetReady_one": "可填入 {{count}} 個欄位",
+          "targetReady_other": "可填入 {{count}} 個欄位",
+          "targetIncompatible_one": "{{count}} 個欄位不相容",
+          "targetIncompatible_other": "{{count}} 個欄位不相容",
+          "status": { "needsConfirm": "需要確認", "ready": "可以填入", "incompatible": "不相容" },
+          "secretIndependent": "複製到 {{target}} 的獨立本機金鑰",
+          "overwriteCurrent": "取代目前值",
+          "fillEmpty": "填入目前空白欄位",
+          "incompatibleProtocol": "未複製：{{target}} 不支援此 API 協議",
+          "incompatibleHeaders": "未複製：{{target}} 需要無法在此安全複製的請求標頭",
+          "incompatibleEndpoint": "未複製：{{target}} 無法使用此端點設定",
+          "noSelectableFields": "此 Runtime 沒有可相容填入的欄位。",
+          "endpointBundleNote": "填入 {{target}} 時，基礎 URL、請求路徑和 API 協議會成組複製，避免端點組合不符。",
+          "oauthPiUnavailable": "Pi 原生 Runtime 不支援 OAuth 供應商，因此不會作為填入目標。",
+          "independentNote": "這是一次性填入；之後各 Runtime 不會同步。API 金鑰仍使用獨立 safeStorage 記錄。",
+          "continue": "查看覆蓋項目",
+          "apply": "確認填入",
+          "applyOverwrite": "覆蓋並填入",
+          "back": "返回差異",
+          "nothingToFill": "請先填寫目前 Runtime 的可重用欄位",
+          "alreadySame": "其他 Runtime 中可填入的欄位已經一致",
+          "loadingKeys": "請等待已儲存的 API 金鑰載入完成，再填入其他 Runtime",
+          "keysUnavailable": "無法讀取已儲存的 API 金鑰，暫時無法填入其他 runtime",
+          "modelsBusy": "請先完成正在進行的模型列表獲取或選擇，再填入其他 Runtime",
+          "noCompatibleFields": "其他 Runtime 不支援目前 Runtime 中可重用的欄位",
+          "filledToast": "已填入 {{targets}}；各 Runtime 仍保持獨立"
+        },
         "authMode": {
           "label": "鑑權方式",
           "apiKey": "API 金鑰",
@@ -2266,6 +2323,9 @@
         "nestedLabel": "允許 Subagent 再建立 Subagent",
         "nestedHint": "僅舊版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）會忽略此設定。",
         "nestedAria": "允許 Subagent 再建立 Subagent",
+        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
+        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃與委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
+        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略",
         "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。"
       },
       "toast": {
@@ -3271,10 +3331,11 @@
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
-        "conflict": "暫不可用",
-        "conflictAria": "{{name}} 存在插件標識衝突",
-        "conflictDescription": "插件標識已被佔用，當前無法安裝",
+        "replace": "替換",
+        "replaceAria": "使用此市場版本替換 {{name}}",
+        "replaceDescription": "已安裝相同標識的插件；繼續安裝會使用此市場版本替換，並保留插件資料。",
         "unavailable": "插件市場暫時不可用；已安裝插件仍可正常管理和使用。",
+        "customSourcesUnavailable": "以下自訂市場暫時不可用：{{names}}。其他市場不受影響。",
         "authenticationRequired": "登入 Cindy 後才能檢視插件市場。",
         "notConfigured": "當前環境未配置插件市場；已安裝插件仍可正常管理和使用。",
         "upgradeNotice": {
@@ -3698,13 +3759,6 @@
         "title": "全部更新 · {{count}} 個插件",
         "description": "權限無變化的更新會自動完成；涉及權限變更的需要你逐項確認。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "權限有變更",
-        "reviewOutdated": "權限差異已過期",
-        "rereview": "重新審閱",
-        "reviewDiff": "檢視並確認",
-        "collapseDiff": "收起",
-        "approve": "同意並更新",
-        "skip": "跳過此項",
         "statusPending": "排隊中",
         "statusInstalling": "更新中…",
         "statusDone": "已更新",
@@ -4369,6 +4423,7 @@
     "close": "關閉",
     "menuItems": {
       "settings": "設定",
+      "resourceUsage": "資源用量",
       "help": "幫助",
       "issues": "問題反饋",
       "checkForUpdates": "檢查更新"
@@ -4768,7 +4823,15 @@
         "unmerged": "存在未合併檔案",
         "in-progress": "git 操作進行中",
         "agent-running": "Agent 正在執行",
-        "disabled": "審查不可用"
+        "disabled": "審查不可用",
+        "remote-device": "遠端設備任務僅支援檢視",
+        "remote-ssh": "SSH 工作區審查僅支援檢視"
+      },
+      "remote": {
+        "deviceTooOldTitle": "對方設備版本過舊",
+        "deviceTooOldDesc": "對方設備的 {{appName}} 版本過舊，暫不支援遠端審查，請升級被控設備後重試。",
+        "oversizeTitle": "改動資料過大",
+        "oversizeDesc": "該視圖的改動超過裝置互聯單次傳輸上限，請在被控設備上檢視。"
       },
       "unmodifiedLines_one": "{{count}} 行未改動",
       "unmodifiedLines_other": "{{count}} 行未改動",
@@ -4969,7 +5032,7 @@
         },
         "no-session": {
           "title": "任務不存在",
-          "desc": "找不到當前任務記錄。"
+          "desc": "本裝置上找不到該任務記錄。"
         },
         "no-workdir": {
           "title": "沒有工作目錄",
@@ -5406,6 +5469,7 @@
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在設定裡配置 API key 才能使用",
       "hidden": "已隱藏",
+      "modelListAria": "模型列表",
       "subscriptionDirectDisabled": {
         "chatgpt": "訂閱直連的 GPT 模型協議暫不支援 SSH 遠端會話",
         "xai": "訂閱直連的 Grok 模型協議暫不支援 SSH 遠端會話",
@@ -5452,7 +5516,7 @@
         "budget": "GPT 折扣",
         "grok": "xAI",
         "google": "Google",
-        "china": "國內",
+        "china": "中國",
         "image": "影像",
         "video": "影片",
         "tts": "語音合成",
@@ -5460,6 +5524,7 @@
         "realtime": "即時語音",
         "embedding": "向量",
         "compression": "壓縮",
+        "ungrouped": "未分組",
         "other": "其它"
       },
       "search": {
@@ -5556,6 +5621,7 @@
     },
     "worktree": {
       "detecting": "檢測環境中…",
+      "detectFailed": "環境檢測失敗，worktree 暫不可用",
       "gitMissing": "未檢測到 git，請先安裝",
       "notGitRepo": "當前目錄不是 git 倉庫",
       "alreadyInWorktree": "已在 worktree 中，禁止巢狀",
@@ -5904,6 +5970,7 @@
     "verificationFailed": "暫時無法確認 ChatGPT 登入是否已恢復，請重新檢測。"
   },
   "chat": {
+    "sessionLoading": "正在載入任務",
     "askUserQuestion": {
       "skippedAnswer": "已跳過"
     },
@@ -6417,6 +6484,7 @@
           "sourceConversationChanged": "來源任務已變更，請針對當前任務重新執行 /review。",
           "sourceFilesChanged": "來源任務的檔案已變更，請針對當前成果重新執行 /review。",
           "artifactChanged": "審查成果已變更，請針對當前成果重新執行 /review。",
+          "artifactUnavailable": "Cindy 無法安全讀取審查成果，請檢查工作區或附件後重新執行 /review。",
           "providerFailed": "審查任務執行失敗"
         }
       }
@@ -6563,7 +6631,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "遠端連線已中斷（daemon 可能正在升級或重啟）。本輪已結束 — 請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時不可用，需要審批的操作會被拒絕。想自己確認這些操作，可以把任務切到「預設權限」。",
+      "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷（網路或服務波動），需要審批的操作已轉由你來確認。想少被打斷，可以把任務切到「預設權限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
@@ -8802,6 +8870,7 @@
       "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
       "permissionTightenInterruptFailed": "收緊權限時未能停止正在執行的任務，它可能會繼續免確認執行直到結束；如有需要請手動停止。",
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
+      "hostShellCommandBlocked": "Cindy 已阻止會繞過內嵌模擬器的 Shell 命令。請改用模擬器工具控制裝置、啟動 App、操作介面、截圖和診斷。",
       "upstreamResponseIdleTimeout": "模型長時間沒有任何響應，本輪已自動中斷以免無限等待。已完成的工具呼叫都保留，可以直接發下一條訊息繼續。",
       "codexCompactionNotConverging": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。壓不動的部分通常不在對話裡——system prompt 與工具定義佔掉的空間壓縮清不掉。新開一個任務可以繼續。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。本任務中途切換過模型，而 Codex 仍按切換前那個模型的上下文上限來判斷。切回原模型可以繼續，或者新開一個任務。",
@@ -8929,17 +8998,9 @@
     "dropHint": "鬆開以在此分欄開啟任務",
     "loadingTask": "正在載入任務…",
     "resizeAria": "調整任務分欄大小",
-    "openInSplit": "在分欄中開啟",
-    "openSide": {
-      "left": "在左側開啟任務",
-      "right": "在右側開啟任務",
-      "top": "在上方開啟任務",
-      "bottom": "在下方開啟任務"
-    },
     "alreadyOpen": "該任務已在當前分欄中開啟，請選擇其他任務",
     "limitReached": "一個分欄最多可開啟 {{count}} 個任務，請先關閉一個任務分欄再重試",
-    "addUnavailable": "當前無法在分欄中開啟該任務，請先在主區域開啟一個任務再重試",
-    "workerUnavailable": "Worker 任務不能單獨在分欄中開啟，請改為開啟所屬 Lead 任務"
+    "addUnavailable": "當前無法在分欄中開啟該任務，請先在主區域開啟一個任務再重試"
   },
   "extraDirs": {
     "menuAria": "操作選單",

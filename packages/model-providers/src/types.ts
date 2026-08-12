@@ -17,7 +17,7 @@
  * 本包零运行时依赖：`AgentKind` / `Effort` 在此就地定义（与 maker-core 的同名
  * 联合保持一致），不 import maker-core，保证可作为独立能力复用。
  */
-import type { ModelRegistry } from '@cindy/model-access-protocol';
+import type { ModelRegistry } from './modelAccessBean.js';
 
 /** 承载模型的 agent runtime —— 与 maker-core AgentKind 对齐。 */
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
@@ -175,6 +175,7 @@ export interface RoutingDescriptor {
   headerDelete?: string[];
   /** 额外固定请求头覆盖（少数特例用；多数由 authStrategy 隐含）。 */
   headerOverride?: Record<string, string>;
+  headerOverrideState?: 'configured' | 'unknown';
   /** 可选 quirk 适配钩子名（对齐 OpenCode custom loader，承接无法纯数据表达的特例）。 */
   adapter?: string;
   /**
@@ -228,7 +229,9 @@ export interface CatalogModel {
   family?: string;
   /**
    * 厂商分组 id —— 决定模型在选择器右栏的分组归属（替代渲染层按 id 前缀硬猜）。
-   * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'google' | 'china'。
+   * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'grok' |
+   * 'google' | 'china' | 'ungrouped' | 'image' | 'video' | 'tts' | 'stt' | 'realtime' |
+   * 'embedding' | 'compression' | 'other'。
    * 缺省时渲染层回退到 id 前缀归类（categorize）。新增未知分组需在渲染层补 i18n 标签。
    */
   group?: string;
@@ -594,6 +597,8 @@ export interface CustomProviderRuntimeConfig {
    * custom_providers SQLite，也不通过非可信 / 远程 provider:list 返回。
    */
   headers?: Record<string, string>;
+  /** Transient non-secret state; main normalization strips it before persistence. */
+  headersState?: 'configured' | 'unknown';
   /**
    * 可选的「列模型」端点（「获取模型列表」按钮用；缺省由 baseUrl 推导 `…/v1/models`）。
    * 从预设创建时随 `ProviderPresetRuntime.modelsUrl` 快照进来并持久化，编辑态仍可再拉。

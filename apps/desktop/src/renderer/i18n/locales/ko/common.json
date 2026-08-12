@@ -1468,6 +1468,67 @@
         },
         "advanced": {
           "label": "고급 설정 (모델 / 요청 헤더)"
+        },
+        "runtimeFill": {
+          "action": "다른 runtime 채우기",
+          "reviewTitle": "다른 runtime 채우기",
+          "reviewSubtitle": "필드 차이를 먼저 확인하세요. 각 runtime은 독립적으로 저장됩니다.",
+          "confirmTitle": "덮어쓰기 확인",
+          "confirmSubtitle": "{{source}}에서 복사할 필드를 선택하세요.",
+          "source": "원본",
+          "columns": { "field": "필드", "source": "원본 값", "target": "현재 값" },
+          "fields": {
+            "endpointBundle": "엔드포인트 및 API 프로토콜",
+            "baseUrl": "기본 URL",
+            "requestPath": "요청 경로",
+            "wireProtocol": "API 프로토콜",
+            "apiKey": "API 키",
+            "models": "모델",
+            "headers": "추가 헤더",
+            "modelsUrl": "모델 목록 엔드포인트"
+          },
+          "values": {
+            "empty": "비어 있음",
+            "default": "기본/추론",
+            "configured": "설정됨",
+            "secretSet": "설정됨(숨김)",
+            "models_one": "모델 {{count}}개",
+            "models_other": "모델 {{count}}개",
+            "headers_one": "헤더 {{count}}개",
+            "headers_other": "헤더 {{count}}개"
+          },
+          "targetConflict_one": "기존 필드 {{count}}개가 다름",
+          "targetConflict_other": "기존 필드 {{count}}개가 다름",
+          "targetReady_one": "필드 {{count}}개를 채울 수 있음",
+          "targetReady_other": "필드 {{count}}개를 채울 수 있음",
+          "targetIncompatible_one": "필드 {{count}}개가 호환되지 않음",
+          "targetIncompatible_other": "필드 {{count}}개가 호환되지 않음",
+          "status": {
+            "needsConfirm": "확인 필요",
+            "ready": "채울 준비됨",
+            "incompatible": "호환되지 않음"
+          },
+          "secretIndependent": "{{target}}의 별도 로컬 키로 복사",
+          "overwriteCurrent": "현재 값 대체",
+          "fillEmpty": "빈 필드 채우기",
+          "incompatibleProtocol": "복사되지 않음: {{target}}에서 이 API 프로토콜을 지원하지 않습니다",
+          "incompatibleHeaders": "복사되지 않음: {{target}}에 필요한 헤더는 여기서 안전하게 복사할 수 없습니다",
+          "incompatibleEndpoint": "복사되지 않음: {{target}}에서는 이 엔드포인트 설정을 사용할 수 없습니다",
+          "noSelectableFields": "이 runtime에 호환되는 필드가 없습니다.",
+          "endpointBundleNote": "{{target}}에는 기본 URL, 요청 경로, API 프로토콜을 함께 복사하여 엔드포인트 불일치를 방지합니다.",
+          "oauthPiUnavailable": "Pi 네이티브 runtime은 OAuth 제공자를 지원하지 않아 채우기 대상에서 제외됩니다.",
+          "independentNote": "일회성 채우기입니다. 이후 runtime 간 동기화되지 않으며 키는 별도 safeStorage에 저장됩니다.",
+          "continue": "덮어쓰기 검토",
+          "apply": "채우기 확인",
+          "applyOverwrite": "덮어쓰고 채우기",
+          "back": "차이로 돌아가기",
+          "nothingToFill": "현재 runtime에 재사용 가능한 필드를 먼저 입력하세요",
+          "alreadySame": "다른 runtime과 이미 일치합니다",
+          "loadingKeys": "저장된 API 키를 모두 불러온 후 다른 runtime을 채우세요",
+          "keysUnavailable": "저장된 API 키를 불러오지 못해 다른 runtime을 채울 수 없습니다",
+          "modelsBusy": "모델 목록 가져오기 또는 선택을 완료한 후 다른 runtime을 채우세요",
+          "noCompatibleFields": "현재 runtime의 재사용 가능한 필드를 다른 runtime에서 지원하지 않습니다",
+          "filledToast": "{{targets}}에 채웠습니다"
         }
       },
       "models": {
@@ -3271,10 +3332,11 @@
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
-        "conflict": "사용할 수 없음",
-        "conflictAria": "{{name}}에 플러그인 ID 충돌이 있습니다",
-        "conflictDescription": "이 플러그인 ID는 이미 사용 중이어서 설치할 수 없습니다.",
+        "replace": "교체",
+        "replaceAria": "{{name}}을(를) 이 마켓 버전으로 교체",
+        "replaceDescription": "같은 ID의 플러그인이 이미 설치되어 있습니다. 계속하면 이 마켓 버전으로 교체하고 플러그인 데이터는 유지됩니다.",
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "customSourcesUnavailable": "다음 사용자 지정 마켓을 일시적으로 사용할 수 없습니다: {{names}}. 다른 마켓에는 영향을 주지 않습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "upgradeNotice": {
@@ -3696,15 +3758,8 @@
       },
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
-        "description": "권한 변경이 없는 업데이트는 자동으로 완료됩니다. 권한이 확장되는 업데이트는 항목별 확인이 필요합니다.",
+        "description": "일반 업데이트는 자동으로 완료되며, 검증된 실제 패키지가 새 권한을 요청할 때만 개별 확인합니다.",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "권한 변경됨",
-        "reviewOutdated": "권한 변경 내역이 오래되었습니다",
-        "rereview": "다시 검토",
-        "reviewDiff": "확인",
-        "collapseDiff": "접기",
-        "approve": "동의 후 업데이트",
-        "skip": "건너뛰기",
         "statusPending": "대기 중",
         "statusInstalling": "업데이트 중…",
         "statusDone": "업데이트됨",
@@ -4369,6 +4424,7 @@
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
+      "resourceUsage": "리소스 사용량",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"
@@ -4768,7 +4824,15 @@
         "unmerged": "병합되지 않은 파일 있음",
         "in-progress": "git 작업 진행 중",
         "agent-running": "에이전트 실행 중",
-        "disabled": "리뷰를 사용할 수 없음"
+        "disabled": "리뷰를 사용할 수 없음",
+        "remote-device": "원격 기기 세션은 보기 전용입니다",
+        "remote-ssh": "SSH 워크스페이스 검토는 보기 전용입니다"
+      },
+      "remote": {
+        "deviceTooOldTitle": "상대 기기 버전이 너무 오래되었습니다",
+        "deviceTooOldDesc": "상대 기기의 {{appName}} 버전이 오래되어 원격 리뷰를 지원하지 않습니다. 피제어 기기를 업그레이드한 후 다시 시도해 주세요.",
+        "oversizeTitle": "변경 데이터가 너무 큽니다",
+        "oversizeDesc": "이 보기의 변경 사항이 기기 연결 전송 한도를 초과합니다. 피제어 기기에서 확인해 주세요."
       },
       "unmodifiedLines_one": "{{count}}줄 변경 없음",
       "unmodifiedLines_other": "{{count}}줄 변경 없음",
@@ -4969,7 +5033,7 @@
         },
         "no-session": {
           "title": "세션을 찾을 수 없음",
-          "desc": "현재 세션 기록을 찾을 수 없습니다."
+          "desc": "이 기기에서 현재 세션 기록을 찾을 수 없습니다."
         },
         "no-workdir": {
           "title": "작업 디렉터리 없음",
@@ -5406,6 +5470,7 @@
     "modelSelector": {
       "budgetNeedsApiKey": "이 모델은 설정에서 API key를 구성해야 사용할 수 있습니다",
       "hidden": "숨김",
+      "modelListAria": "모델 목록",
       "subscriptionDirectDisabled": {
         "chatgpt": "구독 직결 GPT 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
         "xai": "구독 직결 Grok 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
@@ -5452,7 +5517,7 @@
         "budget": "GPT 할인",
         "grok": "xAI",
         "google": "Google",
-        "china": "국내",
+        "china": "중국",
         "image": "이미지",
         "video": "비디오",
         "tts": "음성 합성",
@@ -5460,6 +5525,7 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "compression": "압축",
+        "ungrouped": "미분류",
         "other": "기타"
       },
       "search": {
@@ -5556,6 +5622,7 @@
     },
     "worktree": {
       "detecting": "환경 감지 중…",
+      "detectFailed": "환경 감지에 실패하여 worktree를 당분간 사용할 수 없습니다",
       "gitMissing": "git이 감지되지 않습니다. 먼저 설치하세요",
       "notGitRepo": "현재 디렉터리는 git 리포지토리가 아닙니다",
       "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다",
@@ -5904,6 +5971,7 @@
     "verificationFailed": "ChatGPT 로그인이 복구되었는지 확인할 수 없습니다. 다시 확인해 주세요."
   },
   "chat": {
+    "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
       "skippedAnswer": "건너뜀"
     },
@@ -6417,6 +6485,7 @@
           "sourceConversationChanged": "원본 작업이 변경되었습니다. 현재 작업에 대해 /review를 다시 실행하세요.",
           "sourceFilesChanged": "원본 작업의 파일이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
           "artifactChanged": "검토 대상 결과물이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
+          "artifactUnavailable": "Cindy가 검토 대상 결과물을 안전하게 읽지 못했습니다. 작업 공간 또는 첨부 파일을 확인한 후 /review를 다시 실행하세요.",
           "providerFailed": "검토 작업 실행에 실패했습니다"
         }
       }
@@ -6563,7 +6632,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
-      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰를 일시적으로 사용할 수 없어 검토가 필요한 작업이 거부됩니다. 직접 승인하려면 이 세션을 기본 권한으로 전환하세요.",
+      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다(네트워크 또는 서비스 일시 장애). 검토가 필요한 작업은 직접 확인하도록 전환되었습니다. 중단을 줄이려면 이 작업을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
@@ -8802,6 +8871,7 @@
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
+      "hostShellCommandBlocked": "Cindy가 내장 iOS 시뮬레이터를 우회하는 셸 명령을 차단했습니다. 기기 제어, 앱 실행, 화면 조작, 스크린샷, 진단에는 iOS 시뮬레이터 도구를 사용하세요.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
       "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
       "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
@@ -8929,17 +8999,9 @@
     "dropHint": "여기에 세션을 놓아 열기",
     "loadingTask": "세션 불러오는 중…",
     "resizeAria": "세션 분할 창 크기 조절",
-    "openInSplit": "분할로 열기",
-    "openSide": {
-      "left": "세션을 왼쪽에 열기",
-      "right": "세션을 오른쪽에 열기",
-      "top": "세션을 위쪽에 열기",
-      "bottom": "세션을 아래쪽에 열기"
-    },
     "alreadyOpen": "이 세션은 이미 분할 창에 열려 있습니다. 다른 세션을 선택하세요.",
     "limitReached": "한 분할 창에는 세션을 최대 {{count}}개까지 열 수 있습니다. 분할 창 하나를 닫고 다시 시도하세요.",
-    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요.",
-    "workerUnavailable": "Worker는 별도의 분할 창에서 열 수 없습니다. 소속 Lead 세션을 대신 여세요."
+    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요."
   },
   "extraDirs": {
     "menuAria": "작업 메뉴",

@@ -1,12 +1,12 @@
-import {
-  modelRegistryCanonicalJson,
-  type ModelAgent,
-  type ModelPriceVariant,
-  type ModelReferencePrice,
-  type ModelRegistry,
-  type ModelRegistryEntry,
-  type ModelRegistryRoute,
-} from "@cindy/model-access-protocol";
+import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
+import type {
+  ModelAgent,
+  ModelPriceVariant,
+  ModelReferencePrice,
+  ModelRegistry,
+  ModelRegistryEntry,
+  ModelRegistryRoute,
+} from "./modelAccessBean.js";
 
 export type ModelRegistryRevisionRelation =
   | "newer"

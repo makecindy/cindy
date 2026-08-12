@@ -2058,14 +2058,22 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   }
   let persistedSession = readPersistedAuthSession();
   if (!persistedSession) {
-    // 旧版只保存裸 refresh token；迁移时按安装包区域解释，并以单个加密 JSON
-    // 原子记录替代，确保 token 与 realm 永不分离。passive 可以写入有效的新记录，
-    // 但旧文件仍留给可能正在消费它的旧版 primary。
+    // 旧版只保存裸 refresh token，没有 realm 可供校验。只有独占 userData 的
+    // primary 才能按当前构建区域迁移它；passive 若猜 AUTH_REGION，恰好会在旧
+    // cn / global 共库时把对端 token 认领成本区会话，随后 refresh 轮换并改写
+    // primary 的凭证。这里 fail closed：保留旧文件，本进程稳定保持登出，等
+    // 同区域的独占实例完成原子迁移。
     const legacyToken = readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+    if (legacyToken && isPassiveSharedUserDataInstance()) {
+      log.warn(
+        'passive shared-userData instance found an unscoped legacy refresh token; refusing to assign a realm or rotate it',
+      );
+      passiveLocalSignOut = true;
+      commitActiveAppSession('signed-out');
+      return snapshotLoggedOutAuthState();
+    }
     if (legacyToken && writePersistedAuthSession(legacyToken, AUTH_REGION)) {
-      if (!isPassiveSharedUserDataInstance()) {
-        removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
-      }
+      removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
       persistedSession = { version: 1, realm: AUTH_REGION, refreshToken: legacyToken };
     }
   }

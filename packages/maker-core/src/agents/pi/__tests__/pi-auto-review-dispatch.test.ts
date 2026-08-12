@@ -1160,7 +1160,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(resolverCalls).toBe(1);
   });
 
-  it('auto mode silently denies a gray bash command when no reviewer is wired', async () => {
+  it('auto mode lets the user take over a gray bash command when no reviewer is wired', async () => {
     const handle = await start('auto');
     let resolverCalls = 0;
     handle.setInteractionResolver?.(async () => {
@@ -1169,12 +1169,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     firePermissionRequest('b5', 'bash', { command: 'npm test' });
     expect(await waitForResponse('b5')).toEqual({
-      type: 'extension_ui_response', id: 'b5', confirmed: false,
+      type: 'extension_ui_response', id: 'b5', confirmed: true,
     });
-    expect(resolverCalls).toBe(0);
+    expect(resolverCalls).toBe(1);
   });
 
-  it('auto mode silently denies a gray bash command when the reviewer throws', async () => {
+  it('auto mode lets the user take over a gray bash command when the reviewer throws', async () => {
     const review = vi.fn(async () => {
       throw new Error('reviewer infrastructure down');
     });
@@ -1186,11 +1186,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     firePermissionRequest('b6', 'bash', { command: 'npm test' });
     expect(await waitForResponse('b6')).toEqual({
-      type: 'extension_ui_response', id: 'b6', confirmed: false,
+      type: 'extension_ui_response', id: 'b6', confirmed: true,
     });
     expect(review).toHaveBeenCalledTimes(1);
-    // 基础设施故障静默 deny(fail-closed),不退化成弹窗。
-    expect(resolverCalls).toBe(0);
+    // 基础设施故障先提示一次,随后允许用户接管决定。
+    expect(resolverCalls).toBe(1);
   });
 
   it('auto mode blocks a bash request with no command text without consulting the reviewer', async () => {
@@ -1418,7 +1418,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r4', confirmed: true });
   });
 
-  it('auto mode silently blocks gray actions when the current-model reviewer is unavailable', async () => {
+  // 审阅器不可用时降级为「问用户」,不再静默拒绝:宿主侧已重试过,走到这里
+  // 说明确实没救回来。静默否掉一批正常的灰区操作会让 Auto 档看起来像坏了,
+  // 而用户既看不到原因也无法接管。降级后安全边界不变(未点头仍不执行)。
+  it('auto mode hands gray actions to the user when the current-model reviewer is unavailable', async () => {
     const handle = await start('auto');
     let resolverCalls = 0;
     handle.setInteractionResolver?.(async () => {
@@ -1427,8 +1430,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     firePermissionRequest('r7', 'write', { path: '/tmp/outside.txt' });
     await flush();
-    expect(resolverCalls).toBe(0);
-    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: false });
+    expect(resolverCalls).toBe(1);
+    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: true });
   });
 
   it('ask mode still prompts for in-workspace writes (auto shortcut is auto-only)', async () => {
