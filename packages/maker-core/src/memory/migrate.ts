@@ -533,17 +533,24 @@ async function countShardFiles(dir: string): Promise<number> {
 }
 
 /**
- * 路径是否为活 git 仓库 — 探测 `<path>/.git` 标记 (目录或 gitdir 指针文件)。
- * 静态推导前的护栏: 普通 checkout 恰好位于 .cindy-worktrees 下时 resolver
- * 返回原样, 但路径仍是活仓库, 不能推导成主仓根 (Codex review on #2519
- * 第十二轮)。
+ * 路径是否位于活 git 仓库内 — 从 `<p>` 向上遍历祖先目录找 `.git` 标记
+ * (目录或 gitdir 指针文件)。静态推导前的护栏: 普通 checkout 恰好位于
+ * .cindy-worktrees 下、会话 workdir 是子目录时 (如 /home/me/.cindy-worktrees/
+ * proj/apps/a), `.git` 在祖先 proj/ 下 — 只查 `<p>/.git` 会误判非活仓库并
+ * 推导成错误主仓根 (Codex review on #2519 第十二轮 + 第十四轮)。
  */
 async function isLiveGitRepo(p: string): Promise<boolean> {
-  try {
-    const s = await fs.stat(path.join(p, '.git'));
-    return s.isDirectory() || s.isFile();
-  } catch {
-    return false;
+  let cur = path.resolve(p);
+  for (;;) {
+    try {
+      const s = await fs.stat(path.join(cur, '.git'));
+      if (s.isDirectory() || s.isFile()) return true;
+    } catch {
+      // 继续向上
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return false;
+    cur = parent;
   }
 }
 

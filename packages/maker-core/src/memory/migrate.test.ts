@@ -459,6 +459,23 @@ describe('runLegacyShardMigration — 执行', () => {
     expect(shard?.canonicalScopeKey).toBe(liveRepo);
   });
 
+  it('活仓库子目录 (absPath 为 .cindy-worktrees 下子路径) → 祖先 .git 标记命中, 不推导 (Codex 第十四轮)', async () => {
+    // 会话 workdir = /.../.cindy-worktrees/proj/apps/a, 仓库根 proj/ 下有 .git
+    const projRoot = path.join(tmpRoot, '.cindy-worktrees', 'proj');
+    const workdir = path.join(projRoot, 'apps', 'a');
+    await fs.mkdir(path.join(projRoot, '.git'), { recursive: true }); // 祖先标记
+    const wtDir = sanitizeWorkdir(workdir);
+    await makeShard(wtDir, { absPath: workdir, files: { 'feedback_a.md': 'X' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot);
+    // 向上遍历发现祖先 .git → 活仓库 → 不推导 → 非 legacy, key 原样
+    expect(plan.mergeCandidates).toHaveLength(0);
+    expect(plan.emptyToDelete).toHaveLength(0);
+    const shard = plan.all.find((s) => s.dir.endsWith(wtDir));
+    expect(shard?.isLegacy).toBe(false);
+    expect(shard?.canonicalScopeKey).toBe(workdir);
+  });
+
   it('慢路径合并: plan 后写入的合法分片被一并合并, 数据不丢 (Codex 第四轮: 快照后写入)', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     const worktree = path.join(tmpRoot, 'repo-wt');
