@@ -181,11 +181,8 @@ export function WorkLouderCodexKeyboardLayout({
  * command keys with dark ones, and that contrast has to survive in both themes.
  * Routing them through `--surface-*` inverted the board in dark mode, which is
  * exactly backwards from the hardware. Only the shell tracks the app theme.
- *
- * Exported so the connection card's thumbnail draws the same device from the
- * same values instead of keeping its own copy of them.
  */
-export const WORKLOUDER_CODEX_BOARD_TOKENS = {
+const WORKLOUDER_CODEX_BOARD_TOKENS = {
   // One key tall. Keys are square, so this is their width too; the double-width
   // microphone key spans two columns without getting any taller.
   '--wl-key-size': '64px',

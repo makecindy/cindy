@@ -15,7 +15,6 @@ import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
 import { cn } from '@/lib/utils';
 import {
-  WORKLOUDER_CODEX_BOARD_TOKENS,
   WorkLouderCodexKeyboardLayout,
   WorkLouderCodexKeycapPicker,
   WorkLouderCodexPartEditor,
@@ -280,7 +279,6 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       </div>
 
       <SettingsCard className="flex items-center gap-4">
-        <CodexMicroKeyPreview />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-13 font-medium text-[var(--text-primary)]">
@@ -938,42 +936,6 @@ function ConnectionStatus({
       <span className={cn('size-1.5 rounded-full', dotClass)} aria-hidden="true" />
       {t(`settings.shortcuts.workLouderCodex.connection.status.${effectiveStatus}`)}
     </span>
-  );
-}
-
-/**
- * Thumbnail of the device for the connection card. It is the same object as the
- * editable board below — 4×4, stick in one corner, encoder in the other — so
- * the two read as one device rather than two different products. Numbered
- * squares used to stand in here, which matched no hardware that ships.
- */
-function CodexMicroKeyPreview() {
-  const cap = 'rounded-[3px] bg-[var(--wl-agent-cap)]';
-  const command = 'rounded-[3px] bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]';
-  return (
-    <div
-      className="grid size-[76px] shrink-0 grid-cols-4 grid-rows-4 gap-[3px] rounded-xl border border-[var(--wl-edge)] bg-[var(--wl-board)] p-2 shadow-[var(--wl-board-shadow)]"
-      style={WORKLOUDER_CODEX_BOARD_TOKENS}
-      aria-hidden="true"
-    >
-      {/* Encoder left, stick right — the same corners as the board below. */}
-      <span className="rounded-full bg-[var(--wl-command-cap)]" />
-      <span className={cap} />
-      <span className={cap} />
-      <span className="flex items-center justify-center rounded-[3px] bg-[var(--wl-stick-housing)]">
-        <span className="block size-[72%] rounded-full bg-[var(--wl-stick-cap)]" />
-      </span>
-      {Array.from({ length: 4 }, (_, index) => (
-        <span key={index} className={cap} />
-      ))}
-      {Array.from({ length: 4 }, (_, index) => (
-        <span key={index} className={command} />
-      ))}
-      <span />
-      {/* The microphone key spans two columns, as it does on the board. */}
-      <span className={cn('col-span-2', command)} />
-      <span className={command} />
-    </div>
   );
 }
 
