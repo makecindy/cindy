@@ -272,4 +272,68 @@ describe('runLegacyShardMigration — 执行', () => {
     const canonical = plan2.all.find((s) => s.dir.endsWith(mainDir));
     expect(canonical?.isLegacy).toBe(false);
   });
+
+  it('未识别 .md 文件 (不符合 <type>_<slug> 规则) → 保留源目录不删', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X' },
+    });
+    // 未识别文件: 不符合 <type>_<slug>.md 规则但仍含内容的 markdown
+    await fs.writeFile(path.join(wtPath, 'notes.md'), '# 手写笔记\n\n重要内容', 'utf8');
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan.mergeCandidates).toHaveLength(1);
+    const result = await runLegacyShardMigration(plan);
+    // 合法文件照常合并, 但源目录因未识别文件保留
+    expect(result.results[0].mergedFiles).toEqual([
+      { filename: 'feedback_a.md', outcome: 'same-skipped' },
+    ]);
+    expect(result.results[0].error).toContain('unrecognized');
+    // 源目录保留 (未识别文件仍在)
+    expect(await fs.readFile(path.join(wtPath, 'notes.md'), 'utf8')).toContain('重要内容');
+    // 目标目录不含未识别文件 (未参与合并)
+    const target = path.join(memoryRoot, mainDir);
+    await expect(fs.stat(path.join(target, 'notes.md'))).rejects.toThrow();
+  });
+
+  it('空分片删除前竞态校验: 扫描后新增分片文件 → 跳过删除并报告', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+    const wtPath = await makeShard(wtDir, { absPath: worktree });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan.emptyToDelete).toHaveLength(1);
+    // 模拟扫描后竞态: 在删除前写入一个分片文件
+    await fs.writeFile(
+      path.join(wtPath, 'feedback_race.md'),
+      '---\ntitle: R\ndescription: DR\ntype: feedback\nupdatedAt: t\n---\n\nNEW',
+      'utf8',
+    );
+    const result = await runLegacyShardMigration(plan);
+    expect(result.results[0].action).toBe('skipped');
+    expect(result.results[0].error).toContain('race');
+    // 目录保留
+    expect(await fs.readFile(path.join(wtPath, 'feedback_race.md'), 'utf8')).toContain('NEW');
+  });
+
+  it('Cindy 托管 worktree 路径静态推导: 已归档 worktree 仍可识别为 legacy', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    // 已归档/删除的 worktree: resolver live 探测会回落原样 (fake resolver 返回自身)
+    const archivedWt = path.join(mainRepo, '.cindy-worktrees', 'feat-x');
+    const wtDir = sanitizeWorkdir(archivedWt);
+    await makeShard(wtDir, { absPath: archivedWt, files: { 'feedback_a.md': 'X' } });
+
+    // resolver 回落原样 (模拟 live 探测失败) — 静态推导接管
+    const plan = await planLegacyShardMigration(memoryRoot);
+    expect(plan.mergeCandidates).toHaveLength(1);
+    expect(plan.mergeCandidates[0].canonicalDirName).toBe(sanitizeWorkdir(mainRepo));
+    expect(plan.mergeCandidates[0].canonicalScopeKey).toBe(mainRepo);
+  });
 });

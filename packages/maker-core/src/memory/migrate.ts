@@ -164,6 +164,13 @@ export async function planLegacyShardMigration(
     } catch {
       canonicalScopeKey = meta.absPath || entry;
     }
+    // 已归档/删除的 Cindy worktree (resolver live 探测失败回落原样) —
+    // 用 `.cindy-worktrees/<name>` 路径形态做静态推导, 否则旧记录永远孤儿
+    // (Codex review on #2519)。
+    if (canonicalScopeKey === (meta.absPath || entry)) {
+      const derived = deriveCanonicalFromCindyWorktreePath(meta.absPath || entry);
+      if (derived) canonicalScopeKey = derived;
+    }
     const canonicalDirName = memoryScopeDirName(canonicalScopeKey);
     const isLegacy = canonicalDirName !== entry;
 
@@ -210,6 +217,40 @@ async function buildSkippedInfo(dir: string, entry: string): Promise<LegacyShard
 }
 
 /**
+ * Cindy worktree 路径 → 主仓路径的静态推导 (Codex review on #2519)。
+ *
+ * 场景: 旧 worktree 分片的 meta.absPath 指向 `.../<主仓>/.cindy-worktrees/<name>`。
+ * 若该 worktree 已被归档/删除, resolver 的 live git 探测找不到 .git 标记,
+ * 回落返回原路径 → canonicalDirName === 目录名 → 不迁移, 旧记录永远孤儿。
+ *
+ * 本函数只处理 **已知的 Cindy 托管 worktree 形态** (产品自己创建的
+ * `.cindy-worktrees/<name>`): 取 `.cindy-worktrees` 段之前的路径为主仓根,
+ * 段之后的子路径拼回。非该形态 (用户手工 worktree / 其他布局) 返回 null,
+ * 交回 live 探测结果, 不做危险猜测。
+ *
+ * 例:
+ *   /repo/.cindy-worktrees/feat-x            → /repo
+ *   /repo/.cindy-worktrees/feat-x/apps/a     → /repo/apps/a
+ *   /Users/me/other/wt (无 .cindy-worktrees) → null
+ */
+export function deriveCanonicalFromCindyWorktreePath(absPath: string): string | null {
+  const sep = path.sep;
+  const marker = `${sep}.cindy-worktrees${sep}`;
+  const idx = absPath.indexOf(marker);
+  if (idx < 0) return null;
+  // 段后紧跟 worktree 名; 该名不存在 → 不是托管形态
+  const rest = absPath.slice(idx + marker.length);
+  if (rest.length === 0) return null;
+  const worktreeNameEnd = rest.indexOf(sep);
+  const worktreeName = worktreeNameEnd < 0 ? rest : rest.slice(0, worktreeNameEnd);
+  if (worktreeName.length === 0) return null;
+  const mainRoot = absPath.slice(0, idx);
+  if (mainRoot.length === 0) return null;
+  const subPath = worktreeNameEnd < 0 ? '' : rest.slice(worktreeNameEnd + 1);
+  return subPath ? path.join(mainRoot, subPath) : mainRoot;
+}
+
+/**
  * 执行迁移计划 (幂等: 已合并/已删除的分片第二次跑时 canonicalDirName === 目录名
  * 或目录已不存在, 自然跳过)。
  *
@@ -229,6 +270,16 @@ export async function runLegacyShardMigration(
   for (const shard of plan.emptyToDelete) {
     const r: ShardMigrationResult = { shard, action: 'removed-empty' };
     try {
+      // 竞态防御 (Greptile summary on #2519): 计划基于扫描快照, 删除前重新
+      // 校验目录仍是空的 — 若扫描后新增了分片文件, 跳过删除并报告, 绝不让
+      // 过期快照删掉新写入的数据。
+      const gained = await countShardFiles(shard.dir);
+      if (gained > 0) {
+        r.action = 'skipped';
+        r.error = `dir gained ${gained} shard file(s) since scan (race), kept`;
+        result.results.push(r);
+        continue;
+      }
       if (backupRoot) await backupDir(shard.dir, backupRoot);
       await fs.rm(shard.dir, { recursive: true, force: true });
     } catch (e) {
@@ -260,9 +311,18 @@ export async function runLegacyShardMigration(
         // 合并后重建目标 MEMORY.md (从分片 frontmatter 派生)
         await rebuildIndexFile(targetDir);
         // 源目录此刻只剩 MEMORY.md / meta.json / fts.db → 整个删掉。
-        // 有冲突时保留源目录 — 冲突文件(同名不同内容)绝不静默覆盖,
-        // 人工处理前数据必须仍在磁盘上 (#2400: 不静默覆盖现有记录)。
+        // 保留源目录的情形 (数据保全, 人工处理前数据必须仍在磁盘上):
+        //  1. 有冲突 — 同名不同内容绝不静默覆盖 (#2400)
+        //  2. 有未识别文件 — 不符合 <type>_<slug>.md 规则但仍含内容的 .md,
+        //     不参与合并, 删掉源目录会永久丢失 (Greptile review on #2519)
         const hasConflict = merged.some((m) => m.outcome === 'conflict-skipped');
+        const unrecognized = await findUnrecognizedMdFiles(shard.dir);
+        if (unrecognized.length > 0) {
+          r.action = 'merged';
+          r.error = `unrecognized files kept in source dir for manual review: ${unrecognized.join(', ')}`;
+          result.results.push(r);
+          continue;
+        }
         if (!hasConflict) {
           await fs.rm(shard.dir, { recursive: true, force: true });
         } else {
@@ -355,5 +415,34 @@ async function pathExists(p: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** 目录中合法分片文件 (<type>_<slug>.md) 的数量。目录不存在返 0。 */
+async function countShardFiles(dir: string): Promise<number> {
+  try {
+    const files = await fs.readdir(dir);
+    return files.filter((f) => parseFilename(f)).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 找出目录中「不符合 <type>_<slug>.md 规则但仍保存内容的 .md 文件」
+ * (排除 MEMORY.md / meta.json / fts.db)。存在即数据保全风险:
+ * 这些文件不参与合并, 删掉源目录会永久丢失 (Greptile review on #2519)。
+ */
+async function findUnrecognizedMdFiles(dir: string): Promise<string[]> {
+  try {
+    const files = await fs.readdir(dir);
+    return files.filter(
+      (f) =>
+        f.endsWith('.md') &&
+        f !== 'MEMORY.md' &&
+        !parseFilename(f),
+    );
+  } catch {
+    return [];
   }
 }
