@@ -169,9 +169,18 @@ export async function planLegacyShardMigration(
     // 已归档/删除的 Cindy worktree (resolver live 探测失败回落原样) —
     // 用 `.cindy-worktrees/<name>` 路径形态做静态推导, 否则旧记录永远孤儿
     // (Codex review on #2519)。
+    //
+    // 仅当该路径**不是活 git 仓库**时才推导 (Codex review on #2519 第十二
+    // 轮): 普通本地 checkout 恰好位于 `.cindy-worktrees`/`.xdt-worktrees`
+    // 目录下时 (如 /home/me/.cindy-worktrees/proj), resolver 正确返回原样
+    // 但无条件推导会把 canonical 错误改写 — dry-run 报假 legacy、apply 把
+    // 记忆合并到错误 scope。isLiveGitRepo 探测 `.git` 标记: 活仓库跳过推导。
     if (canonicalScopeKey === (meta.absPath || entry)) {
-      const derived = deriveCanonicalFromCindyWorktreePath(meta.absPath || entry);
-      if (derived) canonicalScopeKey = derived;
+      const raw = meta.absPath || entry;
+      if (!(await isLiveGitRepo(raw))) {
+        const derived = deriveCanonicalFromCindyWorktreePath(raw);
+        if (derived) canonicalScopeKey = derived;
+      }
     }
     const canonicalDirName = memoryScopeDirName(canonicalScopeKey);
     const isLegacy = canonicalDirName !== entry;
@@ -520,6 +529,21 @@ async function countShardFiles(dir: string): Promise<number> {
     return files.filter((f) => parseFilename(f)).length;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * 路径是否为活 git 仓库 — 探测 `<path>/.git` 标记 (目录或 gitdir 指针文件)。
+ * 静态推导前的护栏: 普通 checkout 恰好位于 .cindy-worktrees 下时 resolver
+ * 返回原样, 但路径仍是活仓库, 不能推导成主仓根 (Codex review on #2519
+ * 第十二轮)。
+ */
+async function isLiveGitRepo(p: string): Promise<boolean> {
+  try {
+    const s = await fs.stat(path.join(p, '.git'));
+    return s.isDirectory() || s.isFile();
+  } catch {
+    return false;
   }
 }
 

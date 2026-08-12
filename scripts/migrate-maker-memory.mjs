@@ -149,10 +149,14 @@ async function main() {
       `maker-memory-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`,
     );
   }
+  // 人类可读 banner 在 --json 模式下走 stderr, 保证 stdout 只有 RESULT JSON
+  // (Codex review on #2519 第十二轮: agent/脚本解析 stdout 为单一机器可读
+  // 结果, 备份横幅会污染)。
+  const banner = (msg) => (opts.json ? process.stderr : process.stdout).write(`${msg}\n`);
   if (!opts.noBackup && opts.backupDir) {
-    process.stdout.write(`备份目录: ${path.resolve(opts.backupDir)}\n`);
+    banner(`备份目录: ${path.resolve(opts.backupDir)}`);
   } else {
-    process.stdout.write('⚠️ --no-backup: 无冲突分片删除后不可回滚\n');
+    banner('⚠️ --no-backup: 无冲突分片删除后不可回滚');
   }
   if (!opts.force && (await isHostRunning())) {
     process.stderr.write(

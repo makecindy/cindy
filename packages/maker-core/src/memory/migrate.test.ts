@@ -442,6 +442,23 @@ describe('runLegacyShardMigration — 执行', () => {
     expect(plan.mergeCandidates[0].isLegacy).toBe(true);
   });
 
+  it('活 git 仓库位于 .cindy-worktrees 目录下 → 不静态推导 (Codex 第十二轮: 误判护栏)', async () => {
+    // 普通本地 checkout 恰好位于 /home/me/.cindy-worktrees/proj
+    const liveRepo = path.join(tmpRoot, '.cindy-worktrees', 'proj');
+    await fs.mkdir(liveRepo, { recursive: true });
+    await fs.mkdir(path.join(liveRepo, '.git'), { recursive: true }); // 活仓库标记
+    const wtDir = sanitizeWorkdir(liveRepo);
+    await makeShard(wtDir, { absPath: liveRepo, files: { 'feedback_a.md': 'X' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot);
+    // 是活仓库 → 不推导 → canonicalScopeKey = absPath 原样 → 非 legacy
+    expect(plan.mergeCandidates).toHaveLength(0);
+    expect(plan.emptyToDelete).toHaveLength(0);
+    const shard = plan.all.find((s) => s.dir.endsWith(wtDir));
+    expect(shard?.isLegacy).toBe(false);
+    expect(shard?.canonicalScopeKey).toBe(liveRepo);
+  });
+
   it('慢路径合并: plan 后写入的合法分片被一并合并, 数据不丢 (Codex 第四轮: 快照后写入)', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     const worktree = path.join(tmpRoot, 'repo-wt');
