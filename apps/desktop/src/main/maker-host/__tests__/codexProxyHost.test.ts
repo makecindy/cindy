@@ -2671,6 +2671,144 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-gateway-passthrough');
   });
 
+  it('sanitizes unsupported tools for XD Gateway Grok without applying direct xAI rewrites', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-xd-grok', 'thread-xd-grok', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-grok', 'xd');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'x-ai/grok-4.5',
+      instructions: 'keep gateway instructions',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'namespace', name: 'multi_agent_v1', tools: [{ type: 'function', name: 'close_agent' }] },
+        { type: 'function', name: 'exec_command' },
+        {
+          type: 'web_search',
+          filters: { allowed_domains: ['example.com'] },
+          external_web_access: true,
+          search_context_size: 'medium',
+        },
+      ],
+      tool_choice: { type: 'namespace', name: 'multi_agent_v1' },
+      parallel_tool_calls: false,
+      input: [{ type: 'custom_tool_call', call_id: 'call_1', name: 'legacy_tool', input: '{}' }],
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-xd-grok' } };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'x-ai/grok-4.5',
+      instructions: 'keep gateway instructions',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'web_search', filters: { allowed_domains: ['example.com'] } },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: [{ type: 'custom_tool_call', call_id: 'call_1', name: 'legacy_tool', input: '{}' }],
+    });
+
+    current = {
+      model: 'x-ai/grok-4.5',
+      tools: [{ type: 'namespace', name: 'multi_agent_v1', tools: [] }],
+      tool_choice: { type: 'namespace', name: 'multi_agent_v1' },
+      parallel_tool_calls: true,
+      input: 'hello',
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+    expect(current).toEqual({ model: 'x-ai/grok-4.5', input: 'hello' });
+
+    clearSessionProvider('session-xd-grok');
+  });
+
+  it('keeps Gateway Grok tools when an OAuth session falls back to ChatGPT', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-xd-grok-fallback', 'thread-xd-grok-fallback', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-grok-fallback', 'xd');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.setCodexProxyGatewayKeyReader(() => null);
+
+    const proxyOptions = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+    const transforms = proxyOptions?.transformRequest ?? [];
+    const routingTransform = proxyOptions?.routingTransform;
+    const original = {
+      model: 'x-ai/grok-4.5',
+      tools: [{ type: 'namespace', name: 'multi_agent_v1', tools: [] }],
+      input: 'hello',
+    };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-xd-grok-fallback' },
+    };
+    let current: unknown = original;
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual(original);
+    expect(routingTransform(original, ctx)).toEqual({
+      upstreamOverride: 'https://chatgpt.com/backend-api/codex',
+    });
+
+    host.clearCodexProxyAuthInjection();
+    clearSessionProvider('session-xd-grok-fallback');
+  });
+
+  it('keeps Codex namespace tools for non-Grok XD Gateway models', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-xd-deepseek', 'thread-xd-deepseek', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-deepseek', 'xd');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const original = {
+      model: 'deepseek/deepseek-v4-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+      ],
+      input: 'hello',
+    };
+    let current: unknown = original;
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-xd-deepseek' } };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual(original);
+
+    clearSessionProvider('session-xd-deepseek');
+  });
+
   it('normalizes xAI Codex Responses body before forwarding requests', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

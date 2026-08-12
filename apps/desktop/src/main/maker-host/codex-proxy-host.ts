@@ -1373,7 +1373,7 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
   if (!Array.isArray(body.tools)) return null;
 
   let changed = false;
-  const tools: unknown[] = [];
+  const tools: Record<string, unknown>[] = [];
   for (const tool of body.tools) {
     if (!isPlainObject(tool) || typeof tool.type !== 'string' || !XAI_SUPPORTED_TOOL_TYPES.has(tool.type)) {
       changed = true;
@@ -1393,9 +1393,38 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
   if (!changed) return null;
 
   const next: Record<string, unknown> = { ...body };
-  if (tools.length > 0) next.tools = tools;
-  else delete next.tools;
+  if (tools.length > 0) {
+    next.tools = tools;
+    if (toolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
+  } else {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+  }
   return next;
+}
+
+function isXdGatewayGrokRequest(
+  body: Record<string, unknown>,
+  ctx: RequestTransformCtx,
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): boolean {
+  if (typeof body.model !== 'string' || !body.model.startsWith('x-ai/grok-')) return false;
+  const path = ctx.url.split('?', 1)[0] ?? ctx.url;
+  if (ctx.method !== 'POST' || (!path.endsWith('/responses') && path !== '/responses')) return false;
+
+  const sessionId = sessionIdFromTransformCtx(ctx);
+  if (!sessionId || getSessionProvider(sessionId) !== 'xd') return false;
+  const routing = getSessionRoutingDescriptor(sessionId, 'codex', body.model);
+  if (
+    routing?.authStrategy !== 'gateway-key'
+    || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses'
+  ) {
+    return false;
+  }
+
+  const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+  return authInjection !== 'oauth-bearer' || Boolean(_readGatewayKey());
 }
 
 /**
@@ -1483,7 +1512,7 @@ function isByteDanceSeedRequest(
   return isByteDanceSeedModel(body.model) || isVolcengineArkResponsesRouting(ctx, body.model);
 }
 
-function seedToolChoiceReferencesRemovedTool(
+function toolChoiceReferencesRemovedTool(
   toolChoice: unknown,
   tools: Record<string, unknown>[],
 ): boolean {
@@ -1528,7 +1557,7 @@ function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<strin
   const next: Record<string, unknown> = { ...body };
   if (tools.length > 0) {
     next.tools = tools;
-    if (seedToolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
+    if (toolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
   } else {
     delete next.tools;
     delete next.tool_choice;
@@ -1737,9 +1766,14 @@ function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
   };
 }
 
-function createXaiResponsesCompatTransform(): RequestTransform {
+function createXaiResponsesCompatTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
+    // XD Gateway 的 Grok 只复用已由 422 证明必要的 tools schema 清理；直连 xAI 的
+    // instructions/history/reasoning/search 改写没有网关运行证据，不能扩大到这条路由。
+    if (isXdGatewayGrokRequest(body, ctx, frozenAuthInjection)) return sanitizeXaiTools(body);
     const sessionId = sessionIdFromTransformCtx(ctx);
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const inferredProviderId =
@@ -2292,7 +2326,7 @@ function createTransformRequestChain(
     // 后续针对具体供应商的 input 归一化才能稳定处理。
     createCrossProviderCompactionCompatTransform(),
     createStrictGatewayHistoryCompatTransform(),
-    createXaiResponsesCompatTransform(),
+    createXaiResponsesCompatTransform(frozenAuthInjection),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),
