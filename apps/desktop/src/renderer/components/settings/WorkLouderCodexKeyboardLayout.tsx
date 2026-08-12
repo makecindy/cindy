@@ -1,35 +1,10 @@
 import type { ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import {
-  ArrowDown,
-  ArrowRight,
-  ArrowUp,
-  Bot,
-  Bug,
-  CheckCircle2,
-  Circle,
-  CircleDot,
-  ChevronsUpDown,
-  FlaskConical,
-  FolderOpen,
-  GitBranch,
-  GitMerge,
-  GitPullRequest,
-  Keyboard,
-  Mic,
-  Pencil,
-  Play,
-  Sparkles,
-  MoveDiagonal,
-  Terminal,
-  Trash2,
-  Upload,
-  Zap,
-  XCircle,
-  Search,
-} from 'lucide-react';
+import { ChevronsUpDown, CircleDot, Keyboard, Search } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+
+import { WorkLouderCodexKeycapGlyph } from './WorkLouderCodexKeycapGlyphs';
 
 import {
   WORKLOUDER_CODEX_COMMAND_SLOTS,
@@ -125,9 +100,6 @@ export function WorkLouderCodexKeyboardLayout({
                 keycapId={layout.slots[slot].keycapId}
                 disabled={disabled}
                 onEdit={onEditKeycap}
-                iconOverride={
-                  isMicrophoneKeycap(layout.slots[slot].keycapId) ? <Mic size={23} /> : undefined
-                }
               />
             );
           })}
@@ -166,7 +138,14 @@ function AgentKey({
       className="aspect-square min-w-0"
       ariaLabel={`${slot}${title ? ` ${title}` : ''}`}
       disabled={disabled}
-      icon={<Bot size={20} strokeWidth={1.7} />}
+      // Codex leaves its agent keys blank apart from a lit centre dot; the key
+      // stands for a chat, not for an action, so it carries no glyph.
+      icon={
+        <span
+          aria-hidden="true"
+          className="block size-3 rounded-full border border-[#4f477f]/20 bg-[#685fae]/85 shadow-[0_0_5px_rgba(87,76,151,0.42)] dark:border-[#b5adf0]/20 dark:bg-[#8177c8]/90 dark:shadow-[0_0_6px_rgba(118,104,197,0.5)]"
+        />
+      }
     >
       <span className="max-w-full truncate text-10 font-medium">{title ?? slot}</span>
     </ControlKey>
@@ -179,14 +158,12 @@ function CommandKey({
   className,
   disabled,
   onEdit,
-  iconOverride,
 }: {
   slot: WorkLouderCodexCommandSlot;
   keycapId: WorkLouderCodexKeycapId;
   className?: string;
   disabled: boolean;
   onEdit?: (slot: WorkLouderCodexEditableKey) => void;
-  iconOverride?: ReactNode;
 }) {
   return (
     <ControlKey
@@ -194,7 +171,7 @@ function CommandKey({
       ariaLabel={`${slot} ${keycapId}`}
       disabled={disabled}
       onClick={() => onEdit?.(slot)}
-      icon={iconOverride ?? <KeycapGlyph keycapId={keycapId} />}
+      icon={<KeycapGlyph keycapId={keycapId} />}
     >
       <span className="truncate text-11 font-medium tracking-wide">{keycapId}</span>
     </ControlKey>
@@ -252,74 +229,8 @@ function ControlKey({
   );
 }
 
-function isMicrophoneKeycap(keycapId: WorkLouderCodexKeycapId): boolean {
-  return keycapId === 'MIC' || keycapId === 'MIC1';
-}
-
 function KeycapGlyph({ keycapId }: { keycapId: WorkLouderCodexKeycapId }) {
-  switch (keycapId) {
-    case 'FAST':
-      return <Zap size={23} strokeWidth={1.7} />;
-    case 'APPR':
-      return <CheckCircle2 size={22} strokeWidth={1.7} />;
-    case 'REJ':
-      return <XCircle size={22} strokeWidth={1.7} />;
-    case 'SPLIT':
-      return <MoveDiagonal size={22} strokeWidth={1.7} />;
-    case 'CODEX':
-      return <Bot size={22} strokeWidth={1.7} />;
-    case 'BUG':
-      return <Bug size={22} strokeWidth={1.7} />;
-    case 'OAI':
-      return <Sparkles size={22} strokeWidth={1.7} />;
-    case 'TERM':
-      return <Terminal size={21} strokeWidth={1.7} />;
-    case 'DWN':
-      return <ArrowDown size={22} strokeWidth={1.7} />;
-    case 'DEL':
-      return <Trash2 size={21} strokeWidth={1.7} />;
-    case 'NEW':
-      return <Pencil size={21} strokeWidth={1.7} />;
-    case 'NAV':
-      return <ArrowRight size={22} strokeWidth={1.7} />;
-    case 'MAGIC':
-      return <Sparkles size={22} strokeWidth={1.7} />;
-    case 'DIFF':
-      return <Circle size={22} strokeWidth={1.7} />;
-    case 'PLAY':
-      return <Play size={22} strokeWidth={1.7} />;
-    case 'GIT':
-    case 'BRCH':
-    case 'BRANCH':
-      return <GitBranch size={22} strokeWidth={1.7} />;
-    case 'MRG':
-      return <GitMerge size={22} strokeWidth={1.7} />;
-    case 'PR':
-      return <GitPullRequest size={22} strokeWidth={1.7} />;
-    case 'PAINT':
-      return <Pencil size={22} strokeWidth={1.7} />;
-    case 'LAB':
-      return <FlaskConical size={22} strokeWidth={1.7} />;
-    case 'UPL':
-      return <Upload size={22} strokeWidth={1.7} />;
-    case 'FOLD':
-      return <FolderOpen size={22} strokeWidth={1.7} />;
-    case 'MIND+':
-      return <ArrowUp size={22} strokeWidth={1.7} />;
-    case 'MIND-':
-      return <ArrowDown size={22} strokeWidth={1.7} />;
-    case 'MIC':
-    case 'MIC1':
-      return <Mic size={22} strokeWidth={1.7} />;
-    case 'EMPT1':
-    case 'EMPT2':
-    case 'EMPT3':
-    case 'EMPT4':
-    case 'EMPT5':
-      return <Circle size={20} strokeWidth={1.5} />;
-    default:
-      return <Circle size={20} strokeWidth={1.5} />;
-  }
+  return <WorkLouderCodexKeycapGlyph keycapId={keycapId} className="size-[22px]" />;
 }
 
 export interface WorkLouderCodexKeycapPickerProps {

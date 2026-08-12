@@ -3,11 +3,15 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createWorkLouderCodexDefaultSettings } from '../../../../shared/workLouderCodex';
+import {
+  WORKLOUDER_CODEX_KEYCAP_IDS,
+  createWorkLouderCodexDefaultSettings,
+} from '../../../../shared/workLouderCodex';
 import {
   WorkLouderCodexKeyboardLayout,
   WorkLouderCodexKeycapPicker,
 } from '../WorkLouderCodexKeyboardLayout';
+import { WorkLouderCodexKeycapGlyph } from '../WorkLouderCodexKeycapGlyphs';
 
 describe('WorkLouderCodexKeyboardLayout', () => {
   it('renders the physical keycap layout and exposes command keys as edit targets', () => {
@@ -124,5 +128,39 @@ describe('WorkLouderCodexKeyboardLayout', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(onSave).toHaveBeenCalledOnce();
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe('WorkLouderCodexKeycapGlyph', () => {
+  it('draws Codex artwork for every keycap the hardware can wear', () => {
+    for (const keycapId of WORKLOUDER_CODEX_KEYCAP_IDS) {
+      const { container, unmount } = render(<WorkLouderCodexKeycapGlyph keycapId={keycapId} />);
+      // Blank keycaps are a bordered square and the two joke keys are silk-screened
+      // text; everything else must resolve to real Codex vector artwork.
+      const blank = keycapId.startsWith('EMPT');
+      const legend = keycapId === 'YOLO' || keycapId === 'YEET';
+      if (blank) {
+        expect(container.querySelector('svg')).toBeNull();
+        expect(container.textContent).toBe('');
+      } else if (legend) {
+        expect(container.textContent).toBe(keycapId === 'YOLO' ? ':yolo:' : ':yeet:');
+      } else {
+        const svg = container.querySelector('svg');
+        expect(svg, `${keycapId} has no glyph`).not.toBeNull();
+        expect(
+          svg?.querySelector('path, circle, rect'),
+          `${keycapId} glyph is empty`,
+        ).not.toBeNull();
+      }
+      unmount();
+    }
+  });
+
+  it('gives the microphone keycaps the same glyph in both sizes', () => {
+    const wide = render(<WorkLouderCodexKeycapGlyph keycapId="MIC" />);
+    const single = render(<WorkLouderCodexKeycapGlyph keycapId="MIC1" />);
+    expect(wide.container.querySelector('svg')?.innerHTML).toBe(
+      single.container.querySelector('svg')?.innerHTML,
+    );
   });
 });
