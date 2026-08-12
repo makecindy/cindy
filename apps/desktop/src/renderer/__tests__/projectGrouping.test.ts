@@ -7,14 +7,23 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildPersistentLocalProjects,
   deviceLinkProjectKey,
   extractDisplayName,
+  filterPersistentLocalProjectsByLastActivity,
   groupSessions,
   normalizeProjectKey,
   normalizeWorkingDir,
   projectIdentityKey,
   pinnedSessionIdsInDisplayOrder,
+  persistentProjectMatchesVendor,
 } from '@/features/cc-agent/lib/projectGrouping';
+import {
+  gcProjectsAgainstActive,
+  normalizeManualPinnedOrder,
+  normalizeManualProjectOrder,
+} from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
+import { pinnedProjectEntryId } from '@/features/cc-agent/lib/pinnedSidebarOrder';
 import type { Session } from '@/lib/ccAgent.types';
 
 /* ---------------- helpers ---------------- */
@@ -206,6 +215,186 @@ describe('groupSessions', () => {
       unclassified: [],
       projects: [],
     });
+  });
+
+  it('keeps a persistent local project after its last session disappears', () => {
+    const r = groupSessions([], {
+      persistentLocalProjects: [
+        {
+          workingDir: 'D:\\AIWork\\empty-project\\',
+          lastUsedAt: '2026-08-12T08:00:00.000Z',
+          knownAgentKinds: [],
+        },
+      ],
+    });
+
+    expect(r.projects).toEqual([
+      expect.objectContaining({
+        projectKey: 'local:D:/AIWork/empty-project',
+        workingDir: 'D:/AIWork/empty-project',
+        displayName: 'empty-project',
+        sessions: [],
+        latestActivityAt: '2026-08-12T08:00:00.000Z',
+        isPersistentLocal: true,
+      }),
+    ]);
+  });
+
+  it('merges a persistent local project with its sessions instead of duplicating it', () => {
+    const session = s({ workingDir: 'D:\\AIWork\\Project-A' });
+    const r = groupSessions([session], {
+      persistentLocalProjects: [
+        {
+          workingDir: 'd:/aiwork/project-a/',
+          lastUsedAt: '2026-08-12T08:00:00.000Z',
+          knownAgentKinds: ['cc'],
+        },
+      ],
+      localPlatform: 'win32',
+    });
+
+    expect(r.projects).toHaveLength(1);
+    expect(r.projects[0]).toMatchObject({
+      projectKey: 'local:d:/aiwork/project-a',
+      workingDir: 'd:/aiwork/project-a',
+      sessions: [session],
+      isPersistentLocal: true,
+    });
+  });
+
+  it('keeps Windows project filter, alias, pin, and order identity after the last session disappears', () => {
+    const projectKey = 'local:d:/aiwork/project-a';
+    const retainedProject = {
+      workingDir: 'd:/aiwork/project-a',
+      lastUsedAt: '2026-08-12T08:00:00.000Z',
+      knownAgentKinds: ['cc'],
+    };
+    const aliases = new Map([[projectKey, 'Stable project']]);
+    const withSession = groupSessions([s({ workingDir: 'D:\\AIWork\\Project-A' })], {
+      persistentLocalProjects: [retainedProject],
+      projectAliases: aliases,
+      localPlatform: 'win32',
+    }).projects[0]!;
+    const afterDelete = groupSessions([], {
+      persistentLocalProjects: [retainedProject],
+      projectAliases: aliases,
+      localPlatform: 'win32',
+    }).projects[0]!;
+
+    expect(afterDelete.projectKey).toBe(withSession.projectKey);
+    expect(withSession.workingDir).toBe('d:/aiwork/project-a');
+    expect(afterDelete.displayName).toBe('Stable project');
+    expect(gcProjectsAgainstActive([projectKey], [afterDelete.projectKey])).toEqual([projectKey]);
+    expect(normalizeManualProjectOrder([projectKey], [afterDelete.projectKey])).toEqual([
+      projectKey,
+    ]);
+    const pinEntry = pinnedProjectEntryId(projectKey);
+    expect(normalizeManualPinnedOrder([pinEntry], [pinnedProjectEntryId(afterDelete.projectKey)]))
+      .toEqual([pinEntry]);
+  });
+
+  it('applies last-activity cutoff to persistent projects using lastUsedAt', () => {
+    const projects = [
+      {
+        workingDir: '/workspace/old',
+        lastUsedAt: '2026-07-01T00:00:00.000Z',
+        knownAgentKinds: [] as string[],
+      },
+      {
+        workingDir: '/workspace/recent',
+        lastUsedAt: '2026-08-10T00:00:00.000Z',
+        knownAgentKinds: [] as string[],
+      },
+    ];
+
+    expect(
+      filterPersistentLocalProjectsByLastActivity(
+        projects,
+        Date.parse('2026-08-01T00:00:00.000Z'),
+      ).map((project) => project.workingDir),
+    ).toEqual(['/workspace/recent']);
+    expect(filterPersistentLocalProjectsByLastActivity(projects, null)).toEqual(projects);
+  });
+
+  it('distinguishes a truly empty project from a vendor-mismatched historical project', () => {
+    const deletedCcSession = s({
+      workingDir: '/workspace/cc-only',
+      agentKind: 'cc',
+      status: 'deleted',
+    });
+    const visibleSessionsAfterDeletion = [deletedCcSession].filter(
+      (session) => session.status !== 'deleted',
+    );
+    const persistent = buildPersistentLocalProjects(
+      [
+        {
+          path: '/workspace/cc-only',
+          lastUsedAt: '2026-08-12T08:00:00.000Z',
+          knownAgentKinds: ['cc'],
+        },
+        { path: '/workspace/truly-empty', lastUsedAt: '2026-08-12T07:00:00.000Z' },
+      ],
+      visibleSessionsAfterDeletion,
+      'linux',
+    );
+    const grouped = groupSessions([], { persistentLocalProjects: persistent });
+    const ccOnly = grouped.projects.find((project) => project.workingDir.endsWith('/cc-only'))!;
+    const trulyEmpty = grouped.projects.find((project) =>
+      project.workingDir.endsWith('/truly-empty'),
+    )!;
+
+    expect(ccOnly.persistentLocalKnownAgentKinds).toEqual(['cc']);
+    expect(persistentProjectMatchesVendor(ccOnly, 'codex')).toBe(false);
+    expect(persistentProjectMatchesVendor(ccOnly, 'cc')).toBe(true);
+    expect(trulyEmpty.persistentLocalKnownAgentKinds).toEqual([]);
+    expect(persistentProjectMatchesVendor(trulyEmpty, 'codex')).toBe(true);
+  });
+
+  it('combines last-activity and vendor filtering without inventing mismatched empty shells', () => {
+    const persistent = buildPersistentLocalProjects(
+      [
+        { path: '/workspace/cc-recent', lastUsedAt: '2026-08-12T08:00:00.000Z' },
+        { path: '/workspace/empty-recent', lastUsedAt: '2026-08-12T07:00:00.000Z' },
+        { path: '/workspace/empty-old', lastUsedAt: '2026-07-01T00:00:00.000Z' },
+      ],
+      [s({ workingDir: '/workspace/cc-recent', agentKind: 'cc' })],
+      'linux',
+    );
+    const activityFiltered = filterPersistentLocalProjectsByLastActivity(
+      persistent,
+      Date.parse('2026-08-01T00:00:00.000Z'),
+    );
+    const visibleForCodex = groupSessions([], {
+      persistentLocalProjects: activityFiltered,
+    }).projects.filter((project) => persistentProjectMatchesVendor(project, 'codex'));
+
+    expect(visibleForCodex.map((project) => project.workingDir)).toEqual([
+      '/workspace/empty-recent',
+    ]);
+  });
+
+  it('does not let an older session regress retained project activity', () => {
+    const retainedLastUsedAt = '2026-08-12T08:00:00.000Z';
+    const grouped = groupSessions(
+      [
+        s({
+          workingDir: '/workspace/project-a',
+          userSendAt: '2026-08-01T08:00:00.000Z',
+          updatedAt: '2026-08-01T08:00:00.000Z',
+        }),
+      ],
+      {
+        persistentLocalProjects: [
+          {
+            workingDir: '/workspace/project-a',
+            lastUsedAt: retainedLastUsedAt,
+            knownAgentKinds: ['cc'],
+          },
+        ],
+      },
+    );
+
+    expect(grouped.projects[0]?.latestActivityAt).toBe(retainedLastUsedAt);
   });
 
   it('can keep an individually pinned conversation in the project catalogue', () => {
@@ -891,7 +1080,12 @@ describe('pinnedSessionIdsInDisplayOrder（拖拽 baseline:与置顶段同序 st
       s({ id: 'p-mid', pinnedAt: '2026-02-15T00:00:00.000Z' }),
     ];
     // active 段按 pinnedAt desc: p-new, p-mid, p-old;归档置顶排在所有 active 之后。
-    expect(pinnedSessionIdsInDisplayOrder(sessions)).toEqual(['p-new', 'p-mid', 'p-old', 'p-archived']);
+    expect(pinnedSessionIdsInDisplayOrder(sessions)).toEqual([
+      'p-new',
+      'p-mid',
+      'p-old',
+      'p-archived',
+    ]);
   });
 
   it('本地 + 远程置顶合并后统一按 pinnedAt desc 排(不分本地 / 远程)', () => {

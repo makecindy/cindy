@@ -50,6 +50,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useModifierHold } from '@/hooks/useModifierHold';
@@ -121,11 +122,15 @@ import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
+  buildPersistentLocalProjects,
+  filterPersistentLocalProjectsByLastActivity,
   normalizeProjectKey,
   normalizeWorkingDir,
   projectIdentityKey,
   projectIdentityKeyForSession,
   pinnedSessionIdsInDisplayOrder,
+  persistentProjectMatchesVendor,
+  type PersistentLocalProject,
   type ProjectNode,
 } from './lib/projectGrouping';
 import { projectDisplayLabelWithMachine } from './lib/remoteProjectIdentity';
@@ -140,6 +145,8 @@ import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdent
 import {
   buildProjectKeyComparisonSet,
   isProjectHidden,
+  isSessionInProject,
+  isSessionInProjectComparisonSet,
   projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
@@ -401,7 +408,17 @@ export function CCAgentSidebarUpper() {
     [allSessionsForAttention],
   );
   const projectAliases = useProjectAliases();
-  const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
+  const { entries: recentWorkdirs } = useRecentWorkdirs();
+  const persistentLocalProjects = useMemo<PersistentLocalProject[]>(
+    () => buildPersistentLocalProjects(recentWorkdirs, searchProjectSessions, localPlatform),
+    [recentWorkdirs, searchProjectSessions, localPlatform],
+  );
+  const searchProjectGroups = useProjectGroups(
+    searchProjectSessions,
+    projectAliases.aliases,
+    false,
+    persistentLocalProjects,
+  );
   const visibleSearchProjects = useMemo(
     () => visibleSidebarProjects(searchProjectGroups.projects, hiddenProjectKeys, localPlatform),
     [searchProjectGroups.projects, hiddenProjectKeys, localPlatform],
@@ -675,6 +692,7 @@ export function CCAgentSidebarUpper() {
                 hiddenProjects={hiddenProjects}
                 projectAliases={projectAliases}
                 scheduleSessionIndex={scheduleSessionIndex}
+                persistentLocalProjects={persistentLocalProjects}
               />
             </div>
           </div>
@@ -764,6 +782,7 @@ interface ExpandedProps {
   hiddenProjects: UseHiddenProjectsReturn;
   projectAliases: ReturnType<typeof useProjectAliases>;
   scheduleSessionIndex: ReturnType<typeof useAutomationScheduleSessionIndex>;
+  persistentLocalProjects: readonly PersistentLocalProject[];
 }
 
 /** rail 未分类隐藏态的空列表(引用稳定,免得 lampScope 发布 effect 空转)。 */
@@ -794,6 +813,7 @@ function ExpandedView({
   hiddenProjects,
   projectAliases,
   scheduleSessionIndex,
+  persistentLocalProjects,
 }: ExpandedProps) {
   const { t, i18n } = useTranslation();
   const localPlatform = window.electronAPI.platform;
@@ -1125,6 +1145,13 @@ function ExpandedView({
   // 机器切换栏选中机器后整体过滤:本机 → 只本地会话;远程 → 只该机器会话。
   // 过滤在源头做,下游 grouping / pinned / projects / dialogues / date-grouped / search 自动继承。
   const selectedMachineId = useEffectiveSelectedMachineId();
+  const visiblePersistentLocalProjects = useMemo(
+    () =>
+      selectedMachineId === MACHINE_ALL || selectedMachineId.includes(MACHINE_LOCAL)
+        ? persistentLocalProjects
+        : [],
+    [persistentLocalProjects, selectedMachineId],
+  );
   const switcherDevices = useSwitcherDevices();
   const deviceListSettled = useDeviceLinkDeviceListSettled();
   const selectedDialogueDeviceResolution = useMemo(
@@ -1284,21 +1311,45 @@ function ExpandedView({
     if (cutoff === null) return sidebarSessions;
     return sidebarSessions.filter((s) => sessionActivityMs(s) >= cutoff);
   }, [sidebarSessions, filter.lastActivity]);
+  const activityFilteredPersistentLocalProjects = useMemo(
+    () =>
+      filterPersistentLocalProjectsByLastActivity(
+        visiblePersistentLocalProjects,
+        cutoffForLastActivity(filter.lastActivity),
+      ),
+    [filter.lastActivity, visiblePersistentLocalProjects],
+  );
 
   /* ---- Grouping & collapse ---- */
-  const allGroups = useProjectGroups(sidebarSessions, projectAliases.aliases);
-  const groups = useProjectGroups(activityFilteredSessions, projectAliases.aliases);
+  const allGroups = useProjectGroups(
+    sidebarSessions,
+    projectAliases.aliases,
+    false,
+    visiblePersistentLocalProjects,
+  );
+  const groups = useProjectGroups(
+    activityFilteredSessions,
+    projectAliases.aliases,
+    false,
+    activityFilteredPersistentLocalProjects,
+  );
   // 普通项目目录也需要保留「所有会话都已单独置顶」的项目身份，供用户继续
   // 从 ProjectNode 菜单置顶整个项目；实际项目子行在渲染前仍会排除已置顶会话。
   const groupsWithPinnedProjects = useProjectGroups(
     activityFilteredSessions,
     projectAliases.aliases,
     true,
+    activityFilteredPersistentLocalProjects,
   );
   // Project pinning is independent from conversation pinning. This catalogue
   // keeps pinned conversations inside their project solely for project identity
   // and project-level actions; the normal project tree above remains deduped.
-  const allProjectGroups = useProjectGroups(sidebarSessions, projectAliases.aliases, true);
+  const allProjectGroups = useProjectGroups(
+    sidebarSessions,
+    projectAliases.aliases,
+    true,
+    visiblePersistentLocalProjects,
+  );
   const activeWorkingDirs = useMemo(
     () => allProjectGroups.projects.map((p) => p.projectKey),
     [allProjectGroups.projects],
@@ -1313,7 +1364,12 @@ function ExpandedView({
     () => [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
     [sessions, remoteProjectSessions, passesOrcaAndStatus],
   );
-  const projectUniverse = useProjectGroups(unfilteredProjectSessions, projectAliases.aliases, true);
+  const projectUniverse = useProjectGroups(
+    unfilteredProjectSessions,
+    projectAliases.aliases,
+    true,
+    persistentLocalProjects,
+  );
   // Visibility is a negative overlay only. Keep the raw universe above for
   // filter/manual-order GC, and expose a separate catalogue to sidebar UI.
   const visibleProjectUniverse = useMemo(
@@ -1459,19 +1515,31 @@ function ExpandedView({
     () => buildProjectKeyComparisonSet(hiddenProjectKeys, localPlatform),
     [hiddenProjectKeys, localPlatform],
   );
+  const allowedProjectComparisonKeys = useMemo(
+    () =>
+      filter.projectsAsSet === null
+        ? null
+        : buildProjectKeyComparisonSet(filter.projectsAsSet, localPlatform),
+    [filter.projectsAsSet, localPlatform],
+  );
+  const pinnedProjectComparisonKeys = useMemo(
+    () => buildProjectKeyComparisonSet(pinnedProjectKeys, localPlatform),
+    [pinnedProjectKeys, localPlatform],
+  );
 
   const visiblePinnedSessions = useMemo(() => {
     // 置顶段用 allGroups.pinned(未经"最近活跃 N 天"筛选)——置顶内容不受活跃时间过滤影响,
     // 久未活跃的置顶会话也始终显示。vendor / project 过滤仍照常生效。
     return allGroups.pinned.filter((session) => {
       if (vendorPredicate && !vendorPredicate(session)) return false;
-      const allowedProjects = filter.projectsAsSet;
-      if (allowedProjects === null) return true;
-      if (session.workspaceKind === 'dialogue') return false;
-      const projectKey = projectIdentityKeyForSession(session);
-      return projectKey != null && allowedProjects.has(projectKey);
+      if (allowedProjectComparisonKeys === null) return true;
+      return isSessionInProjectComparisonSet(
+        session,
+        allowedProjectComparisonKeys,
+        localPlatform,
+      );
     });
-  }, [allGroups.pinned, vendorPredicate, filter.projectsAsSet]);
+  }, [allGroups.pinned, vendorPredicate, allowedProjectComparisonKeys, localPlatform]);
 
   const visiblePinnedProjects = useMemo(() => {
     const allowedProjects = filter.projectsAsSet;
@@ -1487,7 +1555,13 @@ function ExpandedView({
       const matchingSessions = vendorPredicate
         ? project.sessions.filter(vendorPredicate)
         : project.sessions;
-      if (vendorPredicate && matchingSessions.length === 0) return [];
+      if (
+        vendorPredicate &&
+        matchingSessions.length === 0 &&
+        !persistentProjectMatchesVendor(project, filter.vendor)
+      ) {
+        return [];
+      }
 
       return [
         {
@@ -1503,6 +1577,7 @@ function ExpandedView({
     hiddenProjectComparisonKeys,
     pinnedProjectKeys,
     filter.projectsAsSet,
+    filter.vendor,
     vendorPredicate,
   ]);
 
@@ -1570,7 +1645,13 @@ function ExpandedView({
       const matchingSessions = vendorPredicate
         ? project.sessions.filter(vendorPredicate)
         : project.sessions;
-      if (matchingSessions.length === 0) return [];
+      if (
+        matchingSessions.length === 0 &&
+        (!project.isPersistentLocal ||
+          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
+      ) {
+        return [];
+      }
       return [
         {
           ...project,
@@ -1583,6 +1664,7 @@ function ExpandedView({
     visibleProjects,
     pinnedProjectKeys,
     vendorPredicate,
+    filter.vendor,
     filter.sortBy,
     filter.manualProjectOrder,
   ]);
@@ -1594,7 +1676,13 @@ function ExpandedView({
       const matchingSessions = vendorPredicate
         ? project.sessions.filter(vendorPredicate)
         : project.sessions;
-      if (matchingSessions.length === 0) return [];
+      if (
+        matchingSessions.length === 0 &&
+        (!project.isPersistentLocal ||
+          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
+      ) {
+        return [];
+      }
       return [
         {
           ...project,
@@ -1603,7 +1691,7 @@ function ExpandedView({
       ];
     });
     return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
-  }, [visibleProjects, vendorPredicate, filter.sortBy, filter.manualProjectOrder]);
+  }, [visibleProjects, vendorPredicate, filter.vendor, filter.sortBy, filter.manualProjectOrder]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
@@ -1637,22 +1725,24 @@ function ExpandedView({
   );
 
   const visibleDateSessions = useMemo(() => {
-    const allowedProjects = filter.projectsAsSet;
     return activityFilteredSessions.filter((s) => {
       if (s.pinnedAt != null) return false;
       if (vendorPredicate && !vendorPredicate(s)) return false;
       if (s.workspaceKind !== 'dialogue') {
-        const pinnedProjectKey = projectIdentityKeyForSession(s);
-        if (pinnedProjectKey != null && pinnedProjectKeys.has(pinnedProjectKey)) return false;
+        if (isSessionInProjectComparisonSet(s, pinnedProjectComparisonKeys, localPlatform)) {
+          return false;
+        }
       }
-      if (allowedProjects === null) return true;
-      if (s.workspaceKind === 'dialogue') return false;
-      const wd = normalizeWorkingDir(s.workingDir);
-      if (wd == null) return false;
-      const key = projectIdentityKeyForSession(s);
-      return key != null && allowedProjects.has(key);
+      if (allowedProjectComparisonKeys === null) return true;
+      return isSessionInProjectComparisonSet(s, allowedProjectComparisonKeys, localPlatform);
     });
-  }, [activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]);
+  }, [
+    activityFilteredSessions,
+    vendorPredicate,
+    allowedProjectComparisonKeys,
+    pinnedProjectComparisonKeys,
+    localPlatform,
+  ]);
 
   const hasVisibleSidebarContent =
     visiblePinnedEntries.length > 0 ||
@@ -2147,7 +2237,7 @@ function ExpandedView({
     (project: ProjectNode) => {
       const targetProjectKey = project.projectKey;
       const inProject = (s: (typeof sessions)[number]): boolean =>
-        projectIdentityKeyForSession(s) === targetProjectKey && s.status !== 'deleted';
+        isSessionInProject(s, targetProjectKey, localPlatform) && s.status !== 'deleted';
       const navigateToProjectSession = (id: string) => {
         if (project.scope === 'remote') {
           navigate(`/cc-agent/${id}`);
@@ -2172,7 +2262,7 @@ function ExpandedView({
       }
       toast.warning(t('ccAgent.sidebar.browseEmpty'));
     },
-    [activeSessionId, sessions, navigate, t],
+    [activeSessionId, sessions, navigate, t, localPlatform],
   );
 
   /* ---- Rename handler ---- */
@@ -2785,7 +2875,7 @@ function ExpandedView({
       const targetProjectKey = project.projectKey;
       const action = projectBulkArchiveActionForStatus(filter.status);
       const belongsToProject = (session: Session): boolean =>
-        projectIdentityKeyForSession(session) === targetProjectKey;
+        isSessionInProject(session, targetProjectKey, localPlatform);
 
       // 只对**本地** sessions 归档:device-link 远程会话的运行态不在本渲染进程(runningSessionIds 是
       // 本地 makerChatStore 的),无法像本地那样把「正在运行」的排除掉 —— 批量归档时可能把被控端正在
@@ -2945,6 +3035,7 @@ function ExpandedView({
       navigate,
       patchLocal,
       filter.status,
+      localPlatform,
       t,
     ],
   );

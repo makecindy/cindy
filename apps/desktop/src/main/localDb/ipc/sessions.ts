@@ -190,6 +190,21 @@ export function broadcastSessionPatched(
   }
 }
 
+/** 刷新本机窗口的 recent_workdirs cache；异步写跨 owner 后不得误投给新账号。 */
+function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
+  const hasCapturedScope = ownerScope !== null;
+  const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (w.isDestroyed()) continue;
+    if (hasCapturedScope || ownerStamp !== undefined) {
+      w.webContents.send('local-db:recent-workdirs:changed', { path }, ownerStamp);
+    } else {
+      w.webContents.send('local-db:recent-workdirs:changed', { path });
+    }
+  }
+}
+
 /**
  * worktree 回收真正跑完后通知本机所有窗口重拉 worktree 快照。
  *
@@ -1342,7 +1357,8 @@ export function registerSessionIpc(
     const sid = requireString(id, 'id');
     const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
-    const db = getDbClient().drizzle;
+    const dbClient = getDbClient();
+    const db = dbClient.drizzle;
     if (p.workspaceKind !== undefined) {
       const value = p.workspaceKind;
       if (value !== 'project' && value !== 'dialogue') {
@@ -1485,12 +1501,18 @@ export function registerSessionIpc(
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
     if (
-      projectTargetChanged &&
+      (projectTargetChanged || p.status === 'deleted') &&
       row.workspaceKind === 'project' &&
       row.workingDir &&
       !row.remoteHostId
     ) {
-      await upsertRecentWorkdir(row.workingDir, Date.now());
+      const touched = await upsertRecentWorkdir(
+        row.workingDir,
+        Date.now(),
+        process.platform,
+        dbClient,
+      );
+      if (touched) broadcastRecentWorkdirsChanged(row.workingDir, ownerScope);
     }
     if (projectTargetChanged || settingsChanged || titleChanged || p.pinnedAt !== undefined) {
       if (isOwnerScopeCurrent(ownerScope)) {
@@ -1574,7 +1596,8 @@ export async function patchSessionMetaInDb(
     throwIpcError('INVALID_PARAMS', 'title must be a string');
   }
 
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
@@ -1584,6 +1607,20 @@ export async function patchSessionMetaInDb(
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     return sessionToCamel(row);
   });
+  if (
+    patch.status === 'deleted' &&
+    updated.workspaceKind === 'project' &&
+    updated.workingDir &&
+    !updated.remoteHostId
+  ) {
+    const touched = await upsertRecentWorkdir(
+      updated.workingDir,
+      Date.now(),
+      process.platform,
+      dbClient,
+    );
+    if (touched) broadcastRecentWorkdirsChanged(updated.workingDir, ownerScope);
+  }
   notifyAgentIslandSessionPatch(updated.id, {
     status: updated.status,
     title: updated.title,

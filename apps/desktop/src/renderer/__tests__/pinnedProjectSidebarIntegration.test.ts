@@ -57,9 +57,14 @@ describe('pinned project sidebar integration', () => {
 
     expect(dateStart).toBeGreaterThanOrEqual(0);
     expect(dateEnd).toBeGreaterThan(dateStart);
-    expect(dateBlock).toContain('pinnedProjectKeys.has(pinnedProjectKey)');
     expect(dateBlock).toContain(
-      '[activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]',
+      'isSessionInProjectComparisonSet(s, pinnedProjectComparisonKeys, localPlatform)',
+    );
+    expect(dateBlock).toContain(
+      'isSessionInProjectComparisonSet(s, allowedProjectComparisonKeys, localPlatform)',
+    );
+    expect(dateBlock).toContain(
+      'allowedProjectComparisonKeys,\n    pinnedProjectComparisonKeys,\n    localPlatform,',
     );
   });
 
@@ -100,6 +105,24 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain('ensureProjectIncluded: filter.ensureProjectIncluded,');
     expect(sidebarSource).toContain('localPlatform,');
     expect(sidebarSource).toContain('if (restored) return;');
+  });
+
+  it('uses comparison identity for Browse Files and Archive All action membership', () => {
+    const browseStart = sidebarSource.indexOf('const handleBrowseFiles = useCallback(');
+    const browseEnd = sidebarSource.indexOf('/* ---- Rename handler ---- */', browseStart);
+    const archiveStart = sidebarSource.indexOf('const handleArchiveAllInProject = useCallback(');
+    const archiveEnd = sidebarSource.indexOf('\n  return (', archiveStart);
+
+    expect(browseStart).toBeGreaterThanOrEqual(0);
+    expect(browseEnd).toBeGreaterThan(browseStart);
+    expect(archiveStart).toBeGreaterThanOrEqual(0);
+    expect(archiveEnd).toBeGreaterThan(archiveStart);
+    expect(sidebarSource.slice(browseStart, browseEnd)).toContain(
+      'isSessionInProject(s, targetProjectKey, localPlatform)',
+    );
+    expect(sidebarSource.slice(archiveStart, archiveEnd)).toContain(
+      'isSessionInProject(session, targetProjectKey, localPlatform)',
+    );
   });
 
   it('prunes hidden projects from filters in every renderer hook', () => {

@@ -29,9 +29,7 @@ vi.mock('electron', () => ({
     }),
   },
   BrowserWindow: {
-    getAllWindows: () => [
-      { isDestroyed: () => false, webContents: { send: h.webContentsSend } },
-    ],
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: h.webContentsSend } }],
   },
 }));
 vi.mock('../../../logger', () => ({
@@ -41,7 +39,7 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
 
-import { registerRecentWorkdirsIpc } from '../recentWorkdirs';
+import { registerRecentWorkdirsIpc, removeRecentWorkdir } from '../recentWorkdirs';
 
 function createDb(): void {
   h.sqlite?.close();
@@ -52,15 +50,24 @@ function createDb(): void {
       last_used_at INTEGER NOT NULL
     );
     CREATE INDEX idx_recent_workdirs_last_used_at ON recent_workdirs(last_used_at);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      working_dir TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      workspace_kind TEXT NOT NULL DEFAULT 'project',
+      remote_host_id TEXT,
+      agent_kind TEXT NOT NULL DEFAULT 'cc'
+    );
   `);
   h.sqlite = sqlite;
   h.db = drizzle(sqlite);
 }
 
 function seed(path: string, lastUsedAt: number): void {
-  h.sqlite!
-    .prepare('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)')
-    .run(path, lastUsedAt);
+  h.sqlite!.prepare('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)').run(
+    path,
+    lastUsedAt,
+  );
 }
 
 function rows(): Array<{ path: string }> {
@@ -117,6 +124,27 @@ describe('local-db:recent-workdirs:remove', () => {
 
     expect(res.deleted).toBe(true);
     expect(rows()).toEqual([]);
+  });
+
+  it('removes every legacy Windows casing variant for the same drive/UNC identity', async () => {
+    seed('D:/Work/Project-A', 1_000);
+    seed('d:/work/project-a', 2_000);
+    seed('//Server/Share/Project-B', 3_000);
+    seed('//server/share/project-b', 4_000);
+
+    await removeRecentWorkdir('D:\\WORK\\PROJECT-A', 'win32');
+    await removeRecentWorkdir('\\\\SERVER\\SHARE\\PROJECT-B', 'win32');
+
+    expect(rows()).toEqual([]);
+  });
+
+  it('does not fold POSIX path casing when removing on Windows', async () => {
+    seed('/Workspace/Project-A', 1_000);
+    seed('/workspace/project-a', 2_000);
+
+    await invoke('local-db:recent-workdirs:remove', { path: '/Workspace/Project-A' });
+
+    expect(rows()).toEqual([{ path: '/workspace/project-a' }]);
   });
 
   it('is idempotent: missing path resolves deleted:false without broadcasting', async () => {
@@ -177,5 +205,42 @@ describe('local-db:recent-workdirs:list exists probe', () => {
     expect(list[1].exists).toBe(false);
     expect(list[2].exists).toBe(false);
     expect(typeof list[0].lastUsedAt).toBe('string');
+  });
+
+  it('returns every explicitly retained project instead of truncating at ten', async () => {
+    for (let i = 0; i < 14; i += 1) {
+      seed(`/not-mounted/project-${i}`, 1_000 + i);
+    }
+
+    const list = (await invoke('local-db:recent-workdirs:list')) as Array<{ path: string }>;
+
+    expect(list).toHaveLength(14);
+    expect(list[0]?.path).toBe('/not-mounted/project-13');
+    expect(list[13]?.path).toBe('/not-mounted/project-0');
+  });
+
+  it('retains agent-kind history after the last project session is soft-deleted', async () => {
+    seed('/workspace/codex-only', 1_786_500_000_000);
+    h.sqlite!
+      .prepare(
+        `INSERT INTO sessions (id, working_dir, status, workspace_kind, remote_host_id, agent_kind)
+         VALUES (?, ?, 'active', 'project', NULL, 'codex')`,
+      )
+      .run('codex-session', '/workspace/codex-only');
+    h.sqlite!
+      .prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?")
+      .run('codex-session');
+
+    const list = (await invoke('local-db:recent-workdirs:list')) as Array<{
+      path: string;
+      knownAgentKinds: string[];
+    }>;
+
+    expect(list).toEqual([
+      expect.objectContaining({
+        path: '/workspace/codex-only',
+        knownAgentKinds: ['codex'],
+      }),
+    ]);
   });
 });

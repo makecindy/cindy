@@ -13,11 +13,15 @@
  *    (main 端 session 创建广播 = 可能新增了 recent_workdirs row)
  *  - 调用方 (hook) 也可以主动调 forceRefresh
  *
- * 不订阅 sessionsPush.onPatched —— 字段变更 (rename / pin / archive) 不影响
- * recent_workdirs 表。
+ * 普通字段变更 (rename / pin / archive) 不影响 recent_workdirs；软删除会由 main
+ * 刷新 lastUsedAt，并经 recentWorkdirs.onChanged 触发强制重拉。
  */
 
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerPushCurrent,
+  type DataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
 export interface RecentWorkdirEntry {
   /** 绝对路径(写入时已 trim,跟 sessions.workingDir 形态一致)。 */
@@ -26,10 +30,14 @@ export interface RecentWorkdirEntry {
   lastUsedAt: string;
   /** 目录是否仍在磁盘上(main 侧 list 时探测);false → UI 置灰提示已迁移/删除。 */
   exists: boolean;
+  /** 包含软删除历史的 project agentKind 聚合，供 vendor 过滤识别非空项目。 */
+  knownAgentKinds?: readonly string[];
 }
 
 let cache: RecentWorkdirEntry[] | null = null;
-let inflight: Promise<RecentWorkdirEntry[]> | null = null;
+let activeOwner = getDataOwnerGeneration();
+let requestGeneration = 0;
+let inflight: { generation: number; promise: Promise<RecentWorkdirEntry[]> } | null = null;
 const subs = new Set<() => void>();
 
 function notify(): void {
@@ -60,29 +68,54 @@ export const recentWorkdirsStore = {
 
   /** 命中即 noop,dedupe 并发请求。 */
   async ensure(): Promise<void> {
-    if (cache) return;
+    if (cache !== null) return;
     if (!inflight) {
-      inflight = fetchList()
+      const generation = requestGeneration;
+      const promise = fetchList()
         .then((data) => {
+          if (generation !== requestGeneration) return data;
           cache = data;
-          inflight = null;
+          if (inflight?.generation === generation) inflight = null;
           notify();
           return data;
         })
         .catch((e) => {
-          inflight = null;
+          if (generation !== requestGeneration) return [];
+          if (generation === requestGeneration && inflight?.generation === generation) {
+            inflight = null;
+          }
           throw e;
         });
+      inflight = { generation, promise };
     }
-    await inflight;
+    await inflight.promise;
   },
 
   /** 强制重拉(drop cache 后 ensure)。 */
   async forceRefresh(): Promise<RecentWorkdirEntry[]> {
+    requestGeneration += 1;
     cache = null;
     inflight = null;
     await this.ensure();
     return cache ?? [];
+  },
+
+  /**
+   * 同步切换 owner scope。清空旧快照并使所有旧 owner 的在途读取失效；只有同一
+   * owner + generation 启动的最新请求才允许写回 cache。
+   */
+  setDataOwner(owner: DataOwnerGeneration): void {
+    if (
+      activeOwner.dataOwnerId === owner.dataOwnerId &&
+      activeOwner.generation === owner.generation
+    ) {
+      return;
+    }
+    activeOwner = { ...owner };
+    requestGeneration += 1;
+    cache = null;
+    inflight = null;
+    notify();
   },
 
   /**
@@ -109,6 +142,7 @@ export const recentWorkdirsStore = {
 
   /** 仅供测试 / 登出清理。 */
   reset(): void {
+    requestGeneration += 1;
     cache = null;
     inflight = null;
     notify();
@@ -130,9 +164,8 @@ if (typeof window !== 'undefined') {
       });
     });
   }
-  // 删除广播:别的窗口(或 device-link 远程调用)移除条目时,本窗口的模块级
-  // 缓存也要跟上,否则删掉的项目在这里仍可选。发起删除的窗口自己已乐观 patch,
-  // 重拉一次幂等无害。
+  // 变更广播:显式移除与软删除 activity touch 都会改变持久目录投影；强制重拉
+  // 保证本窗口的 lastActivity 过滤立即看到新时间，而不是等下一次 session 创建。
   const recentApi = window.electronAPI?.localDb?.recentWorkdirs;
   if (recentApi?.onChanged) {
     recentApi.onChanged((_payload, ownerStamp) => {

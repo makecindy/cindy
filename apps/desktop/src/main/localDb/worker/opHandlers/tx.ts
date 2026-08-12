@@ -75,6 +75,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
       return sessionsSetStatus(db, txArgs);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(db, txArgs);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(db, txArgs);
     case 'message.delete':
@@ -122,6 +124,38 @@ export function tx(db: Database.Database, args: unknown): unknown {
     default:
       throw Object.assign(new Error(`unknown tx: ${name}`), { code: 'UNKNOWN_TX' });
   }
+}
+
+function recentWorkdirsMergeWindowsIdentity(db: Database.Database, args: unknown): void {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  const transaction = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO recent_workdirs (path, last_used_at)
+       SELECT COALESCE(
+                (SELECT path FROM recent_workdirs
+                 WHERE LOWER(path) = LOWER(?)
+                 ORDER BY last_used_at DESC, rowid ASC LIMIT 1),
+                ?
+              ),
+              MAX(?, COALESCE(MAX(last_used_at), 0))
+       FROM recent_workdirs
+       WHERE LOWER(path) = LOWER(?)
+       ON CONFLICT(path) DO UPDATE SET
+         last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)`,
+    ).run(path, path, lastUsedAt, path);
+    db.prepare(
+      `DELETE FROM recent_workdirs
+       WHERE LOWER(path) = LOWER(?)
+         AND path != (
+           SELECT path FROM recent_workdirs
+           WHERE LOWER(path) = LOWER(?)
+           ORDER BY last_used_at DESC, rowid ASC LIMIT 1
+         )`,
+    ).run(path, path);
+  });
+  transaction();
 }
 
 /** Remove every stale startup binding as one all-or-nothing repair. */

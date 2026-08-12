@@ -12,7 +12,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
-import { messages, sessions } from '../../schema';
+import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
 
 type SessionRouteLockMock = SessionRouteLock &
@@ -20,13 +20,25 @@ type SessionRouteLockMock = SessionRouteLock &
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
+  client: null as { drizzle: ReturnType<typeof drizzle> } | null,
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   relocate: vi.fn(async (): Promise<{ persistedSdkSessionId: string | null }> => ({
     persistedSdkSessionId: null,
   })),
   tapWindowBroadcast: vi.fn(),
+  webContentsSend: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
+  upsertRecentWorkdir: vi.fn(
+    async (
+      _path: string | null | undefined,
+      _atMs?: number,
+      _platform?: NodeJS.Platform,
+      _client?: { drizzle: ReturnType<typeof drizzle> },
+    ) => true,
+  ),
+  captureOwnerScope: false,
+  ownerCurrent: true,
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
@@ -38,23 +50,32 @@ vi.mock('electron', () => ({
       h.handlers.set(channel, handler);
     }),
   },
-  BrowserWindow: { getAllWindows: () => [] },
+  app: { getPath: () => 'C:\\cindy-test-user-data' },
+  BrowserWindow: {
+    getAllWindows: () => [
+      { isDestroyed: () => false, webContents: { send: h.webContentsSend } },
+    ],
+  },
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../client/current', () => ({
-  getDbClient: () => ({ drizzle: h.db }),
+  getDbClient: () => h.client,
 }));
 vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
 vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
-vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
+vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
+  captureDataOwnerBroadcastScope: vi.fn(() =>
+    h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
+  ),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => h.ownerCurrent),
 }));
 vi.mock('../../../sessionTaskSummary.js', () => ({
   maybeGenerateSessionTaskSummary: h.summarizeSession,
@@ -129,6 +150,10 @@ function createDb(): void {
       created_at INTEGER NOT NULL,
       rewind_at INTEGER
     );
+    CREATE TABLE recent_workdirs (
+      path TEXT PRIMARY KEY NOT NULL,
+      last_used_at INTEGER NOT NULL
+    );
   `);
   const insert = sqlite.prepare(`
     INSERT INTO sessions (id, working_dir, agent_kind, remote_host_id, workspace_kind, created_at, updated_at)
@@ -144,6 +169,7 @@ function createDb(): void {
   `).run('review-local', '/review/dir', 'codex', null, 'dialogue');
   h.sqlite = sqlite;
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
+  h.client = { drizzle: h.db };
 }
 
 async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise<unknown> {
@@ -152,10 +178,19 @@ async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise
   return handler({}, id, patch);
 }
 
+async function invokePatchMeta(id: string, patch: Record<string, unknown>): Promise<unknown> {
+  const handler = h.handlers.get('local-db:sessions:patch-meta');
+  if (!handler) throw new Error('patch-meta handler not registered');
+  return handler({}, id, patch);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
+  h.upsertRecentWorkdir.mockImplementation(async () => true);
+  h.captureOwnerScope = false;
+  h.ownerCurrent = true;
   h.handlers.clear();
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
@@ -167,6 +202,103 @@ afterEach(() => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('touches the retained local project at the soft-delete activity time', async () => {
+    h.sqlite!
+      .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
+      .run('codex-local');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_000_000);
+
+    try {
+      await invokeUpdate('codex-local', { status: 'deleted' });
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      '/old/dir',
+      1_786_500_000_000,
+      process.platform,
+      h.client,
+    );
+    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+      path: '/old/dir',
+    });
+  });
+
+  it('touches the retained local project when device-link soft-deletes through patch-meta', async () => {
+    h.sqlite!
+      .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
+      .run('codex-local');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_100_000);
+
+    try {
+      await invokePatchMeta('codex-local', { status: 'deleted' });
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      '/old/dir',
+      1_786_500_100_000,
+      process.platform,
+      h.client,
+    );
+    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+      path: '/old/dir',
+    });
+  });
+
+  it('touches only the handler-entry database and suppresses broadcast after owner switch', async () => {
+    h.sqlite!
+      .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
+      .run('codex-local');
+    const oldClient = h.client!;
+    const nextSqlite = new Database(':memory:');
+    nextSqlite.exec(`
+      CREATE TABLE recent_workdirs (
+        path TEXT PRIMARY KEY NOT NULL,
+        last_used_at INTEGER NOT NULL
+      );
+    `);
+    const nextClient = { drizzle: drizzle(nextSqlite, { schema: { recentWorkdirs } }) };
+    h.captureOwnerScope = true;
+    h.upsertRecentWorkdir.mockImplementation(
+      async (
+        _path: string | null | undefined,
+        atMs?: number,
+        _platform?: NodeJS.Platform,
+        client?: typeof oldClient,
+      ) => {
+        await client!.drizzle
+          .insert(recentWorkdirs)
+          .values({ path: '/old/dir', lastUsedAt: atMs! });
+        return true;
+      },
+    );
+    h.routeLock.mockImplementation(async (_sessionId, task) => {
+      const result = await task();
+      h.client = nextClient as typeof h.client;
+      h.ownerCurrent = false;
+      return result;
+    });
+
+    try {
+      await invokeUpdate('codex-local', { status: 'deleted' });
+
+      expect(
+        h.sqlite!.prepare('SELECT path FROM recent_workdirs').all(),
+      ).toEqual([{ path: '/old/dir' }]);
+      expect(nextSqlite.prepare('SELECT path FROM recent_workdirs').all()).toEqual([]);
+      expect(h.webContentsSend).not.toHaveBeenCalledWith(
+        'local-db:recent-workdirs:changed',
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      nextSqlite.close();
+    }
+  });
+
   it('does not resurrect a deleted task through the generic status writer', async () => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
 

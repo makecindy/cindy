@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildProjectKeyComparisonSet,
   isProjectHidden,
+  isSessionInProject,
+  isSessionInProjectComparisonSet,
   isSessionInHiddenProject,
   projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
@@ -122,6 +124,34 @@ describe('sidebar project visibility', () => {
       isSessionInHiddenProject(
         session({ workingDir: 'c:\\users\\lee\\repo' }),
         hidden,
+        'win32',
+      ),
+    ).toBe(true);
+  });
+
+  it('uses retained Windows comparison identity for session-level filter and pin selectors', () => {
+    const retainedComparisonKeys = buildProjectKeyComparisonSet(
+      new Set(['local:d:/aiwork/project-a']),
+      'win32',
+    );
+    const differentlyCasedSession = session({ workingDir: 'D:\\AIWork\\Project-A' });
+
+    expect(
+      isSessionInProjectComparisonSet(
+        differentlyCasedSession,
+        retainedComparisonKeys,
+        'win32',
+      ),
+    ).toBe(true);
+  });
+
+  it('selects Browse/Archive action members through retained Windows identity', () => {
+    const differentlyCasedSession = session({ workingDir: 'D:\\AIWork\\Project-A' });
+
+    expect(
+      isSessionInProject(
+        differentlyCasedSession,
+        'local:d:/aiwork/project-a',
         'win32',
       ),
     ).toBe(true);

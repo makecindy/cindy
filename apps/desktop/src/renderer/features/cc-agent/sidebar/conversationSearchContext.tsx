@@ -25,6 +25,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { useConversationSearchRequest } from '@/state/conversationSearchRequest';
 import { useProjectAliases } from '../hooks/useProjectAliases';
@@ -40,6 +41,7 @@ import {
   useConversationSearch,
 } from './ConversationSearchBox';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
+import { buildPersistentLocalProjects } from '../lib/projectGrouping';
 
 interface ConversationSearchContextValue {
   /** 搜索状态机(query / 排序 / 筛选 / 结果 / handleSelect 等)。 */
@@ -61,15 +63,15 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   const { sessions } = useCCSessions({ includeArchived: 'all' });
   const { aliases } = useProjectAliases();
   const { hiddenProjectKeys } = useHiddenProjects();
+  const { entries: recentWorkdirs } = useRecentWorkdirs();
   const searchSessions = useMemo(() => sessions.filter((s) => !isOrcaWorkerSession(s)), [sessions]);
-  const { projects } = useProjectGroups(searchSessions, aliases);
+  const persistentLocalProjects = useMemo(
+    () => buildPersistentLocalProjects(recentWorkdirs, searchSessions, window.electronAPI.platform),
+    [recentWorkdirs, searchSessions],
+  );
+  const { projects } = useProjectGroups(searchSessions, aliases, false, persistentLocalProjects);
   const visibleProjects = useMemo(
-    () =>
-      visibleSidebarProjects(
-        projects,
-        hiddenProjectKeys,
-        window.electronAPI.platform,
-      ),
+    () => visibleSidebarProjects(projects, hiddenProjectKeys, window.electronAPI.platform),
     [projects, hiddenProjectKeys],
   );
   const allowedSessionIds = useMemo(
@@ -100,11 +102,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   useEffect(() => {
     if (
       search.lockedProjectKey &&
-      isProjectHidden(
-        search.lockedProjectKey,
-        hiddenProjectKeys,
-        window.electronAPI.platform,
-      )
+      isProjectHidden(search.lockedProjectKey, hiddenProjectKeys, window.electronAPI.platform)
     ) {
       search.reset();
       search.clearLock();
@@ -119,7 +117,8 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     if (
       next.length === search.projectSelection.length &&
       next.every((projectKey, index) => projectKey === search.projectSelection[index])
-    ) return;
+    )
+      return;
     search.setProjectSelection(next.length > 0 ? next : 'all');
   }, [
     hiddenProjectKeys,

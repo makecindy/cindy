@@ -19,6 +19,7 @@ export type DbTxName =
   | 'orca.reconcileInactiveTeamWorkersForLead'
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
+  | 'recentWorkdirs.mergeWindowsIdentity'
   | 'session.agentSwitchFallback'
   | 'message.delete'
   | 'im.deleteBindings'
@@ -736,6 +737,12 @@ export interface WechatUnbindCleanupResult {
   filePaths: string[];
 }
 
+export interface RecentWorkdirsMergeWindowsIdentityArgs {
+  /** Canonical lowercase Windows drive or UNC path. */
+  path: string;
+  lastUsedAt: number;
+}
+
 export type DbTxArgsByName = {
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
@@ -757,6 +764,7 @@ export type DbTxArgsByName = {
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
+  'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
@@ -802,6 +810,7 @@ export type DbTxResultByName = {
   'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
+  'recentWorkdirs.mergeWindowsIdentity': undefined;
   'session.agentSwitchFallback': undefined;
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;

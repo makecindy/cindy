@@ -17,6 +17,10 @@ CREATE TABLE migration_history (
   content_hash TEXT NOT NULL,
   applied_at INTEGER NOT NULL
 );
+CREATE TABLE recent_workdirs (
+  path TEXT PRIMARY KEY NOT NULL,
+  last_used_at INTEGER NOT NULL
+);
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL DEFAULT 'New Maker',
@@ -861,6 +865,64 @@ describe('db worker tx handlers', () => {
       });
     }, { useInlineWorker });
   });
+
+  it.each([false, true])(
+    'recentWorkdirs.mergeWindowsIdentity rolls back canonical insert when cleanup fails (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await client.exec(
+          'INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?), (?, ?)',
+          ['D:/Work/Project-A', 3_000, 'd:/work/project-a', 2_000],
+        );
+        await client.exec(`
+          CREATE TRIGGER fail_recent_workdir_cleanup
+          BEFORE DELETE ON recent_workdirs
+          BEGIN
+            SELECT RAISE(ABORT, 'forced cleanup failure');
+          END
+        `);
+
+        await expect(
+          client.tx('recentWorkdirs.mergeWindowsIdentity', {
+            path: 'd:/work/project-a',
+            lastUsedAt: 4_000,
+          }),
+        ).rejects.toThrow(/forced cleanup failure/);
+
+        await expect(
+          client.query<{ path: string; lastUsedAt: number }>(
+            'SELECT path, last_used_at AS lastUsedAt FROM recent_workdirs ORDER BY path',
+          ),
+        ).resolves.toEqual([
+          { path: 'D:/Work/Project-A', lastUsedAt: 3_000 },
+          { path: 'd:/work/project-a', lastUsedAt: 2_000 },
+        ]);
+      }, { useInlineWorker });
+    },
+  );
+
+  it.each([false, true])(
+    'recentWorkdirs.mergeWindowsIdentity keeps the existing display path while refreshing activity (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await client.exec('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)', [
+          'D:/Work/Project-A',
+          3_000,
+        ]);
+
+        await client.tx('recentWorkdirs.mergeWindowsIdentity', {
+          path: 'd:/work/project-a',
+          lastUsedAt: 4_000,
+        });
+
+        await expect(
+          client.query<{ path: string; lastUsedAt: number }>(
+            'SELECT path, last_used_at AS lastUsedAt FROM recent_workdirs',
+          ),
+        ).resolves.toEqual([{ path: 'D:/Work/Project-A', lastUsedAt: 4_000 }]);
+      }, { useInlineWorker });
+    },
+  );
 
   it('sessions.renameTitles applies title changes atomically with preconditions', async () => {
     await withClient(async (client) => {

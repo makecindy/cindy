@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
   recentWorkdirsStore,
   type RecentWorkdirEntry,
@@ -44,9 +45,16 @@ export function useRecentWorkdirs(): UseRecentWorkdirsReturn {
 
     const unsub = recentWorkdirsStore.subscribe(() => {
       const next = recentWorkdirsStore.get();
-      if (next !== null) {
-        setSnapshot(next);
-        setIsLoading(false);
+      setSnapshot(next);
+      setIsLoading(next === null);
+      if (next === null && getDataOwnerGeneration().dataOwnerId !== null) {
+        void recentWorkdirsStore
+          .ensure()
+          .then(() => setError(null))
+          .catch((e: unknown) => {
+            setError(e instanceof Error ? e : new Error(String(e)));
+            setIsLoading(false);
+          });
       }
     });
 

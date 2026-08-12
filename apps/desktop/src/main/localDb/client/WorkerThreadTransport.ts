@@ -311,6 +311,8 @@ function dispatchTx(readyDb, payload) {
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(readyDb, request.args);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(readyDb, request.args);
     case 'message.delete':
@@ -324,6 +326,21 @@ function dispatchTx(readyDb, payload) {
     default:
       throw Object.assign(new Error('unknown tx: ' + name), { code: 'UNKNOWN_TX' });
   }
+}
+
+// ⚠️ 与 worker/opHandlers/tx.ts 的 recentWorkdirsMergeWindowsIdentity 保持一致。
+function recentWorkdirsMergeWindowsIdentity(readyDb, args) {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  return readyDb.transaction(() => {
+    readyDb.prepare(
+      'INSERT INTO recent_workdirs (path, last_used_at) SELECT COALESCE((SELECT path FROM recent_workdirs WHERE LOWER(path) = LOWER(?) ORDER BY last_used_at DESC, rowid ASC LIMIT 1), ?), MAX(?, COALESCE(MAX(last_used_at), 0)) FROM recent_workdirs WHERE LOWER(path) = LOWER(?) ON CONFLICT(path) DO UPDATE SET last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)',
+    ).run(path, path, lastUsedAt, path);
+    readyDb.prepare(
+      'DELETE FROM recent_workdirs WHERE LOWER(path) = LOWER(?) AND path != (SELECT path FROM recent_workdirs WHERE LOWER(path) = LOWER(?) ORDER BY last_used_at DESC, rowid ASC LIMIT 1)',
+    ).run(path, path);
+  })();
 }
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的 imDeleteBindings 保持一致。

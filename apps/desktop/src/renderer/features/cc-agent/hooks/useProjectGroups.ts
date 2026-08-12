@@ -12,18 +12,28 @@ import { useMemo } from 'react';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
-import { groupSessions, type ProjectGroupsResult } from '../lib/projectGrouping';
+import {
+  groupSessions,
+  type PersistentLocalProject,
+  type ProjectGroupsResult,
+} from '../lib/projectGrouping';
 import { resolveRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
 
 export function useProjectGroups(
   sessions: readonly Session[],
   projectAliases?: ReadonlyMap<string, string>,
   includePinnedInProjects: boolean = false,
+  persistentLocalProjects?: readonly PersistentLocalProject[],
 ): ProjectGroupsResult {
   const sshHosts = useRemoteSshHosts();
 
   return useMemo(() => {
-    const groups = groupSessions(sessions, { projectAliases, includePinnedInProjects });
+    const groups = groupSessions(sessions, {
+      projectAliases,
+      includePinnedInProjects,
+      persistentLocalProjects,
+      localPlatform: window.electronAPI.platform,
+    });
     return {
       ...groups,
       projects: groups.projects.map((project) => ({
@@ -31,5 +41,5 @@ export function useProjectGroups(
         remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts),
       })),
     };
-  }, [sessions, projectAliases, includePinnedInProjects, sshHosts]);
+  }, [sessions, projectAliases, includePinnedInProjects, persistentLocalProjects, sshHosts]);
 }
