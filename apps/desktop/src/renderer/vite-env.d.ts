@@ -4667,6 +4667,8 @@ interface ElectronAPI {
         retryable: boolean;
         status: number;
         detail?: string;
+        errorType?: string;
+        reqId?: number;
       }) => void,
     ) => () => void;
     /** Claude Auto classifier 失败后降级到 ask 的会话级通知。 */
