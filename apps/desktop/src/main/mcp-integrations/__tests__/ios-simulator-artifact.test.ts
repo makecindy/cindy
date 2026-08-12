@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +37,22 @@ afterEach(async () => {
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
+
+/** 探针创建真实符号链接来检测 OS 能力，不靠平台名猜测（开发者模式 Windows 可以 symlink）。 */
+function canCreateSymlink(): boolean {
+  const probe = mkdtempSync(path.join(os.tmpdir(), 'cindy-ios-artifact-symlink-probe-'));
+  try {
+    writeFileSync(path.join(probe, 'target'), 'probe');
+    symlinkSync(path.join(probe, 'target'), path.join(probe, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const canLink = canCreateSymlink();
 
 async function createFixture(
   patch: {
@@ -158,14 +175,18 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     const testDirectory = path.dirname(fileURLToPath(import.meta.url));
     const sourcePath = path.resolve(testDirectory, '../../../../forge.config.ts');
     const source = await readFile(sourcePath, 'utf8');
+    const helperSourcePath = path.resolve(
+      testDirectory,
+      '../../../../forge-ios-simulator-helper.ts',
+    );
+    const helperSource = await readFile(helperSourcePath, 'utf8');
     const resourcesStart = source.indexOf('function extraResourcesForTarget');
     const resourcesEnd = source.indexOf('function assertRealAndroidPlatformTool');
     const ensureWdaStart = source.indexOf('function ensureMacIOSSimulatorWdaArchive');
     const ensureWdaEnd = source.indexOf('const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET');
     const buildStart = source.indexOf('function buildMacIOSSimulatorHelper');
     const buildEnd = source.indexOf('function runSwiftcForTarget');
-    const stageStart = source.indexOf('function stageMacIOSSimulatorHelper');
-    const stageEnd = source.indexOf('function targetPlatformKey');
+    const stageStart = helperSource.indexOf('export function stageMacIOSSimulatorHelper');
     const prePackageStart = source.indexOf('prePackage: async');
     const postPackageStart = source.indexOf('postPackage: async');
     const postPackageEnd = source.indexOf('  makers,', postPackageStart);
@@ -178,7 +199,6 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
       buildStart,
       buildEnd,
       stageStart,
-      stageEnd,
       prePackageStart,
       postPackageStart,
       postPackageEnd,
@@ -189,7 +209,7 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     const resourcesBody = source.slice(resourcesStart, resourcesEnd);
     const ensureWdaBody = source.slice(ensureWdaStart, ensureWdaEnd);
     const buildBody = source.slice(buildStart, buildEnd);
-    const stageBody = source.slice(stageStart, stageEnd);
+    const stageBody = helperSource.slice(stageStart);
     const prePackageBody = source.slice(prePackageStart, postPackageStart);
     const postPackageBody = source.slice(postPackageStart, postPackageEnd);
 
@@ -206,14 +226,20 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     expect(buildBody).toContain('CINDY_IOS_SIDECAR_ARCH: helperArch');
     expect(buildBody).toContain('`${CINDY_APP_ID}.ios-simulator-helper`');
     expect(buildBody).toContain('process.env.APP_VERSION ?? DESKTOP_PACKAGE_VERSION');
+    expect(helperSource).toContain(
+      "const IOS_SIMULATOR_PACKAGED_BUILD_RESULT = 'native-helper-build-result.json'",
+    );
     expect(stageBody).toContain("path.join(appContents, 'Helpers', IOS_SIMULATOR_HELPER_BUNDLE)");
-    expect(stageBody).toContain("fs.rmSync(path.join(resourceRoot, 'helper')");
+    expect(stageBody).toContain("buildResult.status === 'unsupported'");
+    expect(stageBody).toContain('fs.rmSync(sourceRoot');
     expect(stageBody).toContain("fs.rmSync(path.join(resourceRoot, 'native')");
     const ensureWdaIndex = prePackageBody.indexOf('ensureMacIOSSimulatorWdaArchive(platform);');
     const buildHelperIndex = prePackageBody.indexOf('buildMacIOSSimulatorHelper(platform, arch);');
     expect(ensureWdaIndex).toBeGreaterThan(-1);
     expect(buildHelperIndex).toBeGreaterThan(ensureWdaIndex);
-    expect(postPackageBody).toContain('stageMacIOSSimulatorHelper(buildPath, opts.platform);');
+    expect(postPackageBody).toContain(
+      'stageMacIOSSimulatorHelper(buildPath, opts.platform, opts.arch);',
+    );
   });
 
   it('promotes only the fixed signed Helper layout to a verified descriptor', async () => {
@@ -276,7 +302,7 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     });
   });
 
-  it('rejects a symlinked executable before invoking codesign', async () => {
+  it.skipIf(!canLink)('rejects a symlinked executable before invoking codesign', async () => {
     const fixture = await createFixture();
     const targetPath = path.join(fixture.root, 'replacement');
     await writeFile(targetPath, 'native-sidecar');
@@ -284,17 +310,18 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     await symlink(targetPath, fixture.executablePath);
     const commandRunner = createCommandRunner(fixture);
 
-    await expect(
-      verifyIOSSimulatorPackagedSidecarArtifact({
-        resourcesPath: fixture.resourcesPath,
-        version: VERSION,
-        architecture: 'arm64',
-        platform: 'darwin',
-        commandRunner,
-      }),
-    ).rejects.toThrow('verification failed');
-    expect(commandRunner).not.toHaveBeenCalled();
-  });
+      await expect(
+        verifyIOSSimulatorPackagedSidecarArtifact({
+          resourcesPath: fixture.resourcesPath,
+          version: VERSION,
+          architecture: 'arm64',
+          platform: 'darwin',
+          commandRunner,
+        }),
+      ).rejects.toThrow('verification failed');
+      expect(commandRunner).not.toHaveBeenCalled();
+    },
+  );
 
   it('fails a final pre-spawn check after the verified executable changes', async () => {
     const fixture = await createFixture();
@@ -341,9 +368,7 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
       source.indexOf('async function finishLinux'),
     );
     const notarizeIndex = finishDarwinBody.indexOf('notarizeMacApp(appPath, identity)');
-    const verifiedGateIndex = finishDarwinBody.indexOf(
-      "runIOSSimulatorReleaseGate(appPath, arch, 'verified'",
-    );
+    const releaseGateIndex = finishDarwinBody.indexOf('runIOSSimulatorReleaseGate(', notarizeIndex);
     const dmgIndex = finishDarwinBody.indexOf('createMacDMG(');
     const adhocIndex = finishDarwinBody.indexOf('adhocSignMacApp(');
     const untrustedGateIndex = finishDarwinBody.indexOf(
@@ -352,8 +377,12 @@ describe('packaged iOS Simulator sidecar artifact verification', () => {
     const appZipIndex = finishDarwinBody.indexOf('Creating app ZIP (ad-hoc signed)');
 
     expect(notarizeIndex).toBeGreaterThan(-1);
-    expect(verifiedGateIndex).toBeGreaterThan(notarizeIndex);
-    expect(dmgIndex).toBeGreaterThan(verifiedGateIndex);
+    expect(releaseGateIndex).toBeGreaterThan(notarizeIndex);
+    expect(finishDarwinBody).toContain("iosSimulatorHelperSigned ? 'verified' : 'untrusted'");
+    expect(finishDarwinBody).toContain(
+      'CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE=1 requires a packaged Native Helper',
+    );
+    expect(dmgIndex).toBeGreaterThan(releaseGateIndex);
     expect(adhocIndex).toBeGreaterThan(-1);
     expect(untrustedGateIndex).toBeGreaterThan(adhocIndex);
     expect(appZipIndex).toBeGreaterThan(untrustedGateIndex);

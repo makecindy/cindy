@@ -17,12 +17,9 @@ git lfs version
 
 ## 安装
 
-公开贡献者只初始化普通开发必需且公开可访问的 submodule，不要索取、复制或写入凭证：
-
 ```bash
 git clone https://github.com/makecindy/cindy.git
 cd cindy
-git submodule update --init --recursive cindy-protocol
 git lfs pull
 pnpm install
 ```
@@ -63,10 +60,6 @@ sudo chmod 4755 chrome-sandbox
 
 ## 不变量
 
-- submodule 版本由父仓 gitlink 锁定；普通同步不得使用 `git submodule update --remote`。
-- 旧 checkout 拉到 `.gitmodules` URL 迁移后，开发脚本会先执行
-  `git submodule sync -- cindy-protocol`；手动更新 submodule 前也应先执行同一命令，
-  避免继续使用 `.git/config` 缓存的旧仓库地址。
 - 公开版本不包含内建插件种子；插件通过 SkillHub 或手动安装。不要把任何访问令牌写入
   仓库、Git 配置或脚本。
 - Desktop runtime 二进制（claude／codex／ripgrep／pi）的版本由仓库维护者统一判断与升级；贡献者和

@@ -78,9 +78,9 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  * ——黑名单漏一条就会对认证失效、协议错这类确定性失败反复重试、反复烧额度，而
  * 白名单漏一条只是少一次自愈。风险不对称，所以这里只认识别得了的形态。
  *
- * 先过 reason 门（带稳定 reason 的都是 translator 已归类的错误：`empty-response`
- * 零产出无可续、`turn-failed` 连错误详情都没有、`silent-stop-exhausted` 是另一套
- * 自愈的耗尽信号），然后认三类：
+ * 先过 reason 门（带稳定 reason 的都是 translator 已归类的错误：`turn-failed`
+ * 连错误详情都没有、`silent-stop-exhausted` 是另一套自愈的耗尽信号），然后认
+ * 三类：
  *
  *  1. **SSE 流被切断**（`isStreamTruncationError`）——最初的实测形态。
  *  2. **网络到不了上游**（`isNetworkishErrorMessage`：502/503/504、errno、
@@ -105,7 +105,22 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
   // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
   // 权威判据（结构化优先于文案，与 overload-error.ts 的论证同源），直接放行、不再看文案。
-  if (reason === UPSTREAM_OVERLOAD_REASON || reason === 'codex_reconnect_stalled') return true;
+  //
+  // `empty-response` 同理放行（#2320）：translator 的判据已经足够严格——本轮确实发起过
+  // API 调用（apiCalls > 0）、无可见文本、无 result 兜底文本、无工具调用、无 compact
+  // boundary、单轮 usage 增量全为 0——这是上游/网关返回退化空响应的形态，与「流被切断」
+  // 同属连接层故障，续跑一次通常就能过去。此前按「零产出无可续」排除，但 coordinator 的
+  // auto 路径对零产出 turn 本就走**克隆重发原文**（active-turn recovery 已落库，重发安全；
+  // 见 performRetryLastError），对已有 durable progress 的长任务则带 RecoveryCheckpoint
+  // 续跑——两种形态都有安全动作可执行。连续空响应仍由同一份连续失败上限 / 人工介入周期
+  // 硬上限 / 退避止损，预算耗尽后横幅交还用户，不会无界重试。
+  if (
+    reason === UPSTREAM_OVERLOAD_REASON ||
+    reason === 'codex_reconnect_stalled' ||
+    reason === 'empty-response'
+  ) {
+    return true;
+  }
   if (reason.length > 0) return false;
   if (isStreamTruncationError(signals)) return true;
   const message = signals.message;

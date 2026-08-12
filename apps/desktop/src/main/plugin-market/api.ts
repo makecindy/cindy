@@ -11,14 +11,14 @@ import {
 
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { PermanentPluginInstallReceiptError } from './installReceiptOutbox.js';
 
 const log = createLogger('plugin-market-api');
+const PLUGIN_MARKET_API_TIMEOUT_MS = 15_000;
+const RETRYABLE_RECEIPT_HTTP_STATUSES = new Set([401, 403, 408, 425, 429]);
 
-type Fetcher = <T>(
-  apiPath: string,
-  options: Omit<ApiFetchOptions, 'baseUrl'>,
-) => Promise<T>;
+type Fetcher = <T>(apiPath: string, options: Omit<ApiFetchOptions, 'baseUrl'>) => Promise<T>;
 
 export interface PluginInstallReceiptResponse {
   accepted: true;
@@ -48,12 +48,11 @@ export class PluginMarketApi {
     return {
       cache: 'no-store',
       headers: { [CINDY_CLIENT_VERSION_HEADER]: this.getClientVersion() },
+      timeoutMs: PLUGIN_MARKET_API_TIMEOUT_MS,
     };
   }
 
-  async listAll(
-    query?: string,
-  ): Promise<Pick<ListPluginsResponse, 'plugins' | 'removals'>> {
+  async listAll(query?: string): Promise<Pick<ListPluginsResponse, 'plugins' | 'removals'>> {
     const plugins: ListPluginsResponse['plugins'] = [];
     const removalsByPluginId = new Map<string, PluginRemovalNotice>();
     let cursor: string | null = null;
@@ -63,10 +62,7 @@ export class PluginMarketApi {
       if (query?.trim()) search.set('query', query.trim());
       if (cursor) search.set('cursor', cursor);
       const response = parseListPluginsResponse(
-        await this.fetcher<unknown>(
-          `/api/plugins?${search.toString()}`,
-          this.requestOptions(),
-        ),
+        await this.fetcher<unknown>(`/api/plugins?${search.toString()}`, this.requestOptions()),
       );
       for (const plugin of response.plugins) {
         if (seen.has(plugin.id)) continue;
@@ -106,10 +102,7 @@ export class PluginMarketApi {
     ).plugin;
   }
 
-  async download(
-    pluginId: string,
-    releaseId: string,
-  ): Promise<PluginDownloadResponse> {
+  async download(pluginId: string, releaseId: string): Promise<PluginDownloadResponse> {
     return parsePluginDownloadResponse(
       await this.fetcher<unknown>(
         `/api/plugins/${encodeURIComponent(pluginId)}/releases/${encodeURIComponent(releaseId)}/download`,
@@ -123,16 +116,31 @@ export class PluginMarketApi {
     releaseId: string,
     eventId: string,
   ): Promise<PluginInstallReceiptResponse> {
-    const response = await this.fetcher<unknown>(
-      `/api/plugins/${encodeURIComponent(pluginId)}/install-events`,
-      {
-        ...this.requestOptions(),
-        method: 'POST',
-        body: { eventId, releaseId },
-        // 回执必须是后台尽力而为；服务端悬挂不能拖住本地安装。
-        timeoutMs: 5_000,
-      },
-    );
+    let response: unknown;
+    try {
+      response = await this.fetcher<unknown>(
+        `/api/plugins/${encodeURIComponent(pluginId)}/install-events`,
+        {
+          ...this.requestOptions(),
+          method: 'POST',
+          body: { eventId, releaseId },
+          // 回执必须是后台尽力而为；服务端悬挂不能拖住本地安装。
+          timeoutMs: 5_000,
+        },
+      );
+    } catch (error) {
+      if (
+        error instanceof ServerApiError &&
+        error.statusCode >= 400 &&
+        error.statusCode < 500 &&
+        !RETRYABLE_RECEIPT_HTTP_STATUSES.has(error.statusCode)
+      ) {
+        throw new PermanentPluginInstallReceiptError(
+          `Plugin install receipt was rejected (${error.statusCode})`,
+        );
+      }
+      throw error;
+    }
     if (
       !response ||
       typeof response !== 'object' ||
@@ -141,7 +149,7 @@ export class PluginMarketApi {
       typeof (response as { duplicate?: unknown }).duplicate !== 'boolean' ||
       (response as { eventId?: unknown }).eventId !== eventId
     ) {
-      throw new Error('Plugin install receipt response is invalid');
+      throw new PermanentPluginInstallReceiptError('Plugin install receipt response is invalid');
     }
     return response as PluginInstallReceiptResponse;
   }

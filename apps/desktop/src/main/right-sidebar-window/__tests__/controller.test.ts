@@ -626,4 +626,156 @@ describe('setContext / routeCommand', () => {
     h.controller.markReady();
     expect(h.sends.at(-1)).toEqual({ channel: 'cmd-channel', payload: explicit });
   });
+
+  it('同会话多条不同 passive 命令保序全量下发,不再互相覆盖(#2409)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const register = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await expect(h.controller.routeCommand({ command: register, allowOpen: false })).resolves.toBe('queued');
+    await expect(h.controller.routeCommand({ command: close, allowOpen: false })).resolves.toBe('queued');
+
+    h.controller.open();
+    h.controller.markReady();
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([register, close]);
+  });
+
+  it('切 attached 时同会话多条 deferred 命令按序转交主 renderer(#2409)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const register = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await h.controller.routeCommand({ command: register, allowOpen: false });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
+
+    h.controller.setDetached(false);
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([register, close]);
+    expect(h.sendTargets.slice(-2)).toEqual([
+      h.mainWin.webContents.id,
+      h.mainWin.webContents.id,
+    ]);
+  });
+
+  it('完全等价的重复 passive 帧只登记一次(#2409)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const register = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    await h.controller.routeCommand({ command: register, allowOpen: false });
+    await h.controller.routeCommand({ command: { ...register }, allowOpen: false });
+
+    h.controller.open();
+    h.controller.markReady();
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toHaveLength(1);
+  });
+
+  it('generic ensure 被合并后,显式 intent 与其他登记命令仍全量下发(#2409)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const explicit = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await h.controller.routeCommand({ command: explicit, allowOpen: false });
+    await h.controller.routeCommand({
+      command: { type: 'ensure-orca-workers-tab', sessionId: 's1', focusTab: false },
+      allowOpen: false,
+    });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
+
+    h.controller.open();
+    h.controller.markReady();
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([explicit, close]);
+  });
+
+  it('close 之后的 generic ensure 不与屏障前的 ensure 合并,重开意图保留(#2511 review)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const explicit = {
+      type: 'ensure-orca-workers-tab' as const,
+      sessionId: 's1',
+      focusWorkerSessionId: 'worker-s1',
+      focusTab: false,
+    };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    const reopen = { type: 'ensure-orca-workers-tab' as const, sessionId: 's1', focusTab: false };
+    await h.controller.routeCommand({ command: explicit, allowOpen: false });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
+    await h.controller.routeCommand({ command: reopen, allowOpen: false });
+
+    h.controller.open();
+    h.controller.markReady();
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([explicit, close, reopen]);
+  });
+
+  it('隔着 close 的等价 ensure 帧不做跨屏障合并(#2511 review)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const ensure = { type: 'ensure-orca-workers-tab' as const, sessionId: 's1', focusTab: false };
+    const close = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await h.controller.routeCommand({ command: ensure, allowOpen: false });
+    await h.controller.routeCommand({ command: close, allowOpen: false });
+    await h.controller.routeCommand({ command: { ...ensure }, allowOpen: false });
+
+    h.controller.open();
+    h.controller.markReady();
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([ensure, close, ensure]);
+  });
+
+  it('同目标 open-turn-review 后帧取代前帧,不同 session 的并存(#2511 review)', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const stale = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-a',
+      changeSetIds: ['cs-old'],
+      requestNonce: 1,
+      hostSessionId: 's1',
+    };
+    const fresh = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-a',
+      changeSetIds: ['cs-new'],
+      requestNonce: 2,
+      hostSessionId: 's1',
+    };
+    const other = {
+      type: 'open-turn-review' as const,
+      sessionId: 'worker-b',
+      changeSetIds: ['cs-b'],
+      requestNonce: 3,
+      hostSessionId: 's1',
+    };
+    await h.controller.routeCommand({ command: stale, allowOpen: false });
+    await h.controller.routeCommand({ command: other, allowOpen: false });
+    await h.controller.routeCommand({ command: fresh, allowOpen: false });
+
+    h.controller.open();
+    h.controller.markReady();
+    const delivered = h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload);
+    expect(delivered).toEqual([other, fresh]);
+  });
+
 });

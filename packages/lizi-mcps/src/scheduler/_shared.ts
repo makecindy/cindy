@@ -19,11 +19,48 @@
  *    Implemented in errors.ts.
  */
 
-import { parseCron, type Scheduler } from '@cindy/maker-scheduler';
+import {
+  parseCron,
+  SCHEDULER_RUN_ID_VENDOR_OPTION,
+  type Scheduler,
+} from '@cindy/maker-scheduler';
 
 import type { SchedulerToolResult } from '../cindy_schedulerToolRegistry.js';
-import type { SchedulerMcpDeps } from '../types.js';
+import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import { classifySchedulerError } from './errors.js';
+
+/**
+ * Resolve the possible owners of a scheduler MCP call in priority order.
+ *
+ * A completed run can leave a stale host-owned run id while a subsequent fire
+ * is already mapped to the same session. Keep the host-owned id first for the
+ * auto-resume case, but let callers try the live session mapping if that id is
+ * no longer active.
+ */
+export function resolveSchedulerRunIdCandidates(
+  scheduler: Pick<Scheduler, 'resolveInflightRunForSession'>,
+  sessionContext: LiziMcpSessionContext | undefined,
+  explicitRunId?: string,
+): { sessionId?: string; runIds: string[] } {
+  const sessionId = sessionContext?.sessionId;
+  const hostOwnedRunId = sessionContext?.vendorOptions?.[SCHEDULER_RUN_ID_VENDOR_OPTION];
+  const mappedRunId = sessionId
+    ? scheduler.resolveInflightRunForSession(sessionId)
+    : undefined;
+  const runIds: string[] = [];
+
+  if (typeof hostOwnedRunId === 'string' && hostOwnedRunId.length > 0) {
+    runIds.push(hostOwnedRunId);
+  }
+  if (typeof mappedRunId === 'string' && mappedRunId.length > 0 && !runIds.includes(mappedRunId)) {
+    runIds.push(mappedRunId);
+  }
+  if (!sessionId && runIds.length === 0 && explicitRunId) {
+    runIds.push(explicitRunId);
+  }
+
+  return { sessionId, runIds };
+}
 
 /**
  * 校验 cronExpr / timezone 在工具层就合法。

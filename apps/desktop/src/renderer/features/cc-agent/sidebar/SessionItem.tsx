@@ -95,15 +95,12 @@ import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import {
-  SPLIT_GROUP_DRAG_HANDLE_SELECTOR,
-  SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR,
+  finishSessionDrag,
   isSplitGroupDragSource,
   needsDedicatedSplitGroupDragHandle,
-  shouldStartSplitGroupDrag,
-  writeSplitGroupSessionDragData,
+  startSessionDrag,
 } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { OpenInSplitMenu } from './OpenInSplitMenu';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -589,35 +586,17 @@ export const SessionItem = memo(function SessionItem({
 
   const handleDragStart = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
-      const target =
-        dragStartTargetRef.current ?? (event.target instanceof Element ? event.target : null);
+      startSessionDrag(event, {
+        sessionId: session.id,
+        deviceId: session.deviceLinkDeviceId,
+        label: displayTitle,
+        enabled: splitDragEnabled,
+        needsDedicatedHandle: needsSplitDragHandle,
+        dragStartTarget: dragStartTargetRef.current,
+      });
       dragStartTargetRef.current = null;
-      const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
-      const startedOnInteractiveElement = Boolean(
-        target !== event.currentTarget && target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
-      );
-      if (
-        !shouldStartSplitGroupDrag({
-          enabled: splitDragEnabled,
-          needsDedicatedHandle: needsSplitDragHandle,
-          startedOnDedicatedHandle,
-          startedOnInteractiveElement,
-        })
-      ) {
-        event.preventDefault();
-        return;
-      }
-      if (
-        !writeSplitGroupSessionDragData(event.dataTransfer, session.id, {
-          deviceId: session.deviceLinkDeviceId,
-        })
-      ) {
-        event.preventDefault();
-        return;
-      }
-      event.currentTarget.dataset.sessionDragging = 'true';
     },
-    [needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
+    [displayTitle, needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
   );
 
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
@@ -726,8 +705,8 @@ export const SessionItem = memo(function SessionItem({
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
-    void window.electronAPI.maker.openSessionInNewWindow(session.id);
-  }, [remoteWritesBlocked, session.id, t]);
+    void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
+  }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, t]);
 
   // 复制 cindy://session/<id> 深度链接到剪贴板。三个变体(标准/Pinned/Archived/Draft)
   // 共用此 handler — sessionId 始终存在(draft 也是 DB-backed 的 Session row)。
@@ -751,14 +730,6 @@ export const SessionItem = memo(function SessionItem({
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
-  const openInSplitMenu = (
-    <OpenInSplitMenu
-      sessionId={session.id}
-      orcaRole={session.orcaRole}
-      onOpenSession={() => onClick(session.id)}
-    />
-  );
-
   const canMoveToProject =
     Boolean(onMoveSession) &&
     !isEmpty &&
@@ -825,7 +796,7 @@ export const SessionItem = memo(function SessionItem({
       onDragStart={handleDragStart}
       onDragEnd={(event) => {
         dragStartTargetRef.current = null;
-        delete event.currentTarget.dataset.sessionDragging;
+        finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
       }}
       onPointerDown={(e) => {
         if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
@@ -1185,7 +1156,6 @@ export const SessionItem = memo(function SessionItem({
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1206,7 +1176,6 @@ export const SessionItem = memo(function SessionItem({
                 >
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1238,7 +1207,6 @@ export const SessionItem = memo(function SessionItem({
                 </DropdownMenuItem>
                 {moveToProjectSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}

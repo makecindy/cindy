@@ -206,6 +206,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           }] : []),
         ],
       },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
       registerPiProxySession: (sessionId, token) => {
         captured.proxyRegistration = { sessionId, token };
@@ -699,6 +700,29 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
+  it('resume 模型同时缺少公开与 retained 描述符时不会在来源初始化前访问 resolver', async () => {
+    const deps = buildDeps();
+    deps.resolvePiRuntimeModelDescriptor = vi.fn(() => null);
+    deps.resolvePiGatewayModelDescriptor = vi.fn(() => null);
+    const agent = new PiAgent(deps);
+    const resumeFile = path.join(agentHome, 'missing-retained-session.jsonl');
+    writeFileSync(resumeFile, '{}\n');
+
+    const handle = await agent.startSession({
+      sessionId: 'missing-retained-resume',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-missing',
+      providerId: 'openai',
+      resumeSessionId: resumeFile,
+    });
+
+    expect(deps.resolvePiGatewayModelDescriptor).toHaveBeenCalledWith(
+      'openai',
+      'chatgpt/gpt-missing',
+    );
+    await handle.close();
+  });
+
   it('新会话缺少公开模型时不调用私有续跑解析器', async () => {
     const resolver = vi.fn(() => ({
       id: 'chatgpt/gpt-retired',
@@ -1087,7 +1111,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r4', confirmed: true });
   });
 
-  it('auto mode silently blocks gray actions when the current-model reviewer is unavailable', async () => {
+  // 审阅器不可用时降级为「问用户」,不再静默拒绝:宿主侧已重试过,走到这里
+  // 说明确实没救回来。静默否掉一批正常的灰区操作会让 Auto 档看起来像坏了,
+  // 而用户既看不到原因也无法接管。降级后安全边界不变(未点头仍不执行)。
+  it('auto mode hands gray actions to the user when the current-model reviewer is unavailable', async () => {
     const handle = await start('auto');
     let resolverCalls = 0;
     handle.setInteractionResolver?.(async () => {
@@ -1096,8 +1123,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     firePermissionRequest('r7', 'write', { path: '/tmp/outside.txt' });
     await flush();
-    expect(resolverCalls).toBe(0);
-    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: false });
+    expect(resolverCalls).toBe(1);
+    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: true });
   });
 
   it('ask mode still prompts for in-workspace writes (auto shortcut is auto-only)', async () => {

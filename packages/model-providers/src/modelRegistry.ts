@@ -1,12 +1,12 @@
-import {
-  modelRegistryCanonicalJson,
-  type ModelAgent,
-  type ModelPriceVariant,
-  type ModelReferencePrice,
-  type ModelRegistry,
-  type ModelRegistryEntry,
-  type ModelRegistryRoute,
-} from "@cindy/model-access-protocol";
+import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
+import type {
+  ModelAccessV2Agent,
+  ModelPriceVariant,
+  ModelReferencePrice,
+  ModelRegistry,
+  ModelRegistryEntry,
+  ModelRegistryRoute,
+} from "./modelAccessBean.js";
 
 export type ModelRegistryRevisionRelation =
   | "newer"
@@ -67,7 +67,7 @@ export interface ResolvedModelReferencePrice {
 }
 
 export interface ResolveModelReferencePriceOptions {
-  agent?: ModelAgent;
+  agent?: ModelAccessV2Agent;
   inputTokens?: number;
   variant?: ModelPriceVariant;
   /** ISO date or Date; defaults to the current day. */
@@ -98,7 +98,7 @@ function matchingModelRegistryRoutes(
   registry: ModelRegistry | null | undefined,
   providerId: string,
   modelId: string,
-  agent?: ModelAgent,
+  agent?: ModelAccessV2Agent,
 ): Array<{ entry: ModelRegistryEntry; route: ModelRegistryRoute }> {
   if (!registry) return [];
   const normalizedProviderId = providerId.trim();
@@ -137,7 +137,7 @@ export function findModelRegistryRoute(
   registry: ModelRegistry | null | undefined,
   providerId: string,
   modelId: string,
-  agent?: ModelAgent,
+  agent?: ModelAccessV2Agent,
 ): { entry: ModelRegistryEntry; route: ModelRegistryRoute } | undefined {
   return matchingModelRegistryRoutes(registry, providerId, modelId, agent)[0];
 }

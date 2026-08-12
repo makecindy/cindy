@@ -3,8 +3,8 @@ import os from 'node:os';
 import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
-import type { GhostManifest } from '../../shared/ghost.js';
 import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';
+import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import {
   sendToTrustedAppWindows,
   setGhostUninstallLedgerPreparer,
@@ -15,7 +15,10 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
 import { parseMarketSource } from './sources/parse.js';
 import { LocalIconRequestGate } from './localIconRequestGate.js';
 import { PluginMarketPackagePermissionReviewBridge } from './packagePermissionReviewBridge.js';
-import { PluginMarketService } from './service.js';
+import {
+  PluginMarketService,
+  type PluginMarketSnapshotOptions,
+} from './service.js';
 
 const log = createLogger('plugin-market-ipc');
 let registered = false;
@@ -42,9 +45,9 @@ function signalUpgradeNoticeAvailable(): void {
   sendToTrustedAppWindows(UPGRADE_NOTICE_AVAILABLE_CHANNEL, undefined);
 }
 
-async function snapshotAndSignalRemovalNotice() {
+async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOptions) {
   try {
-    return await service().snapshot();
+    return await service().snapshot(options);
   } finally {
     // 清理已成功但后续默认安装等步骤失败时，pending 仍必须通知 Renderer；
     // snapshot 的原始异常继续向上抛，不把通知信号伪装成整轮成功。
@@ -109,7 +112,15 @@ export function registerPluginMarketIpc(): void {
   );
   ipcMain.handle('plugin-market:snapshot', (event) => {
     assertTrustedAppRendererEvent(event);
-    return invokePluginMarket(() => snapshotAndSignalRemovalNotice());
+    return invokePluginMarket(() =>
+      snapshotAndSignalRemovalNotice({
+        deferDefaultReconciliation: true,
+        onDeferredReconciliationSettled: () => {
+          signalRemovalNoticeAvailable();
+          signalUpgradeNoticeAvailable();
+        },
+      }),
+    );
   });
   ipcMain.handle('plugin-market:consume-removal-notice', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -156,30 +167,26 @@ export function registerPluginMarketIpc(): void {
         typeof options === 'object' && options !== null
           ? (options as {
               expectedReleaseId?: unknown;
-              expectedManifest?: unknown;
-              allowPermissionExpansion?: unknown;
-              reviewedBaseline?: unknown;
+              allowSourceReplacement?: unknown;
             })
           : null;
       const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
-      const expectedManifest = requireObject(obj?.expectedManifest);
-      const allowPermissionExpansion = obj?.allowPermissionExpansion === true;
-      // 扩权批准的审阅基线:只收字符串,野值按缺席处理(缺席 = 保持旧行为)。
-      const reviewedBaseline =
-        typeof obj?.reviewedBaseline === 'string' ? obj.reviewedBaseline : undefined;
+      const allowSourceReplacement = obj?.allowSourceReplacement;
+      if (typeof allowSourceReplacement !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'allowSourceReplacement must be a boolean');
+      }
       return invokePluginMarket(() =>
         service().install(
           requireString(pluginId, 'pluginId'),
           {
             expectedReleaseId,
-            expectedManifest: expectedManifest as unknown as GhostManifest,
-            allowPermissionExpansion,
-            ...(reviewedBaseline !== undefined ? { reviewedBaseline } : {}),
+            allowSourceReplacement,
           },
           (facts) =>
             packagePermissionReviewBridge.request(
               event.sender.id,
               facts,
+              getActiveDataOwnerPushStamp(),
               (request) => {
                 if (event.sender.isDestroyed()) return false;
                 event.sender.send(PACKAGE_PERMISSION_REVIEW_CHANNEL, request);

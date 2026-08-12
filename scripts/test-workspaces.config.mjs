@@ -249,9 +249,8 @@ export default {
     requiredUnitWorkspace('@cindy/remote-file-service', 'packages/remote-file-service'),
     requiredUnitWorkspace('@cindy/voice-input-core', 'packages/voice-input-core'),
     requiredUnitWorkspace('@cindy/wechat-ilink', 'packages/wechat-ilink'),
-    noCollectableWorkspace('@cindy/device-link-protocol', 'cindy-protocol/packages/device-link-protocol'),
-    requiredUnitWorkspace('@cindy/model-access-protocol', 'cindy-protocol/packages/model-access-protocol'),
-    requiredUnitWorkspace('@cindy/plugin-protocol', 'cindy-protocol/packages/plugin-protocol'),
-    requiredUnitWorkspace('@cindy/slack-hook-protocol', 'cindy-protocol/packages/slack-hook-protocol'),
+    noCollectableWorkspace('@cindy/device-link-protocol', 'packages/device-link-protocol'),
+    requiredUnitWorkspace('@cindy/plugin-protocol', 'packages/plugin-protocol'),
+    requiredUnitWorkspace('@cindy/slack-hook-protocol', 'packages/slack-hook-protocol'),
   ],
 };

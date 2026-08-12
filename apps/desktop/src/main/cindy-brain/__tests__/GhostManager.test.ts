@@ -731,13 +731,18 @@ describe('GhostManager · update(原位换版)', () => {
       { ...goodManifest(), version: '2.0.0' },
       { 'new.txt': 'v2' },
     );
-    const result = await manager.update(v2);
+    const onPackagePlaced = vi.fn();
+    const result = await manager.update(v2, { onPackagePlaced });
     expect('ghost' in result, JSON.stringify(result)).toBe(true);
     const { ghost } = result as { ghost: InstalledGhost };
     expect(ghost.manifest.version).toBe('2.0.0');
     expect(ghost.dir).toBe(path.join(rootDir, 'hello'));
     expect(fs.existsSync(path.join(rootDir, 'hello', 'new.txt'))).toBe(true);
     expect(fs.existsSync(path.join(rootDir, 'hello', 'old.txt'))).toBe(false); // 换版不留旧文件
+    expect(onPackagePlaced).toHaveBeenCalledTimes(1);
+    expect(onPackagePlaced.mock.invocationCallOrder[0]).toBeLessThan(
+      onChanged.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(onChanged).toHaveBeenCalledTimes(1);
     // 备份/staging 临时目录不残留。
     const leftovers = fs.readdirSync(rootDir).filter((n) => n.startsWith('.cindy-'));
@@ -758,6 +763,27 @@ describe('GhostManager · update(原位换版)', () => {
     );
     expect((r2 as { ghost: InstalledGhost }).ghost.enabled).toBe(true);
     expect(fs.existsSync(path.join(rootDir, 'hello', '.disabled'))).toBe(false);
+  });
+
+  it('提交前回调失败时恢复旧版本', async () => {
+    await manager.install(await makeCindy('v1.cindy', goodManifest(), { 'old.txt': 'v1' }));
+    const result = await manager.update(
+      await makeCindy(
+        'v2.cindy',
+        { ...goodManifest(), version: '2.0.0' },
+        { 'new.txt': 'v2' },
+      ),
+      {
+        beforePackageCommit: () => {
+          throw new Error('migration write failed');
+        },
+      },
+    );
+
+    await expectRejection(result, 'io');
+    expect(manager.list()[0]?.manifest.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(rootDir, 'hello', 'old.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(rootDir, 'hello', 'new.txt'))).toBe(false);
   });
 
   it('未装入 → not-installed 拒绝', async () => {

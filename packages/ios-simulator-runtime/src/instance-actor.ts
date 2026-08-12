@@ -40,6 +40,13 @@ type IOSSimulatorCreateInput = Omit<IOSSimulatorAttachInput, "device"> & {
 
 export interface IOSSimulatorReconcileOptions {
   preserveDetachGrace?: boolean;
+  /**
+   * Correct a `viewerState` inherited from a process that is already gone. Only
+   * the first sweep of an owner generation knows the persisted value cannot
+   * describe a live viewer; later sweeps observe CoreSimulator alone and have no
+   * evidence about viewer attachment, so they must leave it untouched.
+   */
+  normalizeViewerState?: boolean;
 }
 
 export type IOSSimulatorMutationSource = "agent" | "user";
@@ -291,6 +298,34 @@ export class IOSSimulatorInstanceActor {
     options: IOSSimulatorReconcileOptions = {},
   ): IOSSimulatorInstance {
     const current = this.#store.requireOwned(instanceId, sessionId);
+    // The ownership sweep runs ahead of every tool dispatch, so a reconcile that
+    // observed no change must not issue a new route: bumping the generation and
+    // minting a new lease invalidates the (generation, leaseId) pair the caller
+    // just read, which no caller can ever win against. Viewer attachment is
+    // process-local and never observed by CoreSimulator, so an unchanged binding
+    // keeps its viewer as well — see `normalizeViewerState` for the one sweep
+    // that is allowed to correct a value inherited from a dead process. A
+    // pending detach grace is excluded: re-arming that deadline in this process
+    // is itself a transition, so it still issues a fresh route.
+    const unchanged =
+      options.preserveDetachGrace !== true &&
+      current.graceExpiresAt === null &&
+      current.lifecycleState === lifecycleState &&
+      current.healthState === healthState &&
+      current.errorCode === errorCode;
+    const staleViewerState =
+      options.normalizeViewerState === true && current.viewerState !== "detached";
+    if (unchanged && !staleViewerState) {
+      // Preserving the route must not mean preserving a lease that can no longer
+      // authorize one. A persisted lease can already be expired here — restored
+      // from a previous process, or idle past its TTL — and because every later
+      // sweep is unchanged too, nothing would ever renew it: reads that hand back
+      // a full route without heartbeating (`doctor`) would then fail
+      // LEASE_EXPIRED forever. `heartbeat` is exactly the needed shape: it leaves
+      // a healthy lease and its id untouched, extends one close to expiry under
+      // the same id, and mints a new id only when the old one is already unusable.
+      return this.#store.heartbeat(instanceId, sessionId);
+    }
     this.#cancelActiveAgentMutation(instanceId);
     this.#abortLifecycleStartsForInstance(instanceId);
     const renewed = this.#store.renew(instanceId, sessionId, {

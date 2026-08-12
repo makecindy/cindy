@@ -4,12 +4,16 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { PluginInstallReceiptOutbox } from '../installReceiptOutbox';
+import {
+  PermanentPluginInstallReceiptError,
+  PluginInstallReceiptOutbox,
+} from '../installReceiptOutbox';
 
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
 const EVENT_A = '123e4567-e89b-42d3-a456-426614174000';
 const EVENT_B = '223e4567-e89b-42d3-a456-426614174000';
+const EVENT_C = '323e4567-e89b-42d3-a456-426614174000';
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -81,13 +85,16 @@ describe('PluginInstallReceiptOutbox', () => {
   });
 
   it('keeps a failed event and a new outbox instance resends it after app restart', async () => {
-    const h = harness(vi.fn(async () => {
-      throw new Error('service unavailable');
-    }), {
-      randomUUID: () => EVENT_A,
-      retryDelaysMs: [0, 1],
-      wait: async () => undefined,
-    });
+    const h = harness(
+      vi.fn(async () => {
+        throw new Error('service unavailable');
+      }),
+      {
+        randomUUID: () => EVENT_A,
+        retryDelaysMs: [0, 1],
+        wait: async () => undefined,
+      },
+    );
     h.outbox.enqueue(PLUGIN_ID, 'release-1');
 
     await h.outbox.flush();
@@ -109,6 +116,46 @@ describe('PluginInstallReceiptOutbox', () => {
     expect(restarted.pending()).toEqual([]);
   });
 
+  it('drains more than the default 16-receipt batch during one flush', async () => {
+    let sequence = 0;
+    const h = harness(undefined, {
+      retryDelaysMs: [0],
+      randomUUID: () => `123e4567-e89b-42d3-a456-${String(sequence++).padStart(12, '0')}`,
+    });
+    for (let index = 0; index < 17; index += 1) {
+      h.outbox.enqueue(PLUGIN_ID, `release-${index}`);
+    }
+
+    await h.outbox.flush();
+
+    expect(h.send).toHaveBeenCalledTimes(17);
+    expect(h.outbox.pending()).toEqual([]);
+  });
+
+  it('discards a permanently rejected receipt, continues, and releases queue capacity', async () => {
+    const ids = [EVENT_A, EVENT_B, EVENT_C];
+    const send = vi.fn(async (receipt: { eventId: string }) => {
+      if (receipt.eventId === EVENT_A) {
+        throw new PermanentPluginInstallReceiptError('release no longer exists');
+      }
+    });
+    const h = harness(send, {
+      maxPendingReceipts: 2,
+      maxReceiptsPerFlush: 1,
+      retryDelaysMs: [0, 10],
+      wait: vi.fn(async () => undefined),
+      randomUUID: () => ids.shift() ?? EVENT_C,
+    });
+    h.outbox.enqueue(PLUGIN_ID, 'deleted-release');
+    h.outbox.enqueue(PLUGIN_ID, 'release-2');
+
+    await h.outbox.flush();
+
+    expect(send.mock.calls.map(([receipt]) => receipt.eventId)).toEqual([EVENT_A, EVENT_B]);
+    expect(h.outbox.pending()).toEqual([]);
+    expect(h.outbox.enqueue(PLUGIN_ID, 'release-3')).toMatchObject({ eventId: EVENT_C });
+  });
+
   it('does not wait for a hanging request before accepting another successful install event', async () => {
     let uuid = EVENT_A;
     const send = vi.fn(() => new Promise<void>(() => undefined));
@@ -123,10 +170,12 @@ describe('PluginInstallReceiptOutbox', () => {
     uuid = EVENT_B;
 
     expect(h.outbox.enqueue(PLUGIN_ID, 'release-2')).toMatchObject({ eventId: EVENT_B });
-    expect(h.outbox.pending().map((receipt) => receipt.eventId).sort()).toEqual([
-      EVENT_A,
-      EVENT_B,
-    ]);
+    expect(
+      h.outbox
+        .pending()
+        .map((receipt) => receipt.eventId)
+        .sort(),
+    ).toEqual([EVENT_A, EVENT_B]);
   });
 
   it('bounds pending storage and creates a new eventId for a reinstall', () => {

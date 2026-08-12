@@ -53,6 +53,8 @@ export function iosSimulatorBusinessError(
 /** Progressive tool registry shared by Claude and Codex transports. */
 export class IOSSimulatorToolRegistry {
   private readonly tools = new Map<string, IOSSimulatorToolDefinition>();
+  /** Deprecated name → advertised name. Callable, never advertised. */
+  private readonly deprecatedAliases = new Map<string, string>();
 
   register<T extends z.ZodRawShape>(definition: {
     name: string;
@@ -60,16 +62,35 @@ export class IOSSimulatorToolRegistry {
     readOnly?: boolean;
     inputShape: T;
     handler: IOSSimulatorToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
+    /**
+     * Superseded names that still resolve here. They keep a plugin or saved
+     * prompt written against the old name working after a rename.
+     */
+    deprecatedAliases?: readonly string[];
   }): void {
     if (this.tools.has(definition.name)) {
       throw new Error(
         `[iosSimulatorToolRegistry] duplicate tool name: ${definition.name}`,
       );
     }
+    for (const alias of definition.deprecatedAliases ?? []) {
+      if (this.tools.has(alias) || this.deprecatedAliases.has(alias)) {
+        throw new Error(
+          `[iosSimulatorToolRegistry] duplicate tool alias: ${alias}`,
+        );
+      }
+      this.deprecatedAliases.set(alias, definition.name);
+    }
     this.tools.set(definition.name, {
       ...definition,
       readOnly: definition.readOnly === true,
     } as unknown as IOSSimulatorToolDefinition);
+  }
+
+  /** Advertised name for a requested name, resolving a deprecated alias. */
+  resolveName(name: string): string {
+    if (this.tools.has(name)) return name;
+    return this.deprecatedAliases.get(name) ?? name;
   }
 
   list(
@@ -101,7 +122,8 @@ export class IOSSimulatorToolRegistry {
   }
 
   async call(name: string, rawArgs: unknown): Promise<IOSSimulatorToolResult> {
-    const definition = this.tools.get(name);
+    const resolved = this.resolveName(name);
+    const definition = this.tools.get(resolved);
     if (!definition) {
       return iosSimulatorTextResult(
         {
@@ -120,7 +142,7 @@ export class IOSSimulatorToolRegistry {
         {
           ok: false,
           errorCode: "INVALID_ARGS",
-          data: { tool: name, validation_errors: parsed.error.issues },
+          data: { tool: resolved, validation_errors: parsed.error.issues },
         },
         true,
       );

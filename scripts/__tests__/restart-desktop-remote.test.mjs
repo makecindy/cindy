@@ -9,10 +9,13 @@ import { fileURLToPath } from "node:url";
 import {
 	applyDesktopStartupConfigForPhase,
 	commandUsesUserDataDir,
+	defaultIsolatedUserDataDir,
 	devEnvPrefix,
 	isRepositoryDesktopDevProcess,
 	formatDesktopStartupFailure,
+	inspectSharedUserDataRegion,
 	partitionDesktopDevProcesses,
+	productionUserDataDir,
 	readDesktopStartupStatus,
 	parseWorktreePaths,
 	osascriptLaunchDarwinTerminalArgs,
@@ -133,6 +136,68 @@ test("userData conflict detection matches exact sandbox dirs only", () => {
 		commandUsesUserDataDir("node scripts/dev.mjs", "/Users/dev/Library/Application Support/Cindy-dev"),
 		false,
 	);
+});
+
+test("shared production userData path is region-aware", () => {
+	assert.equal(path.basename(productionUserDataDir()), "CindyGlobal");
+	assert.equal(path.basename(productionUserDataDir("global")), "CindyGlobal");
+	assert.equal(path.basename(productionUserDataDir("cn")), "Cindy");
+	assert.equal(path.basename(productionUserDataDir("dev")), "CindyDev");
+});
+
+test("default isolated userData path is region-aware", () => {
+	assert.equal(path.basename(defaultIsolatedUserDataDir("", "global")), "CindyGlobal-dev2");
+	assert.equal(path.basename(defaultIsolatedUserDataDir("", "cn")), "Cindy-dev2");
+	assert.equal(path.basename(defaultIsolatedUserDataDir("review", "dev")), "CindyDev-dev2-review");
+});
+
+test("preserve-running only shares a target with live records from the same region", () => {
+	const userData = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-shared-region-"));
+	const records = path.join(userData, ".dev-instances");
+	const knownRoot = path.resolve("/repo/cindy-global");
+	fs.mkdirSync(records);
+	try {
+		fs.writeFileSync(
+			path.join(records, `${process.pid}.json`),
+			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, region: "global", rootDir: knownRoot })}\n`,
+		);
+		const processes = [{
+			pid: process.pid + 1,
+			command: `electron --type=renderer --user-data-dir=${userData} --app-path=${path.join(knownRoot, "apps", "desktop")}`,
+		}];
+		assert.deepEqual(inspectSharedUserDataRegion(userData, "global", processes), {
+			compatible: true,
+			reason: null,
+		});
+		const mismatch = inspectSharedUserDataRegion(userData, "cn", processes);
+		assert.equal(mismatch.compatible, false);
+		assert.match(mismatch.reason, /pid=.*region=global/);
+
+		fs.writeFileSync(
+			path.join(records, `${process.pid}.json`),
+			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, rootDir: knownRoot })}\n`,
+		);
+		const unknown = inspectSharedUserDataRegion(userData, "global", processes);
+		assert.equal(unknown.compatible, false);
+		assert.match(unknown.reason, /region=unknown/);
+
+		fs.writeFileSync(
+			path.join(records, `${process.pid}.json`),
+			`${JSON.stringify({ schemaVersion: 1, pid: process.pid, region: "global", rootDir: knownRoot })}\n`,
+		);
+		const unrecorded = inspectSharedUserDataRegion(userData, "global", [
+			...processes,
+			{
+				pid: process.pid + 2,
+				command: `electron --type=renderer --user-data-dir=${userData} --app-path=/repo/unknown/apps/desktop`,
+			},
+		]);
+		assert.equal(unrecorded.compatible, false);
+		assert.match(unrecorded.reason, /not covered/);
+		assert.match(unrecorded.reason, new RegExp(`pid=${process.pid + 2}`));
+	} finally {
+		fs.rmSync(userData, { recursive: true, force: true });
+	}
 });
 
 test("desktop restart runner forwards user args (incl. --isolated) into the kill stage", () => {
@@ -438,6 +503,7 @@ test("desktop whoami prefers launch-time commit metadata over process inference"
 		rootDir: "/repo/cindy-preview",
 		state: "ready",
 		mode: "remote",
+		region: "global",
 		passive: true,
 		isolated: false,
 		userDataDir: "/tmp/Cindy",
@@ -448,6 +514,7 @@ test("desktop whoami prefers launch-time commit metadata over process inference"
 
 	assert.equal(merged[0].commit, "abc123");
 	assert.equal(merged[0].commitVerified, true);
+	assert.equal(merged[0].region, "global");
 	assert.equal(merged[0].source, "record");
 });
 

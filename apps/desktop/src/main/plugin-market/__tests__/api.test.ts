@@ -7,12 +7,23 @@ import { PluginMarketApi } from '../api';
 const logger = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
-const serverApi = vi.hoisted(() => ({ serverApiFetch: vi.fn() }));
+const serverApi = vi.hoisted(() => {
+  class TestServerApiError extends Error {
+    constructor(
+      public readonly code: string,
+      public readonly statusCode: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+  return { ServerApiError: TestServerApiError, serverApiFetch: vi.fn() };
+});
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: logger.warn, error: vi.fn() }),
 }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: serverApi.serverApiFetch }));
+vi.mock('../../serverApiClient.js', () => serverApi);
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => 'https://plugins.example.com',
 }));
@@ -90,6 +101,7 @@ describe('PluginMarketApi', () => {
     expect(fetcher.mock.calls[1]?.[0]).toContain(`cursor=${PLUGIN_A}`);
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
       headers: { 'x-cindy-version': '1.2.3' },
+      timeoutMs: 15_000,
     });
   });
 
@@ -134,10 +146,9 @@ describe('PluginMarketApi', () => {
       plugins: [{ id: PLUGIN_A }],
       removals: [{ pluginId: PLUGIN_B }],
     });
-    expect(logger.warn).toHaveBeenCalledWith(
-      'market removal ignored because plugin is active',
-      { pluginId: PLUGIN_A },
-    );
+    expect(logger.warn).toHaveBeenCalledWith('market removal ignored because plugin is active', {
+      pluginId: PLUGIN_A,
+    });
   });
 
   it('fails closed when the server still returns schema v1', async () => {
@@ -177,16 +188,13 @@ describe('PluginMarketApi', () => {
       duplicate: false,
       eventId,
     });
-    expect(fetcher).toHaveBeenCalledWith(
-      `/api/plugins/${PLUGIN_A}/install-events`,
-      {
-        cache: 'no-store',
-        headers: { 'x-cindy-version': '1.2.3' },
-        method: 'POST',
-        body: { eventId, releaseId: 'release-1' },
-        timeoutMs: 5_000,
-      },
-    );
+    expect(fetcher).toHaveBeenCalledWith(`/api/plugins/${PLUGIN_A}/install-events`, {
+      cache: 'no-store',
+      headers: { 'x-cindy-version': '1.2.3' },
+      method: 'POST',
+      body: { eventId, releaseId: 'release-1' },
+      timeoutMs: 5_000,
+    });
   });
 
   it('accepts the idempotent duplicate response and rejects response drift', async () => {
@@ -201,8 +209,23 @@ describe('PluginMarketApi', () => {
     const drifted = new PluginMarketApi(
       vi.fn().mockResolvedValue({ accepted: true, duplicate: false, eventId: crypto.randomUUID() }),
     );
+    await expect(drifted.recordInstallReceipt(PLUGIN_A, 'release-1', eventId)).rejects.toThrow(
+      'response is invalid',
+    );
+  });
+
+  it('marks terminal 4xx receipt failures as permanent but keeps retryable failures', async () => {
+    const permanent = new PluginMarketApi(
+      vi.fn().mockRejectedValue(new serverApi.ServerApiError('NOT_FOUND', 404, 'not found')),
+    );
     await expect(
-      drifted.recordInstallReceipt(PLUGIN_A, 'release-1', eventId),
-    ).rejects.toThrow('response is invalid');
+      permanent.recordInstallReceipt(PLUGIN_A, 'release-1', crypto.randomUUID()),
+    ).rejects.toMatchObject({ name: 'PermanentPluginInstallReceiptError' });
+
+    const retryableError = new serverApi.ServerApiError('RATE_LIMITED', 429, 'retry later');
+    const retryable = new PluginMarketApi(vi.fn().mockRejectedValue(retryableError));
+    await expect(
+      retryable.recordInstallReceipt(PLUGIN_A, 'release-1', crypto.randomUUID()),
+    ).rejects.toBe(retryableError);
   });
 });

@@ -11,6 +11,7 @@ export const REVIEW_FAILURE_CODES = [
   'source-conversation-changed',
   'source-files-changed',
   'artifact-changed',
+  'artifact-unavailable',
   'provider-failed',
 ] as const;
 
@@ -57,6 +58,7 @@ const LEGACY_REVIEW_FAILURE_CODE_BY_ERROR = new Map<string, ReviewFailureCode>([
     'A review artifact changed while Review was running. Run /review again for the current result.',
     'artifact-changed',
   ],
+  ['Review refused a multiply linked file in its artifact workspace', 'artifact-unavailable'],
   ['Reviewer task failed', 'provider-failed'],
 ]);
 

@@ -8,7 +8,7 @@
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
-import { parseModelRegistry } from '@cindy/model-access-protocol';
+import { parseModelRegistry } from './modelAccessValidator.js';
 
 import { PI_REASONING_EFFORTS } from './types.js';
 import type {

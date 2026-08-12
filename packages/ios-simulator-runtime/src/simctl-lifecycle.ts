@@ -6,6 +6,7 @@ import path from "node:path";
 import { createNodeIOSSimulatorCommandRunner } from "./command-runner.js";
 import { IOSSimulatorInstanceError } from "./instance-errors.js";
 import type { IOSSimulatorCreatedDevice } from "./instance-types.js";
+import type { IOSSimulatorPendingCreateEvidence } from "./pending-create-evidence-file.js";
 import { parseSimctlListJson } from "./simctl-parser.js";
 import type {
   IOSSimulatorCommandResult,
@@ -42,6 +43,19 @@ export interface IOSSimulatorSimctlLifecycleOptions {
   pollIntervalMs?: number;
   /** Stable, non-secret profile identity used to recover interrupted creates. */
   createMarkerNamespace?: string;
+  /**
+   * Host-owned breadcrumb armed before every `simctl create`. It is what lets
+   * recovery stay off the CoreSimulator path until this profile has actually
+   * created a device.
+   */
+  pendingCreateEvidence?: IOSSimulatorPendingCreateEvidence;
+}
+
+export interface IOSSimulatorPendingCreateRecoveryResult {
+  /** Marker UUIDs that were renamed or deleted during the sweep. */
+  recovered: readonly string[];
+  /** False when a marker was observed but could not be safely attributed. */
+  complete: boolean;
 }
 
 /**
@@ -144,7 +158,7 @@ export interface IOSSimulatorSimctlLifecycle {
   recoverPendingCreatesAtStartup?(
     ownedDevices: readonly { udid: string; name: string }[],
     signal?: AbortSignal,
-  ): Promise<readonly string[]>;
+  ): Promise<IOSSimulatorPendingCreateRecoveryResult>;
   deleteExact(udid: string, signal?: AbortSignal): Promise<void>;
   /** Set the simulated system appearance without bringing Simulator.app forward. */
   setAppearance?(
@@ -502,6 +516,7 @@ export function createIOSSimulatorSimctlLifecycle(
     options.createMarkerNamespace ?? randomUUID().replaceAll("-", ""),
   );
   const createMarkerPrefix = `${CREATE_MARKER_PREFIX}${createMarkerNamespace}__`;
+  const pendingCreateEvidence = options.pendingCreateEvidence ?? null;
   if (bootTimeoutMs <= 0 || pollIntervalMs <= 0) {
     throw new IOSSimulatorInstanceError(
       "INVALID_ARGUMENT",
@@ -526,6 +541,54 @@ export function createIOSSimulatorSimctlLifecycle(
     );
   }
 
+  /**
+   * Markers minted by this process that may still exist in CoreSimulator. A
+   * marker stays pending from the moment `simctl create` can commit a device
+   * until that device is proven renamed away or deleted — a span that covers the
+   * caller's ownership write, which is the window the breadcrumb exists for.
+   *
+   * The breadcrumb may only be retired while this map is empty: another create
+   * still inside that window needs the same evidence to survive a crash.
+   */
+  const pendingCreateMarkers = new Map<string, string | null>();
+  let lastArmedEvidenceGeneration = 0;
+  // Evidence may predate this lifecycle. If startup recovery could not prove
+  // that older marker is gone, a later create must not retire the shared file
+  // merely because its own marker settled successfully.
+  let startupRecoveryIncomplete = false;
+
+  function armPendingCreateMarker(markerName: string): void {
+    if (!pendingCreateEvidence) return;
+    lastArmedEvidenceGeneration = pendingCreateEvidence.arm();
+    pendingCreateMarkers.set(markerName, null);
+  }
+
+  function bindPendingCreateMarker(markerName: string, udid: string): void {
+    if (!pendingCreateMarkers.has(markerName)) return;
+    pendingCreateMarkers.set(markerName, udid.toUpperCase());
+  }
+
+  /** Only call from a path that proves this exact marker no longer exists. */
+  function settlePendingCreateMarker(markerName: string): void {
+    if (!pendingCreateEvidence) return;
+    if (!pendingCreateMarkers.delete(markerName)) return;
+    if (pendingCreateMarkers.size > 0 || startupRecoveryIncomplete) return;
+    // The newest arm is the generation the file now carries, so retiring against
+    // it is a no-op if anything armed the breadcrumb outside this lifecycle.
+    pendingCreateEvidence.clearIfUnchanged(lastArmedEvidenceGeneration);
+  }
+
+  function settlePendingCreateMarkerForDevice(udid: string): void {
+    if (pendingCreateMarkers.size === 0) return;
+    const normalized = udid.toUpperCase();
+    for (const [markerName, markerUdid] of pendingCreateMarkers) {
+      if (markerUdid === normalized) {
+        settlePendingCreateMarker(markerName);
+        return;
+      }
+    }
+  }
+
   async function cleanupFailedCreate(
     udid: string,
     signal?: AbortSignal,
@@ -546,25 +609,41 @@ export function createIOSSimulatorSimctlLifecycle(
     }
   }
 
+  /**
+   * `verified` separates "this profile provably created nothing" from "the check
+   * itself could not run". Only the former may retire create evidence.
+   */
   async function recoverCreatedMarker(
     markerName: string,
     deviceTypeIdentifier: string,
     runtimeIdentifier: string,
     signal: AbortSignal,
-  ): Promise<IOSSimulatorDevice | null> {
+  ): Promise<{ device: IOSSimulatorDevice | null; verified: boolean }> {
     const result = await runner.run(XCRUN, ["simctl", "list", "-j"], {
       timeoutMs: CREATE_ABORT_CLEANUP_TIMEOUT_MS,
       signal,
     });
-    if (result.exitCode !== 0 || signal.aborted) return null;
-    const candidates = parseSimctlListJson(result.stdout).devices.filter(
+    if (result.exitCode !== 0 || signal.aborted) {
+      return { device: null, verified: false };
+    }
+    // The marker name is random and profile-scoped, so its presence alone proves
+    // CoreSimulator committed something for this operation. Verification must key
+    // on that name only: `deviceTypeIdentifier` is nullable in a listing, so a
+    // metadata mismatch would otherwise be read as "nothing was created" and
+    // retire the recovery evidence for a device that really exists.
+    const named = parseSimctlListJson(result.stdout).devices.filter(
+      (device) => device.name === markerName,
+    );
+    const candidates = named.filter(
       (device) =>
-        device.name === markerName &&
         device.runtimeIdentifier === runtimeIdentifier &&
         device.deviceTypeIdentifier === deviceTypeIdentifier &&
         UUID_PATTERN.test(device.udid.toUpperCase()),
     );
-    return candidates.length === 1 ? candidates[0]! : null;
+    // Deletion keeps the stricter identity rule; only a listing without this
+    // exact name proves nothing needs recovering.
+    if (candidates.length === 1) return { device: candidates[0]!, verified: true };
+    return { device: null, verified: named.length === 0 };
   }
 
   async function list(signal?: AbortSignal): Promise<IOSSimulatorDevice[]> {
@@ -612,6 +691,11 @@ export function createIOSSimulatorSimctlLifecycle(
         "The newly created iOS Simulator could not be named.",
         true,
       );
+    }
+    // The caller persists ownership before finalizing the name, so a marker that
+    // is renamed away is both recorded and no longer sweepable.
+    if (!isPendingCreateName(targetName)) {
+      settlePendingCreateMarkerForDevice(normalized);
     }
   }
 
@@ -745,6 +829,10 @@ export function createIOSSimulatorSimctlLifecycle(
       );
       const markerName = `${createMarkerPrefix}${randomUUID()}`;
       throwIfAborted(signal);
+      // Arm before CoreSimulator can commit the device: everything after this
+      // point may leave a hidden marker behind if the process dies, and the
+      // breadcrumb is the only thing that survives to prove it.
+      armPendingCreateMarker(markerName);
       let result: IOSSimulatorCommandResult | null = null;
       let commandError: unknown = null;
       try {
@@ -774,6 +862,7 @@ export function createIOSSimulatorSimctlLifecycle(
             deviceTypeIdentifier,
           }
         : null;
+      if (createdDevice) bindPendingCreateMarker(markerName, createdDevice.udid);
       const createFailure =
         commandError ??
         (result?.exitCode !== 0
@@ -802,13 +891,18 @@ export function createIOSSimulatorSimctlLifecycle(
             runtimeIdentifier,
             cleanupController.signal,
           );
-          if (recovered) {
+          if (recovered.device) {
             createdDevice = {
-              udid: recovered.udid.toUpperCase(),
+              udid: recovered.device.udid.toUpperCase(),
               name: markerName,
               runtimeIdentifier,
               deviceTypeIdentifier,
             };
+            bindPendingCreateMarker(markerName, createdDevice.udid);
+          } else if (recovered.verified) {
+            // This create provably left nothing behind, so it must not keep the
+            // profile paying a startup sweep it cannot clean anything with.
+            settlePendingCreateMarker(markerName);
           }
         } catch {
           // The marker is profile-scoped and remains recoverable on startup.
@@ -822,6 +916,8 @@ export function createIOSSimulatorSimctlLifecycle(
             createdDevice.udid,
             cleanupController?.signal,
           );
+          // The compensating delete succeeded, so this marker is gone.
+          settlePendingCreateMarker(markerName);
         } catch (error) {
           throw new IOSSimulatorCreateCleanupRequiredError(
             createdDevice,
@@ -877,17 +973,24 @@ export function createIOSSimulatorSimctlLifecycle(
     async recoverPendingCreatesAtStartup(
       ownedDevices,
       signal,
-    ): Promise<readonly string[]> {
+    ): Promise<IOSSimulatorPendingCreateRecoveryResult> {
       const owned = new Map(
         ownedDevices.map((device) => [
           requireUdid(device.udid),
           requireIdentifier(device.name, "name"),
         ]),
       );
-      const pending = (await list(signal)).filter((device) =>
-        isPendingCreateName(device.name),
-      );
+      let pending: IOSSimulatorDevice[];
+      try {
+        pending = (await list(signal)).filter((device) =>
+          isPendingCreateName(device.name),
+        );
+      } catch (error) {
+        startupRecoveryIncomplete = true;
+        throw error;
+      }
       const recovered: string[] = [];
+      let complete = true;
       let firstFailure: unknown = null;
       for (const device of pending) {
         const udid = device.udid.toUpperCase();
@@ -908,19 +1011,31 @@ export function createIOSSimulatorSimctlLifecycle(
             current.name !== device.name ||
             !isPendingCreateName(current.name) ||
             current.runtimeIdentifier !== device.runtimeIdentifier ||
+            current.deviceTypeIdentifier === null ||
             current.deviceTypeIdentifier !== device.deviceTypeIdentifier
           ) {
+            // We deliberately avoid deleting a marker whose identity changed or
+            // whose metadata is incomplete. That is not a completed sweep: the
+            // breadcrumb must survive so a later startup can retry the cleanup.
+            complete = false;
             continue;
           }
           await cleanupFailedCreate(udid, signal);
           recovered.push(udid);
         } catch (error) {
-          if (signal?.aborted) throwIfAborted(signal);
+          if (signal?.aborted) {
+            startupRecoveryIncomplete = true;
+            throwIfAborted(signal);
+          }
           firstFailure ??= error;
         }
       }
-      if (firstFailure !== null) throw firstFailure;
-      return recovered;
+      if (firstFailure !== null) {
+        startupRecoveryIncomplete = true;
+        throw firstFailure;
+      }
+      startupRecoveryIncomplete = !complete;
+      return { recovered, complete };
     },
 
     async deleteExact(udid, signal): Promise<void> {
@@ -938,6 +1053,8 @@ export function createIOSSimulatorSimctlLifecycle(
           "The iOS Simulator device could not be deleted.",
         );
       }
+      // A rolled-back create leaves nothing for a sweep to find either.
+      settlePendingCreateMarkerForDevice(normalized);
     },
 
     async setAppearance(udid, appearance, signal): Promise<void> {

@@ -284,16 +284,28 @@ describe('pickConnectedModelForAgent — newSessionDefault 标记优先（步骤
     expect(picked?.providerId).toBe('anthropic');
   });
 
-  it('pi 按 claude-code 口径判定标记（pi 镜像 cc-compatible 模型）', () => {
+  it('pi accepts its explicit v3 marker', () => {
     const providers = [
       provider('xd', true, {
         pi: [
           model('claude-sonnet-5', { sortOrder: 0 }),
-          model('deepseek', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+          model('deepseek', { sortOrder: 44, newSessionDefault: ['pi'] }),
         ],
       }),
     ];
     expect(pickId(providers, 'pi', 'claude-sonnet-5')).toBe('deepseek');
+  });
+
+  it('pi does not borrow a claude-code default marker', () => {
+    const providers = [
+      provider('anthropic', true, {
+        pi: [
+          model('claude-sonnet-5', { sortOrder: 0 }),
+          model('claude-opus-5', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+        ],
+      }),
+    ];
+    expect(pickId(providers, 'pi', 'claude-sonnet-5')).toBe('claude-sonnet-5');
   });
 
   it('被标记但默认收起(defaultEnabled:false)时不选', () => {

@@ -5,10 +5,7 @@ import crypto from 'node:crypto';
 import { isValidPluginResourceId } from '@cindy/plugin-protocol';
 
 import { createLogger } from '../logger.js';
-import {
-  atomicWriteFileSync,
-  readAtomicFileSync,
-} from '../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 const log = createLogger('plugin-market-install-receipts');
 
@@ -16,8 +13,7 @@ const RECEIPT_SCHEMA_VERSION = 1;
 const DEFAULT_MAX_PENDING_RECEIPTS = 256;
 const DEFAULT_MAX_RECEIPTS_PER_FLUSH = 16;
 const DEFAULT_RETRY_DELAYS_MS = [0, 250, 1_000] as const;
-const EVENT_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const EVENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RECEIPT_FILE_RE = new RegExp(`^(${EVENT_ID_RE.source.slice(1, -1)})\\.json$`, 'i');
 
 export interface PluginInstallReceipt {
@@ -41,6 +37,14 @@ export interface PluginInstallReceiptOutboxOptions {
 }
 
 type ReceiptSender = (receipt: PluginInstallReceipt) => Promise<void>;
+
+/** 服务端已明确拒绝且后续重试不会改变结果；回执可从活跃队列移除。 */
+export class PermanentPluginInstallReceiptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermanentPluginInstallReceiptError';
+  }
+}
 
 function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -83,8 +87,9 @@ function storedReceipt(value: unknown): StoredPluginInstallReceipt | null {
  * 成功安装回执的窄 outbox。
  *
  * 每个 eventId 一个 owner-scoped 文件，避免与安装账本 schema 耦合，也避免两个
- * Cindy 实例并发整份重写队列时丢掉彼此的新事件。单轮只处理有限条目、每条只做
- * 有限次重试；最终失败保留文件，等下次市场同步或应用重启补发。它不是通用遥测队列。
+ * Cindy 实例并发整份重写队列时丢掉彼此的新事件。每批只处理有限条目、每条只做
+ * 有限次重试；一次 flush 会分批遍历当时可见的全部积压。瞬时失败保留文件，确定的
+ * 终态失败移出队列，避免坏消息永久占满容量。它不是通用遥测队列。
  */
 export class PluginInstallReceiptOutbox {
   private readonly maxPendingReceipts: number;
@@ -102,7 +107,10 @@ export class PluginInstallReceiptOutbox {
     options: PluginInstallReceiptOutboxOptions = {},
   ) {
     this.maxPendingReceipts = options.maxPendingReceipts ?? DEFAULT_MAX_PENDING_RECEIPTS;
-    this.maxReceiptsPerFlush = options.maxReceiptsPerFlush ?? DEFAULT_MAX_RECEIPTS_PER_FLUSH;
+    this.maxReceiptsPerFlush = Math.max(
+      1,
+      Math.floor(options.maxReceiptsPerFlush ?? DEFAULT_MAX_RECEIPTS_PER_FLUSH),
+    );
     this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
     this.randomUUID = options.randomUUID ?? crypto.randomUUID;
     this.wait = options.wait ?? wait;
@@ -166,33 +174,41 @@ export class PluginInstallReceiptOutbox {
 
   private async flushPending(): Promise<void> {
     if (!this.shouldSend()) return;
-    const pending = this.readPending().slice(0, this.maxReceiptsPerFlush);
-    for (const entry of pending) {
-      if (!this.shouldSend()) return;
-      let delivered = false;
-      for (const delayMs of this.retryDelaysMs) {
+    // 目录容量本身有上限；先固定本轮快照，避免持续入队让一次 flush 的内存/时长无界增长。
+    const pending = this.readPending();
+    for (let offset = 0; offset < pending.length; offset += this.maxReceiptsPerFlush) {
+      const batch = pending.slice(offset, offset + this.maxReceiptsPerFlush);
+      for (const entry of batch) {
         if (!this.shouldSend()) return;
-        if (delayMs > 0) await this.wait(delayMs);
+        let delivered = false;
+        let permanentFailure = false;
+        for (const delayMs of this.retryDelaysMs) {
+          if (!this.shouldSend()) return;
+          if (delayMs > 0) await this.wait(delayMs);
+          try {
+            await this.send(entry.receipt);
+            delivered = true;
+            break;
+          } catch (error) {
+            permanentFailure = error instanceof PermanentPluginInstallReceiptError;
+            log.warn('plugin install receipt delivery failed', {
+              eventId: entry.receipt.eventId,
+              errorKind: errorKind(error),
+              permanent: permanentFailure,
+            });
+            if (permanentFailure) break;
+          }
+        }
+        if (!delivered && !permanentFailure) continue;
         try {
-          await this.send(entry.receipt);
-          delivered = true;
-          break;
+          fs.rmSync(entry.filePath, { force: true });
         } catch (error) {
-          log.warn('plugin install receipt delivery failed', {
+          // 已接收的重复发送由服务端幂等去重；终态拒绝也会在下次 flush 再尝试隔离。
+          log.warn('settled plugin install receipt could not be cleared', {
             eventId: entry.receipt.eventId,
             errorKind: errorKind(error),
           });
         }
-      }
-      if (!delivered) continue;
-      try {
-        fs.rmSync(entry.filePath, { force: true });
-      } catch (error) {
-        // 服务端已按 eventId 接收；删失败时保留文件，后续重复发送由服务端幂等去重。
-        log.warn('delivered plugin install receipt could not be cleared', {
-          eventId: entry.receipt.eventId,
-          errorKind: errorKind(error),
-        });
       }
     }
   }

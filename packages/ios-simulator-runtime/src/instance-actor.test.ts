@@ -94,6 +94,85 @@ function createHarness(
 }
 
 describe("IOSSimulatorInstanceActor", () => {
+  it("keeps the current route when a reconcile observes no change", () => {
+    const harness = createHarness();
+    const before = harness.instance;
+
+    const reconciled = harness.actor.reconcile(
+      before.instanceId,
+      before.sessionId,
+      before.lifecycleState,
+      before.healthState,
+      before.errorCode,
+    );
+
+    expect(reconciled.generation).toBe(before.generation);
+    expect(reconciled.lease.id).toBe(before.lease.id);
+    // CoreSimulator says nothing about viewer attachment, so an unchanged
+    // binding must not have a live viewer kicked out from under it.
+    expect(reconciled.viewerState).toBe("attached");
+    expect(() =>
+      harness.actor.assertRoute(harness.route(before)),
+    ).not.toThrow();
+  });
+
+  it("renews an expired lease on an unchanged reconcile without issuing a new generation", () => {
+    const harness = createHarness();
+    const before = harness.instance;
+    // A persisted lease restored from a previous process, or idle past its TTL.
+    harness.setNow(Date.parse(before.lease.expiresAt) + 1);
+
+    const reconciled = harness.actor.reconcile(
+      before.instanceId,
+      before.sessionId,
+      before.lifecycleState,
+      before.healthState,
+      before.errorCode,
+    );
+
+    // Without this, every later sweep stays unchanged too, so the binding could
+    // never produce a usable route again.
+    expect(reconciled.generation).toBe(before.generation);
+    expect(reconciled.lease.id).not.toBe(before.lease.id);
+    expect(reconciled.viewerState).toBe(before.viewerState);
+    expect(() =>
+      harness.actor.assertRoute(harness.route(reconciled)),
+    ).not.toThrow();
+  });
+
+  it("issues a new route when the observed state changed", () => {
+    const harness = createHarness();
+    const before = harness.instance;
+
+    const reconciled = harness.actor.reconcile(
+      before.instanceId,
+      before.sessionId,
+      "ready",
+      before.healthState,
+      before.errorCode,
+    );
+
+    expect(reconciled.generation).toBe(before.generation + 1);
+    expect(reconciled.lease.id).not.toBe(before.lease.id);
+    expect(reconciled.viewerState).toBe("detached");
+  });
+
+  it("normalizes a viewer state inherited from a dead process", () => {
+    const harness = createHarness();
+    const before = harness.instance;
+
+    const reconciled = harness.actor.reconcile(
+      before.instanceId,
+      before.sessionId,
+      before.lifecycleState,
+      before.healthState,
+      before.errorCode,
+      { normalizeViewerState: true },
+    );
+
+    expect(reconciled.viewerState).toBe("detached");
+  });
+
   it("increments generation across exact start and stop operations", async () => {
     const harness = createHarness();
     const started = await harness.actor.start(harness.route());

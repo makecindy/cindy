@@ -204,17 +204,18 @@ describe('terminalErrorText', () => {
    */
   it('Auto 档审阅器不可用 → 渠道侧说明 + 可执行动作', () => {
     const notice = turnRetryNotice({
-      message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review is temporarily unavailable, so actions '
-        + 'that need review are being denied. Switch this task to Default permissions if you '
-        + 'want to approve them yourself.',
+      message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review could not reach a decision (network or '
+        + 'service hiccup), so actions that need review are being handed to you to confirm.',
       isTerminal: false,
     });
-    expect(notice).toContain('自动审批暂时不可用');
+    expect(notice).toContain('自动审批暂时无法给出判断');
+    // 必须说清操作的去向 —— 现在是转交用户确认,不再是静默拒绝。
+    expect(notice).toContain('转由你来确认');
     // 必须给出用户能做的事,否则等于只说"又失败了"。
     expect(notice).toContain('默认权限');
     // 不得把 [CODE] 前缀或英文原文推给渠道用户。
     expect(notice).not.toContain('AUTO_REVIEW_UNAVAILABLE');
-    expect(notice).not.toContain('Auto-review is temporarily');
+    expect(notice).not.toContain('Auto-review could not');
   });
 
   it('其它带 bracket code 的非终止 error 仍保持静默', () => {

@@ -284,12 +284,7 @@ describe('SessionCard review regressions', () => {
     );
     expect(sessionCardSource).toContain('data-split-group-drag-handle');
     expect(sessionCardSource).toContain('data-no-drag={splitDragHandleActive');
-    expect(sessionCardSource).toContain('writeSplitGroupSessionDragData');
-  });
-
-  it('wires split creation into both sidebar rendering modes', () => {
-    expect(sessionItemSource).toContain('<OpenInSplitMenu');
-    expect(sessionCardSource).toContain('<OpenInSplitMenu');
+    expect(sessionCardSource).toContain('startSessionDrag');
   });
 
   it('PR-123 greptile: card 路径的绑定徽章与 Timer 进反白体系', () => {

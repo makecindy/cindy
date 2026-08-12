@@ -399,6 +399,13 @@ export async function listBranchBaseCandidates(scope: ReviewScope): Promise<Revi
     await addCandidate(scope.repoRoot, candidates, item);
   }
   await markUpstreamCandidate(scope.repoRoot, candidates, upstream, initDefaultBranchName, remoteDefault);
+  // Record which refs count as this repository's default. `init.defaultBranch`
+  // is only readable here, so consumers cannot re-derive it from a ref name.
+  for (const [refName, candidate] of candidates) {
+    if (isDefaultBranchCandidateRef(refName, initDefaultBranchName, remoteDefault)) {
+      candidates.set(refName, { ...candidate, isDefaultBranch: true });
+    }
+  }
   const withStaleRisk = await markStaleRiskCandidates(scope.repoRoot, Array.from(candidates.values()));
   return sortCandidates(withStaleRisk, initDefaultBranchName);
 }

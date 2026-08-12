@@ -45,6 +45,8 @@ const log = createLogger('releaseNotesService');
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 1_000;
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -59,13 +61,21 @@ let indexCache: string[] | null = null;
 // ── Core ───────────────────────────────────────────────────────────────────
 
 /**
- * Fetch a JSON document from the CDN. Returns the parsed value on 200, null on
- * any failure (404 / network / parse / timeout). Silent — caller decides UX.
- * Extracted so both the per-version notice fetcher and the version-index
- * fetcher share the same net.request boilerplate + timeout handling.
+ * Result of a single CDN fetch attempt.
+ * - `ok` + `data`: HTTP 200 + valid JSON.
+ * - `null`: non-retryable failure (HTTP non-200, JSON parse error).
+ * - `retryable` error: network error / timeout — caller can retry.
  */
-function fetchCdnJson<T>(url: string): Promise<T | null> {
-  log.info('Fetching: %s', url);
+type FetchAttempt<T> =
+  | { ok: true; data: T }
+  | { ok: false; retryable: boolean };
+
+/**
+ * Single attempt at fetching a JSON document from the CDN.
+ * Resolves with structured result so the retry wrapper can decide whether to
+ * back off and retry or give up immediately.
+ */
+function fetchCdnJsonOnce<T>(url: string): Promise<FetchAttempt<T>> {
   return new Promise((resolve) => {
     try {
       const request = net.request(url);
@@ -78,7 +88,7 @@ function fetchCdnJson<T>(url: string): Promise<T | null> {
           settled = true;
           request.abort();
           log.info('Timeout: %s', url);
-          resolve(null);
+          resolve({ ok: false, retryable: true });
         }
       }, REQUEST_TIMEOUT_MS);
 
@@ -87,7 +97,7 @@ function fetchCdnJson<T>(url: string): Promise<T | null> {
           log.info('HTTP %d for %s', response.statusCode, url);
           clearTimeout(timeout);
           settled = true;
-          resolve(null);
+          resolve({ ok: false, retryable: false });
           return;
         }
 
@@ -100,10 +110,10 @@ function fetchCdnJson<T>(url: string): Promise<T | null> {
           settled = true;
           try {
             body += decoder.end();
-            resolve(JSON.parse(body) as T);
+            resolve({ ok: true, data: JSON.parse(body) as T });
           } catch (err) {
             log.error('JSON parse failed for %s:', url, err);
-            resolve(null);
+            resolve({ ok: false, retryable: false });
           }
         });
         response.on('error', (err) => {
@@ -111,7 +121,7 @@ function fetchCdnJson<T>(url: string): Promise<T | null> {
           clearTimeout(timeout);
           if (!settled) {
             settled = true;
-            resolve(null);
+            resolve({ ok: false, retryable: true });
           }
         });
       });
@@ -121,16 +131,43 @@ function fetchCdnJson<T>(url: string): Promise<T | null> {
         clearTimeout(timeout);
         if (!settled) {
           settled = true;
-          resolve(null);
+          resolve({ ok: false, retryable: true });
         }
       });
 
       request.end();
     } catch (err) {
       log.error('Unexpected error for %s:', url, err);
-      resolve(null);
+      resolve({ ok: false, retryable: true });
     }
   });
+}
+
+/**
+ * Fetch a JSON document from the CDN with retries for transient failures.
+ *
+ * Retryable (network error / timeout): up to MAX_RETRIES attempts with
+ * exponential backoff (1s → 2s → 4s). Non-retryable (HTTP non-200, JSON parse
+ * error): returns null immediately — no point re-fetching a definitive answer.
+ *
+ * Returns the parsed value on 200, null on any failure. Silent — caller decides
+ * UX.
+ */
+async function fetchCdnJson<T>(url: string): Promise<T | null> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+      log.info('Retry %d/%d for %s in %dms', attempt, MAX_RETRIES, url, delayMs);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+
+    const result = await fetchCdnJsonOnce<T>(url);
+    if (result.ok) return result.data;
+    if (!result.retryable) return null;
+  }
+
+  log.info('All retries exhausted for %s', url);
+  return null;
 }
 
 /**

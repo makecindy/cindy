@@ -18,6 +18,7 @@ import {
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
+  extractPlainText,
   prependHandoffToUserMessage,
   prependNoteToWireUserMessage,
   type HandoffWireMessage,
@@ -220,6 +221,13 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  /**
+   * 计划对账:会话里若有未收口的旧计划(未盖终态章且有未完成步骤),返回一段
+   * "顺手收拾"指示文本,与交接同通道前置进 wire payload(不进落库显示)。每次
+   * 发送现算,无 pending 状态、无 consume——旧清单被 agent 更新/清掉后,下一轮
+   * 自然算不出注入。undefined = 不启用(测试最小 harness)。
+   */
+  peekPlanReconcileNote?(sessionId: string): Promise<string | null>;
   /**
    * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
@@ -737,6 +745,80 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
+      // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
+      // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
+      // 只对"用户真的开口"的普通新轮次注入,判定用白名单而非枚举内部来源
+      // (scheduler/auto-resume/compact/UI 触发续跑…漏一个就会让自动轮次去动
+      // 一份用户没打算收的计划):
+      //  - 排除一切带内部来源标记的派发(origin / autoResume);
+      //  - 排除斜杠控制消息(/compact 等,以 '/' 开头的纯指令)与合成触发
+      //    ([UI_ACTION_TRIGGER] 前缀,coordinator 的续跑指令);
+      //  - 只在消息即将作为可显示 user 行落库(persistUserMessage.content 非空)
+      //    时注入——内部控制轮次都不落可显示 user 行。
+      // 失败静默跳过:对账是锦上添花,不能挡发送。
+      const soForReconcile = (outgoingSendOpts ?? {}) as MakerSendOptions;
+      // 落库内容是 stringifyUserContent 信封({"text":...}),裸 startsWith 只会
+      // 看到 '{'——必须先抽出纯文本再分类,否则 /compact、[UI_ACTION_TRIGGER]
+      // 一类控制消息全部漏网(review P2)。
+      const reconcilePersistContent = soForReconcile.persistUserMessage?.content;
+      const reconcilePersistText =
+        reconcilePersistContent !== undefined
+          ? extractPlainText(reconcilePersistContent).trim()
+          : '';
+      // 仅附件轮次(图片/文件,text 为空)同样是"用户真的开口":信封里带
+      // images/files 即认可显示 user 行,不要求正文非空(review P2)。
+      const reconcileHasAttachments = (() => {
+        if (typeof reconcilePersistContent !== 'string') return false;
+        if (!reconcilePersistContent.startsWith('{')) return false;
+        try {
+          const parsed = JSON.parse(reconcilePersistContent) as {
+            images?: unknown;
+            files?: unknown;
+          };
+          return (
+            (Array.isArray(parsed.images) && parsed.images.length > 0) ||
+            (Array.isArray(parsed.files) && parsed.files.length > 0)
+          );
+        } catch {
+          return false;
+        }
+      })();
+      // 斜杠开头不等于控制指令:`/tmp/build.log 为什么失败` 是普通提问,按首字符
+      // 排除会让它绕过对账、遗留计划失去这一轮的收口机会(review P2)。信封里的
+      // slashCommandRanges 是权威判据 —— Composer 对新消息总会写这个键(空数组
+      // 表示"确认没有指令",见 stringifyUserContent 的注释),所以键在时只认
+      // 起点为 0 的真实指令范围;键不在(旧数据 / 非 Composer 生产者)才退回
+      // 首字符启发式。
+      const reconcileSlashRanges = (() => {
+        if (typeof reconcilePersistContent !== 'string') return undefined;
+        if (!reconcilePersistContent.startsWith('{')) return undefined;
+        try {
+          const parsed = JSON.parse(reconcilePersistContent) as { slashCommandRanges?: unknown };
+          return Array.isArray(parsed.slashCommandRanges) ? parsed.slashCommandRanges : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      const startsWithSlashCommand =
+        reconcileSlashRanges !== undefined
+          ? reconcileSlashRanges.some(
+              (range) => (range as { start?: unknown } | null)?.start === 0,
+            )
+          : reconcilePersistText.startsWith('/');
+      const isOrdinaryUserTurn =
+        soForReconcile.origin === undefined &&
+        soForReconcile.persistUserMessage?.autoResume !== true &&
+        soForReconcile.persistUserMessage?.origin === undefined &&
+        soForReconcile.persistUserMessage?.delivery !== 'steer' &&
+        (reconcilePersistText.length > 0 || reconcileHasAttachments) &&
+        !startsWithSlashCommand &&
+        !reconcilePersistText.startsWith('[UI_ACTION_TRIGGER]');
+      const planReconcileNote = isOrdinaryUserTurn
+        ? ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null)
+        : null;
+      const withPlanReconcile = planReconcileNote
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcileNote)
+        : withHandoff;
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
       // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
@@ -750,8 +832,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? buildMobileClientPromptNote()
           : null;
       const outgoing = mobileClientNote
-        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
-        : withHandoff;
+        ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)
+        : withPlanReconcile;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);

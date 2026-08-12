@@ -1468,6 +1468,63 @@
         },
         "advanced": {
           "label": "高级配置（模型 / 请求头）"
+        },
+        "runtimeFill": {
+          "action": "填充其他 runtime",
+          "reviewTitle": "填充其他 runtime",
+          "reviewSubtitle": "先查看字段差异；每个 runtime 仍独立保存。",
+          "confirmTitle": "确认覆盖",
+          "confirmSubtitle": "选择从 {{source}} 复制的字段。",
+          "source": "来源",
+          "columns": { "field": "字段", "source": "来源值", "target": "当前值" },
+          "fields": {
+            "endpointBundle": "端点与 API 协议",
+            "baseUrl": "基础 URL",
+            "requestPath": "请求路径",
+            "wireProtocol": "API 协议",
+            "apiKey": "API 密钥",
+            "models": "模型",
+            "headers": "高级请求头",
+            "modelsUrl": "模型列表端点"
+          },
+          "values": {
+            "empty": "空",
+            "default": "默认/推断",
+            "configured": "已配置",
+            "secretSet": "已设置（值已隐藏）",
+            "models_one": "{{count}} 个模型",
+            "models_other": "{{count}} 个模型",
+            "headers_one": "{{count}} 个请求头",
+            "headers_other": "{{count}} 个请求头"
+          },
+          "targetConflict_one": "{{count}} 个已有字段不同",
+          "targetConflict_other": "{{count}} 个已有字段不同",
+          "targetReady_one": "可填充 {{count}} 个字段",
+          "targetReady_other": "可填充 {{count}} 个字段",
+          "targetIncompatible_one": "{{count}} 个字段不兼容",
+          "targetIncompatible_other": "{{count}} 个字段不兼容",
+          "status": { "needsConfirm": "需要确认", "ready": "可以填充", "incompatible": "不兼容" },
+          "secretIndependent": "复制到 {{target}} 的独立本地密钥",
+          "overwriteCurrent": "替换当前值",
+          "fillEmpty": "填充当前空字段",
+          "incompatibleProtocol": "未复制：{{target}} 不支持此 API 协议",
+          "incompatibleHeaders": "未复制：{{target}} 需要无法在此安全复制的请求头",
+          "incompatibleEndpoint": "未复制：{{target}} 无法使用此端点配置",
+          "noSelectableFields": "此 runtime 没有可兼容填充的字段。",
+          "endpointBundleNote": "向 {{target}} 填充时，基础 URL、请求路径和 API 协议会成组复制，避免端点组合不匹配。",
+          "oauthPiUnavailable": "Pi 原生 runtime 不支持 OAuth 供应商，因此不会作为填充目标。",
+          "independentNote": "这是一次性填充；之后各 runtime 不会同步。API 密钥仍使用独立 safeStorage 记录。",
+          "continue": "查看覆盖项",
+          "apply": "确认填充",
+          "applyOverwrite": "覆盖并填充",
+          "back": "返回差异",
+          "nothingToFill": "请先填写当前 runtime 的可复用字段",
+          "alreadySame": "其他 runtime 中的可填充字段已经一致",
+          "loadingKeys": "请等待已保存的 API 密钥加载完成后再填充其他 runtime",
+          "keysUnavailable": "无法读取已保存的 API 密钥，暂时无法填充其他 runtime",
+          "modelsBusy": "请先完成正在进行的模型列表获取或选择，再填充其他 runtime",
+          "noCompatibleFields": "其他 runtime 不支持当前 runtime 中可复用的字段",
+          "filledToast": "已填充 {{targets}}；各 runtime 仍独立"
         }
       },
       "models": {
@@ -3253,6 +3310,7 @@
         "manageAria": "管理 {{name}}",
         "agentInvoked": "Agent 自动调用",
         "upToDate": "已是最新",
+        "oauthAuthorizationExpired": "授权已失效，需重新连接",
         "installAria": "安装 {{name}}"
       },
       "market": {
@@ -3271,10 +3329,11 @@
         "update": "从市场更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安装",
-        "conflict": "暂不可用",
-        "conflictAria": "{{name}} 存在插件标识冲突",
-        "conflictDescription": "插件标识已被占用，当前无法安装",
+        "replace": "替换",
+        "replaceAria": "使用此市场版本替换 {{name}}",
+        "replaceDescription": "已安装相同标识的插件；继续安装会用此市场版本替换，并保留插件数据。",
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
+        "customSourcesUnavailable": "以下自定义市场暂时不可用：{{names}}。其他市场不受影响。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
         "upgradeNotice": {
@@ -3677,6 +3736,7 @@
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。将替换现有版本；生效状态与面板位置保持不变。",
+        "oauthClientChanged": "本次更新更换了 OAuth 客户端。使用插件内置授权的已连接账号将在更新后失效，需要重新连接。",
         "confirm": "更新",
         "cancel": "取消"
       },
@@ -3696,15 +3756,8 @@
       },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
-        "description": "权限无变化的更新会自动完成；涉及权限变更的需要你逐项确认。",
+        "description": "普通更新会自动完成；真实包请求新增权限时需要逐项确认。",
         "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "权限有变更",
-        "reviewOutdated": "权限差异已过期",
-        "rereview": "重新审阅",
-        "reviewDiff": "查看并确认",
-        "collapseDiff": "收起",
-        "approve": "同意并更新",
-        "skip": "跳过此项",
         "statusPending": "排队中",
         "statusInstalling": "更新中…",
         "statusDone": "已更新",
@@ -4369,6 +4422,7 @@
     "close": "关闭",
     "menuItems": {
       "settings": "设置",
+      "resourceUsage": "资源用量",
       "help": "帮助",
       "issues": "问题反馈",
       "checkForUpdates": "检查更新"
@@ -4768,7 +4822,15 @@
         "unmerged": "存在未合并文件",
         "in-progress": "git 操作进行中",
         "agent-running": "Agent 正在运行",
-        "disabled": "审查不可用"
+        "disabled": "审查不可用",
+        "remote-device": "远程设备任务仅支持查看",
+        "remote-ssh": "SSH 工作区审查仅支持查看"
+      },
+      "remote": {
+        "deviceTooOldTitle": "对方设备版本过旧",
+        "deviceTooOldDesc": "对方设备的 {{appName}} 版本过旧，暂不支持远程审查，请升级被控设备后重试。",
+        "oversizeTitle": "改动数据过大",
+        "oversizeDesc": "该视图的改动超过设备互联单次传输上限，请在被控设备上查看。"
       },
       "unmodifiedLines_one": "{{count}} 行未改动",
       "unmodifiedLines_other": "{{count}} 行未改动",
@@ -4969,7 +5031,7 @@
         },
         "no-session": {
           "title": "任务不存在",
-          "desc": "找不到当前任务记录。"
+          "desc": "本设备上找不到该任务记录。"
         },
         "no-workdir": {
           "title": "没有工作目录",
@@ -5406,6 +5468,7 @@
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在设置里配置 API key 才能使用",
       "hidden": "已隐藏",
+      "modelListAria": "模型列表",
       "subscriptionDirectDisabled": {
         "chatgpt": "订阅直连的 GPT 模型协议暂不支持 SSH 远程会话",
         "xai": "订阅直连的 Grok 模型协议暂不支持 SSH 远程会话",
@@ -5452,7 +5515,7 @@
         "budget": "GPT 折扣",
         "grok": "xAI",
         "google": "Google",
-        "china": "国内",
+        "china": "中国",
         "image": "图像",
         "video": "视频",
         "tts": "语音合成",
@@ -5460,6 +5523,7 @@
         "realtime": "实时语音",
         "embedding": "向量",
         "compression": "压缩",
+        "ungrouped": "未分组",
         "other": "其它"
       },
       "search": {
@@ -5556,6 +5620,7 @@
     },
     "worktree": {
       "detecting": "检测环境中…",
+      "detectFailed": "环境检测失败，worktree 暂不可用",
       "gitMissing": "未检测到 git，请先安装",
       "notGitRepo": "当前目录不是 git 仓库",
       "alreadyInWorktree": "已在 worktree 中，禁止嵌套",
@@ -5904,6 +5969,7 @@
     "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
   },
   "chat": {
+    "sessionLoading": "正在加载任务",
     "askUserQuestion": {
       "skippedAnswer": "已跳过"
     },
@@ -6417,6 +6483,7 @@
           "sourceConversationChanged": "来源任务已变化，请针对当前任务重新运行 /review。",
           "sourceFilesChanged": "来源任务的文件已变化，请针对当前成果重新运行 /review。",
           "artifactChanged": "审查成果已变化，请针对当前成果重新运行 /review。",
+          "artifactUnavailable": "Cindy 无法安全读取审查成果，请检查工作区或附件后重新运行 /review。",
           "providerFailed": "审查任务执行失败"
         }
       }
@@ -6563,7 +6630,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把任务切到「默认权限」。",
+      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
@@ -8175,7 +8242,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "需要信任此项目后可用"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
     "home": {
@@ -8802,6 +8869,7 @@
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
+      "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
       "codexCompactionNotConverging": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。压不动的部分通常不在对话里——system prompt 与工具定义占掉的空间压缩清不掉。新开一个任务可以继续。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。本任务中途切换过模型，而 Codex 仍按切换前那个模型的上下文上限来判断。切回原模型可以继续，或者新开一个任务。",
@@ -8929,17 +8997,9 @@
     "dropHint": "松开以在此分栏打开任务",
     "loadingTask": "正在加载任务…",
     "resizeAria": "调整任务分栏大小",
-    "openInSplit": "在分栏中打开",
-    "openSide": {
-      "left": "在左侧打开任务",
-      "right": "在右侧打开任务",
-      "top": "在上方打开任务",
-      "bottom": "在下方打开任务"
-    },
     "alreadyOpen": "该任务已在当前分栏中打开，请选择其他任务",
     "limitReached": "一个分栏最多可打开 {{count}} 个任务，请先关闭一个任务分栏再重试",
-    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试",
-    "workerUnavailable": "Worker 任务不能单独在分栏中打开，请改为打开所属 Lead 任务"
+    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试"
   },
   "extraDirs": {
     "menuAria": "操作菜单",
@@ -9317,7 +9377,8 @@
     },
     "currentSubscription": {
       "title": "当前订阅",
-      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
+      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。",
+      "purchaseBlockedUntilPeriodEnd": "当前套餐将于 {{date}} 结束，届时可购买新套餐。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "等待完成支付",

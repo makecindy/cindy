@@ -764,6 +764,82 @@ const IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH = path.join(
   'ios-simulator',
   'native-sidecar-manifest.json',
 );
+const IOS_SIMULATOR_HELPER_BUILD_RESULT_RELATIVE_PATH = path.join(
+  'Contents',
+  'Resources',
+  'ios-simulator',
+  'native-helper-build-result.json',
+);
+const IOS_SIMULATOR_HELPER_UNSUPPORTED_REASON =
+  'simulator-kit-architecture-unavailable';
+
+function expectedIOSSimulatorHelperArchitecture(packageArch) {
+  switch (packageArch) {
+    case 'arm64':
+      return 'arm64';
+    case 'x64':
+      return 'x86_64';
+    case 'universal':
+      return 'universal';
+    default:
+      throw new Error(`unsupported packaged iOS Simulator helper architecture: ${packageArch}`);
+  }
+}
+
+export function inspectPackagedIOSSimulatorHelper(appPath, packageArch) {
+  const expectedArchitecture = expectedIOSSimulatorHelperArchitecture(packageArch);
+  const helperPath = path.join(appPath, IOS_SIMULATOR_HELPER_RELATIVE_PATH);
+  const executablePath = path.join(
+    helperPath,
+    'Contents',
+    'MacOS',
+    IOS_SIMULATOR_HELPER_EXECUTABLE,
+  );
+  const buildResultPath = path.join(
+    appPath,
+    IOS_SIMULATOR_HELPER_BUILD_RESULT_RELATIVE_PATH,
+  );
+  const hasExecutable = fs.existsSync(executablePath);
+  const hasBuildResult = fs.existsSync(buildResultPath);
+  if (hasExecutable) {
+    if (hasBuildResult) {
+      throw new Error('packaged iOS Simulator helper conflicts with unsupported build result');
+    }
+    return { status: 'present', helperPath, executablePath };
+  }
+  if (!hasBuildResult) {
+    throw new Error(`packaged iOS Simulator helper is missing: ${executablePath}`);
+  }
+
+  let result;
+  try {
+    result = JSON.parse(fs.readFileSync(buildResultPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `packaged iOS Simulator helper build result is invalid: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (
+    result?.schemaVersion !== 1 ||
+    result?.status !== 'unsupported' ||
+    result?.targetArchitecture !== 'x86_64' ||
+    result?.reason !== IOS_SIMULATOR_HELPER_UNSUPPORTED_REASON ||
+    !Array.isArray(result?.simulatorKitArchitectures) ||
+    result.simulatorKitArchitectures.length === 0 ||
+    result.simulatorKitArchitectures.includes('x86_64') ||
+    !result.simulatorKitArchitectures.every((architecture) => typeof architecture === 'string')
+  ) {
+    throw new Error('packaged iOS Simulator helper build result is invalid');
+  }
+  if (expectedArchitecture !== 'x86_64') {
+    throw new Error(
+      `packaged iOS Simulator helper fallback is allowed only for x64 packages, received ${packageArch}`,
+    );
+  }
+  return { status: 'unsupported', buildResultPath, result };
+}
 
 function runSigningCommand(command, args, label) {
   const result = spawnSync(command, args, { encoding: 'utf8' });
@@ -848,33 +924,34 @@ export function writeIOSSimulatorSidecarManifest(appPath, signing) {
   return manifestPath;
 }
 
-function signIOSSimulatorHelper(appPath, signArgs, signing) {
-  const helperPath = path.join(appPath, IOS_SIMULATOR_HELPER_RELATIVE_PATH);
-  const executablePath = path.join(
-    helperPath,
-    'Contents',
-    'MacOS',
-    IOS_SIMULATOR_HELPER_EXECUTABLE,
-  );
-  if (!fs.existsSync(executablePath)) {
-    throw new Error(`packaged iOS Simulator helper is missing: ${executablePath}`);
+export function signIOSSimulatorHelper(appPath, signArgs, signing, packageArch) {
+  const helper = inspectPackagedIOSSimulatorHelper(appPath, packageArch);
+  if (helper.status === 'unsupported') {
+    fs.rmSync(path.join(appPath, IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH), {
+      force: true,
+    });
+    console.warn(
+      '    Skipping iOS Simulator helper signing: x86_64 SimulatorKit slice unavailable; package will use WDA/MJPEG',
+    );
+    return false;
   }
   console.log('    Signing iOS Simulator helper executable...');
   runSigningCommand(
     '/usr/bin/codesign',
-    [...signArgs, executablePath],
+    [...signArgs, helper.executablePath],
     'iOS Simulator helper signing',
   );
   console.log('    Signing iOS Simulator helper bundle...');
   runSigningCommand(
     '/usr/bin/codesign',
-    [...signArgs, helperPath],
+    [...signArgs, helper.helperPath],
     'iOS Simulator helper bundle signing',
   );
   writeIOSSimulatorSidecarManifest(appPath, signing);
+  return true;
 }
 
-export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath) {
+export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch) {
   console.log('==> Ad-hoc signing macOS app for local packaged testing...');
   const signBase = '/usr/bin/codesign --force --options runtime --sign -';
   const frameworksDir = path.join(appPath, 'Contents', 'Frameworks');
@@ -893,13 +970,16 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
   exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
-  signIOSSimulatorHelper(appPath, ['--force', '--options', 'runtime', '--sign', '-'], {
-    mode: 'adhoc',
-    teamIdentifier: null,
-  });
+  const iosSimulatorHelperSigned = signIOSSimulatorHelper(
+    appPath,
+    ['--force', '--options', 'runtime', '--sign', '-'],
+    { mode: 'adhoc', teamIdentifier: null },
+    arch,
+  );
   exec(`${signBase} --entitlements "${mainEntitlementsPath}" "${appPath}"`);
   exec(`/usr/bin/codesign --verify --deep --strict "${appPath}"`);
   verifyMacContactsPermissions(appPath);
+  return iosSimulatorHelperSigned;
 }
 
 // ── macOS 正式签名 / 公证 / DMG(单点实现;publish-macos 与 package-desktop 共用)──
@@ -915,7 +995,7 @@ export function signMacAppWithIdentity(
   helperEntitlementsPath,
   mainEntitlementsPath,
   identity,
-  { keychainAccessGroup } = {},
+  { keychainAccessGroup, arch } = {},
 ) {
   console.log('    Removing provenance attributes...');
   exec(`/usr/bin/xattr -dr com.apple.provenance "${appPath}" 2>/dev/null || true`);
@@ -955,10 +1035,11 @@ export function signMacAppWithIdentity(
   // 4. Host-owned iOS Simulator Helper uses Hardened Runtime but receives no
   // Electron/V8 or main-app entitlements. Its manifest is written only after
   // the final nested signature, then sealed by the outer app signature.
-  signIOSSimulatorHelper(
+  const iosSimulatorHelperSigned = signIOSSimulatorHelper(
     appPath,
     ['--force', '--timestamp', '--options', 'runtime', '--sign', identity.signIdentity],
     { mode: 'developer-id', teamIdentifier: identity.teamId },
+    arch,
   );
 
   // 5. 主 app bundle
@@ -971,6 +1052,7 @@ export function signMacAppWithIdentity(
     keychainAccessGroup,
     signingTeamId: identity.teamId,
   });
+  return iosSimulatorHelperSigned;
 }
 
 const NOTARYTOOL_TIMEOUT_MS = 1800000;
