@@ -2608,52 +2608,83 @@ export async function installComputerDriver(
   targetVersion?: string,
   onProgress?: (progress: ComputerDriverUpdateProgress) => void,
 ): Promise<ComputerDriverInstallResult> {
-  // 并发保护:首次安装(无 targetVersion)时,若已有安装/更新在进行,
-  // join 同一个 in-flight(与更新路径共用同一把锁),避免并行安装导致
-  // 进度事件串扰。更新路径调用本函数时会传 targetVersion,不触发此分支。
+  // 并发保护:首次安装(无 targetVersion)也收进 in-flight(与更新路径共用
+  // driverUpdateInstallInFlight),若已有安装/更新在进行则 join,避免并行
+  // 安装导致进度事件串扰。更新路径调用本函数时传 targetVersion,单独
+  // 处理(它自己在 updateComputerDriver 里管理 in-flight)。
   if (!targetVersion && driverUpdateInstallInFlight) {
     const result = await driverUpdateInstallInFlight;
     onProgress?.({ phase: 'done', downloadedBytes: null, totalBytes: null });
     return result;
   }
-  // 首次安装(无 targetVersion)时,后台预取最新 release 的 asset 列表填充缓存,
-  // 让进度采样器能换算已下载/总字节。预取不 await(不阻塞安装启动),
-  // 结果异步到达;失败仅影响进度条精度(退化为不定态)。
-  // 注意不能用 fetchDriverUpdateCheck:它依赖本地已安装版本,首次安装时
-  // currentVersion 为空会直接返回 latestVersion:null。
-  if (!targetVersion && onProgress) {
-    void (async () => {
-      try {
-        const headers = getCuaDriverGithubHeaders();
-        const tagNames: string[] = [];
-        for (let page = 1; page <= CUA_DRIVER_REFS_MAX_PAGES; page += 1) {
-          const res = await outboundFetch(
-            `${CUA_DRIVER_TAG_REFS_URL}?per_page=${CUA_DRIVER_REFS_PAGE_SIZE}&page=${page}`,
-            { headers, signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS) },
-          );
-          if (!res.ok) break;
-          const batch = (await res.json()) as Array<{ ref?: unknown }>;
-          if (!Array.isArray(batch) || batch.length === 0) break;
-          for (const entry of batch) {
-            if (typeof entry?.ref === 'string' && entry.ref.startsWith('refs/tags/')) {
-              tagNames.push(entry.ref.slice('refs/tags/'.length));
+  if (!targetVersion) {
+    let stopSampler: () => void = () => {};
+    driverUpdateInstallInFlight = (async () => {
+      // 后台预取最新 release 的 asset 列表填充缓存(不阻塞安装启动)。
+      // 仅当需要上报进度(onProgress)时才预取;纯安装不需要。
+      // 注意不能用 fetchDriverUpdateCheck:它依赖本地已安装版本,首次安装时
+      // currentVersion 为空会直接返回 latestVersion:null。
+      if (onProgress) {
+        void (async () => {
+          try {
+            const headers = getCuaDriverGithubHeaders();
+            const tagNames: string[] = [];
+            for (let page = 1; page <= CUA_DRIVER_REFS_MAX_PAGES; page += 1) {
+              const res = await outboundFetch(
+                `${CUA_DRIVER_TAG_REFS_URL}?per_page=${CUA_DRIVER_REFS_PAGE_SIZE}&page=${page}`,
+                { headers, signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS) },
+              );
+              if (!res.ok) break;
+              const batch = (await res.json()) as Array<{ ref?: unknown }>;
+              if (!Array.isArray(batch) || batch.length === 0) break;
+              for (const entry of batch) {
+                if (typeof entry?.ref === 'string' && entry.ref.startsWith('refs/tags/')) {
+                  tagNames.push(entry.ref.slice('refs/tags/'.length));
+                }
+              }
+              if (batch.length < CUA_DRIVER_REFS_PAGE_SIZE) break;
             }
+            const latestVersion = pickLatestCuaDriverVersion(tagNames);
+            if (latestVersion) {
+              const release = await fetchInstallableCuaDriverRelease(
+                latestVersion,
+                outboundFetch,
+                headers,
+              );
+              if (release) cachedDriverReleaseAssets = release.assets;
+            }
+          } catch {
+            /* 预取失败仅影响进度条精度,不阻塞安装 */
           }
-          if (batch.length < CUA_DRIVER_REFS_PAGE_SIZE) break;
-        }
-        const latestVersion = pickLatestCuaDriverVersion(tagNames);
-        if (latestVersion) {
-          const release = await fetchInstallableCuaDriverRelease(
-            latestVersion,
-            outboundFetch,
-            headers,
-          );
-          if (release) cachedDriverReleaseAssets = release.assets;
-        }
-      } catch {
-        /* 预取失败仅影响进度条精度,不阻塞安装 */
+        })();
       }
-    })();
+      const res = await runInstallCommand(
+        (pid) => {
+          onSpawn?.(pid);
+          if (onProgress) {
+            stopSampler = startInstallProgressSampler(pid, onProgress);
+          }
+        },
+        targetVersion,
+      );
+      const status = await getComputerDriverStatus();
+      if (res.exitCode !== 0 || !status.installed) {
+        throw new ComputerDriverError(
+          res.stderr.trim() || res.stdout.trim() || `cua-driver installer exited ${res.exitCode}`,
+        );
+      }
+      return {
+        ok: true,
+        stdout: res.stdout,
+        stderr: res.stderr,
+        status,
+      };
+    })().finally(() => {
+      driverUpdateInstallInFlight = null;
+      stopSampler();
+      onProgress?.({ phase: 'done', downloadedBytes: null, totalBytes: null });
+    });
+    return driverUpdateInstallInFlight;
   }
   let stopSampler: () => void = () => {};
   try {
