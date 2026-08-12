@@ -2608,41 +2608,44 @@ export async function installComputerDriver(
   targetVersion?: string,
   onProgress?: (progress: ComputerDriverUpdateProgress) => void,
 ): Promise<ComputerDriverInstallResult> {
-  // 首次安装(无 targetVersion)时,先拉取最新 release 的 asset 列表填充缓存,
-  // 让进度采样器能换算已下载/总字节。失败不阻塞安装(进度条退化为不定态)。
+  // 首次安装(无 targetVersion)时,后台预取最新 release 的 asset 列表填充缓存,
+  // 让进度采样器能换算已下载/总字节。预取不 await(不阻塞安装启动),
+  // 结果异步到达;失败仅影响进度条精度(退化为不定态)。
   // 注意不能用 fetchDriverUpdateCheck:它依赖本地已安装版本,首次安装时
   // currentVersion 为空会直接返回 latestVersion:null。
   if (!targetVersion && onProgress) {
-    try {
-      const headers = getCuaDriverGithubHeaders();
-      const tagNames: string[] = [];
-      for (let page = 1; page <= CUA_DRIVER_REFS_MAX_PAGES; page += 1) {
-        const res = await outboundFetch(
-          `${CUA_DRIVER_TAG_REFS_URL}?per_page=${CUA_DRIVER_REFS_PAGE_SIZE}&page=${page}`,
-          { headers, signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS) },
-        );
-        if (!res.ok) break;
-        const batch = (await res.json()) as Array<{ ref?: unknown }>;
-        if (!Array.isArray(batch) || batch.length === 0) break;
-        for (const entry of batch) {
-          if (typeof entry?.ref === 'string' && entry.ref.startsWith('refs/tags/')) {
-            tagNames.push(entry.ref.slice('refs/tags/'.length));
+    void (async () => {
+      try {
+        const headers = getCuaDriverGithubHeaders();
+        const tagNames: string[] = [];
+        for (let page = 1; page <= CUA_DRIVER_REFS_MAX_PAGES; page += 1) {
+          const res = await outboundFetch(
+            `${CUA_DRIVER_TAG_REFS_URL}?per_page=${CUA_DRIVER_REFS_PAGE_SIZE}&page=${page}`,
+            { headers, signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS) },
+          );
+          if (!res.ok) break;
+          const batch = (await res.json()) as Array<{ ref?: unknown }>;
+          if (!Array.isArray(batch) || batch.length === 0) break;
+          for (const entry of batch) {
+            if (typeof entry?.ref === 'string' && entry.ref.startsWith('refs/tags/')) {
+              tagNames.push(entry.ref.slice('refs/tags/'.length));
+            }
           }
+          if (batch.length < CUA_DRIVER_REFS_PAGE_SIZE) break;
         }
-        if (batch.length < CUA_DRIVER_REFS_PAGE_SIZE) break;
+        const latestVersion = pickLatestCuaDriverVersion(tagNames);
+        if (latestVersion) {
+          const release = await fetchInstallableCuaDriverRelease(
+            latestVersion,
+            outboundFetch,
+            headers,
+          );
+          if (release) cachedDriverReleaseAssets = release.assets;
+        }
+      } catch {
+        /* 预取失败仅影响进度条精度,不阻塞安装 */
       }
-      const latestVersion = pickLatestCuaDriverVersion(tagNames);
-      if (latestVersion) {
-        const release = await fetchInstallableCuaDriverRelease(
-          latestVersion,
-          outboundFetch,
-          headers,
-        );
-        if (release) cachedDriverReleaseAssets = release.assets;
-      }
-    } catch {
-      /* 预取失败仅影响进度条精度,不阻塞安装 */
-    }
+    })();
   }
   let stopSampler: () => void = () => {};
   try {
