@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   resetSettings: vi.fn(),
   openInputMonitoringSettings: vi.fn(),
   reload: vi.fn(),
+  /** Which rule the six task keys follow; drives whether they are clickable. */
+  agentSource: 'recent' as string,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -28,6 +30,7 @@ vi.mock('@/hooks/useWorkLouderCodex', () => ({
       settings: {
         ...createWorkLouderCodexDefaultSettings(),
         lightingBrightness: 70,
+        agentSource: mocks.agentSource,
       },
       agentSlots: Array.from({ length: 6 }, (_, slot) => ({
         slot,
@@ -61,6 +64,7 @@ import { WorkLouderCodexEntry, WorkLouderCodexSettings } from '../WorkLouderCode
 describe('WorkLouderCodexSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.agentSource = 'recent';
   });
 
   it('renders a keyboard-shortcuts entry with live connection status', () => {
@@ -99,8 +103,10 @@ describe('WorkLouderCodexSettings', () => {
   it('shows the six task keys and writes the settings that remain on the panel', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    expect(screen.getByRole('button', { name: /AG00/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /AG05/ })).toBeTruthy();
+    // Default source is "recent", so the keys follow the shared rule and are
+    // not individually clickable.
+    expect(screen.getByRole('img', { name: /AG00/ })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /AG05/ })).toBeTruthy();
 
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',
@@ -118,23 +124,42 @@ describe('WorkLouderCodexSettings', () => {
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingAutoDim: '10-minutes' });
   });
 
-  it('keeps the task-key options behind the task key itself', () => {
+  it('sets all six task keys at once, since they follow one shared rule', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    // The panel no longer lists these; they live behind a click on the key.
-    expect(
-      screen.queryByRole('switch', {
-        name: 'settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria',
+    // One control for the set, not one per key.
+    fireEvent.change(
+      screen.getByRole('combobox', {
+        name: 'settings.shortcuts.workLouderCodex.agentKeys.source.label',
       }),
-    ).toBeNull();
+      { target: { value: 'pinned' } },
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith({ agentSource: 'pinned' });
 
-    fireEvent.click(screen.getByRole('button', { name: /AG00/ }));
     fireEvent.click(
       screen.getByRole('switch', {
         name: 'settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria',
       }),
     );
     expect(mocks.setSettings).toHaveBeenCalledWith({ singleTapAgentKeys: true });
+  });
+
+  it('only lets a task key be set on its own under "custom"', () => {
+    mocks.agentSource = 'custom';
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    // Now each key is its own target, and its editor writes only that slot.
+    fireEvent.click(screen.getByRole('button', { name: /AG02/ }));
+    fireEvent.change(
+      screen.getByRole('combobox', {
+        name: 'settings.shortcuts.workLouderCodex.actions.choose',
+      }),
+      { target: { value: 'command:newTask' } },
+    );
+
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      customAgentKeys: [null, null, { type: 'command', commandId: 'newTask' }, null, null, null],
+    });
   });
 
   it('opens the analog stick and encoder editors from the board', () => {

@@ -42,6 +42,12 @@ export interface WorkLouderCodexKeyboardLayoutProps {
   };
   /** Hover copy per part; the board itself carries no lettering. */
   hintFor?(key: WorkLouderCodexEditableKey): WorkLouderCodexKeyHint | null;
+  /**
+   * Whether a part has anything of its own to edit. Task keys do not when all
+   * six follow one shared rule, and a key that opens nothing should not look
+   * like a button.
+   */
+  canEdit?(key: WorkLouderCodexEditableKey): boolean;
   onEditKeycap?(slot: WorkLouderCodexEditableKey): void;
 }
 
@@ -60,8 +66,11 @@ export function WorkLouderCodexKeyboardLayout({
   disabled = false,
   labels,
   hintFor,
+  canEdit,
   onEditKeycap,
 }: WorkLouderCodexKeyboardLayoutProps) {
+  const editHandlerFor = (key: WorkLouderCodexEditableKey) =>
+    canEdit && !canEdit(key) ? undefined : onEditKeycap;
   const agentKeys = Array.from(
     { length: 6 },
     (_, index) => `AG${index.toString().padStart(2, '0')}` as WorkLouderCodexAgentKey,
@@ -76,7 +85,7 @@ export function WorkLouderCodexKeyboardLayout({
       part={slot}
       hint={hintFor?.(slot) ?? { legend: slot, name: agentSlots[index]?.title ?? null }}
       disabled={disabled}
-      onEdit={onEditKeycap}
+      onEdit={editHandlerFor(slot)}
       className="bg-[var(--wl-agent-cap)] shadow-[var(--wl-agent-shadow)]"
     >
       {/* Agent keys wear no artwork — just the lit dot that marks a task slot. */}
@@ -92,7 +101,7 @@ export function WorkLouderCodexKeyboardLayout({
         part={slot}
         hint={hintFor?.(slot) ?? { legend: keycapId }}
         disabled={disabled}
-        onEdit={onEditKeycap}
+        onEdit={editHandlerFor(slot)}
         className={cn('bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]', className)}
       >
         <WorkLouderCodexKeycapGlyph
@@ -120,7 +129,7 @@ export function WorkLouderCodexKeyboardLayout({
           part="analog"
           hint={hintFor?.('analog') ?? { legend: labels.analogStick }}
           disabled={disabled}
-          onEdit={onEditKeycap}
+          onEdit={editHandlerFor('analog')}
           rounded="full"
           className="bg-transparent shadow-none"
         >
@@ -131,7 +140,7 @@ export function WorkLouderCodexKeyboardLayout({
           part="encoder"
           hint={hintFor?.('encoder') ?? { legend: labels.encoder }}
           disabled={disabled}
-          onEdit={onEditKeycap}
+          onEdit={editHandlerFor('encoder')}
           rounded="full"
           className="bg-transparent shadow-none"
         >

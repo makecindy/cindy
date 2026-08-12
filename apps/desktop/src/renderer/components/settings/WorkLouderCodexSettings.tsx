@@ -181,6 +181,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       setKeycapQuery('');
       return;
     }
+    // A task key is only its own thing under "custom"; otherwise all six follow
+    // the shared rule and there is nothing per-key to edit.
+    if (key.startsWith('AG') && settings.agentSource !== 'custom') return;
     setEditingPart(key as WorkLouderCodexAgentKey | WorkLouderCodexControlPart);
   };
 
@@ -199,10 +202,20 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     if (key.startsWith('AG')) {
       const index = Number(key.slice(2));
       const slot = state?.agentSlots[index];
+      const custom = settings.agentSource === 'custom';
       return {
         legend: key,
-        name: slot?.title ?? t('settings.shortcuts.workLouderCodex.agentKeys.newTask'),
-        description: t('settings.shortcuts.workLouderCodex.agentKeys.source.description'),
+        name: custom
+          ? (actionLabel(settings.customAgentKeys[index] ?? null, t) ??
+            t('settings.shortcuts.workLouderCodex.agentKeys.newTask'))
+          : (slot?.title ?? t('settings.shortcuts.workLouderCodex.agentKeys.newTask')),
+        // Say which rule the key is following, so it is clear why it is not
+        // individually editable outside "custom".
+        description: custom
+          ? t('settings.shortcuts.workLouderCodex.agentKeys.customDescription')
+          : t(
+              `settings.shortcuts.workLouderCodex.agentKeys.source.options.${settings.agentSource}`,
+            ),
       };
     }
     if (key === 'analog') {
@@ -324,9 +337,48 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
             indicator: t('settings.shortcuts.workLouderCodex.layout.keyboard.indicator'),
           }}
           hintFor={hintFor}
+          canEdit={(key) => !key.startsWith('AG') || settings.agentSource === 'custom'}
           onEditKeycap={openPartEditor}
         />
       </SettingsCard>
+
+      {/* The six task keys follow one rule as a set, so it is chosen once here.
+          Picking "custom" is what makes them individually clickable. */}
+      <SettingsGroup title={t('settings.shortcuts.workLouderCodex.agentKeys.title')}>
+        <SettingsRow
+          label={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
+          description={t('settings.shortcuts.workLouderCodex.agentKeys.source.description')}
+          control={
+            <SelectControl
+              value={settings.agentSource}
+              disabled={!state || saving}
+              ariaLabel={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
+              onChange={(value) =>
+                void setSettings({ agentSource: value as WorkLouderCodexAgentSource })
+              }
+            >
+              {WORKLOUDER_CODEX_AGENT_SOURCES.map((source) => (
+                <option key={source} value={source}>
+                  {t(`settings.shortcuts.workLouderCodex.agentKeys.source.options.${source}`)}
+                </option>
+              ))}
+            </SelectControl>
+          }
+        />
+        <SettingsDivider />
+        <SettingsRow
+          label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.label')}
+          description={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.description')}
+          control={
+            <Switch
+              checked={settings.singleTapAgentKeys}
+              disabled={!state || saving}
+              onCheckedChange={(checked) => void setSettings({ singleTapAgentKeys: checked })}
+              aria-label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria')}
+            />
+          }
+        />
+      </SettingsGroup>
 
       <WorkLouderCodexKeycapPicker
         open={editingSlot !== null}
@@ -393,73 +445,38 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
         onOpenChange={(open) => {
           if (!open) setEditingPart(null);
         }}
-        title={t('settings.shortcuts.workLouderCodex.agentKeys.title')}
-        description={t('settings.shortcuts.workLouderCodex.agentKeys.source.description')}
+        title={editingPart ?? ''}
+        description={t('settings.shortcuts.workLouderCodex.agentKeys.customDescription')}
         closeLabel={t('settings.shortcuts.workLouderCodex.layout.editor.done')}
       >
-        <div className="flex flex-col gap-3">
+        {/* Only this one key. What the six keys follow as a set is chosen once,
+            under the board — repeating it here would let a single key's dialog
+            silently rewrite the other five. */}
+        {editingPart?.startsWith('AG') && (
           <SettingsRow
-            label={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
-            description={t('settings.shortcuts.workLouderCodex.agentKeys.source.description')}
+            label={t('settings.shortcuts.workLouderCodex.agentKeys.source.options.custom')}
+            description={t('settings.shortcuts.workLouderCodex.agentKeys.customDescription')}
             control={
-              <SelectControl
-                value={settings.agentSource}
+              <ActionSelect
+                action={settings.customAgentKeys[Number(editingPart.slice(2))] ?? null}
+                state={state}
+                skills={enabledSkills}
                 disabled={!state || saving}
-                ariaLabel={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
-                onChange={(value) =>
-                  void setSettings({ agentSource: value as WorkLouderCodexAgentSource })
-                }
-              >
-                {WORKLOUDER_CODEX_AGENT_SOURCES.map((source) => (
-                  <option key={source} value={source}>
-                    {t(`settings.shortcuts.workLouderCodex.agentKeys.source.options.${source}`)}
-                  </option>
-                ))}
-              </SelectControl>
-            }
-          />
-          <SettingsDivider />
-          <SettingsRow
-            label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.label')}
-            description={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.description')}
-            control={
-              <Switch
-                checked={settings.singleTapAgentKeys}
-                disabled={!state || saving}
-                onCheckedChange={(checked) => void setSettings({ singleTapAgentKeys: checked })}
-                aria-label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria')}
+                emptyLabel={t('settings.shortcuts.workLouderCodex.agentKeys.newTask')}
+                allowTasks
+                allowKeycaps
+                onChange={(action) => {
+                  const index = Number(editingPart.slice(2));
+                  const customAgentKeys = settings.customAgentKeys.map((item) =>
+                    item ? { ...item } : null,
+                  );
+                  customAgentKeys[index] = action;
+                  void setSettings({ customAgentKeys });
+                }}
               />
             }
           />
-          {settings.agentSource === 'custom' && editingPart?.startsWith('AG') && (
-            <>
-              <SettingsDivider />
-              <SettingsRow
-                label={editingPart}
-                description={t('settings.shortcuts.workLouderCodex.agentKeys.customDescription')}
-                control={
-                  <ActionSelect
-                    action={settings.customAgentKeys[Number(editingPart.slice(2))] ?? null}
-                    state={state}
-                    skills={enabledSkills}
-                    disabled={!state || saving}
-                    emptyLabel={t('settings.shortcuts.workLouderCodex.agentKeys.newTask')}
-                    allowTasks
-                    allowKeycaps
-                    onChange={(action) => {
-                      const index = Number(editingPart.slice(2));
-                      const customAgentKeys = settings.customAgentKeys.map((item) =>
-                        item ? { ...item } : null,
-                      );
-                      customAgentKeys[index] = action;
-                      void setSettings({ customAgentKeys });
-                    }}
-                  />
-                }
-              />
-            </>
-          )}
-        </div>
+        )}
       </WorkLouderCodexPartEditor>
 
       <WorkLouderCodexPartEditor
@@ -963,6 +980,31 @@ function connectionDescription(
 ): string {
   const key = state?.connectionReason ?? state?.connectionStatus ?? 'connecting';
   return t(`settings.shortcuts.workLouderCodex.connection.descriptions.${key}`);
+}
+
+/**
+ * Human-readable name for whatever a key is bound to, for the hover tooltip.
+ * Returns null when the binding has no name worth showing on its own.
+ */
+function actionLabel(
+  action: WorkLouderCodexAction | null,
+  t?: ReturnType<typeof useTranslation>['t'],
+): string | null {
+  if (!action) return null;
+  switch (action.type) {
+    case 'command':
+      return t ? workLouderCodexCommandName(t, action.commandId) : action.commandId;
+    case 'skill':
+      return action.name;
+    case 'keycap':
+      return action.keycapId;
+    case 'composer-text':
+      return action.text;
+    case 'external-url':
+      return action.url;
+    case 'task':
+      return null;
+  }
 }
 
 function actionValue(action: WorkLouderCodexAction | null): string {
