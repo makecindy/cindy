@@ -25,6 +25,7 @@ import { Pause, Play } from 'lucide-react-native';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
+import { claudeOpusPlanMismatchText } from '@/session/claudeOpusPlanMismatchText';
 import {
   fontWeight,
   iconSize,
@@ -68,16 +69,17 @@ export function InlineQueueSection({
     ? inputProjectionErrorI18nKey(projection.error)
     : null;
   const projectionError = projection.error
-    ? projectionErrorKey
-      ? t(projectionErrorKey)
-      : (describeAgentAuthError(projection.error) ?? projection.error)
+    ? claudeOpusPlanMismatchText(projection.errorReason)
+      ?? (projectionErrorKey
+        ? t(projectionErrorKey)
+        : (describeAgentAuthError(projection.error) ?? projection.error))
     : null;
 
   return (
     <View style={styles.container} testID="queue.inline.section">
       {projection.error ? (
         <View style={styles.errorBox} testID="queue.inline.error">
-          {/* 稳定错误 marker 按当前显示端语言翻译；其它错误维持既有 auth 映射或原文。 */}
+          {/* 结构化归因/稳定 marker 按本机语言翻译；其它错误维持既有 auth 映射或原文。 */}
           <Text style={styles.errorText}>{projectionError}</Text>
           <View style={styles.errorActions}>
             <ActionPill

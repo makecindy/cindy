@@ -199,7 +199,9 @@
     "learnFailed": "Skill learning couldn't start",
     "learnBusyBody": "A learning task is already running. Try again after it finishes.",
     "learnFailedBody": "Failed to start: {{detail}}",
-    "unknownError": "Unknown error"
+    "unknownError": "Unknown error",
+    "claudeGatewayOpusPlanMismatch": "This Opus request went through XD Gateway instead of the connected Claude.ai subscription, and the gateway rejected the model. Switch to the Claude.ai subscription and retry, or choose another model.",
+    "claudeSubscriptionOpusPlanMismatch": "Opus isn't available with the connected Claude.ai subscription. Choose another available model. If the subscription changed recently, reconnect Anthropic in Settings, then retry."
   },
   "quote": {
     "count": "{{n}} quotes",

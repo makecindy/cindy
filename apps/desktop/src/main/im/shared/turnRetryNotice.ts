@@ -34,6 +34,7 @@ import {
   parseOverloadRetryProgress,
   parseTerminalRateLimitRetryProgress,
 } from '@cindy/maker-core';
+import { decodeClaudeOpusPlanMismatchReason } from '@cindy/maker-shared/claude-opus-plan-mismatch';
 
 /**
  * Auto 档「自动审批不可用」-> 渠道说明。
@@ -119,6 +120,24 @@ export function overloadFailureNotice(
   );
 }
 
+/** Request-attributed Claude Opus failures -> channel-safe copy; unknown reasons stay unmapped. */
+export function claudeOpusPlanMismatchFailureNotice(reason: unknown): string | null {
+  const route = decodeClaudeOpusPlanMismatchReason(reason);
+  if (route === 'gateway') {
+    return (
+      '⚠️ 这次 Opus 请求走的是 XD Gateway，不是 Claude.ai 订阅；该网关拒绝了这个模型。' +
+      '请切换到 Claude.ai 订阅后在这里重发这条消息，或换一个模型。'
+    );
+  }
+  if (route === 'subscription') {
+    return (
+      '⚠️ 当前连接的 Claude.ai 订阅暂时无法使用 Opus。请换一个可用模型；' +
+      '如果最近调整过订阅，请在 Cindy 设置中重新连接 Anthropic 后在这里重发这条消息。'
+    );
+  }
+  return null;
+}
+
 /**
  * 终态 error 事件的 data -> 渠道要展示的失败文案: 过载类换成上面那条可操作说明,
  * 其它错误沿用上游原文。
@@ -144,5 +163,13 @@ export function terminalErrorText(data: unknown): string {
   const errorStatus = typeof record?.errorStatus === 'number' ? record.errorStatus : undefined;
   const codexErrorInfo =
     typeof record?.codexErrorInfo === 'string' ? record.codexErrorInfo : undefined;
-  return overloadFailureNotice(message, errorStatus, codexErrorInfo) ?? message;
+  const reason =
+    record && 'reason' in record
+      ? (record as { reason?: unknown }).reason
+      : undefined;
+  return (
+    claudeOpusPlanMismatchFailureNotice(reason) ??
+    overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
+    message
+  );
 }

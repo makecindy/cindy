@@ -3,6 +3,7 @@ export * from './agentInputProjection.js';
 export * from './agentTask.js';
 export * from './branding.js';
 export * from './brandIdentity.js';
+export * from './claudeOpusPlanMismatch.js';
 export * from './commandIntent.js';
 export * from './commandDisplay.js';
 export * from './composerPalette.js';

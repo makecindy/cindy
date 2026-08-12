@@ -199,7 +199,9 @@
     "learnFailed": "技能學習未能啟動",
     "learnBusyBody": "已有一個學習任務在執行中，等它完成後再試。",
     "learnFailedBody": "啟動失敗：{{detail}}",
-    "unknownError": "未知錯誤"
+    "unknownError": "未知錯誤",
+    "claudeGatewayOpusPlanMismatch": "這次 Opus 請求走的是 XD Gateway，而不是 Claude.ai 訂閱；該 Gateway 拒絕了此模型。請切換至 Claude.ai 訂閱後重試，或改用其他模型。",
+    "claudeSubscriptionOpusPlanMismatch": "目前連接的 Claude.ai 訂閱暫時無法使用 Opus。請改用其他可用模型；若最近調整過訂閱，請在設定中重新連接 Anthropic 後再試。"
   },
   "quote": {
     "count": "{{n}} 處引用",

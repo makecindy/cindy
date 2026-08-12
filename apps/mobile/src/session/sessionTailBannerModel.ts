@@ -28,13 +28,14 @@ import {
 } from '@cindy/maker-shared/message-normalize';
 import { describeAgentAuthError } from '@cindy/maker-shared/device-link-contract';
 import { i18n } from '@/i18n';
+import { claudeOpusPlanMismatchText } from '@/session/claudeOpusPlanMismatchText';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 
 export interface SessionTailErrorBanner {
   kind: 'error-tail';
   /** 错误行 clientId:忽略(dismiss)与本地隐藏态都按它归属。 */
   clientId: string;
-  /** 展示文案(agent 未鉴权错误已换成中文引导,其余保持原文)。 */
+  /** 展示文案(请求归因与 agent 未鉴权错误映射安全文案,未知错误保持原文)。 */
   text: string;
   /** 主按钮语义:中断标记行 →「继续任务」;普通失败行 →「重试」。 */
   continueKind: 'interrupted' | 'error';
@@ -92,11 +93,12 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
-    const guidance = describeNonRetryableTailError(tail.text);
+    const attributedText = claudeOpusPlanMismatchText(tail.reason);
+    const guidance = attributedText === null ? describeNonRetryableTailError(tail.text) : null;
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
-      text: guidance ?? tail.text,
+      text: attributedText ?? guidance ?? tail.text,
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
       retryable: guidance === null,
     };

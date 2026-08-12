@@ -14,6 +14,7 @@
     "./branding": "./src/branding.ts",
     "./brand-identity": "./src/brandIdentity.ts",
     "./chat-quotes": "./src/chatQuotes.ts",
+    "./claude-opus-plan-mismatch": "./src/claudeOpusPlanMismatch.ts",
     "./command-display": "./src/commandDisplay.ts",
     "./client-endpoints": "./src/clientEndpoints.ts",
     "./composer-palette": "./src/composerPalette.ts",

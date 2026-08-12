@@ -46,6 +46,32 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
+  it('attributes Claude Opus terminal errors before listener fan-out', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const lifecycleStart = wireSessionSource.indexOf('session.setTurnLifecycleObserver({');
+    const firstListener = wireSessionSource.indexOf('session.onEvent((event: AgentEvent) => {');
+    const lifecycleSource = wireSessionSource.slice(lifecycleStart, firstListener);
+    const rendererForwarderStart = wireSessionSource.indexOf(
+      '// 转发事件到所有 window。interaction_dismissed 单独走专用 channel,',
+    );
+    const rendererForwarderEnd = wireSessionSource.indexOf(
+      'registration.disposers.push(',
+      rendererForwarderStart + 1,
+    );
+    const rendererForwarderSource = wireSessionSource.slice(
+      rendererForwarderStart,
+      rendererForwarderEnd,
+    );
+
+    expect(lifecycleStart).toBeGreaterThanOrEqual(0);
+    expect(firstListener).toBeGreaterThan(lifecycleStart);
+    expect(lifecycleSource).toContain('consumeClaudeOpusPlanMismatch');
+    expect(lifecycleSource).toContain('isCurrentGeneration');
+    // Session hands this same listenerEvent to every listener after onTerminal. Consuming in the
+    // renderer forwarder would make Desktop and IM race the one-shot request evidence again.
+    expect(rendererForwarderSource).not.toContain('consumeClaudeOpusPlanMismatch');
+  });
+
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
     const wireSessionSource = extractWireSessionSource();
 

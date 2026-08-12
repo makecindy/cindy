@@ -156,6 +156,19 @@ describe('overloadFailureNotice', () => {
 });
 
 describe('terminalErrorText', () => {
+  const misleadingPlanError =
+    'Claude Opus is not available with the Claude Pro plan. Run /logout and /login.';
+
+  it.each([
+    ['claude-gateway-opus-plan-mismatch', 'XD Gateway'],
+    ['claude-subscription-opus-plan-mismatch', 'Claude.ai 订阅'],
+  ])('按请求级 reason 输出安全说明：%s', (reason, expectedRoute) => {
+    const text = terminalErrorText({ message: misleadingPlanError, reason });
+
+    expect(text).toContain(expectedRoute);
+    expect(text).not.toMatch(/Claude Pro plan|\/logout|\/login/i);
+  });
+
   it('Codex 容量终态 → 本地化说明(定时转播卡与用户 turn 共用同一映射)', () => {
     // 三条渠道终态路径(handleTurnErrorAsync / finalizeTranspond / hook session-runner)
     // 必须口径一致: 之前转播路径自己 extractErrMessage 取原文, 重试耗尽时卡片会从

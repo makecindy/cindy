@@ -98,6 +98,25 @@ export function consumeClaudeOpusPlanMismatch(
   return pending.reason;
 }
 
+/**
+ * Consume request evidence once and attach it to the shared terminal event before Session fans
+ * that event out. The original diagnostic payload stays intact; every listener observes the same
+ * stable reason without competing for the one-shot registry entry.
+ */
+export function consumeClaudeOpusPlanMismatchIntoEvent(
+  sessionId: string,
+  event: { data?: unknown },
+): ClaudeOpusPlanMismatchReason | null {
+  const reason = consumeClaudeOpusPlanMismatch(sessionId);
+  if (!reason) return null;
+  const data =
+    event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+      ? (event.data as Record<string, unknown>)
+      : {};
+  event.data = { ...data, reason };
+  return reason;
+}
+
 export function resetClaudeGatewayErrorObserverForTest(): void {
   pendingMismatches.clear();
 }

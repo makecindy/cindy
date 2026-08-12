@@ -18,6 +18,7 @@ import type {
 } from '../../shared/agentInputQueue';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { __resetStickySessionOriginForTest, getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '@cindy/maker-shared/claude-opus-plan-mismatch';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => ({ items: [], hasMore: false, oldestId: null })),
@@ -127,6 +128,7 @@ function projection(
     queueEditLocks: [],
     queueAbortPending: false,
     error: null,
+    errorReason: null,
     recovery: null,
     errorRetryText: null,
     credentialSwitchWait: null,
@@ -327,6 +329,7 @@ describe('renderer input queue facade', () => {
       queueEditLocks: ['q-1'],
       queueAbortPending: true,
       error: 'paused',
+      errorReason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
       recovery: { kind: 'queue-head', clientId: 'q-1' },
       errorRetryText: 'from main',
     }));
@@ -341,12 +344,23 @@ describe('renderer input queue facade', () => {
     expect(snap.queueEditLocks).toEqual(['q-1']);
     expect(snap.queueAbortPending).toBe(true);
     expect(snap.error).toBe('paused');
+    expect(snap.errorReason).toBe(CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON);
     expect(snap.errorRetryText).toBe('from main');
+
+    projectionHandler?.(projection(sid, {
+      error: 'ordinary raw diagnostic',
+      errorReason: { route: 'untrusted-wire-shape' } as unknown as string,
+    }));
+    expect(makerChatStore.getSnapshot(sid)).toMatchObject({
+      error: 'ordinary raw diagnostic',
+      errorReason: null,
+    });
 
     // 旧被控端 projection 缺省新字段时回落 null，不能把前一轮 in-flight
     // Continue 标记永久留在 renderer。
     projectionHandler?.(projection(sid));
     expect(makerChatStore.getSnapshot(sid).continuationInFlightClientId).toBeNull();
+    expect(makerChatStore.getSnapshot(sid).errorReason).toBeNull();
   });
 
   it('delegates queue row operations to main input intents', async () => {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAKER_EVENT_BATCH_CHANNEL } from '@cindy/device-link';
+import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '@cindy/maker-shared/claude-opus-plan-mismatch';
 import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -115,6 +116,7 @@ function projection(sessionId: string, clientId = 'q-1'): InputProjection {
     queueEditLocks: [],
     queueAbortPending: false,
     error: null,
+    errorReason: null,
     errorRetryText: null,
     credentialSwitchWait: null,
   };
@@ -2677,12 +2679,18 @@ describe('remoteSessionStore', () => {
       remoteSessionStore.getInputProjection('missing'),
     );
 
-    remoteSessionStore.applyRemotePush('dev-1', 'maker:input:projection', projection('s1'));
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:input:projection', {
+      ...projection('s1'),
+      error: 'raw diagnostic retained by the host',
+      errorReason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+    });
 
     expect(remoteSessionStore.getInputProjection('s1')).toMatchObject({
       sessionId: 's1',
       pendingQueue: [{ clientId: 'q-1', text: 'queued' }],
       queuePaused: true,
+      error: 'raw diagnostic retained by the host',
+      errorReason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
     });
   });
 

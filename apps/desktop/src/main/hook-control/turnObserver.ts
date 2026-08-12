@@ -28,7 +28,7 @@ import {
   createTurnPresenter,
   type ProgressBodyMode,
 } from '../im/shared/turnPresenter.js';
-import { overloadFailureNotice } from '../im/shared/turnRetryNotice.js';
+import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
 
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
@@ -294,17 +294,18 @@ export function observeHookTurn(
           message?: string;
           errorStatus?: number;
           codexErrorInfo?: string;
+          reason?: string;
         } | null;
         const raw = data?.message ?? 'agent terminal error';
         // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
         // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,
         // 原文留在本地日志里供排查。结构化 tag 一并传: 只认文案时 codex 改措辞
         // 会让这条终态说明退回裸英文原文(#1022)。
-        const friendly = overloadFailureNotice(raw, data?.errorStatus, data?.codexErrorInfo);
-        if (friendly !== null) {
-          log.warn(`hook turn failed (upstream overload): ${raw}`);
+        const friendly = terminalErrorText(data ? { ...data, message: raw } : { message: raw });
+        if (friendly !== raw) {
+          log.warn(`hook turn failed (normalized): ${raw}`);
         }
-        failTurn(new Error(friendly ?? raw));
+        failTurn(new Error(friendly));
       }
     });
     stopListening = teardown;

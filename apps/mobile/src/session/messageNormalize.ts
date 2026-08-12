@@ -2,6 +2,7 @@ import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import { contentToPreview } from '@/utils/contentPreview';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
+import { claudeOpusPlanMismatchText } from '@/session/claudeOpusPlanMismatchText';
 import {
   buildMessageToolResultPairing,
   messageNormalizeKey,
@@ -231,12 +232,14 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
 
     // turn 失败终态的持久化行(desktop main 落库):content = { message, reason? },
     // 提取 message 文案按 system 样式展示 —— 不加分支会 fall through 到通用兜底,
-    // body 变成整段生 JSON。agent 未鉴权错误换成带引导的中文提示(describeAgentAuthError),
-    // 其余 reason 的本地化 / 红色错误卡样式留待手机版专项跟进。
+    // body 变成整段生 JSON。请求级 Claude Opus reason 优先走安全的五语文案；原始
+    // message 仍留在 source.content 供诊断。agent 未鉴权错误继续走既有引导。
     if (message.role === 'error') {
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
-      const errText = describeAgentAuthError(rawText) ?? rawText;
+      const reason = typeof c?.reason === 'string' ? c.reason : undefined;
+      const errText =
+        claudeOpusPlanMismatchText(reason) ?? describeAgentAuthError(rawText) ?? rawText;
       result.push({
         key: messageNormalizeKey(message),
         source: message,

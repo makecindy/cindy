@@ -219,6 +219,7 @@ describe('mobile remote-control headless UI flow smoke', () => {
       queueEditLocks: [],
       queueAbortPending: false,
       error: null,
+      errorReason: null,
       errorRetryText: null,
     credentialSwitchWait: null,
     };
@@ -448,11 +449,11 @@ describe('mobile remote-control headless UI flow smoke', () => {
         return projection;
       }
       if (channel === 'maker:input:retry-last-error') {
-        projection = { ...projection, recovery: null, error: null, errorRetryText: null };
+        projection = { ...projection, recovery: null, error: null, errorReason: null, errorRetryText: null };
         return projection;
       }
       if (channel === 'maker:input:clear-error') {
-        projection = { ...projection, recovery: null, error: null, errorRetryText: null };
+        projection = { ...projection, recovery: null, error: null, errorReason: null, errorRetryText: null };
         return projection;
       }
       if (channel === 'maker:input:update-text') {
