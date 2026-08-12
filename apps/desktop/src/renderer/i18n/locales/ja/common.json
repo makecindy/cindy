@@ -8244,7 +8244,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "このプロジェクトを信頼すると使用できます"
+    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
     "home": {

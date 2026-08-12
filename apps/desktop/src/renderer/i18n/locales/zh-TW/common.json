@@ -8243,7 +8243,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "信任此專案後即可使用"
+    "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入"
   },
   "skillhub": {
     "home": {

@@ -8257,7 +8257,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "Available after you trust this project"
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
   },
   "skillhub": {
     "home": {
