@@ -19,6 +19,7 @@ import {
 } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowUp,
   Bot,
   Check,
@@ -2004,7 +2005,13 @@ export function GhostPluginCard({
         </span>
         <span className="mt-1 block min-w-0 truncate text-11 text-[var(--text-tertiary)]">
           {sourceLabel ? `${sourceLabel} · ` : ''}v{item.version}
-          {!updateVersion ? (
+          {item.oauthAuthorizationExpired ? (
+            <span className="inline-flex items-center gap-1 text-[var(--warning-fg)]">
+              {' · '}
+              <AlertTriangle size={11} className="inline" aria-hidden="true" />
+              <span>{t('settings.ghosts.page.oauthAuthorizationExpired')}</span>
+            </span>
+          ) : !updateVersion ? (
             <span className="inline-flex items-center gap-1">
               {' · '}
               <Check size={11} className="inline" aria-hidden="true" />

@@ -53,9 +53,9 @@ export interface ModelDescriptor {
   /**
    * 该模型是哪些 wire agent 的**新对话默认种子**(源自目录 newSessionDefault,与 sortOrder
    * 解耦;生产环境 XD 网关由服务端按区域下发)。消费点见 modelDefinitions.newSessionDefaultModelId
-   * 与 draftModelCalibration:被标记且可用的模型优先作新对话默认。pi 按 'claude-code' 口径判定。
+   * 与 draftModelCalibration:被标记且可用的模型优先作新对话默认。
    */
-  newSessionDefault?: ('claude-code' | 'codex')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
 }
 
 export interface EffortDescriptor {
@@ -195,13 +195,13 @@ function isOptionalStringRecord(value: unknown): boolean {
   );
 }
 
-/** 与 protocol newSessionDefault 约束一致:可选;存在时非空、wire agent、无重复。 */
+/** 与 protocol newSessionDefault 约束一致:可选;存在时非空、已知 agent、无重复。 */
 function isOptionalNewSessionDefault(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length === 0) return false;
   if (
     value.some(
-      (agent) => agent !== 'claude-code' && agent !== 'codex',
+      (agent) => agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi',
     )
   ) {
     return false;

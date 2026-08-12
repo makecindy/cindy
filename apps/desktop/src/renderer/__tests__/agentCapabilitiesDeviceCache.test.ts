@@ -307,7 +307,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
 
   it.each([
     { label: '空数组', value: [] },
-    { label: '未知 agent', value: ['pi'] },
+    { label: '未知 agent', value: ['future-agent'] },
     { label: '重复 agent', value: ['codex', 'codex'] },
   ])('newSessionDefault 非法（$label）时整份 capabilities fail closed', async ({ value }) => {
     const invoke = vi.fn(async () => ({
@@ -334,6 +334,28 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       error: 'Invalid agent capabilities response',
     });
     expect(mod.getCachedCapabilities('codex', 'dev-invalid-default')).toBeNull();
+  });
+
+  it('接受 v3 的 Pi 新任务默认标记', async () => {
+    const invoke = vi.fn(async () => ({
+      ...caps('pi-default'),
+      availableModels: [
+        {
+          ...caps('pi-default').availableModels[0],
+          newSessionDefault: ['pi'],
+        },
+      ],
+    }));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities: vi.fn() }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-pi-default');
+
+    expect(
+      mod.getCachedCapabilities('pi', 'dev-pi-default')?.availableModels[0]?.newSessionDefault,
+    ).toEqual(['pi']);
   });
 
   it('模型默认 effort 不在可用列表中时不得落缓存', async () => {

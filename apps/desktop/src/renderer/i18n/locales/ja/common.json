@@ -3314,6 +3314,7 @@
         "manageAria": "{{name}} を管理",
         "agentInvoked": "Agent が自動で呼び出し",
         "upToDate": "最新です",
+        "oauthAuthorizationExpired": "認証期限切れ・再接続が必要",
         "installAria": "{{name}} をインストール"
       },
       "market": {
@@ -3739,6 +3740,7 @@
       "updateConfirm": {
         "title": "プラグイン「{{name}}」を更新しますか?",
         "body": "バージョン {{from}} → {{to}}。既存バージョンを置き換えます。有効状態とパネル位置は保持されます。",
+        "oauthClientChanged": "この更新で OAuth クライアントが変更されます。プラグイン内蔵の認証を使用している接続済みアカウントは更新後に無効となり、再接続が必要です。",
         "confirm": "更新",
         "cancel": "キャンセル"
       },
@@ -9379,7 +9381,8 @@
     },
     "currentSubscription": {
       "title": "現在のサブスクリプション",
-      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。"
+      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。",
+      "purchaseBlockedUntilPeriodEnd": "現在のプランは {{date}} に終了します。終了後に新しいプランを購入できます。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "支払い待ち",

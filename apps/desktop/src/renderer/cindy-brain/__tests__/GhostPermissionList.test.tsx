@@ -273,6 +273,14 @@ describe('GhostUpdateReview(更新确认内容区,两个入口共用)', () => {
     expect(screen.getByText(/perm\.networkHost:.*api\.example\.com/)).toBeTruthy();
   });
 
+  it('内置 OAuth clientId 变化时提示更新后需要重新连接', () => {
+    const diff = diffGhostPermissionItems(chip(), next());
+    render(<GhostUpdateReview diff={{ ...diff, builtinOauthClientChanged: true }} />);
+    expect(screen.getByRole('alert').textContent).toBe(
+      'settings.ghosts.updateConfirm.oauthClientChanged',
+    );
+  });
+
   it('不自套限高滚动区(高度归共享 ConfirmDialog)', () => {
     const { container } = render(
       <GhostUpdateReview diff={diffGhostPermissionItems(chip(), next())} />,

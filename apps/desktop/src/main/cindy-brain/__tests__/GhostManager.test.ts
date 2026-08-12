@@ -765,6 +765,27 @@ describe('GhostManager · update(原位换版)', () => {
     expect(fs.existsSync(path.join(rootDir, 'hello', '.disabled'))).toBe(false);
   });
 
+  it('提交前回调失败时恢复旧版本', async () => {
+    await manager.install(await makeCindy('v1.cindy', goodManifest(), { 'old.txt': 'v1' }));
+    const result = await manager.update(
+      await makeCindy(
+        'v2.cindy',
+        { ...goodManifest(), version: '2.0.0' },
+        { 'new.txt': 'v2' },
+      ),
+      {
+        beforePackageCommit: () => {
+          throw new Error('migration write failed');
+        },
+      },
+    );
+
+    await expectRejection(result, 'io');
+    expect(manager.list()[0]?.manifest.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(rootDir, 'hello', 'old.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(rootDir, 'hello', 'new.txt'))).toBe(false);
+  });
+
   it('未装入 → not-installed 拒绝', async () => {
     await expectRejection(
       await manager.update(await makeCindy('a.cindy', goodManifest())),

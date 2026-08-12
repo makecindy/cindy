@@ -74,6 +74,7 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
           { id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null },
         ],
       },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
     };
   }

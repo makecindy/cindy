@@ -1468,6 +1468,10 @@ export interface InstalledGhost {
     secretKey: string;
     missingScopeCount: number;
   };
+  /** 插件列表所需的失效授权投影；不暴露账号身份或凭证内容。 */
+  oauthAuthorizationExpired?: {
+    expiredAccountCount: number;
+  };
 }
 
 /**
@@ -2069,6 +2073,38 @@ export interface GhostPermissionDiff {
   added: GhostPermissionItem[];
   removed: GhostPermissionItem[];
   unchanged: GhostPermissionItem[];
+  /** 同一凭证槽的内置直连 OAuth clientId 发生变化。 */
+  builtinOauthClientChanged: boolean;
+}
+
+/**
+ * 返回同一插件内置直连 OAuth clientId 发生变化的凭证槽。
+ * tokenBroker 可能按区域选择不同 clientId，仅凭 manifest 无法判断账号实际
+ * 使用哪一个，因此不把 broker 默认值变化判成确定失效。
+ */
+export function changedBuiltinOauthClientSecretKeys(
+  previousManifest: GhostManifest,
+  currentManifest: GhostManifest,
+): string[] {
+  if (previousManifest.id !== currentManifest.id) return [];
+  const previousSecrets = new Map(
+    (previousManifest.network?.secrets ?? []).map((secret) => [secret.key, secret]),
+  );
+  const changed: string[] = [];
+  for (const current of currentManifest.network?.secrets ?? []) {
+    if (current.source !== 'oauth' || !current.oauth) continue;
+    const previous = previousSecrets.get(current.key);
+    if (previous?.source !== 'oauth' || !previous.oauth) continue;
+    if (current.oauth.tokenBroker || previous.oauth.tokenBroker) continue;
+    const previousClientId = previous.oauth.clientId?.trim() || null;
+    const currentClientId = current.oauth.clientId?.trim() || null;
+    // 旧版没有内置 clientId 时，存量账号只能来自用户自定义配置；新增默认值
+    // 不会让这些令牌失效。只有旧内置客户端真实存在时才属于迁移。
+    if (previousClientId !== null && previousClientId !== currentClientId) {
+      changed.push(current.key);
+    }
+  }
+  return changed;
 }
 
 /**
@@ -2148,7 +2184,12 @@ export function diffGhostPermissionItems(
       removed.push(item);
     }
   }
-  return { added, removed, unchanged };
+  return {
+    added,
+    removed,
+    unchanged,
+    builtinOauthClientChanged: changedBuiltinOauthClientSecretKeys(prev, next).length > 0,
+  };
 }
 
 /** 返回真实包中既未在安装前展示、也未被当前已装版本覆盖的权限。 */

@@ -118,6 +118,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
           { id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null },
         ],
       },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
       registerPiProxySession: () => () => { proxyDisposed++; },
       // 注册身份并回传 disposeSessionCtx 探针；外部 MCP 描述只放 env 引用，真值

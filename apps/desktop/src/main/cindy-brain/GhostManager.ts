@@ -831,6 +831,8 @@ export class GhostManager {
     opts?: {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
+      /** 新目录已换位、旧目录仍可回滚时执行；抛错会恢复旧版本。 */
+      beforePackageCommit?: () => void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
       onPackagePlaced?: () => void;
     },
@@ -917,6 +919,26 @@ export class GhostManager {
     } catch (err) {
       await fs.promises.rename(backupDir, finalDir).catch(() => {});
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      return {
+        rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
+      };
+    }
+    try {
+      opts?.beforePackageCommit?.();
+    } catch (err) {
+      try {
+        await fs.promises.rename(finalDir, stagingDir);
+        await fs.promises.rename(backupDir, finalDir);
+        await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      } catch (rollbackErr) {
+        this.options.log?.warn('ghost update pre-commit rollback failed', {
+          id: manifest.id,
+          error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        });
+        if (!(await pathExists(finalDir)) && (await pathExists(stagingDir))) {
+          await fs.promises.rename(stagingDir, finalDir).catch(() => {});
+        }
+      }
       return {
         rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
       };

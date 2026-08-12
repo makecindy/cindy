@@ -3313,6 +3313,7 @@
         "manageAria": "管理 {{name}}",
         "agentInvoked": "Agent 自動呼叫",
         "upToDate": "已是最新",
+        "oauthAuthorizationExpired": "授權已失效，需重新連線",
         "installAria": "安裝 {{name}}"
       },
       "market": {
@@ -3738,6 +3739,7 @@
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。將替換現有版本；生效狀態與面板位置保持不變。",
+        "oauthClientChanged": "本次更新更換了 OAuth 用戶端。使用插件內建授權的已連線帳號將在更新後失效，需要重新連線。",
         "confirm": "更新",
         "cancel": "取消"
       },
@@ -9378,7 +9380,8 @@
     },
     "currentSubscription": {
       "title": "當前訂閱",
-      "purchaseBlocked": "當前已有未結束的訂閱，請先處理現有訂閱後再購買新套餐。"
+      "purchaseBlocked": "當前已有未結束的訂閱，請先處理現有訂閱後再購買新套餐。",
+      "purchaseBlockedUntilPeriodEnd": "當前套餐將於 {{date}} 結束，屆時可購買新套餐。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "等待完成支付",

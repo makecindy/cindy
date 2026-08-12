@@ -417,10 +417,27 @@ export function GhostUpdateReview({
   trust?: GhostTrustInfo;
   diff: GhostPermissionDiff;
 }) {
+  const { t } = useTranslation();
   return (
     <div>
       {trust && <GhostTrustSummary trust={trust} />}
-      <div className={cn(trust && 'mt-3')}>
+      {diff.builtinOauthClientChanged ? (
+        <div
+          role="alert"
+          className={cn(
+            trust && 'mt-3',
+            'flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2 text-13 leading-5 text-[var(--text-secondary)]',
+          )}
+        >
+          <ShieldAlert
+            size={16}
+            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+            aria-hidden="true"
+          />
+          <span>{t('settings.ghosts.updateConfirm.oauthClientChanged')}</span>
+        </div>
+      ) : null}
+      <div className={cn((trust || diff.builtinOauthClientChanged) && 'mt-3')}>
         <GhostPermissionDiffView diff={diff} />
       </div>
     </div>
