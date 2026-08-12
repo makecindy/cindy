@@ -12,9 +12,16 @@
  *  - 所有清理动作都是**归档** (rename 进 `<shard>/.archive/`), 不是删除;
  *    归档文件退出 storage.list()/MEMORY.md/FTS 正常路径, 但仍完整留在
  *    磁盘上, 用户可随时手工找回 — 对记忆数据不可逆删除是禁区。
- *  - 只有**确定性**的判定才自动执行 (完全重复 / digest 保留最新 N /
- *    高置信过期信号词); 语义级「同主题不同表述」的近似重复只报告, 交
- *    给 memory_review (LLM one-shot) 或人工判断 — 那是 P1 的活。
+ *
+ * 自动执行 vs 仅报告的分界:
+ *  - **自动归档** (确定性, 无信息损失): 完全重复 (title+description+body 一致)
+ *    保留 updatedAt 最新一条; digest 保留最新 N 份, 其余归档。
+ *  - **仅报告** (语义判断, 不自动动): 终态信号候选 — 「是否已关闭」「替换
+ *    deprecated 接口」等否定/疑问/引用上下文单靠子串无法可靠区分, 纯启发式
+ *    会被反复挑出反例 (Greptile/Codex on #2561)。因此终态候选只进
+ *    `staleCandidates` 报告, **不自动归档**; 需用户确认后显式 `--archive-stale`
+ *    才归档 (Codex P2 on #2561: bare terms should be report-only)。近似重复
+ *    (同 title 不同内容) 同理只报告, 交 memory_review (LLM) 或人工 — 那是 P1 的活。
  *
  * 本模块只做文件层整理, 不碰 SQLite (与 migrate.ts 同一原则): 文件是
  * source of truth, 目标分片下次打开时 store.init() 的 sanityCheck 会因
@@ -36,11 +43,9 @@ export const ARCHIVE_DIR_NAME = '.archive';
 
 /**
  * 强终态信号 — 中文的明确状态短语, 命中 body/description 且 type 为
- * project/reference 时**建议归档** (#2379 正文「4 条已终态项目归档」的判定
- * 依据; 其中一条描述自己写着「当前状态需重新查询 GitHub」)。
- *
- * 命中前先做否定/疑问/引用前缀排除 (STALE_NEGATE_PREFIX), 避免把「是否已
- * 关闭」「尚未结束」这类非终态表述误归档 (Greptile P1 / Codex P2 on #2561)。
+ * project/reference 时列入**高置信**终态候选 (#2379 正文「4 条已终态项目归档」
+ * 的判定依据; 其中一条描述自己写着「当前状态需重新查询 GitHub」)。
+ * 注意: 只进 staleCandidates 报告, 不自动归档 (见文件头「仅报告」说明)。
  */
 export const STALE_STRONG_SIGNALS: ReadonlyArray<string> = [
   '已归档',
@@ -60,11 +65,8 @@ export const STALE_STRONG_SIGNALS: ReadonlyArray<string> = [
 
 /**
  * 弱终态信号 — 英文 broad 形容词, 常作引用/修饰语出现
- * ("read the archived logs" / "use X instead of deprecated Y"), 单靠子串匹配
- * 无法区分「本条目标记自身终态」与「引用某个已废弃的东西」。
- *
- * 因此命中只进 report-only (staleByWeakSignal), **不自动归档**, 交人工或
- * memory_review 判断 (Codex P2 on #2561: bare terms should be report-only)。
+ * ("read the archived logs" / "use X instead of deprecated Y"), 列入**低置信**
+ * 终态候选 (reason='weak-signal')。只报告不归档。
  */
 export const STALE_WEAK_SIGNALS: ReadonlyArray<string> = [
   'deprecated',
@@ -74,14 +76,6 @@ export const STALE_WEAK_SIGNALS: ReadonlyArray<string> = [
   'no longer active',
   'no longer in use',
 ];
-
-/**
- * 信号词紧邻的否定/疑问/引用前缀 — 命中说明该词是「尚未/是否/替换」上下文,
- * 不是本条目自身的终态声明, 应跳过 (Greptile P1 on #2561)。
- * `\\s*$` 锚定 prefix 末尾, 只排除**紧邻**信号词的前缀, 不误伤窗口内远处出现的词。
- */
-const STALE_NEGATE_PREFIX =
-  /(?:尚未|还未|是否|没有|不是|无需|不必|避免|别再|替换|改用|替代|改为|换成|迁移|升级|参考|参见|读取)\s*$/;
 
 /** age 归档默认阈值 (天): updatedAt 早于该时间的 project 条目列入低置信候选。 */
 export const DEFAULT_STALE_AGE_DAYS = 90;
@@ -118,14 +112,10 @@ export interface NearDuplicateGroup {
   filenames: string[];
 }
 
-/** 过期归档候选。 */
+/** 终态候选 (只报告, 不自动归档)。 */
 export interface StaleCandidate {
   filename: string;
-  /**
-   * signal = 命中强终态信号词 (高置信, run 归档);
-   * weak-signal = 命中英文 broad 词 (低置信, 只报告);
-   * age = 仅时间过期 (低置信, 只报告)。
-   */
+  /** signal = 强信号 (高置信); weak-signal = 英文 broad 词 (低置信); age = 仅时间过期 (低置信)。 */
   reason: 'signal' | 'weak-signal' | 'age';
   /** 命中的信号词 (reason 为 signal / weak-signal 时)。 */
   matchedSignal?: string;
@@ -150,15 +140,11 @@ export interface CleanupPlan {
   duplicates: DuplicateGroup[];
   /** 近似重复组 (只报告)。 */
   nearDuplicates: NearDuplicateGroup[];
-  /** 高置信过期 (强 signal 词命中, run 归档)。 */
-  stale: StaleCandidate[];
-  /** 低置信过期 (仅时间, 只报告)。 */
-  staleByAge: StaleCandidate[];
-  /** 低置信过期 (英文 broad 弱信号, 只报告)。 */
-  staleByWeakSignal: StaleCandidate[];
+  /** 终态候选 (只报告; --archive-stale 才归档)。 */
+  staleCandidates: StaleCandidate[];
   /** digest 保留策略。 */
   digests: DigestRetention;
-  /** 汇总: run 将执行的归档动作 (duplicates + stale + digests 三者并集)。 */
+  /** 汇总: run 默认归档的动作 = 完全重复 + digest 冗余 (确定性, 无语义判断)。 */
   archiveItems: ArchiveItem[];
 }
 
@@ -174,6 +160,12 @@ export interface CleanupRunOptions {
   deps?: MemoryCleanupDeps;
   /** 归档前先复制一份到该根目录 (可选真备份)。 */
   backupRoot?: string;
+  /**
+   * 是否归档终态候选 (默认 false)。终态判定是语义判断, 单靠信号词不可靠
+   * (#2561 review), 默认只报告; 用户确认后显式置 true 才把 staleCandidates
+   * 一并归档。
+   */
+  archiveStale?: boolean;
 }
 
 export interface CleanupRunResult {
@@ -200,9 +192,7 @@ export async function planMemoryCleanup(
     records: [],
     duplicates: [],
     nearDuplicates: [],
-    stale: [],
-    staleByAge: [],
-    staleByWeakSignal: [],
+    staleCandidates: [],
     digests: { keep: [], archive: [] },
     archiveItems: [],
   };
@@ -261,7 +251,7 @@ export async function planMemoryCleanup(
     plan.nearDuplicates.push({ title, filenames });
   }
 
-  // ── 3. 过期归档 ──────────────────────────────────────────────────────
+  // ── 3. 终态候选: 只报告, 不自动归档 ──────────────────────────────────
   const ageCutoff = new Date(now()).getTime() - staleAgeDays * 24 * 60 * 60 * 1000;
   for (const rec of records) {
     const type = rec.frontmatter.type;
@@ -270,37 +260,29 @@ export async function planMemoryCleanup(
     if (type !== 'project' && type !== 'reference') continue;
 
     const haystack = `${rec.frontmatter.description}\n${rec.body}`.toLowerCase();
-    // 强信号: 中文明确状态短语, 但先排除否定/疑问/引用前缀 (「是否已关闭」等)。
-    const signal = findStrongStaleSignal(haystack);
-    if (signal) {
-      plan.stale.push({
+    const strong = STALE_STRONG_SIGNALS.find((s) => haystack.includes(s.toLowerCase()));
+    if (strong) {
+      plan.staleCandidates.push({
         filename: rec.filename,
         reason: 'signal',
-        matchedSignal: signal,
+        matchedSignal: strong,
         updatedAt: rec.frontmatter.updatedAt,
-      });
-      plan.archiveItems.push({
-        filename: rec.filename,
-        reason: 'stale',
-        detail: `matches stale signal "${signal}"`,
       });
       continue;
     }
-    // 弱信号: 英文 broad 形容词, 只报告不归档 (Codex P2 on #2561)。
-    const weakSignal = STALE_WEAK_SIGNALS.find((s) => haystack.includes(s.toLowerCase()));
-    if (weakSignal) {
-      plan.staleByWeakSignal.push({
+    const weak = STALE_WEAK_SIGNALS.find((s) => haystack.includes(s.toLowerCase()));
+    if (weak) {
+      plan.staleCandidates.push({
         filename: rec.filename,
         reason: 'weak-signal',
-        matchedSignal: weakSignal,
+        matchedSignal: weak,
         updatedAt: rec.frontmatter.updatedAt,
       });
       continue;
     }
-
     const ts = Date.parse(rec.frontmatter.updatedAt);
     if (!Number.isNaN(ts) && ts < ageCutoff) {
-      plan.staleByAge.push({
+      plan.staleCandidates.push({
         filename: rec.filename,
         reason: 'age',
         updatedAt: rec.frontmatter.updatedAt,
@@ -331,7 +313,10 @@ export async function planMemoryCleanup(
   return plan;
 }
 
-/** 执行清理计划 — 把所有 archiveItems 归档进 `<shard>/.archive/` (幂等)。 */
+/**
+ * 执行清理计划 — 把待归档项 (默认 = 完全重复 + digest 冗余; archiveStale 时
+ * 额外含终态候选) 归档进 `<shard>/.archive/` (幂等)。
+ */
 export async function runMemoryCleanup(
   plan: CleanupPlan,
   opts: CleanupRunOptions = {},
@@ -339,33 +324,42 @@ export async function runMemoryCleanup(
   const now = opts.deps?.now ?? (() => new Date().toISOString());
   const result: CleanupRunResult = { archived: [], failed: [] };
   const archiveDir = path.join(plan.shardDir, ARCHIVE_DIR_NAME);
+  const stamp = now().replace(/[:.]/g, '-');
 
-  for (const item of plan.archiveItems) {
+  // 待归档 = 默认的确定性项 (重复 + digest) 加上 (可选) 终态候选。
+  const items: ArchiveItem[] = [...plan.archiveItems];
+  if (opts.archiveStale) {
+    for (const c of plan.staleCandidates) {
+      items.push({
+        filename: c.filename,
+        reason: 'stale',
+        detail: c.matchedSignal
+          ? `matches stale signal "${c.matchedSignal}"`
+          : 'age-expired project/reference',
+      });
+    }
+  }
+
+  for (const item of items) {
     const src = path.join(plan.shardDir, item.filename);
     try {
       // 幂等: 源已不存在 (已被上次运行归档) → 跳过不报错。
       const srcStat = await fs.stat(src).catch(() => null);
       if (!srcStat) continue;
 
-      // 可选真备份: 归档前复制一份到 backupRoot (数据保全)。同名冲突时加
-      // 时间戳后缀, 绝不覆盖已有备份 — 重复使用同一 backup-dir 或依次清理
-      // 多个含同名记忆的分片时, 旧备份不能被静默覆盖 (Greptile P1 / Codex
-      // P1 on #2561)。
+      // 可选真备份: 归档前复制一份到 backupRoot (数据保全)。目标路径用循环
+      // 递增后缀保证排他, 绝不覆盖已有备份 — 重复使用同一 backup-dir、同
+      // clock rerun 或依次清理多分片时, 旧备份不能被静默覆盖 (Greptile P1 /
+      // Codex P1 on #2561)。
       if (opts.backupRoot) {
         await fs.mkdir(opts.backupRoot, { recursive: true });
-        const backupDst = path.join(opts.backupRoot, item.filename);
-        const finalBackupDst = (await pathExists(backupDst))
-          ? `${backupDst}.${now().replace(/[:.]/g, '-')}`
-          : backupDst;
-        await fs.copyFile(src, finalBackupDst);
+        const backupDst = await uniqueTargetPath(opts.backupRoot, item.filename, stamp);
+        await fs.copyFile(src, backupDst);
       }
 
       await fs.mkdir(archiveDir, { recursive: true });
-      const dst = path.join(archiveDir, item.filename);
-      // 归档目录里同名冲突 (历史归档) → 加时间戳后缀, 绝不覆盖旧归档。
-      const finalDst = (await pathExists(dst))
-        ? `${dst}.${now().replace(/[:.]/g, '-')}`
-        : dst;
+      // 归档目录同名冲突 (历史归档 / 同 clock rerun) → 循环递增后缀, 排他。
+      const finalDst = await uniqueTargetPath(archiveDir, item.filename, stamp);
       await fs.rename(src, finalDst);
       result.archived.push(item);
     } catch (e) {
@@ -387,22 +381,6 @@ export async function runMemoryCleanup(
   return result;
 }
 
-/**
- * 在 haystack 中查找强终态信号词, 命中且**不是**否定/疑问/引用上下文时返回。
- * 前缀排除 (STALE_NEGATE_PREFIX) 处理「是否已关闭」「替换 deprecated 接口」等
- * 非终态表述 (Greptile P1 on #2561)。未命中返回 undefined。
- */
-function findStrongStaleSignal(haystack: string): string | undefined {
-  for (const signal of STALE_STRONG_SIGNALS) {
-    const idx = haystack.indexOf(signal.toLowerCase());
-    if (idx < 0) continue;
-    const prefix = haystack.slice(Math.max(0, idx - 12), idx);
-    if (STALE_NEGATE_PREFIX.test(prefix)) continue;
-    return signal;
-  }
-  return undefined;
-}
-
 /** 归一化内容 hash — 忽略 updatedAt 与 frontmatter 排版差异, 只比语义内容。 */
 function contentHash(rec: MemoryRecord): string {
   const canonical = [
@@ -412,6 +390,21 @@ function contentHash(rec: MemoryRecord): string {
     rec.body.trim(),
   ].join('\u0000');
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
+
+/**
+ * 找不冲突的目标路径 — 循环递增后缀直到路径确实不存在。
+ * 单次 `pathExists` 检查在「时间戳后缀已存在」(同 clock rerun / 共享 backup-dir
+ * 多分片) 时仍会选中同一路径; 循环探测 + 计数后缀保证最终目标排他
+ * (Greptile P1 / Codex P1 on #2561)。
+ */
+async function uniqueTargetPath(dir: string, filename: string, stamp: string): Promise<string> {
+  const base = path.join(dir, filename);
+  if (!(await pathExists(base))) return base;
+  for (let i = 1; ; i += 1) {
+    const candidate = path.join(dir, `${filename}.${stamp}.${i}`);
+    if (!(await pathExists(candidate))) return candidate;
+  }
 }
 
 async function pathExists(p: string): Promise<boolean> {

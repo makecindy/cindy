@@ -2,19 +2,22 @@
 /**
  * cleanup-maker-memory.mjs — 分片内清理 CLI (P0.5, #2379)。
  *
- * 对单个 memory 分片目录做三类整理 (归档而非删除, 全部进 `.archive/` 可逆):
- *   1. 完全重复去重 (title+description+body 一致) — 保留 updatedAt 最新一条
- *   2. 过期归档 (project/reference 命中终态信号词, 如「已归档/已结束/不再维护」)
- *   3. digest 精简 — 保留最新 N 份, 其余归档
- * 近似重复 (同 title 不同内容) 只报告, 不自动处理 — 交 memory_review/人工。
+ * 对单个 memory 分片目录做整理 (归档而非删除, 全部进 `.archive/` 可逆):
+ *   1. 完全重复去重 (title+description+body 一致) — 保留 updatedAt 最新一条 (自动)
+ *   2. digest 精简 — 保留最新 N 份, 其余归档 (自动)
+ *   3. 终态候选 (project/reference 命中终态信号词 / 时间过期) — 只报告,
+ *      需 --archive-stale 显式确认才归档 (语义判断, 单靠子串不可靠)
+ * 近似重复 (同 title 不同内容) 只报告, 交 memory_review/人工。
  *
  * 运行 (从仓库根):
  *   node --import tsx scripts/cleanup-maker-memory.mjs --shard <path> [--dry-run|--apply]
  *
  * 安全约定:
  *   - 默认 dry-run (只输出计划, 不修改任何文件)
- *   - --apply 才真正执行; 归档进 <shard>/.archive/, 不是删除, 可手工找回
- *   - --backup-dir 可选真备份; 归档目录同名冲突加时间戳后缀, 绝不覆盖
+ *   - --apply 只归档确定性项 (完全重复 + digest 冗余); 归档进 <shard>/.archive/
+ *     不是删除, 可手工找回
+ *   - 终态候选默认只报告; --archive-stale 才一并归档 (用户已确认)
+ *   - --backup-dir 可选真备份; 归档/备份目标循环递增后缀, 绝不覆盖
  *   - 执行前检测宿主进程 (Cindy 桌面应用) — 持有 Store/SQLite 句柄时拒绝
  *
  * 输出格式: 人类可读报告 + 末尾一行机器可读的 `RESULT <json>`。
@@ -39,7 +42,8 @@ const HELP = `cleanup-maker-memory — 分片内清理 (P0.5, #2379)
 
 选项:
   --dry-run             只输出清理计划, 不修改任何文件 (默认)
-  --apply               真正执行归档 (进 <shard>/.archive/, 可逆)
+  --apply               执行归档 (进 <shard>/.archive/, 可逆); 只归档确定性项
+  --archive-stale       连同终态候选一并归档 — 终态是语义判断, 需你确认后显式开启
   --keep-digests <n>    digest 保留数 (默认 2)
   --backup-dir <path>   归档前先复制到该目录 (可选真备份)
   --force               宿主 (Cindy 桌面应用) 正在运行时也继续执行
@@ -48,13 +52,15 @@ const HELP = `cleanup-maker-memory — 分片内清理 (P0.5, #2379)
 
 安全:
   - 清理 = 归档 (rename 进 .archive/), 不是删除; 可逆, 用户可手工找回
-  - 完全重复 / 过期信号词 / digest 精简自动执行; 近似重复 (同 title) 只报告
+  - 完全重复 / digest 精简自动执行; 终态候选 + 近似重复只报告
+  - 归档/备份目标循环递增后缀, 同名冲突绝不覆盖
   - SSH 分片 / 无 meta.json 目录不属于本工具范围 (那是 migrate-maker-memory 的活)
   - 执行前检测宿主进程
 
 示例:
   node --import tsx scripts/cleanup-maker-memory.mjs --shard "%APPDATA%/cindy/maker-memory/E--repo" --dry-run
   node --import tsx scripts/cleanup-maker-memory.mjs --shard "%APPDATA%/cindy/maker-memory/E--repo" --apply
+  node --import tsx scripts/cleanup-maker-memory.mjs --shard "%APPDATA%/cindy/maker-memory/E--repo" --apply --archive-stale
   node --import tsx scripts/cleanup-maker-memory.mjs --shard "%APPDATA%/cindy/maker-memory/E--repo" --apply --keep-digests 1
 `;
 
@@ -64,6 +70,7 @@ function parseArgs(argv) {
     dryRun: true,
     keepDigests: null,
     backupDir: null,
+    archiveStale: false,
     force: false,
     json: false,
   };
@@ -78,6 +85,8 @@ function parseArgs(argv) {
       out.dryRun = false;
     } else if (a === '--dry-run') {
       out.dryRun = true;
+    } else if (a === '--archive-stale') {
+      out.archiveStale = true;
     } else if (a === '--keep-digests') {
       const raw = argv[++i];
       const n = Number(raw);
@@ -122,11 +131,11 @@ async function main() {
     totalRecords: p.records.length,
     duplicates: p.duplicates.map((d) => ({ keep: d.keep, archive: d.archive })),
     nearDuplicates: p.nearDuplicates,
-    stale: p.stale.map((s) => ({ filename: s.filename, matchedSignal: s.matchedSignal })),
-    staleByAge: p.staleByAge.map((s) => ({ filename: s.filename, updatedAt: s.updatedAt })),
-    staleByWeakSignal: p.staleByWeakSignal.map((s) => ({
+    staleCandidates: p.staleCandidates.map((s) => ({
       filename: s.filename,
-      matchedSignal: s.matchedSignal,
+      reason: s.reason,
+      matchedSignal: s.matchedSignal ?? undefined,
+      updatedAt: s.updatedAt,
     })),
     digests: p.digests,
     archiveCount: p.archiveItems.length,
@@ -135,9 +144,12 @@ async function main() {
   if (opts.dryRun) {
     const summary = summarize(plan);
     if (!opts.json) {
+      const staleSignal = summary.staleCandidates.filter((s) => s.reason === 'signal');
+      const staleWeak = summary.staleCandidates.filter((s) => s.reason === 'weak-signal');
+      const staleAge = summary.staleCandidates.filter((s) => s.reason === 'age');
       process.stdout.write(`分片目录: ${shard}\n`);
       process.stdout.write(`合法分片总数: ${summary.totalRecords}\n\n`);
-      process.stdout.write(`完全重复 (${summary.duplicates.length} 组):\n`);
+      process.stdout.write(`完全重复 (${summary.duplicates.length} 组, 自动归档):\n`);
       for (const d of summary.duplicates) {
         process.stdout.write(`  - 保留 ${d.keep}, 归档 [${d.archive.join(', ')}]\n`);
       }
@@ -145,19 +157,21 @@ async function main() {
       for (const n of summary.nearDuplicates) {
         process.stdout.write(`  - "${n.title}": ${n.filenames.join(', ')}\n`);
       }
-      process.stdout.write(`\n过期归档 (信号词, ${summary.stale.length} 条):\n`);
-      for (const s of summary.stale) {
+      process.stdout.write(
+        `\n终态候选 (信号词, ${staleSignal.length} 条, 仅报告; 确认后加 --archive-stale):\n`,
+      );
+      for (const s of staleSignal) {
         process.stdout.write(`  - ${s.filename} (命中 "${s.matchedSignal}")\n`);
-      }
-      process.stdout.write(`\n仅时间过期 (低置信, ${summary.staleByAge.length} 条, 仅报告不归档):\n`);
-      for (const s of summary.staleByAge) {
-        process.stdout.write(`  - ${s.filename} (updatedAt ${s.updatedAt})\n`);
       }
       process.stdout.write(
-        `\n弱信号 (英文 broad 词, ${summary.staleByWeakSignal.length} 条, 仅报告不归档):\n`,
+        `\n终态候选 (英文 broad 词, ${staleWeak.length} 条, 仅报告):\n`,
       );
-      for (const s of summary.staleByWeakSignal) {
+      for (const s of staleWeak) {
         process.stdout.write(`  - ${s.filename} (命中 "${s.matchedSignal}")\n`);
+      }
+      process.stdout.write(`\n终态候选 (仅时间过期, ${staleAge.length} 条, 仅报告):\n`);
+      for (const s of staleAge) {
+        process.stdout.write(`  - ${s.filename} (updatedAt ${s.updatedAt})\n`);
       }
       process.stdout.write(
         `\ndigest 精简: 保留 ${summary.digests.keep.length}, 归档 ${summary.digests.archive.length}\n`,
@@ -184,6 +198,7 @@ async function main() {
 
   const result = await runMemoryCleanup(plan, {
     ...(opts.backupDir ? { backupRoot: path.resolve(opts.backupDir) } : {}),
+    archiveStale: opts.archiveStale,
   });
 
   if (!opts.json) {
@@ -198,6 +213,7 @@ async function main() {
   process.stdout.write(
     `RESULT ${JSON.stringify({
       mode: 'apply',
+      archiveStale: opts.archiveStale,
       archived: result.archived,
       failed: result.failed,
     })}\n`,

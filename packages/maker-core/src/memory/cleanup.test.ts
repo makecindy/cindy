@@ -1,8 +1,9 @@
 /**
  * cleanup.test.ts — P0.5 分片内清理 (cleanup.ts) 单测。
  *
- * 覆盖: 完全重复去重、近似重复仅报告、过期信号词归档、仅时间过期仅报告、
- * digest 保留最新 N、user/feedback 不判定终态、归档幂等、归档同名加后缀。
+ * 覆盖: 完全重复自动去重、近似重复仅报告、终态候选(信号/弱信号/时间)仅报告、
+ * archiveStale 显式归档、user/feedback 不判定终态、digest 保留最新 N、归档幂等、
+ * 归档/备份同名冲突循环后缀 (含同 clock rerun)。
  */
 
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
@@ -85,41 +86,36 @@ describe('planMemoryCleanup', () => {
     expect(plan.archiveItems).toHaveLength(0);
   });
 
-  it('flags strong stale signals and archives only those', async () => {
-    await shard('project_done.md', 'project', 'Done project', 'hook', '这个项目已归档',
+  it('lists stale candidates (signal/weak-signal/age) but does NOT auto-archive them', async () => {
+    await shard('project_done.md', 'project', 'Done', 'hook', '这个项目已归档',
       '2026-01-01T00:00:00.000Z');
-    // 弱信号 (英文 broad 词) 只报告不归档。
-    await shard('reference_stale.md', 'reference', 'Stale ref', 'hook', 'deprecated 接口',
+    await shard('reference_stale.md', 'reference', 'Ref', 'hook', 'deprecated 接口',
       '2026-01-01T00:00:00.000Z');
+    await shard('project_old.md', 'project', 'Old', 'hook', 'no signal', '2020-01-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    expect(plan.stale.map((s) => s.filename)).toEqual(['project_done.md']);
-    expect(plan.staleByWeakSignal.map((s) => s.filename)).toEqual(['reference_stale.md']);
-    // 只有强信号进归档集合。
-    expect(plan.archiveItems.map((i) => i.filename)).toEqual(['project_done.md']);
-  });
-
-  it('does not treat negated/questioned/reference context as terminal', async () => {
-    // 否定/疑问/引用前缀 → 都不是本条目自身的终态声明。
-    await shard('project_q.md', 'project', 'Q', 'hook', '是否已关闭需要再确认',
-      '2026-01-01T00:00:00.000Z');
-    await shard('project_r.md', 'project', 'R', 'hook', '替换 deprecated 接口',
-      '2026-01-01T00:00:00.000Z');
-
-    const plan = await planMemoryCleanup(dir);
-    // 「是否已关闭」被前缀排除; 「替换 deprecated」里 deprecated 是弱信号。
-    expect(plan.stale).toHaveLength(0);
+    // 终态候选全部进 staleCandidates, 但都不进 archiveItems (仅报告)。
+    const reasons = new Map(plan.staleCandidates.map((c) => [c.filename, c.reason]));
+    expect(reasons.get('project_done.md')).toBe('signal');
+    expect(reasons.get('reference_stale.md')).toBe('weak-signal');
+    expect(reasons.get('project_old.md')).toBe('age');
     expect(plan.archiveItems).toHaveLength(0);
-    expect(plan.staleByWeakSignal.map((s) => s.filename)).toEqual(['project_r.md']);
   });
 
-  it('reports age-only stale as low-confidence and does not archive', async () => {
-    await shard('project_old.md', 'project', 'Old project', 'hook', 'no signal here',
-      '2020-01-01T00:00:00.000Z');
+  it('lists non-adjacent question/negation as report-only candidates too', async () => {
+    // 非紧邻疑问/否定 (Greptile P1 on #2561): 不再靠前缀排除, 因为终态候选
+    // 本来就是 report-only, 不会误归档; 它们进候选列表由用户判断。
+    await shard('project_q.md', 'project', 'Q', 'hook', '是否确认当前项目已关闭',
+      '2026-01-01T00:00:00.000Z');
+    await shard('project_n.md', 'project', 'N', 'hook', '尚未确认该项目已结束',
+      '2026-01-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    expect(plan.stale).toHaveLength(0);
-    expect(plan.staleByAge.map((s) => s.filename)).toEqual(['project_old.md']);
+    expect(plan.staleCandidates.map((c) => c.filename).sort()).toEqual([
+      'project_n.md',
+      'project_q.md',
+    ]);
+    // 关键: 仍不自动归档。
     expect(plan.archiveItems).toHaveLength(0);
   });
 
@@ -128,8 +124,7 @@ describe('planMemoryCleanup', () => {
       '2026-01-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    expect(plan.stale).toHaveLength(0);
-    expect(plan.staleByAge).toHaveLength(0);
+    expect(plan.staleCandidates).toHaveLength(0);
   });
 
   it('retains the newest N digests and archives the rest', async () => {
@@ -140,6 +135,8 @@ describe('planMemoryCleanup', () => {
     const plan = await planMemoryCleanup(dir);
     expect(plan.digests.keep).toEqual(['digest_new.md', 'digest_mid.md']); // 默认保留 2
     expect(plan.digests.archive).toEqual(['digest_old.md']);
+    // digest 冗余是确定性动作 → 进 archiveItems。
+    expect(plan.archiveItems.map((i) => i.filename)).toEqual(['digest_old.md']);
   });
 });
 
@@ -153,14 +150,35 @@ describe('runMemoryCleanup', () => {
 
     expect(result.archived.map((a) => a.filename)).toEqual(['feedback_a.md']);
     expect(result.failed).toHaveLength(0);
-    // 归档文件在 .archive/, 源文件已移除。
     expect(await archiveContents()).toContain('feedback_a.md');
     await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).rejects.toThrow();
     await expect(readFile(path.join(dir, 'feedback_b.md'), 'utf8')).resolves.toContain('same');
-    // MEMORY.md 重建: 不再含已归档条目。
     const index = await readFile(path.join(dir, 'MEMORY.md'), 'utf8');
     expect(index).not.toContain('feedback_a.md');
     expect(index).toContain('feedback_b.md');
+  });
+
+  it('does not archive stale candidates by default (archiveStale=false)', async () => {
+    await shard('project_done.md', 'project', 'Done', 'hook', '这个项目已归档',
+      '2026-01-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    const result = await runMemoryCleanup(plan);
+
+    expect(result.archived).toHaveLength(0);
+    // 终态候选未归档, 仍留在分片目录。
+    await expect(readFile(path.join(dir, 'project_done.md'), 'utf8')).resolves.toContain('已归档');
+  });
+
+  it('archives stale candidates only when archiveStale=true', async () => {
+    await shard('project_done.md', 'project', 'Done', 'hook', '这个项目已归档',
+      '2026-01-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    const result = await runMemoryCleanup(plan, { archiveStale: true });
+
+    expect(result.archived.map((a) => a.filename)).toEqual(['project_done.md']);
+    expect(await archiveContents()).toContain('project_done.md');
   });
 
   it('is idempotent — re-running yields an empty plan archive set', async () => {
@@ -176,7 +194,6 @@ describe('runMemoryCleanup', () => {
   it('suffixes archive filename on collision instead of overwriting', async () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
-    // 预置一个同名旧归档, 制造碰撞。
     await mkdir(path.join(dir, ARCHIVE_DIR_NAME), { recursive: true });
     await writeFile(path.join(dir, ARCHIVE_DIR_NAME, 'feedback_a.md'), 'stale archive', 'utf8');
 
@@ -191,15 +208,34 @@ describe('runMemoryCleanup', () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
     const backupRoot = path.join(dir, 'backup');
-    // 预置一个同名旧备份, 制造碰撞。
     await mkdir(backupRoot, { recursive: true });
     await writeFile(path.join(backupRoot, 'feedback_a.md'), 'previous backup', 'utf8');
 
     await runMemoryCleanup(await planMemoryCleanup(dir), { backupRoot });
 
     const backup = await readdir(backupRoot);
-    // 旧备份保留, 新备份加时间戳后缀。
     expect(await readFile(path.join(backupRoot, 'feedback_a.md'), 'utf8')).toBe('previous backup');
     expect(backup.some((f) => f.startsWith('feedback_a.md.'))).toBe(true);
+  });
+
+  it('increments suffix on same-stamp collision (rerun with identical clock)', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+    // 固定时钟, 模拟同 clock rerun: 第一次归档后目标 feedback_a.md.<stamp>.1 已存在。
+    const fixedNow = () => '2026-08-13T00:00:00.000Z';
+    const stamp = fixedNow().replace(/[:.]/g, '-');
+    await mkdir(path.join(dir, ARCHIVE_DIR_NAME), { recursive: true });
+    // 预置 base + 第 1 级后缀, 迫使循环递增到 .2。
+    await writeFile(path.join(dir, ARCHIVE_DIR_NAME, 'feedback_a.md'), 'v0', 'utf8');
+    await writeFile(path.join(dir, ARCHIVE_DIR_NAME, `feedback_a.md.${stamp}.1`), 'v1', 'utf8');
+
+    const plan = await planMemoryCleanup(dir);
+    await runMemoryCleanup(plan, { deps: { now: fixedNow } });
+
+    const archived = await archiveContents();
+    // 旧归档 base 与 .1 都保留, 新归档递增到 .2, 绝不覆盖。
+    expect(archived).toContain('feedback_a.md');
+    expect(archived).toContain(`feedback_a.md.${stamp}.1`);
+    expect(archived).toContain(`feedback_a.md.${stamp}.2`);
   });
 });
