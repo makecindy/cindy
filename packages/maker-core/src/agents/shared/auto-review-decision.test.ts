@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
+  AUTO_REVIEW_RETRY_ATTEMPTS,
+  AUTO_REVIEW_RETRY_BACKOFF_MS,
+  autoReviewRetryBudgetMs,
+  getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   classifyLocalAutoReviewTier,
   isAutoReviewUnavailableNotice,
@@ -151,29 +156,33 @@ describe('resolveAutoReviewDecision', () => {
     expect(called).toBe(false);
   });
 
-  it('silently blocks when the reviewer is absent, throws, or returns invalid output', async () => {
+  // 审阅器故障降级为 ask 而不是静默 block:宿主侧已先重试过,走到这里说明确实
+  // 没救回来。此时静默拒绝最差 —— 用户看不到发生了什么,一批正常的灰区操作被
+  // 连续否掉,Auto 档表现得像坏了。交给用户确认,安全边界不降低。
+  it('hands over to the user when the reviewer is absent, throws, or returns invalid output', async () => {
     const gray = request({ kind: 'exec', command: 'npx tsc --noEmit' });
-    await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({ verdict: 'block' });
+    await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({ verdict: 'ask' });
     await expect(resolveAutoReviewDecision(gray, async () => {
       throw new Error('offline');
-    })).resolves.toMatchObject({ verdict: 'block' });
+    })).resolves.toMatchObject({ verdict: 'ask' });
     await expect(resolveAutoReviewDecision(
       gray,
       async () => ({ verdict: 'unknown' } as never),
-    )).resolves.toMatchObject({ verdict: 'block' });
+    )).resolves.toMatchObject({ verdict: 'ask' });
   });
 
-  it('silently blocks when the reviewer never settles', async () => {
+  it('hands over to the user when the reviewer never settles', async () => {
     vi.useFakeTimers();
     const pending = resolveAutoReviewDecision(
       request({ kind: 'exec', command: 'npx tsc --noEmit' }),
       async () => new Promise<never>(() => {}),
     );
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs);
+    // 守卫上界要容得下宿主侧最慢一档 + 全部重试与退避;按常量推进,避免参数变化时失配。
+    await vi.advanceTimersByTimeAsync(getAutoReviewDelegateHardCeilingMs() + 1_000);
 
     await expect(pending).resolves.toMatchObject({
-      verdict: 'block',
+      verdict: 'ask',
       reason: expect.stringContaining('could not complete'),
     });
   });
@@ -187,7 +196,7 @@ describe('resolveAutoReviewDecision', () => {
 
     it('flags a missing reviewer as unavailable', async () => {
       await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({
-        verdict: 'block',
+        verdict: 'ask',
         unavailable: true,
       });
     });
@@ -195,21 +204,22 @@ describe('resolveAutoReviewDecision', () => {
     it('flags a throwing reviewer as unavailable', async () => {
       await expect(resolveAutoReviewDecision(gray, async () => {
         throw new Error('offline');
-      })).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+      })).resolves.toMatchObject({ verdict: 'ask', unavailable: true });
     });
 
     it('flags invalid reviewer output as unavailable', async () => {
       await expect(resolveAutoReviewDecision(
         gray,
         async () => ({ verdict: 'unknown' } as never),
-      )).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+      )).resolves.toMatchObject({ verdict: 'ask', unavailable: true });
     });
 
     it('flags a reviewer timeout as unavailable', async () => {
       vi.useFakeTimers();
       const pending = resolveAutoReviewDecision(gray, async () => new Promise<never>(() => {}));
-      await vi.advanceTimersByTimeAsync(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs);
-      await expect(pending).resolves.toMatchObject({ verdict: 'block', unavailable: true });
+      // 按守卫的实际上界推进 —— 它由重试参数推出,写死数字会在参数变化时静默失配。
+      await vi.advanceTimersByTimeAsync(getAutoReviewDelegateHardCeilingMs() + 1_000);
+      await expect(pending).resolves.toMatchObject({ verdict: 'ask', unavailable: true });
     });
 
     it('allows a valid delegate response after eight seconds but before the shared outer deadline', async () => {
@@ -296,7 +306,7 @@ describe('createAutoReviewUnavailableNotice', () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toContain(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
     // 兜底英文必须跟在 code 后面:未落地 i18n 的宿主(远端 / IM)直接显示它。
-    expect(emitted[0]).toContain('Auto-review is temporarily unavailable');
+    expect(emitted[0]).toContain('Auto-review could not reach a decision');
 
     notice.reset();
     notice.notify();
@@ -370,5 +380,34 @@ describe('composeAutoReviewIntentWithClarification', () => {
       { question: 'q'.repeat(200), answer: 'a'.repeat(200) },
     ]);
     expect(long.length).toBeLessThanOrEqual(2_000);
+  });
+});
+
+describe('重试预算', () => {
+  it('总预算含每次超时与全部退避', () => {
+    // 3 次 × 12s + (100 + 200)ms 退避。
+    expect(autoReviewRetryBudgetMs(12_000, 3)).toBe(36_300);
+    // 次数减少时只算实际发生的退避。
+    expect(autoReviewRetryBudgetMs(12_000, 2)).toBe(24_100);
+    expect(autoReviewRetryBudgetMs(12_000, 1)).toBe(12_000);
+  });
+
+  it('核心守卫容得下最宽一档的全部重试(否则宽裕额度形同虚设)', () => {
+    // 回归 PR #2474 review:固定 35s 盖不住 30s 档 × 3 次 + 退避(=90.3s),
+    // 第二次尝试约 5s 就被外层守卫丢弃,且请求未取消、继续消耗额度。
+    const needed = autoReviewRetryBudgetMs(
+      AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
+      AUTO_REVIEW_RETRY_ATTEMPTS,
+    );
+    expect(DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.delegateTimeoutMs).toBeLessThan(needed);
+    // 守卫本身由同一算法推出,不再是写死的常量 —— 改重试次数/退避会自动跟随。
+    expect(getAutoReviewDelegateHardCeilingMs()).toBeGreaterThanOrEqual(needed);
+  });
+
+  it('退避表长度与声明的重试次数自洽', () => {
+    // 退避发生在每次重试之前,所以需要 attempts - 1 个。少了会让后面的重试没有退避。
+    expect(AUTO_REVIEW_RETRY_BACKOFF_MS.length).toBeGreaterThanOrEqual(
+      AUTO_REVIEW_RETRY_ATTEMPTS - 1,
+    );
   });
 });
