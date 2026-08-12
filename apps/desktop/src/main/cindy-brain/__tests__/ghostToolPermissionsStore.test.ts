@@ -79,9 +79,13 @@ describe('resolveModeFromConfig(档位解析)', () => {
     expect(resolveModeFromConfig({}, 'some_tool')).toBe('needs-approval');
   });
 
-  it('全局策略对未单独设定的工具生效', () => {
-    expect(resolveModeFromConfig({ globalPolicy: 'always-allow' }, 'any_tool')).toBe(
-      'always-allow',
+  it('未知工具绝不继承 always-allow,但可继承安全收紧的全局策略', () => {
+    expect(resolveModeFromConfig({ globalPolicy: 'always-allow' }, 'new_tool')).toBe(
+      'needs-approval',
+    );
+    expect(resolveModeFromConfig({ globalPolicy: 'blocked' }, 'new_tool')).toBe('blocked');
+    expect(resolveModeFromConfig({ globalPolicy: 'needs-approval' }, 'new_tool')).toBe(
+      'needs-approval',
     );
   });
 
@@ -92,7 +96,7 @@ describe('resolveModeFromConfig(档位解析)', () => {
     };
     expect(resolveModeFromConfig(cfg, 'sensitive_tool')).toBe('blocked');
     expect(resolveModeFromConfig(cfg, 'ask_tool')).toBe('needs-approval');
-    expect(resolveModeFromConfig(cfg, 'normal_tool')).toBe('always-allow');
+    expect(resolveModeFromConfig(cfg, 'normal_tool')).toBe('needs-approval');
   });
 
   it('globalPolicy=custom 不当作档位用,未单独设定的工具落回 needs-approval', () => {

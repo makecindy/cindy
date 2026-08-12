@@ -21,7 +21,7 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
     bytes: buffer.byteLength,
   }));
   const recordBlob = vi.fn(async () => {});
-  const addRef = vi.fn(async () => 'ref-id');
+  const addRef = vi.fn(async (_params: Parameters<AttachmentGrantDeps['addRef']>[0]) => {});
   const deps: AttachmentGrantDeps = {
     resolveImageUrl: (url: string) => {
       if (!url.startsWith('xdt-image://')) throw new Error('xdt-image: invalid url');
@@ -102,6 +102,33 @@ describe('grantAttachmentsToGhost', () => {
     expect(addRef).toHaveBeenCalledWith(
       expect.objectContaining({ refKind: 'ghost-tool-grant', originKind: 'tool' }),
     );
+  });
+
+  it('异步挂授权行后切换 blocked → 精确回滚本次 ref，绝不留下插件可读权限', async () => {
+    let blocked = false;
+    let createdRefId = '';
+    const removeRefById = vi.fn(async () => {});
+    const addRef = vi.fn(async (params: Parameters<AttachmentGrantDeps['addRef']>[0]) => {
+      // 模拟 DB await 返回后用户正好把目标工具切为 blocked。
+      createdRefId = params.id;
+      blocked = true;
+    });
+    const { deps } = makeDeps({
+      addRef,
+      removeRefById,
+      assertStillAllowed: () => {
+        if (blocked) throw new GrantPolicyError('该插件工具已被用户阻止');
+      },
+    });
+
+    const result = await grantAttachmentsToGhost(deps, {
+      ghostId: 'cindy-art',
+      urls: ['xdt-image://s1/a.png'],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(addRef).toHaveBeenCalledWith(expect.objectContaining({ id: expect.any(String) }));
+    expect(removeRefById).toHaveBeenCalledWith(createdRefId);
   });
 
   it('账本闸策略拒(GrantPolicyError)→ 整批拒零副作用,拒绝理由原样透出不落格式教学文案', async () => {

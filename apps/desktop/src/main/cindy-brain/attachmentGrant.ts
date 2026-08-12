@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * attachmentGrant.ts — 用户图片过户(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
@@ -47,12 +49,21 @@ export interface AttachmentGrantDeps {
   recordBlob(params: { hash: string; ext: string; mimeType: string; bytes: number; isCache: boolean }): Promise<void>;
   /** 加引用行(真身 ledger.addRef;出生按解析层给出的真实来源记账)。 */
   addRef(params: {
+    /** 预留的精确引用 id；策略在 await 后失效时只能回滚本次创建的行。 */
+    id: string;
     hash: string;
     refKind: 'ghost-grant' | 'ghost-tool-grant';
     refId: string;
     originKind: 'user' | 'tool';
     label?: string;
-  }): Promise<string>;
+  }): Promise<void>;
+  /** 精确回滚本次预留的授权行；不触碰旧交接或其它并发调用的引用。 */
+  removeRefById?(id: string): Promise<unknown>;
+  /**
+   * 调用方提供的同步实时授权断言。它会在每个异步持久化边界前后执行，
+   * 确保工具在落仓期间切为 blocked 时不留下可读 grant ref。
+   */
+  assertStillAllowed?(): void;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -75,7 +86,7 @@ export class GrantPolicyError extends Error {}
 
 export type AttachmentGrantResult =
   | { ok: true; hashes: string[] }
-  | { ok: false; message: string };
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' };
 
 /**
  * 把一批用户图片过户给目标意识。任何一张失败整批拒(不做半成品授权——
@@ -115,10 +126,16 @@ export async function grantAttachmentsToGhost(
     }
   }
   const hashes: string[] = [];
-  for (const r of resolved) {
-    try {
+  const stagedRefIds: string[] = [];
+  try {
+    for (const r of resolved) {
+      deps.assertStillAllowed?.();
       const buffer = r.buffer ?? (await deps.readFile(r.absPath));
+      deps.assertStillAllowed?.();
       const written = await deps.writeBlob({ buffer, mimeType: r.mimeType });
+      // 内容寻址 blob 本身不授予插件读取能力；真正的授权边界是下面的
+      // ghost-grant ref。仍在每个 await 后重判，阻止后续 metadata/ref 写入。
+      deps.assertStillAllowed?.();
       await deps.recordBlob({
         hash: written.hash,
         ext: written.ext,
@@ -126,8 +143,14 @@ export async function grantAttachmentsToGhost(
         bytes: written.bytes,
         isCache: false,
       });
+      deps.assertStillAllowed?.();
       const originKind = r.originKind ?? 'user';
+      // 在 await 前预留 id：即使 DB 已提交但 worker 回执丢失，回滚也只会
+      // 删除这次尝试的精确行，而不会误删此前已存在的授权。
+      const refId = randomUUID();
+      stagedRefIds.push(refId);
       await deps.addRef({
+        id: refId,
         hash: written.hash,
         // refKind 本身就是回退兼容边界:旧客户端只把 ghost-grant 当成人工
         // 永久授权，因而工具自动交接必须落到它不认识的独立类型。
@@ -135,12 +158,28 @@ export async function grantAttachmentsToGhost(
         refId: ghostId,
         originKind,
       });
+      deps.assertStillAllowed?.();
       hashes.push(written.hash);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      deps.log?.warn('ghost attachment grant: import failed', { ghostId, error: message });
-      return { ok: false, message: `附件过户失败:${message}` };
     }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const rollbackResults = await Promise.allSettled(
+      stagedRefIds.map((refId) => deps.removeRefById?.(refId)),
+    );
+    rollbackResults.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        deps.log?.warn('ghost attachment grant: exact reference rollback failed', {
+          ghostId,
+          refId: stagedRefIds[index],
+          error: String(result.reason),
+        });
+      }
+    });
+    deps.log?.warn('ghost attachment grant: import failed', { ghostId, error: message });
+    if (err instanceof GrantPolicyError) {
+      return { ok: false, errorCode: 'PERMISSION_DENIED', message: err.message };
+    }
+    return { ok: false, message: `附件过户失败:${message}` };
   }
   deps.log?.info('ghost attachment grant: done', { ghostId, count: hashes.length });
   return { ok: true, hashes };

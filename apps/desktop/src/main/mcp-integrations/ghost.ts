@@ -774,6 +774,10 @@ async function grantAttachmentUrls(params: {
   // 读盘/查账。落任何持久副作用前再做一次无 await 的最终重判。
   const policyBlock = params.recheckPolicy?.();
   if (policyBlock) return policyBlock;
+  const assertStillAllowed = (): void => {
+    const block = params.recheckPolicy?.();
+    if (block) throw new GrantPolicyError(block.message);
+  };
   return grantAttachmentsToGhost(
     {
       // 宽容解析:模型可能只有本地路径、缩图副本路径、或把 xdt-image
@@ -822,6 +826,8 @@ async function grantAttachmentUrls(params: {
       readFile: (absPath) => fs.promises.readFile(absPath),
       writeBlob: (p) => blobStore.writeBlob(p),
       recordBlob: (p) => ledger.recordBlob(p),
+      assertStillAllowed,
+      removeRefById: (id) => ledger.removeRefById(id),
       // 顺序调用幂等化:同 (指纹,意识,引用类型,来源) 已有交接行就不再插入。
       // 并发 check-then-insert 仍可能产生重复账行,但不会改变归属或扩权语义。
       addRef: async (p) => {
@@ -831,7 +837,10 @@ async function grantAttachmentUrls(params: {
           refId: p.refId,
           originKind: p.originKind,
         });
-        return exists ? '' : ledger.addRef(p);
+        // hasRef 本身是 async；返回后再读一次当前工具策略，不能把这段 I/O
+        // 变成 blocked 后仍插入持久 grant ref 的窗口。
+        assertStillAllowed();
+        if (!exists) await ledger.addRef(p);
       },
       log,
     },

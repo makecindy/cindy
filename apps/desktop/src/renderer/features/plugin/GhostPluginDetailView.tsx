@@ -601,6 +601,16 @@ const SELECTABLE_TOOL_POLICIES: readonly ToolApprovalMode[] = [
   'blocked',
 ];
 
+/**
+ * always-allow 只对 tools 表中用户显式见过并选择过的条目生效；插件更新新增
+ * 工具时，界面与 Host 都必须显示/执行默认的 needs-approval，避免误导用户。
+ */
+function toolModeFromConfig(config: GhostToolPermissionConfig, toolName: string): ToolApprovalMode {
+  const explicit = config.tools?.[toolName];
+  if (explicit) return explicit;
+  return config.globalPolicy === 'blocked' ? 'blocked' : 'needs-approval';
+}
+
 function PolicyStatusIcon({ policy }: { policy: GlobalToolPolicy }) {
   const Icon = TOOL_POLICY_ICON[policy];
   return (
@@ -675,14 +685,7 @@ export function ToolsSection({
   };
 
   const currentGlobalPolicy: GlobalToolPolicy = useMemo(() => {
-    if (config.globalPolicy && config.globalPolicy !== 'custom') {
-      const toolModes = Object.values(config.tools ?? {});
-      if (toolModes.length === 0 || toolModes.every((m) => m === config.globalPolicy)) {
-        return config.globalPolicy;
-      }
-      return 'custom';
-    }
-    const toolModes = tools.map((tool) => config.tools?.[tool.name] ?? 'needs-approval');
+    const toolModes = tools.map((tool) => toolModeFromConfig(config, tool.name));
     if (toolModes.every((m) => m === 'always-allow')) return 'always-allow';
     if (toolModes.every((m) => m === 'needs-approval')) return 'needs-approval';
     if (toolModes.every((m) => m === 'blocked')) return 'blocked';
@@ -699,7 +702,9 @@ export function ToolsSection({
 
   const handleSetToolMode = (toolName: string, mode: ToolApprovalMode) => {
     const nextTools = { ...(configRef.current.tools ?? {}), [toolName]: mode };
-    const allSame = tools.every((tool) => (nextTools[tool.name] ?? 'needs-approval') === mode);
+    const allSame = tools.every((tool) =>
+      (nextTools[tool.name] ?? toolModeFromConfig(configRef.current, tool.name)) === mode,
+    );
     persist({ globalPolicy: allSame ? mode : 'custom', tools: nextTools });
   };
 
@@ -781,12 +786,7 @@ export function ToolsSection({
       {expanded ? (
         <div id="ghost-tools-list" className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-2')}>
           {tools.map((tool) => {
-            const mode =
-              config.tools?.[tool.name] ??
-              (config.globalPolicy && config.globalPolicy !== 'custom'
-                ? config.globalPolicy
-                : undefined) ??
-              'needs-approval';
+            const mode = toolModeFromConfig(config, tool.name);
             return (
               <ToolPermissionRow
                 key={tool.name}

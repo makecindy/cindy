@@ -107,7 +107,7 @@ export function writeGhostToolPermissions(
 }
 
 /**
- * 档位解析的纯函数内核:单工具精确配置 > 非 custom 的全局策略 > 默认 needs-approval。
+ * 档位解析的纯函数内核:单工具精确配置 > 安全的全局策略 > 默认 needs-approval。
  *
  * 默认必须是 needs-approval:配置缺失/损坏/读不出来都会落到这里,fail closed 到
  * 「照旧走确认」而不是「免审批」。
@@ -119,7 +119,14 @@ function resolveModeFromConfig(
   if (cfg.tools && cfg.tools[toolName]) {
     return cfg.tools[toolName];
   }
-  if (cfg.globalPolicy && cfg.globalPolicy !== 'custom') {
+  // always-allow 必须逐工具显式记录。插件更新新增的工具不在用户当初看到的
+  // tools 表中，绝不能因旧的全局选择自动拿到免审批；needs/blocked 则是安全
+  // 收紧策略，可以继续覆盖未知工具。
+  if (
+    cfg.globalPolicy &&
+    cfg.globalPolicy !== 'custom' &&
+    cfg.globalPolicy !== 'always-allow'
+  ) {
     return cfg.globalPolicy;
   }
   return 'needs-approval';

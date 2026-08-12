@@ -888,6 +888,23 @@ describe('Ghost plugin detail sections', () => {
     expect(pressed[0].getAttribute('aria-label')).toBe('Blocked');
   });
 
+  it('shows a newly added tool as needs-approval even when older tools were always-allow', () => {
+    stubToolPermissionApi({
+      config: {
+        globalPolicy: 'always-allow',
+        tools: { tool_0: 'always-allow' },
+      },
+    });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const newToolGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    const pressed = within(newToolGroup)
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0].getAttribute('aria-label')).toBe('Needs approval');
+  });
+
   it('collapses the tool list without losing the global policy control', () => {
     stubToolPermissionApi();
     render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
