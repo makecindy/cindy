@@ -46,17 +46,30 @@ function hasValidPresetReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): boolean {
-  const hasCapability = model.reasoning !== undefined || model.reasoningEfforts !== undefined;
+  const hasCapability =
+    model.reasoning !== undefined
+    || model.reasoningEfforts !== undefined
+    || model.reasoningDefaultEffort !== undefined;
   if (!hasCapability) return true;
   if (agent !== 'pi' || typeof model.reasoning !== 'boolean') return false;
-  if (model.reasoning !== true) return model.reasoningEfforts === undefined;
+  if (model.reasoning !== true) {
+    return model.reasoningEfforts === undefined && model.reasoningDefaultEffort === undefined;
+  }
   if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) return false;
   const efforts = model.reasoningEfforts;
-  return (
+  const effortsValid = (
     efforts.every(
       (effort) =>
         typeof effort === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(effort),
     ) && new Set(efforts).size === efforts.length
+  );
+  if (!effortsValid) return false;
+  return (
+    model.reasoningDefaultEffort === undefined
+    || (
+      typeof model.reasoningDefaultEffort === 'string'
+      && efforts.includes(model.reasoningDefaultEffort)
+    )
   );
 }
 

@@ -249,4 +249,28 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       { id: 'legacy', name: 'Legacy', contextWindow: undefined },
     ]);
   });
+
+  it.each([
+    ['deepseek-v4-pro', 'DeepSeek V4 Pro', false],
+    ['kimi-k3', 'Kimi K3', true],
+  ] as const)('maps %s exact reasoning levels and image capability into Pi', (id, name, visual) => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'cn-provider', name: 'CN Provider', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({ models: [{
+          id, name, ...(visual ? { supportsImageInput: true } : {}),
+          reasoning: true, reasoningEfforts: ['low', 'high', 'max'],
+        }] }) },
+      }],
+      () => null,
+    );
+    expect(providers[0].models[0]).toEqual({
+      id, name, contextWindow: undefined,
+      ...(visual ? { input: ['text', 'image'] } : {}),
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: 'max',
+      },
+    });
+  });
 });

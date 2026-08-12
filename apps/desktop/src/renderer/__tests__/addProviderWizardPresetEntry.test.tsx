@@ -141,6 +141,7 @@ const piReasoningPreset = {
           name: 'Reasoning Model',
           reasoning: true,
           reasoningEfforts: ['low', 'high'] as const,
+          reasoningDefaultEffort: 'high' as const,
         },
       ],
     },
@@ -380,6 +381,7 @@ describe('AddProviderWizard — preset 直达', () => {
         id: 'reasoning-model',
         reasoning: true,
         reasoningEfforts: ['low', 'high'],
+        reasoningDefaultEffort: 'high',
       }),
     ]);
   });

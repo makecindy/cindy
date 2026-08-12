@@ -312,6 +312,29 @@
             }
           ],
           "modelsUrl": "https://api.deepseek.com/models"
+        },
+        "pi": {
+          "baseUrl": "https://api.deepseek.com",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "deepseek-v4-flash",
+              "name": "DeepSeek V4 Flash",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "high"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1000000,
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "high"
+            }
+          ],
+          "modelsUrl": "https://api.deepseek.com/models"
         }
       }
     },
@@ -434,6 +457,34 @@
             }
           ],
           "modelsUrl": "https://api.moonshot.cn/v1/models"
+        },
+        "pi": {
+          "baseUrl": "https://api.moonshot.cn/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "kimi-k3",
+              "name": "Kimi K3",
+              "contextWindow": 1000000,
+              "supportsImageInput": true,
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code",
+              "contextWindow": 262144,
+              "supportsImageInput": true
+            },
+            {
+              "id": "kimi-k2.6",
+              "name": "Kimi K2.6",
+              "contextWindow": 262144,
+              "supportsImageInput": true
+            }
+          ],
+          "modelsUrl": "https://api.moonshot.cn/v1/models"
         }
       }
     },
@@ -479,6 +530,34 @@
             {
               "id": "kimi-k2.6",
               "name": "Kimi K2.6"
+            }
+          ],
+          "modelsUrl": "https://api.moonshot.ai/v1/models"
+        },
+        "pi": {
+          "baseUrl": "https://api.moonshot.ai/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "kimi-k3",
+              "name": "Kimi K3",
+              "contextWindow": 1000000,
+              "supportsImageInput": true,
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code",
+              "contextWindow": 262144,
+              "supportsImageInput": true
+            },
+            {
+              "id": "kimi-k2.6",
+              "name": "Kimi K2.6",
+              "contextWindow": 262144,
+              "supportsImageInput": true
             }
           ],
           "modelsUrl": "https://api.moonshot.ai/v1/models"

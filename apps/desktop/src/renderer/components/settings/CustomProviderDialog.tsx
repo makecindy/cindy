@@ -1112,7 +1112,13 @@ export function CustomProviderDialog({
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
             ...(m.reasoning === true && m.reasoningEfforts?.length
-              ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+              ? {
+                  reasoning: true,
+                  reasoningEfforts: [...m.reasoningEfforts],
+                  ...(m.reasoningDefaultEffort
+                    ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                    : {}),
+                }
               : {}),
           }))
           .filter((m) => m.id.length > 0);
@@ -1136,7 +1142,13 @@ export function CustomProviderDialog({
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(cur?.reasoning === true && cur.reasoningEfforts?.length
-                ? { reasoning: true, reasoningEfforts: [...cur.reasoningEfforts] }
+                ? {
+                    reasoning: true,
+                    reasoningEfforts: [...cur.reasoningEfforts],
+                    ...(cur.reasoningDefaultEffort
+                      ? { reasoningDefaultEffort: cur.reasoningDefaultEffort }
+                      : {}),
+                  }
                 : {}),
             };
           }),
@@ -1196,6 +1208,9 @@ export function CustomProviderDialog({
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       const reasoning = latest ? latest.reasoning : m.reasoning;
       const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
+      const reasoningDefaultEffort = latest
+        ? latest.reasoningDefaultEffort
+        : m.reasoningDefaultEffort;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
@@ -1203,7 +1218,13 @@ export function CustomProviderDialog({
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
         ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
         ...(reasoning === true && reasoningEfforts?.length
-          ? { reasoning: true, reasoningEfforts: [...reasoningEfforts] }
+          ? {
+              reasoning: true,
+              reasoningEfforts: [...reasoningEfforts],
+              ...(reasoningDefaultEffort
+                ? { reasoningDefaultEffort }
+                : {}),
+            }
           : {}),
       };
     });
@@ -1217,7 +1238,13 @@ export function CustomProviderDialog({
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            ? {
+                reasoning: true,
+                reasoningEfforts: [...m.reasoningEfforts],
+                ...(m.reasoningDefaultEffort
+                  ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                  : {}),
+              }
             : {}),
         });
       }
@@ -1345,7 +1372,13 @@ export function CustomProviderDialog({
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            ? {
+                reasoning: true,
+                reasoningEfforts: [...m.reasoningEfforts],
+                ...(m.reasoningDefaultEffort
+                  ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                  : {}),
+              }
             : {}),
         }))
         .filter((m) => m.id && m.name);

@@ -74,7 +74,15 @@ function parseStoredPiReasoningCapability(
   ) {
     return {};
   }
-  return { reasoning: true, reasoningEfforts: efforts };
+  const defaultEffort = isPiReasoningEffort(model.reasoningDefaultEffort)
+    && efforts.includes(model.reasoningDefaultEffort)
+    ? model.reasoningDefaultEffort
+    : undefined;
+  return {
+    reasoning: true,
+    reasoningEfforts: efforts,
+    ...(defaultEffort ? { reasoningDefaultEffort: defaultEffort } : {}),
+  };
 }
 
 function validateNoAuthLoopbackBoundary(
@@ -143,7 +151,10 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
-    const hasReasoningCapability = mm.reasoning !== undefined || mm.reasoningEfforts !== undefined;
+    const hasReasoningCapability =
+      mm.reasoning !== undefined
+      || mm.reasoningEfforts !== undefined
+      || mm.reasoningDefaultEffort !== undefined;
     if (hasReasoningCapability && agent !== 'pi') {
       return invalid(`runtime '${agent}' reasoning capability is only supported for pi models`);
     }
@@ -160,8 +171,17 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       ) {
         return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
       }
-    } else if (mm.reasoningEfforts !== undefined) {
-      return invalid(`runtime '${agent}' model.reasoningEfforts requires reasoning=true`);
+      if (
+        mm.reasoningDefaultEffort !== undefined
+        && (
+          !isPiReasoningEffort(mm.reasoningDefaultEffort)
+          || !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort)
+        )
+      ) {
+        return invalid(`runtime '${agent}' model.reasoningDefaultEffort invalid`);
+      }
+    } else if (mm.reasoningEfforts !== undefined || mm.reasoningDefaultEffort !== undefined) {
+      return invalid(`runtime '${agent}' reasoning metadata requires reasoning=true`);
     }
   }
   if (r.wireProtocol !== undefined) {
@@ -380,7 +400,13 @@ function normalizeRuntime(
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
       ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
-        ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+        ? {
+            reasoning: true,
+            reasoningEfforts: [...m.reasoningEfforts],
+            ...(m.reasoningDefaultEffort
+              ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+              : {}),
+          }
         : {}),
     }))
     .filter((m) => {

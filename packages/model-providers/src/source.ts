@@ -159,16 +159,16 @@ function allowsBundledImageInheritance(
 }
 
 /**
- * 同 id preset 仍以远端为主；bundled 只给远端仍保留的同 runtime / 同 model
- * 回填缺失的 contextWindow。这样旧远端不会把已核实的长上下文元数据降级，同时远端
- * 仍可通过移除 runtime / model 停止新建，或用显式窗口覆盖 bundled。
+ * 同 id preset 仍以远端为主；bundled 给远端仍保留的同 runtime / 同 model 回填缺失的
+ * contextWindow，并为旧 schema 中完全缺席的 Pi runtime 回填已核实能力。这样旧远端不会
+ * 把长上下文或 Pi 能力降级；已有 Pi runtime 与显式窗口仍完整由远端优先。
  */
-function backfillPresetContextWindows(
+function backfillPresetMetadata(
   primary: ProviderPreset,
   bundled: ProviderPreset,
 ): ProviderPreset {
   let changed = primary.nameZhTW === undefined && bundled.nameZhTW !== undefined;
-  const runtimes: ProviderPreset['runtimes'] = {};
+  const runtimes: ProviderPreset['runtimes'] = { ...primary.runtimes };
   for (const [agent, runtime] of Object.entries(primary.runtimes) as [
     AgentKind,
     NonNullable<ProviderPreset['runtimes'][AgentKind]>,
@@ -188,6 +188,13 @@ function backfillPresetContextWindows(
       return { ...model, contextWindow: bundledContextWindow };
     });
     runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
+  }
+  // Pi runtime 是 2026-08 后新增的预设能力槽。旧远端目录没有表达“显式禁用 Pi”的
+  // 字段，缺席只代表旧 schema；对随包已核实的官方预设回填整段，避免远端 LKG 把
+  // DeepSeek/Kimi 的推理档位与视觉能力遮掉。远端一旦自行提供 Pi，仍完整优先。
+  if (primary.runtimes.pi === undefined && bundled.runtimes.pi !== undefined) {
+    runtimes.pi = bundled.runtimes.pi;
+    changed = true;
   }
   return changed
     ? {
@@ -279,7 +286,7 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   const bundledPresetIds = new Set(bundledPresets.map((preset) => preset.id));
   const presets = bundledPresets.map((bundled) => {
     const remote = primaryPresetsById.get(bundled.id);
-    return remote ? backfillPresetContextWindows(remote, bundled) : bundled;
+    return remote ? backfillPresetMetadata(remote, bundled) : bundled;
   });
   for (const preset of primaryPresets) {
     if (!bundledPresetIds.has(preset.id)) presets.push(preset);

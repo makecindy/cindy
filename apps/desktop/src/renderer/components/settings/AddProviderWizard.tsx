@@ -792,6 +792,9 @@ export function AddProviderWizard({
                 ? {
                     reasoning: true,
                     reasoningEfforts: [...presetModel.reasoningEfforts],
+                    ...(presetModel.reasoningDefaultEffort
+                      ? { reasoningDefaultEffort: presetModel.reasoningDefaultEffort }
+                      : {}),
                   }
                 : {}),
             };

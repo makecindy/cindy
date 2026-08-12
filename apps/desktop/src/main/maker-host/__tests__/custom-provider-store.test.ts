@@ -195,6 +195,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         config({
           reasoning: true,
           reasoningEfforts: ['low', 'high', 'xhigh'],
+          reasoningDefaultEffort: 'high',
         }),
       ),
     ).toEqual({ ok: true });
@@ -216,6 +217,11 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       ).ok,
     ).toBe(false);
     expect(validateCustomProviderConfig(config({ reasoningEfforts: ['high'] })).ok).toBe(false);
+    expect(validateCustomProviderConfig(config({
+      reasoning: true,
+      reasoningEfforts: ['low', 'high'],
+      reasoningDefaultEffort: 'max',
+    })).ok).toBe(false);
     expect(
       validateCustomProviderConfig(
         config(
@@ -375,6 +381,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
               name: 'Reasoner',
               reasoning: true,
               reasoningEfforts: ['low', 'high', 'xhigh'],
+              reasoningDefaultEffort: 'xhigh',
             },
             { id: 'legacy', name: 'Legacy' },
             { id: 'explicit-off', name: 'Explicit off', reasoning: false },
@@ -388,6 +395,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         name: 'Reasoner',
         reasoning: true,
         reasoningEfforts: ['low', 'high', 'xhigh'],
+        reasoningDefaultEffort: 'xhigh',
       },
       { id: 'legacy', name: 'Legacy' },
       { id: 'explicit-off', name: 'Explicit off' },

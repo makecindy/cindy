@@ -576,6 +576,7 @@ describe('custom provider runtime fill', () => {
           supportsImageInput: true,
           reasoning: true,
           reasoningEfforts: ['low', 'high'],
+          reasoningDefaultEffort: 'high',
         },
       ],
     });
@@ -592,6 +593,7 @@ describe('custom provider runtime fill', () => {
         supportsImageInput: true,
         reasoning: true,
         reasoningEfforts: ['low', 'high'],
+        reasoningDefaultEffort: 'high',
       },
     ]);
   });

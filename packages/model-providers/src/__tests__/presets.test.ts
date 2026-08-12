@@ -59,12 +59,31 @@ describe('sanitizePresets', () => {
               name: 'Reasoner',
               reasoning: true,
               reasoningEfforts: ['low', 'high', 'xhigh'],
+              reasoningDefaultEffort: 'high',
             },
           ],
         },
       },
     };
     expect(sanitizePresets([piReasoning])).toEqual([piReasoning]);
+    expect(
+      sanitizePresets([{
+        ...piReasoning,
+        id: 'invalid-default-effort',
+        runtimes: {
+          pi: {
+            ...piReasoning.runtimes.pi,
+            models: [{
+              id: 'reasoner',
+              name: 'Reasoner',
+              reasoning: true,
+              reasoningEfforts: ['low', 'high'],
+              reasoningDefaultEffort: 'max',
+            }],
+          },
+        },
+      }]),
+    ).toEqual([]);
     expect(
       sanitizePresets([
         {
@@ -294,6 +313,32 @@ describe('mergeWithBundled presets 兜底', () => {
         ?.models[0]
         ?.contextWindow,
     ).toBe(512_000);
+  });
+
+  it.each(['deepseek', 'moonshot-kimi-cn', 'moonshot-kimi-global'])(
+    '旧远端 %s 缺少 Pi runtime 时从 bundled 回填已核实的 Pi 元数据',
+    (id) => {
+      const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === id);
+      expect(bundled?.runtimes.pi).toBeDefined();
+      const { pi: _missing, ...remoteRuntimes } = bundled!.runtimes;
+      const remote = { ...bundled!, name: `Remote ${id}`, runtimes: remoteRuntimes };
+      const merged = mergeWithBundled(minimalCatalog({ presets: [remote] }));
+      const resolved = merged.presets?.find((preset) => preset.id === id);
+      expect(resolved?.name).toBe(`Remote ${id}`);
+      expect(resolved?.runtimes.pi).toEqual(bundled?.runtimes.pi);
+    },
+  );
+
+  it('远端已有 Pi runtime 时完整优先，不与 bundled 模型级混合', () => {
+    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
+    const remotePi = {
+      baseUrl: 'https://remote.example/v1',
+      models: [{ id: 'remote-model', name: 'Remote Model' }],
+    };
+    const merged = mergeWithBundled(minimalCatalog({
+      presets: [{ ...bundled!, runtimes: { ...bundled!.runtimes, pi: remotePi } }],
+    }));
+    expect(merged.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi).toEqual(remotePi);
   });
 
   it('旧远端同 id preset 缺少 nameZhTW 时从 bundled 回填，显式远端值仍优先', () => {
@@ -597,6 +642,35 @@ describe('官方渠道预设契约', () => {
         models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
       },
     });
+  });
+
+  it('DeepSeek 为 Pi 提供 1M 上下文、真实三档推理强度并默认 high', () => {
+    expect(preset('deepseek')?.runtimes.pi?.models).toEqual([
+      {
+        id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_000_000,
+        reasoning: true, reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: 'high',
+      },
+      {
+        id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_000_000,
+        reasoning: true, reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: 'high',
+      },
+    ]);
+  });
+
+  it.each([
+    ['moonshot-kimi-cn', 'https://api.moonshot.cn/v1'],
+    ['moonshot-kimi-global', 'https://api.moonshot.ai/v1'],
+  ])('%s 为 Pi 提供 Kimi 官方上下文、视觉能力与 K3 推理档位', (id, baseUrl) => {
+    const pi = preset(id)?.runtimes.pi;
+    expect(pi?.baseUrl).toBe(baseUrl);
+    expect(pi?.models).toEqual([
+      {
+        id: 'kimi-k3', name: 'Kimi K3', contextWindow: 1_000_000, supportsImageInput: true,
+        reasoning: true, reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: 'max',
+      },
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 262_144, supportsImageInput: true },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 262_144, supportsImageInput: true },
+    ]);
   });
 
   it.each([

@@ -29,6 +29,7 @@ describe('replaceCustomProviderModelId', () => {
       supportsImageInput: true,
       reasoning: true,
       reasoningEfforts: ['low', 'high'],
+      reasoningDefaultEffort: 'high',
     }, 'another-model')).toEqual({
       id: 'another-model',
       name: 'MiniMax M3',
@@ -160,12 +161,14 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       name: 'Reasoner',
       contextWindow: 200_000,
       efforts: ['low', 'high', 'xhigh'] as CatalogModel['efforts'],
+      defaultEffort: 'xhigh' as const,
     };
     expect(customProviderModelConfigFromCatalogModel(catalogModel, 'pi')).toEqual({
       id: 'reasoner',
       name: 'Reasoner',
       reasoning: true,
       reasoningEfforts: ['low', 'high', 'xhigh'],
+      reasoningDefaultEffort: 'xhigh',
     });
     expect(customProviderModelConfigFromCatalogModel(catalogModel, 'codex')).toEqual({
       id: 'reasoner',
@@ -255,6 +258,7 @@ describe('providerViewToCustomProviderConfig', () => {
         name: 'Reasoner',
         reasoning: true,
         reasoningEfforts: ['low', 'high', 'xhigh'],
+        reasoningDefaultEffort: 'high',
       },
     ]);
   });

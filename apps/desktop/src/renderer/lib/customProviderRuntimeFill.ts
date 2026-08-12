@@ -163,7 +163,13 @@ function modelsForTarget(
       ...portable,
       ...(existing?.supportsImageInput === true ? { supportsImageInput: true } : {}),
       ...(existing?.reasoning === true && existing.reasoningEfforts?.length
-        ? { reasoning: true, reasoningEfforts: [...existing.reasoningEfforts] }
+        ? {
+            reasoning: true,
+            reasoningEfforts: [...existing.reasoningEfforts],
+            ...(existing.reasoningDefaultEffort
+              ? { reasoningDefaultEffort: existing.reasoningDefaultEffort }
+              : {}),
+          }
         : {}),
     };
   });

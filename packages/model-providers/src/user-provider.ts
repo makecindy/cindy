@@ -58,9 +58,12 @@ function toCatalogModel(
         ? [...(m.reasoningEfforts ?? [])]
         : []
       : (CUSTOM_EFFORTS[agent] ?? []);
-  const defaultEffort = efforts.includes(DEFAULT_CUSTOM_EFFORT)
-    ? DEFAULT_CUSTOM_EFFORT
-    : (efforts[0] ?? null);
+  const defaultEffort =
+    agent === 'pi' && m.reasoningDefaultEffort && efforts.includes(m.reasoningDefaultEffort)
+      ? m.reasoningDefaultEffort
+      : efforts.includes(DEFAULT_CUSTOM_EFFORT)
+        ? DEFAULT_CUSTOM_EFFORT
+        : (efforts[0] ?? null);
   return {
     id: m.id,
     name: m.name,

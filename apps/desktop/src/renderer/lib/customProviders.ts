@@ -66,6 +66,7 @@ export function setCustomProviderModelReasoning(
       const rest = { ...model };
       delete rest.reasoning;
       delete rest.reasoningEfforts;
+      delete rest.reasoningDefaultEffort;
       return rest;
     }
     return {
@@ -91,10 +92,14 @@ export function setCustomProviderModelReasoningEffort(
     const selected = new Set(current);
     if (enabled) selected.add(effort);
     else selected.delete(effort);
-    return {
+    const next = {
       ...model,
       reasoningEfforts: PI_REASONING_EFFORTS.filter((candidate) => selected.has(candidate)),
     };
+    if (!enabled && model.reasoningDefaultEffort === effort) {
+      delete next.reasoningDefaultEffort;
+    }
+    return next;
   });
 }
 
@@ -114,7 +119,7 @@ export function customProviderModelConfigFromCatalogModel(
     | 'defaultEnabled'
     | 'supportsImageInput'
   > &
-    Partial<Pick<CatalogModel, 'efforts'>>,
+    Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
 ): ProviderRuntimeModelConfig {
   const reasoningEfforts =
@@ -132,6 +137,11 @@ export function customProviderModelConfigFromCatalogModel(
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
     ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),
     ...(reasoningEfforts.length > 0 ? { reasoning: true, reasoningEfforts } : {}),
+    ...(agent === 'pi'
+      && model.defaultEffort
+      && reasoningEfforts.includes(model.defaultEffort as PiReasoningEffort)
+      ? { reasoningDefaultEffort: model.defaultEffort as PiReasoningEffort }
+      : {}),
   };
 }
 

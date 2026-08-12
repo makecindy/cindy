@@ -487,6 +487,8 @@ export interface ProviderRuntimeModelConfig {
    * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
    */
   reasoningEfforts?: PiReasoningEffort[];
+  /** Pi 自定义模型的厂商推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
+  reasoningDefaultEffort?: PiReasoningEffort;
 }
 
 /**

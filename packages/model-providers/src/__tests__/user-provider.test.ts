@@ -319,6 +319,29 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
+  it.each([
+    ['kimi', 'max'],
+    ['deepseek', 'high'],
+  ] as const)('uses the explicit %s Pi default reasoning effort', (id, expected) => {
+    const p = buildUserProvider({
+      id,
+      name: id,
+      runtimes: {
+        pi: {
+          baseUrl: `https://${id}.example/v1`,
+          models: [{
+            id: `${id}-model`, name: `${id} model`, reasoning: true,
+            reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: expected,
+          }],
+        },
+      },
+    });
+    expect(p.models.pi?.[0]).toMatchObject({
+      efforts: ['low', 'high', 'max'],
+      defaultEffort: expected,
+    });
+  });
+
   it('orders pi after claude-code and codex (AGENT_ORDER)', () => {
     const p = buildUserProvider({
       id: 'multi',
