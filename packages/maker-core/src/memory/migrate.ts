@@ -183,20 +183,28 @@ export async function planLegacyShardMigration(
       recordCount: 0,
     };
 
-    // 统计合法分片数
+    // 统计合法分片数 + 未识别 .md 文件 (数据保全: 只有未识别文件的目录
+    // 不是「空」— 删掉会永久丢失用户内容, Greptile review on #2519 第二轮)
     let files: string[];
     try {
       files = await fs.readdir(dir);
     } catch {
       files = [];
     }
+    let hasUnrecognizedMd = false;
     for (const f of files) {
-      if (parseFilename(f)) info.recordCount += 1;
+      if (parseFilename(f)) {
+        info.recordCount += 1;
+      } else if (f.endsWith('.md') && f !== 'MEMORY.md') {
+        hasUnrecognizedMd = true;
+      }
     }
 
     plan.all.push(info);
     if (!isLegacy) continue;
-    if (info.recordCount === 0) {
+    // recordCount === 0 但存在未识别 .md → 不按空删 (内容可能就在里面),
+    // 归入 mergeCandidates 走慢路径合并 (那边有未识别文件保留源目录的保护)
+    if (info.recordCount === 0 && !hasUnrecognizedMd) {
       plan.emptyToDelete.push(info);
     } else {
       plan.mergeCandidates.push(info);
@@ -217,37 +225,44 @@ async function buildSkippedInfo(dir: string, entry: string): Promise<LegacyShard
 }
 
 /**
- * Cindy worktree 路径 → 主仓路径的静态推导 (Codex review on #2519)。
+ * 托管 worktree 路径 → 主仓路径的静态推导 (Codex review on #2519)。
  *
- * 场景: 旧 worktree 分片的 meta.absPath 指向 `.../<主仓>/.cindy-worktrees/<name>`。
+ * 场景: 旧 worktree 分片的 meta.absPath 指向 `.../<主仓>/<托管段>/<name>`。
  * 若该 worktree 已被归档/删除, resolver 的 live git 探测找不到 .git 标记,
  * 回落返回原路径 → canonicalDirName === 目录名 → 不迁移, 旧记录永远孤儿。
  *
- * 本函数只处理 **已知的 Cindy 托管 worktree 形态** (产品自己创建的
- * `.cindy-worktrees/<name>`): 取 `.cindy-worktrees` 段之前的路径为主仓根,
- * 段之后的子路径拼回。非该形态 (用户手工 worktree / 其他布局) 返回 null,
- * 交回 live 探测结果, 不做危险猜测。
+ * 本函数只处理 **已知的托管 worktree 形态** (产品自己创建的):
+ *   `.cindy-worktrees` — 现行形态
+ *   `.xdt-worktrees`   — 品牌迁移前的旧形态 (Codex review on #2519 第二轮)
+ * 取托管段之前的路径为主仓根, 段之后的子路径拼回。非该形态 (用户手工
+ * worktree / 其他布局) 返回 null, 交回 live 探测结果, 不做危险猜测。
  *
  * 例:
  *   /repo/.cindy-worktrees/feat-x            → /repo
  *   /repo/.cindy-worktrees/feat-x/apps/a     → /repo/apps/a
- *   /Users/me/other/wt (无 .cindy-worktrees) → null
+ *   /repo/.xdt-worktrees/feat-x/apps/a       → /repo/apps/a
+ *   /Users/me/other/wt (无托管段)            → null
  */
+const MANAGED_WORKTREE_DIRS = ['.cindy-worktrees', '.xdt-worktrees'];
+
 export function deriveCanonicalFromCindyWorktreePath(absPath: string): string | null {
   const sep = path.sep;
-  const marker = `${sep}.cindy-worktrees${sep}`;
-  const idx = absPath.indexOf(marker);
-  if (idx < 0) return null;
-  // 段后紧跟 worktree 名; 该名不存在 → 不是托管形态
-  const rest = absPath.slice(idx + marker.length);
-  if (rest.length === 0) return null;
-  const worktreeNameEnd = rest.indexOf(sep);
-  const worktreeName = worktreeNameEnd < 0 ? rest : rest.slice(0, worktreeNameEnd);
-  if (worktreeName.length === 0) return null;
-  const mainRoot = absPath.slice(0, idx);
-  if (mainRoot.length === 0) return null;
-  const subPath = worktreeNameEnd < 0 ? '' : rest.slice(worktreeNameEnd + 1);
-  return subPath ? path.join(mainRoot, subPath) : mainRoot;
+  for (const markerDir of MANAGED_WORKTREE_DIRS) {
+    const marker = `${sep}${markerDir}${sep}`;
+    const idx = absPath.indexOf(marker);
+    if (idx < 0) continue;
+    // 段后紧跟 worktree 名; 该名不存在 → 不是托管形态
+    const rest = absPath.slice(idx + marker.length);
+    if (rest.length === 0) continue;
+    const worktreeNameEnd = rest.indexOf(sep);
+    const worktreeName = worktreeNameEnd < 0 ? rest : rest.slice(0, worktreeNameEnd);
+    if (worktreeName.length === 0) continue;
+    const mainRoot = absPath.slice(0, idx);
+    if (mainRoot.length === 0) continue;
+    const subPath = worktreeNameEnd < 0 ? '' : rest.slice(worktreeNameEnd + 1);
+    return subPath ? path.join(mainRoot, subPath) : mainRoot;
+  }
+  return null;
 }
 
 /**
@@ -270,18 +285,36 @@ export async function runLegacyShardMigration(
   for (const shard of plan.emptyToDelete) {
     const r: ShardMigrationResult = { shard, action: 'removed-empty' };
     try {
-      // 竞态防御 (Greptile summary on #2519): 计划基于扫描快照, 删除前重新
-      // 校验目录仍是空的 — 若扫描后新增了分片文件, 跳过删除并报告, 绝不让
-      // 过期快照删掉新写入的数据。
+      // 竞态防御 (Greptile on #2519): 计划基于扫描快照, 删除前重新校验目录
+      // 仍无任何内容 — 若扫描后新增了分片文件或未识别 .md, 跳过删除并报告,
+      // 绝不让过期快照删掉新写入的数据。rename-then-remove 把复查与删除之间
+      // 的窗口压缩到 rename 原子操作之后: 目录一改名, 新写入只会落到原名
+      // 目录 (已不存在) 或别的路径, 不会进到即将删除的临时名目录。
       const gained = await countShardFiles(shard.dir);
-      if (gained > 0) {
+      const unrecognized = await findUnrecognizedMdFiles(shard.dir);
+      if (gained > 0 || unrecognized.length > 0) {
         r.action = 'skipped';
-        r.error = `dir gained ${gained} shard file(s) since scan (race), kept`;
+        r.error = `dir gained content since scan (${gained} shard file(s), ${unrecognized.length} unrecognized md), kept`;
         result.results.push(r);
         continue;
       }
       if (backupRoot) await backupDir(shard.dir, backupRoot);
-      await fs.rm(shard.dir, { recursive: true, force: true });
+      // rename → 复查 → remove: 复查放在 rename 之后, 只看将被删的临时目录;
+      // rename 后目录已不在原路径, 复查窗口内写入只能落到原名 (已不存在),
+      // 无法进入待删目录 (与备份目录同层, 名字带后缀避免冲突)。
+      const trashName = `${path.basename(shard.dir)}.trash-${now().replace(/[:.]/g, '-')}`;
+      const trashDir = path.join(path.dirname(shard.dir), trashName);
+      await fs.rename(shard.dir, trashDir);
+      const afterRename = await countShardFiles(trashDir);
+      if (afterRename > 0) {
+        // 极端: rename 前已写入的文件 — 恢复原目录名并报告
+        await fs.rename(trashDir, shard.dir);
+        r.action = 'skipped';
+        r.error = `dir gained ${afterRename} shard file(s) before rename, kept`;
+        result.results.push(r);
+        continue;
+      }
+      await fs.rm(trashDir, { recursive: true, force: true });
     } catch (e) {
       r.action = 'skipped';
       r.error = String(e);

@@ -318,7 +318,7 @@ describe('runLegacyShardMigration — 执行', () => {
     );
     const result = await runLegacyShardMigration(plan);
     expect(result.results[0].action).toBe('skipped');
-    expect(result.results[0].error).toContain('race');
+    expect(result.results[0].error).toContain('content since scan');
     // 目录保留
     expect(await fs.readFile(path.join(wtPath, 'feedback_race.md'), 'utf8')).toContain('NEW');
   });
@@ -335,5 +335,39 @@ describe('runLegacyShardMigration — 执行', () => {
     expect(plan.mergeCandidates).toHaveLength(1);
     expect(plan.mergeCandidates[0].canonicalDirName).toBe(sanitizeWorkdir(mainRepo));
     expect(plan.mergeCandidates[0].canonicalScopeKey).toBe(mainRepo);
+  });
+
+  it('只有未识别 .md 的 legacy 分片不按空删 (Greptile 第二轮: 空分片误删未识别内容)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+    const wtPath = await makeShard(wtDir, { absPath: worktree });
+    // 只有未识别文件 (无合法 <type>_<slug>.md) — 内容在 notes.md 里
+    await fs.writeFile(path.join(wtPath, 'notes.md'), '# 手写笔记\n\n重要内容', 'utf8');
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    // 不进 emptyToDelete (会递归删掉 notes.md), 归入 mergeCandidates
+    expect(plan.emptyToDelete).toHaveLength(0);
+    expect(plan.mergeCandidates).toHaveLength(1);
+    const result = await runLegacyShardMigration(plan);
+    // canonical 不存在 → rename 快路径: 整个目录 (含 notes.md) 搬进 canonical, 数据安全
+    expect(result.results[0].action).toBe('renamed');
+    const target = path.join(memoryRoot, mainDir);
+    expect(await fs.readFile(path.join(target, 'notes.md'), 'utf8')).toContain('重要内容');
+  });
+
+  it('.xdt-worktrees 旧形态同样静态推导 (Codex 第二轮: 品牌迁移前布局)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const archivedWt = path.join(mainRepo, '.xdt-worktrees', 'feat-x', 'apps', 'a');
+    const wtDir = sanitizeWorkdir(archivedWt);
+    await makeShard(wtDir, { absPath: archivedWt, files: { 'feedback_a.md': 'X' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot);
+    expect(plan.mergeCandidates).toHaveLength(1);
+    expect(plan.mergeCandidates[0].canonicalDirName).toBe(
+      sanitizeWorkdir(path.join(mainRepo, 'apps', 'a')),
+    );
+    expect(plan.mergeCandidates[0].canonicalScopeKey).toBe(path.join(mainRepo, 'apps', 'a'));
   });
 });
