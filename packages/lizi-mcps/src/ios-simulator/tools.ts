@@ -4,12 +4,21 @@ import type {
   IOSSimulatorMcpErrorCode,
   IOSSimulatorMcpToolName,
 } from "../types.js";
+import { deprecatedIOSSimulatorToolAliasesFor } from "./tool-names.js";
 import {
   IOSSimulatorToolRegistry,
   iosSimulatorBusinessError,
   iosSimulatorTextResult,
+  type IOSSimulatorToolHandler,
 } from "./tool-registry.js";
 import { z } from "zod";
+
+/**
+ * Every advertised description carries the domain, because the model only sees
+ * the inner name (`tap`, `type_simulator_text`, …) next to generic host and
+ * browser tools that have similar names.
+ */
+const TOOL_DESCRIPTION_PREFIX = "[iOS Simulator] ";
 
 function isBusinessError(result: unknown): result is {
   ok: false;
@@ -133,7 +142,25 @@ export function registerIOSSimulatorTools(
   deps: IOSSimulatorMcpDeps,
   getContext?: () => IOSSimulatorMcpCallContext | undefined,
 ): void {
-  registry.register({
+  /**
+   * One place applies the domain prefix and derives the hidden aliases from the
+   * rename table, so a renamed tool cannot forget either half.
+   */
+  const register = <T extends z.ZodRawShape>(definition: {
+    name: string;
+    description: string;
+    readOnly?: boolean;
+    inputShape: T;
+    handler: IOSSimulatorToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
+  }): void => {
+    registry.register({
+      ...definition,
+      description: `${TOOL_DESCRIPTION_PREFIX}${definition.description}`,
+      deprecatedAliases: deprecatedIOSSimulatorToolAliasesFor(definition.name),
+    });
+  };
+
+  register({
     name: "check_environment",
     description:
       "Check whether the current local macOS session can use Cindy's embedded iOS Simulator runtime, Xcode, and the viewer bridge. This does not open macOS Simulator.app.",
@@ -142,7 +169,7 @@ export function registerIOSSimulatorTools(
     handler: async () =>
       callHost(deps, "check_environment", {}, getContext?.()),
   });
-  registry.register({
+  register({
     name: "doctor",
     description:
       "Run one bounded Host diagnosis for the current Cindy session, including environment, ownership, drivers, admitted capabilities, tool availability, and recommended next actions.",
@@ -150,15 +177,15 @@ export function registerIOSSimulatorTools(
     inputShape: {},
     handler: async () => callHost(deps, "doctor", {}, getContext?.()),
   });
-  registry.register({
-    name: "list_devices",
+  register({
+    name: "list_simulator_devices",
     description:
-      "List available simulated iPhone and iPad devices with exact UDIDs and boot states.",
+      "List available simulated iPhone and iPad devices with exact UDIDs and boot states. Apple simulators only: not Android devices, not physical hardware, not this Mac.",
     readOnly: true,
     inputShape: {},
     handler: async () => callHost(deps, "list_devices", {}, getContext?.()),
   });
-  registry.register({
+  register({
     name: "list_instances",
     description:
       "List only the iOS Simulator instances owned by the current Cindy session.",
@@ -166,7 +193,7 @@ export function registerIOSSimulatorTools(
     inputShape: {},
     handler: async () => callHost(deps, "list_instances", {}, getContext?.()),
   });
-  registry.register({
+  register({
     name: "create_instance",
     description:
       "Create a Cindy-owned embedded simulator from an installed template device, then attach it to this session for display in Cindy's viewer.",
@@ -177,7 +204,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "create_instance", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "attach_device",
     description:
       "Attach one exact simulator UDID to the current Cindy embedded-simulator session. Resource admission is enforced by the host; do not open Simulator.app.",
@@ -217,7 +244,7 @@ export function registerIOSSimulatorTools(
     batteryState: z.enum(["charging", "charged", "discharging"]).optional(),
     batteryLevel: z.number().int().min(0).max(100).optional(),
   };
-  registry.register({
+  register({
     name: "start_instance",
     description:
       "Boot the exact simulator attached to this Cindy embedded-simulator session and invalidate stale generations. Keep the device in Cindy's viewer rather than opening Simulator.app.",
@@ -225,14 +252,14 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "start_instance", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "stop_instance",
     description: "Shut down the exact attached simulator without deleting it.",
     inputShape: routeShape,
     handler: async (args) =>
       callHost(deps, "stop_instance", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "detach_device",
     description:
       "Detach the viewer. Cindy-booted devices get a ten-minute grace period; preexisting devices remain running.",
@@ -244,7 +271,7 @@ export function registerIOSSimulatorTools(
     ...routeShape,
     snapshotId: z.string().uuid(),
   };
-  registry.register({
+  register({
     name: "get_screen_map",
     description:
       "Read a bounded accessibility-first screen map. Use its snapshotId and elementIds for the next action.",
@@ -253,7 +280,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "get_screen_map", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "audit_accessibility",
     description:
       "Run a bounded accessibility audit over the current simulator screen map without changing device state.",
@@ -281,7 +308,7 @@ export function registerIOSSimulatorTools(
       })
       .nullable(),
   });
-  registry.register({
+  register({
     name: "compare_screen_maps",
     description:
       "Compare a previously observed accessibility screen map with the current screen without changing device state.",
@@ -302,7 +329,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "compare_screen_maps", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "wait_for_ui",
     description:
       "Wait for one bounded accessibility condition without fixed sleeps, then return a fresh screen map.",
@@ -316,7 +343,7 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "wait_for_ui", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "tap",
     description:
       "Tap an element from the current screen map, or explicit device coordinates as a fallback.",
@@ -329,7 +356,7 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "tap", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "swipe",
     description:
       "Swipe between explicit device points after observing the current screen map.",
@@ -344,10 +371,10 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "swipe", args, getContext?.()),
   });
-  registry.register({
-    name: "drag",
+  register({
+    name: "drag_on_simulator",
     description:
-      "Drag from one element in the current screen map to another using native HID when admitted and WDA otherwise.",
+      "Drag from one element in the simulated device's current screen map to another, using native HID when admitted and WDA otherwise. Not a host mouse drag.",
     inputShape: {
       ...snapshotRouteShape,
       fromElementId: z.string().min(1).max(128),
@@ -357,7 +384,7 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "drag", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "long_press",
     description:
       "Long-press an element from the current screen map for a bounded duration.",
@@ -369,10 +396,10 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "long_press", args, getContext?.()),
   });
-  registry.register({
-    name: "key_press",
+  register({
+    name: "press_simulator_key",
     description:
-      "Send one bounded WebDriver keyboard key to the currently focused control.",
+      "Send one bounded WebDriver keyboard key to the control focused inside the simulated device. Not a host key press.",
     inputShape: {
       ...snapshotRouteShape,
       key: keyName,
@@ -380,7 +407,7 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "key_press", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "batch",
     description:
       "Run up to 16 low-risk UI actions against one instance route, stopping on the first failure and returning a final observation.",
@@ -399,7 +426,7 @@ export function registerIOSSimulatorTools(
     y: z.number().finite().nonnegative().max(1_000_000),
     dtMs: z.number().int().min(0).max(60_000).optional(),
   });
-  registry.register({
+  register({
     name: "touch_path",
     description:
       "Perform one bounded continuous native touch path in device coordinates after observing the current screen map. Use edge only for an intentional system-edge gesture.",
@@ -411,7 +438,7 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "touch_path", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "touch2_path",
     description:
       "Perform two synchronized bounded native touch paths in device coordinates after observing the current screen map. Both paths must use matching phases and timing.",
@@ -424,9 +451,10 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "touch2_path", args, getContext?.()),
   });
-  registry.register({
-    name: "type_text",
-    description: "Type bounded text into the currently focused control.",
+  register({
+    name: "type_simulator_text",
+    description:
+      "Type bounded text into the control focused inside the simulated device. Not host keyboard input and not browser input.",
     inputShape: {
       ...snapshotRouteShape,
       text: z.string().max(10_000),
@@ -434,14 +462,14 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "type_text", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "press_home",
     description:
       "Press the simulated Home button after observing the current screen map.",
     inputShape: { ...snapshotRouteShape, ...observeAfterShape },
     handler: async (args) => callHost(deps, "press_home", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "set_orientation",
     description: "Rotate the simulator after observing the current screen map.",
     inputShape: {
@@ -451,7 +479,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "set_orientation", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "set_appearance",
     description: "Set the simulated system appearance to light or dark.",
     inputShape: {
@@ -461,7 +489,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "set_appearance", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "set_increase_contrast",
     description:
       "Enable or disable the simulated Increase Contrast accessibility setting.",
@@ -472,7 +500,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "set_increase_contrast", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "set_content_size",
     description: "Set the simulated Dynamic Type content-size category.",
     inputShape: {
@@ -495,7 +523,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "set_content_size", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "set_location",
     description: "Set a simulated latitude and longitude on the exact device.",
     inputShape: {
@@ -506,7 +534,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "set_location", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "start_location_route",
     description:
       "Start a bounded simulated route through explicit latitude and longitude waypoints.",
@@ -533,14 +561,14 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "start_location_route", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "clear_location",
     description: "Clear any simulated location from the exact device.",
     inputShape: routeShape,
     handler: async (args) =>
       callHost(deps, "clear_location", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "set_privacy",
     description:
       "Grant, revoke, or reset one simulated privacy permission for an app.",
@@ -556,7 +584,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "set_privacy", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "push_notification",
     description:
       "Send one bounded APNs payload to an installed app on the exact simulator.",
@@ -568,7 +596,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "push_notification", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "set_status_bar",
     description:
       "Apply deterministic status-bar overrides to the exact simulator.",
@@ -576,7 +604,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "set_status_bar", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "clear_status_bar",
     description:
       "Clear all simulated status-bar overrides on the exact simulator.",
@@ -584,7 +612,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "clear_status_bar", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "lock_screen",
     description:
       "Lock the exact simulator after observing the current screen map.",
@@ -592,7 +620,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "lock_screen", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "unlock_screen",
     description:
       "Unlock the exact simulator after observing the current screen map.",
@@ -600,7 +628,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "unlock_screen", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "build_app",
     description:
       "Build one iOS app for the embedded simulator instance. Xcode runs the project's build scripts as the current macOS user, so scripts may read or modify files outside the project and build output is returned to the Agent. Approve only for a trusted project. For repositories with multiple or nested Xcode containers, pass containerPath as a worktree-relative path (or an absolute path that still resolves inside the worktree), then select a shared scheme when needed. Continue with install_app and launch_app on this same Cindy session.",
@@ -611,7 +639,7 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "build_app", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "read_build_diagnostics",
     description:
       "Read a bounded chunk of build output or xcresult diagnostics returned by a successful or failed build_app call.",
@@ -630,7 +658,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "read_build_diagnostics", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "install_app",
     description:
       "Install a build artifact produced for this Cindy session onto the exact simulator.",
@@ -638,7 +666,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "install_app", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "launch_app",
     description:
       "Launch an installed build artifact on the exact Cindy embedded simulator with bounded arguments; this does not open macOS Simulator.app.",
@@ -649,7 +677,7 @@ export function registerIOSSimulatorTools(
     },
     handler: async (args) => callHost(deps, "launch_app", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "terminate_app",
     description:
       "Terminate the app represented by a current build artifact on the exact simulator.",
@@ -657,22 +685,22 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "terminate_app", args, getContext?.()),
   });
-  registry.register({
-    name: "open_url",
+  register({
+    name: "open_simulator_url",
     description:
-      "Open a validated non-file URL on the exact simulator. This may require URL approval.",
+      "Hand a validated non-file URL to iOS inside the simulated device, so the simulator's own browser or a deep-link handler opens it. This never fetches the URL for you and never opens it on this Mac: read web pages or web data with the browser and fetch tools instead. Requires an owned simulator instance route and may require URL approval.",
     inputShape: { ...routeShape, url: z.string().min(1).max(8_192) },
     handler: async (args) => callHost(deps, "open_url", args, getContext?.()),
   });
-  registry.register({
-    name: "take_screenshot",
+  register({
+    name: "take_simulator_screenshot",
     description:
-      "Capture the exact simulator and persist the explicit result in Cindy media. The image may be sent to the model.",
+      "Capture the simulated device's own screen and persist the explicit result in Cindy media. Not a screenshot of this Mac or of a browser page. The image may be sent to the model.",
     inputShape: routeShape,
     handler: async (args) =>
       callHost(deps, "take_screenshot", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "capture_visual_baseline",
     description:
       "Capture a bounded in-memory screenshot baseline for a later pixel diff. The baseline is not persisted as media.",
@@ -680,7 +708,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "capture_visual_baseline", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "visual_diff",
     description:
       "Compare the current simulator screenshot with an in-memory baseline and return bounded pixel metrics.",
@@ -693,7 +721,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "visual_diff", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "capture_state",
     description:
       "Capture one bounded diagnostic state with driver health, orientation, screen map, and stream metadata.",
@@ -702,7 +730,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "capture_state", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "get_diagnostics",
     description: "Read one session-scoped bounded diagnostics entry by ID.",
     readOnly: true,
@@ -710,7 +738,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "get_diagnostics", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "start_recording",
     description:
       "Start one explicit H.264 simulator recording in a unique temporary file.",
@@ -718,7 +746,7 @@ export function registerIOSSimulatorTools(
     handler: async (args) =>
       callHost(deps, "start_recording", args, getContext?.()),
   });
-  registry.register({
+  register({
     name: "stop_recording",
     description:
       "Stop a current recording and ingest the finalized MOV into Cindy media.",

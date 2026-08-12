@@ -64,20 +64,19 @@ export {
   findModelRegistryRoute,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
-export { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
+export { modelRegistryCanonicalJson } from './modelRegistryCanonical.js';
+export {
+  isModelCurrency,
+  parseListModelsResponse,
+  parseModelRegistry,
+} from './modelAccessValidator.js';
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
   ModelRegistryRevisionRelation,
   ModelRegistrySnapshotDecision,
 } from './modelRegistry.js';
-export type {
-  ModelReferencePrice,
-  ModelReferencePriceSource,
-  ModelRegistry,
-  ModelRegistryEntry,
-  ModelRegistryRoute,
-} from '@cindy/model-access-protocol';
+export * from './modelAccessBean.js';
 export type {
   CatalogSourceConfig,
   CatalogIO,

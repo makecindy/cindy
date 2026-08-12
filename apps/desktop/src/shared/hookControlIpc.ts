@@ -108,7 +108,7 @@ export type HookProvider = 'slack' | 'telegram' | 'x';
 /** provider-neutral 状态机(非 slack legacy 线)覆盖的 provider。 */
 export type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
 
-/** provider-neutral 绑定状态（与 cindy-protocol v1 严格同形）。 */
+/** provider-neutral 绑定状态（与本仓 slack-hook-protocol v1 严格同形）。 */
 export type ProviderBindingState =
   | 'none'
   | 'pending'

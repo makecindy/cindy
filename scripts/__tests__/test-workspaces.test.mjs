@@ -117,58 +117,12 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	);
 });
 
-test("client CI builds model-access protocol before consumer checks", () => {
+test("client CI no longer builds model-access protocol for consumers", () => {
 	const workflow = fs.readFileSync(
 		path.join(ROOT, ".github", "workflows", "ci.yml"),
 		"utf8",
 	).replace(/\r\n/g, "\n");
-	const jobs = [
-		{
-			name: "verify-checks",
-			body: workflow.match(/\n  verify-checks:\n([\s\S]*?)\n  linux-unit-shards:/)?.[1],
-			consumerCommand: "run: pnpm --filter desktop typecheck",
-		},
-		{
-			name: "linux-unit-shards",
-			body: workflow.match(/\n  linux-unit-shards:\n([\s\S]*?)\n  verify:/)?.[1],
-			consumerCommand: "run: pnpm exec node scripts/test-workspaces.mjs --tier unit",
-		},
-		{
-			name: "windows-unit-shards",
-			body: workflow.match(/\n  windows-unit-shards:\n([\s\S]*?)\n  windows-unit:/)?.[1],
-			consumerCommand: "run: pnpm test:unit",
-		},
-	];
-
-	for (const { name, body, consumerCommand } of jobs) {
-		assert.ok(body, `client CI must define the ${name} job`);
-		const installIndex = body.indexOf("run: pnpm install --frozen-lockfile");
-		const buildIndex = body.indexOf(
-			"run: pnpm --filter @cindy/model-access-protocol build",
-		);
-		const consumerIndex = body.indexOf(consumerCommand);
-		assert.ok(installIndex >= 0, `${name} must install dependencies`);
-		assert.ok(buildIndex > installIndex, `${name} must build protocol after install`);
-		assert.ok(
-			consumerIndex > buildIndex,
-			`${name} must build protocol before consumer checks`,
-		);
-	}
-});
-
-test("Linux unit shards reject unsafe protocol gitlinks before installing dependencies", () => {
-	const workflow = fs.readFileSync(
-		path.join(ROOT, ".github", "workflows", "ci.yml"),
-		"utf8",
-	).replace(/\r\n/g, "\n");
-	const body = workflow.match(/\n  linux-unit-shards:\n([\s\S]*?)\n  verify:/)?.[1];
-	assert.ok(body, "client CI must define Linux unit shards");
-	const fetchIndex = body.indexOf("git submodule update --init --force --recursive -- cindy-protocol");
-	const guardIndex = body.indexOf("run: node scripts/check-submodule-forward.mjs");
-	const installIndex = body.indexOf("run: pnpm install --frozen-lockfile");
-	assert.ok(fetchIndex >= 0, "Linux unit shards must fetch cindy-protocol");
-	assert.ok(guardIndex > fetchIndex, "Linux unit shards must validate the fetched protocol gitlink");
-	assert.ok(installIndex > guardIndex, "Linux unit shards must reject unsafe gitlinks before install");
+	assert.doesNotMatch(workflow, /pnpm --filter @cindy\/model-access-protocol build/);
 });
 
 test("help groups copyable desktop, binary, and Mobile workflows", async () => {
@@ -805,14 +759,14 @@ test("filterRunsByWorkspace selects by manifest name or cwd and supports exclude
 	);
 });
 
-test("expandWorkspacePatterns supports nested submodule package roots", () => {
+test("expandWorkspacePatterns supports nested workspace package roots", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-patterns-"));
 	try {
-		const pkg = path.join(root, "cindy-protocol", "packages", "protocol-a");
+		const pkg = path.join(root, "vendor", "protocols", "protocol-a");
 		fs.mkdirSync(pkg, { recursive: true });
 		fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"protocol-a"}\n');
-		assert.deepEqual(expandWorkspacePatterns(root, ["cindy-protocol/packages/*"]), [
-			"cindy-protocol/packages/protocol-a",
+		assert.deepEqual(expandWorkspacePatterns(root, ["vendor/protocols/*"]), [
+			"vendor/protocols/protocol-a",
 		]);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });

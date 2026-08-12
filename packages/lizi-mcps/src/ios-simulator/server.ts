@@ -56,7 +56,7 @@ export function createIOSSimulatorMcpServer(
 
   server.tool(
     "list_tools",
-    "Discover Cindy's embedded iOS Simulator tools. This is the preferred entry point for opening, running, testing, or debugging an iOS app in Cindy. Do not use cindy_computer to launch macOS Simulator.app unless the user explicitly requests an external system window. Start with check_environment before selecting a device.",
+    "Discover Cindy's embedded iOS Simulator tools. This is the preferred entry point for opening, running, testing, or debugging an iOS app in Cindy. Everything behind it acts on a simulated Apple device: never use it to browse the web, fetch HTTP data, or automate this Mac — use the browser, fetch, or computer tools for those. Do not use cindy_computer to launch macOS Simulator.app unless the user explicitly requests an external system window. Start with check_environment before selecting a device.",
     { category: z.enum(["ios_simulator"]).optional() },
     async () => {
       const availability = await deps.describeTools?.(readContext(options));
@@ -70,7 +70,7 @@ export function createIOSSimulatorMcpServer(
               tools: registry.list(availability?.tools),
               ...(availability ? { availability } : {}),
               workflow:
-                "Use this embedded viewer workflow: check_environment, then list_devices and either create_instance or attach_device, then start_instance. Build, install, and launch the app through this server. Route mutations with instanceId, generation, and leaseId.",
+                "Use this embedded viewer workflow: check_environment, then list_simulator_devices and either create_instance or attach_device, then start_instance. Build, install, and launch the app through this server. Route mutations with instanceId, generation, and leaseId.",
             }),
           },
         ],
@@ -79,7 +79,7 @@ export function createIOSSimulatorMcpServer(
   );
   server.tool(
     "call_tool",
-    "Invoke a validated iOS Simulator tool for the current Cindy session.",
+    "Invoke a validated iOS Simulator tool for the current Cindy session. Every tool here targets a simulated Apple device, so do not route web browsing, HTTP fetching, or host automation through it.",
     {
       name: z.string(),
       args: jsonObjectArg("Arguments object for the selected tool"),

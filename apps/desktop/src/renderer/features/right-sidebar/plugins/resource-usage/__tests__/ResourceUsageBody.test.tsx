@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TabKindHostContext } from '../../../types';
@@ -25,7 +25,11 @@ import { ResourceUsageBody } from '../ResourceUsageBody';
 const subscribe = vi.fn(async () => undefined);
 const unsubscribe = vi.fn(async () => undefined);
 const offSample = vi.fn();
-const onSample = vi.fn(() => offSample);
+let sampleListener: ((sample: import('../../../../../../shared/processMonitor').ProcessMonitorSample) => void) | null = null;
+const onSample = vi.fn((listener: typeof sampleListener) => {
+  sampleListener = listener;
+  return offSample;
+});
 
 function makeContext({
   remoteHostId = null,
@@ -51,6 +55,7 @@ beforeEach(() => {
   unsubscribe.mockClear();
   offSample.mockClear();
   onSample.mockClear();
+  sampleListener = null;
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -83,6 +88,30 @@ describe('ResourceUsageBody local-only gate', () => {
     ).toBeTruthy();
     expect(onSample).not.toHaveBeenCalled();
     expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  it('reports readiness only after the first local sample is committed', () => {
+    const onFirstSample = vi.fn();
+    render(
+      <ResourceUsageBody
+        state={{}}
+        ctx={makeContext({ deviceLinkDeviceId: null })}
+        active
+        shellVisible
+        onFirstSample={onFirstSample}
+      />,
+    );
+
+    expect(onFirstSample).not.toHaveBeenCalled();
+    act(() => {
+      sampleListener?.({ capturedAtMs: 1, entries: [] });
+    });
+    expect(onFirstSample).toHaveBeenCalledOnce();
+
+    act(() => {
+      sampleListener?.({ capturedAtMs: 2, entries: [] });
+    });
+    expect(onFirstSample).toHaveBeenCalledOnce();
   });
 
   it('releases the local subscription when the tab switches to an SSH task', () => {

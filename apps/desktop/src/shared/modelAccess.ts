@@ -207,3 +207,15 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   /** per-tab 能力覆盖(基线字段之上按 agent 应用)。 */
   perAgent?: Partial<Record<'claude-code' | 'codex', ModelAccessAgentOverride>>;
 }
+
+/**
+ * Consumer-side Bean for `GET /api/model-access/models`.
+ *
+ * The client intentionally owns this tolerant view: legacy responses may omit
+ * fields that the current server always emits, while unknown schema versions
+ * remain a runtime-parser concern.
+ */
+export interface ModelAccessModelsResponse {
+  schemaVersion: 1 | 2;
+  models: ModelAccessGatewayModel[];
+}

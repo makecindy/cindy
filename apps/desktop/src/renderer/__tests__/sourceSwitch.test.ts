@@ -51,7 +51,9 @@ describe('categorize', () => {
     expect(categorize('gpt-5.4')).toBe('gpt');
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('gemini-3-pro')).toBe('google');
-    expect(categorize('moonshotai/kimi-k2')).toBe('china');
+    // 认不出厂商 → 中性兜底组;「中国」只由目录 group 产生(见 model-providers 的
+    // classification.test.ts「只认目录下发的 group」用例)。
+    expect(categorize('moonshotai/kimi-k2')).toBe('ungrouped');
   });
 });
 
@@ -149,9 +151,9 @@ describe('resolveSourceSwitch', () => {
   });
 
   it('reconcile 候选按 mode 准入过滤(issue #882 review):mode 非 chat 且 id 落 categorize 兜底组时不被选中', () => {
-    // 故意造一个 id 不含任何非聊天关键词、只能靠 categorize 兜底落 'china' 的场景:
-    // 旧实现用纯 id 正则的 categorize 判定候选分组,'china' 在 CHAT_VENDOR_CATEGORY_ORDER
-    // 里、会被当成有效候选;换成 mode 优先的 classifyModel 后,mode='embedding' 权威判定
+    // 故意造一个 id 不含任何非聊天关键词、只能靠 categorize 兜底落中性组 'ungrouped' 的场景
+    // (2026-08 前这个兜底是 'china'):旧实现用纯 id 正则的 categorize 判定候选分组,兜底组
+    // 在 CHAT_VENDOR_CATEGORY_ORDER 里、会被当成有效候选;换成 mode 优先的 classifyModel 后,mode='embedding' 权威判定
     // 为非聊天,不再落进任何厂商组,候选列表为空。该来源只 offer 这一个模型,
     // 没有别的候选可选 —— 必须不选中它、保持模型不变,而不是"退而求其次"选一个非聊天模型。
     const r = resolveSourceSwitch({

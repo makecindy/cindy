@@ -2,15 +2,16 @@
 /**
  * rasterizeToImage — 导出倍率收敛与 SVG 固有尺寸解析的单测。
  *
- * 这两段纯计算是「复制为图片」大图内存保护的核心(4096 边长上限对齐手机版
- * mermaidWebViewHtml 的收敛逻辑);canvas / clipboard 等浏览器 API 行为不在
- * jsdom 里模拟,由运行时验证覆盖。
+ * 这两段纯计算是「复制为图片」大图内存保护的核心(默认 4096 边长 + 4096²
+ * 输出像素预算);canvas / clipboard 等浏览器 API 行为不在 jsdom 里模拟,
+ * 由运行时验证覆盖。
  */
 
 import { describe, expect, it } from 'vitest';
 
 import {
   EXPORT_MAX_EDGE_PX,
+  EXPORT_MAX_OUTPUT_PIXELS,
   EXPORT_PNG_SCALE,
   computeExportScale,
   parseSvgIntrinsicSize,
@@ -32,9 +33,7 @@ describe('computeExportScale', () => {
     expect(computeExportScale(8192, 100)).toBe(EXPORT_MAX_EDGE_PX / 8192);
     // 超长内容(>40960px)不得为可读性抬倍率突破边长上限(review P1)
     expect(computeExportScale(1_000_000, 100)).toBe(EXPORT_MAX_EDGE_PX / 1_000_000);
-    expect(1_000_000 * computeExportScale(1_000_000, 100)).toBeLessThanOrEqual(
-      EXPORT_MAX_EDGE_PX,
-    );
+    expect(1_000_000 * computeExportScale(1_000_000, 100)).toBeLessThanOrEqual(EXPORT_MAX_EDGE_PX);
   });
 
   it('非法尺寸回退 1', () => {
@@ -46,6 +45,16 @@ describe('computeExportScale', () => {
   it('自定义目标倍率同样受上限收敛', () => {
     expect(computeExportScale(400, 300, 2)).toBe(2);
     expect(computeExportScale(4000, 300, 2)).toBeCloseTo(4096 / 4000);
+  });
+
+  it('自定义长边允许窄长图超过 4096,同时守住同一输出像素预算', () => {
+    const width = 800;
+    const height = 10_000;
+    const scale = computeExportScale(width, height, 2, 16_384, EXPORT_MAX_OUTPUT_PIXELS);
+
+    expect(scale).toBeGreaterThan(1);
+    expect(Math.max(width, height) * scale).toBeLessThanOrEqual(16_384);
+    expect(width * height * scale * scale).toBeCloseTo(EXPORT_MAX_OUTPUT_PIXELS);
   });
 });
 

@@ -17,6 +17,7 @@ import {
   formatContextWindow,
   groupModelsForDisplay,
   groupOf,
+  isAgentSelectableModel,
   isBudgetModel,
   isChatEligible,
   isModelSelectableForNewRoute,
@@ -48,7 +49,8 @@ describe('categorize', () => {
     expect(categorize('gpt-5.4')).toBe('gpt');
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('gemini-3-pro')).toBe('google');
-    expect(categorize('moonshotai/kimi-k2')).toBe('china');
+    // 认不出厂商 → 中性兜底组(「中国」只由目录 group 产生,见下方专门用例)
+    expect(categorize('moonshotai/kimi-k2')).toBe('ungrouped');
   });
 
   it('非对话类型先于厂商前缀判定(网关杂项模型按类型归组,不误入 gpt/google)', () => {
@@ -217,6 +219,81 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'qwen2.5-72b-instruct' })).toBe(true);
     expect(isChatEligible({ id: 'llama-3-70b-instruct' })).toBe(true);
   });
+
+  it('认不出厂商的对话模型落中性兜底组 ungrouped,不再被标成「中国」(2026-08)', () => {
+    // 兜底改中性前,这批全部落 china —— 分组名是用户直接看见的断言,认不出产地就不该断言。
+    expect(categorize('mistral-large-latest')).toBe('ungrouped');
+    expect(categorize('llama-3-70b-instruct')).toBe('ungrouped');
+    expect(categorize('command-r-plus')).toBe('ungrouped');
+    expect(categorize('gemma-3-27b')).toBe('ungrouped'); // Google 出品但不是 gemini- 前缀
+    expect(categorize('sonar-pro')).toBe('ungrouped');
+    expect(categorize('nova-pro')).toBe('ungrouped');
+    // o 系列与 chatgpt-4o-latest 语义上属 OpenAI,但现有前缀规则(gpt- / chatgpt/)认不出,
+    // 落中性组是**当前**行为;要归 gpt 需要单独补前缀规则,这里先把现状锁住,避免回归成 china。
+    expect(categorize('o3')).toBe('ungrouped');
+    expect(categorize('o4-mini')).toBe('ungrouped');
+    expect(categorize('chatgpt-4o-latest')).toBe('ungrouped');
+    expect(categorize('openai/o3')).toBe('ungrouped');
+  });
+
+  it('目录里存量的 group:"other" 仍按旧含义(非对话端点)解读 —— 改名不得单端翻转 wire 语义', () => {
+    // 改名前 `other` = 「不能对话的其它端点」。若按新含义(认不出厂商的对话模型)解读,
+    // seedream-5 这类 id 不含任何类型关键词、只能靠 group 判定的合成模型会从"硬拒"
+    // 变成"可选"(docs/dev-rules/protocol-compatibility.md §1:禁止单端改既有字段语义)。
+    expect(groupOf({ id: 'seedream-5', group: 'other' })).toBe('other');
+    expect(classifyModel({ id: 'seedream-5', group: 'other' })).toBe('other');
+    expect(isChatEligible({ id: 'seedream-5', group: 'other' })).toBe(false);
+    expect(isAgentSelectableModel({ id: 'seedream-5', group: 'other' })).toBe(false);
+    // 本地 categorize 算出的 `ungrouped` 是独立的新分类,兜底组照常可选。
+    expect(categorize('seedream-5')).toBe('ungrouped');
+    expect(isChatEligible({ id: 'mistral-large-latest' })).toBe(true);
+  });
+
+  it('兜底组仍是对话厂商组:认不出厂商 ≠ 不能对话,不得从 availableModels 消失(2026-08 回归锁)', () => {
+    expect(isChatEligible({ id: 'mistral-large-latest' })).toBe(true);
+    expect(isChatEligible({ id: 'o3' })).toBe(true);
+    expect(isChatEligible({ id: 'some-brand-new-vendor-model' })).toBe(true);
+    // 反向:group 显式声明非对话端点时照旧硬拒(方向不对称,见 isChatEligible 注释)。
+    expect(isChatEligible({ id: 'some-brand-new-vendor-model', group: 'other' })).toBe(false);
+  });
+
+  it('「中国」只认目录下发的 group,客户端不猜产地(2026-08 定案)', () => {
+    // 目录标了就进中国(这是「中国」组唯一的来源)。
+    expect(classifyModel({ id: 'qwen/qwen3.7-max', group: 'china' })).toBe('china');
+    expect(classifyModel({ id: 'z-ai/glm-5.1', group: 'china', mode: 'chat' })).toBe('china');
+    // 同一批 id 在**没有** group 时不再被猜成中国来源 —— 产地不是 id 能可靠推断的属性,
+    // 猜错等于把别家模型挂到「中国」下面;落中性组由服务端补 group 归位。
+    expect(categorize('qwen/qwen3.7-max')).toBe('ungrouped');
+    expect(categorize('z-ai/glm-5.1')).toBe('ungrouped');
+    expect(categorize('deepseek/deepseek-v4-pro')).toBe('ungrouped');
+    expect(categorize('moonshotai/kimi-k2.6')).toBe('ungrouped');
+    expect(categorize('doubao-1.8-pro')).toBe('ungrouped');
+    // 未标 group 也照旧可选,不会从 availableModels 消失。
+    expect(isChatEligible({ id: 'qwen/qwen3.7-max' })).toBe(true);
+  });
+
+  it('主厂商前缀认命名空间形态:目录 id 本来就带命名空间,缺 group 时不该整批掉进兜底组', () => {
+    // catalog/model-registry.json 里的 id 形态就是这样(2026-08 实测 45 条全部带命名空间)。
+    expect(categorize('anthropic/claude-opus-5')).toBe('anthropic');
+    expect(categorize('openai/gpt-5.5')).toBe('gpt');
+    expect(categorize('openai/gpt-5.4-mini')).toBe('gpt');
+    expect(categorize('google/gemini-3.5-flash')).toBe('google');
+    expect(categorize('gateway/anthropic/claude-sonnet-5')).toBe('anthropic'); // 多层同样取尾段
+    // 折扣路由不能被"认尾段"的 gpt 规则抢走:codex/gpt-5.4 的尾段就是 gpt-5.4。
+    expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
+    expect(categorize('codex/gpt-5.6-sol')).toBe('gpt-budget');
+    // xd/codex-gpt-* 的尾段是 codex-gpt-*,不以 gpt- 开头,同样不落 gpt 组。
+    expect(categorize('xd/codex-gpt-5.5')).not.toBe('gpt');
+    expect(groupOf({ id: 'xd/codex-gpt-5.5', group: 'gpt-budget' })).toBe('gpt-budget');
+  });
+
+  it('非对话类型判定优先于兜底:qwen 家族的语音/向量/重排端点各归其类,不落对话兜底组', () => {
+    expect(categorize('qwen-tts')).toBe('tts');
+    expect(categorize('qwen3-asr-flash-realtime')).toBe('stt');
+    expect(categorize('Qwen/Qwen3-Embedding-8B')).toBe('embedding');
+    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('other');
+    expect(isChatEligible({ id: 'qwen-tts' })).toBe(false);
+  });
 });
 
 describe('groupOf — 数据优先,前缀兜底', () => {
@@ -340,7 +417,7 @@ describe('isChatEligible — 决定能否进 Agent availableModels(issue #882 �
     expect(isChatEligible({ id: 'claude-opus-4-8' })).toBe(true);
     expect(isChatEligible({ id: 'gpt-5.5' })).toBe(true);
     expect(isChatEligible({ id: 'x-ai/grok-4.5' })).toBe(true); // 无 mode 时按修正后的 grok 分组,可用
-    expect(isChatEligible({ id: 'moonshotai/kimi-k2' })).toBe(true); // china 兜底组
+    expect(isChatEligible({ id: 'moonshotai/kimi-k2' })).toBe(true); // ungrouped 兜底组
     expect(isChatEligible({ id: 'some-gateway-chat-model', mode: 'chat' })).toBe(true);
   });
 

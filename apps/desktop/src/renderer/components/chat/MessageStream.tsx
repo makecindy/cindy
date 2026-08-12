@@ -39,6 +39,7 @@ import {
 import {
   isAgentPlanToolName,
   isDeliveryProseText,
+  isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
@@ -1002,8 +1003,45 @@ export function buildSubagentModelMap(messages: ChatMessage[]): Map<string, stri
   return out;
 }
 
+/**
+ * 子代理内部消息判据:这条消息是不是某个 Agent/Task 调用**内部**产生的,而不是
+ * 父会话自己说的话。
+ *
+ * 数据来源与 buildSubagentModelMap 同一份:SDK 给子代理的每条消息都带
+ * `parent_tool_use_id`(= 派生它的 Agent 工具调用 id),经 makerChatStore 投影成
+ * 顶层 `parentToolUseId`(实时事件与历史重载两条路径都投影)。
+ *
+ * 形态判据不能省:legacy Claude 导入把普通 transcript 链边(`preceding-user-uuid`
+ * 这类非 tool-use id)也存进同一个字段,无条件当子代理会把父会话自己的正文一起
+ * 吞掉。只认 SDK tool-parent 形态,与 maker-shared 的投影判据共用同一个函数。
+ */
+export function isSubagentInternalMessage(message: ChatMessage): boolean {
+  const parent = message.parentToolUseId;
+  return typeof parent === 'string' && parent.length > 0 && isSubagentParentToolUseId(parent);
+}
+
+/**
+ * 「用户实际看得见的那份消息序列」——剔除子代理内部行后的视图。
+ *
+ * 所有**面向可见 UI 的派生**都必须吃这一份,不能各自去扫原始数组:turn 边界、
+ * 「最后一条 user 消息」这类判断一旦把不可见行算进去,可见气泡就会丢掉编辑入口、
+ * 运行态标记与 action bar —— 同一类坑此前已被 `isSyntheticTrigger` 行踩过一次
+ * (见 `findLastUserMessageClientId` 的注释),子代理内部行是第二类不可见行
+ * (review: codex P2)。
+ *
+ * 反面:`buildSubagentModelMap` 之类**按子代理归属反查**的派生必须继续吃原始序列,
+ * 它要的恰恰是这些被隐藏的行。
+ *
+ * 没有子代理消息时返回同一个引用,useMemo 下游不产生额外重算。
+ */
+export function selectVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.some(isSubagentInternalMessage)
+    ? messages.filter((m) => !isSubagentInternalMessage(m))
+    : messages;
+}
+
 export function buildRenderItems(
-  messages: ChatMessage[],
+  allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
   opts?: {
@@ -1021,6 +1059,43 @@ export function buildRenderItems(
   items: RenderItem[];
   singleResultMap: Map<string, string>;
 } {
+  // ── Pass -1: 剔除子代理内部消息 ──
+  // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并
+  // echo 回主流(每条都带 parent_tool_use_id)。这些是**子任务内部的经过**,不是父
+  // 会话对用户说的话 —— 官方 CLI 界面从不显示它们,Cindy 逐条渲染就等于把整篇子代理
+  // 报告原样铺进聊天窗口(实测一条子代理正文 5.5k 字符直接刷屏)。
+  //
+  // 它们的去处是自己那张 AgentTaskCard(仍由 taskUpdates 正常渲染),不是主流。
+  // 过滤放在最前面:后续所有 pass(tool_result lookup、段落配对、turn 边界、work-group)
+  // 看到的都是同一份"用户可见"的消息序列,不会出现"查得到但不渲染"的半吊子状态。
+  const hasSubagentInternalMessages = allMessages.some(isSubagentInternalMessage);
+  // 过滤后下标 → 原始下标。**产物**类派生(生成文件 chip、媒体卡)必须回到原始序列取
+  // turn 切片:子代理用 Write / Bash 建的文件、出图出片工具返回的媒体都是真实产物,
+  // 只是承载它们的工具行不该渲染;只喂过滤后的切片会让这些卡静默消失(review: codex P2)。
+  const originalIndexByVisible: number[] = [];
+  const messages = hasSubagentInternalMessages
+    ? allMessages.filter((m, idx) => {
+        if (isSubagentInternalMessage(m)) return false;
+        originalIndexByVisible.push(idx);
+        return true;
+      })
+    : allMessages;
+
+  /**
+   * 把过滤后的 turn 区间 `[lo, hi)` 映射回原始序列的区间,使产物收集能看到被隐藏的
+   * 子代理工具调用。`hi` 落在末尾时右端取 `allMessages.length`,保证最后一个 turn
+   * 也覆盖到它后面的子代理尾巴。
+   */
+  const originalTurnSlice = (lo: number, hi: number): readonly ChatMessage[] => {
+    if (!hasSubagentInternalMessages) return messages.slice(lo, hi);
+    const start = originalIndexByVisible[lo];
+    if (start === undefined) return messages.slice(lo, hi);
+    const end = hi < originalIndexByVisible.length
+      ? originalIndexByVisible[hi]
+      : allMessages.length;
+    return allMessages.slice(start, end);
+  };
+
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
   // Plan/task rendering and regular tool result pairing both need a stable
   // lookup by vendor toolUseId. Adjacency remains a fallback in Pass 2.
@@ -1190,9 +1265,36 @@ export function buildRenderItems(
         changeSet,
       });
     }
+    // 子代理工具结果里的媒体产物(出图 / 视频 / 音频 / 模型)。这些工具行本身被隐藏,
+    // 不进 tool_segment,所以段级的 pendingSegmentMedia 收不到它们;而 AgentTaskUpdate
+    // 没有承载媒体的字段,不补这一路产物卡就会随内部工具行一起消失(review: codex P2)。
+    // 归属到 turn 一级,与产物文件卡同一处理方式。
+    //
+    // 只收**被隐藏的**那部分:可见工具行的媒体照旧走 tool_segment,不能在这里重复渲染。
+    // ghost_call 的锚卡逻辑不在这条路径上——子代理不参与意识卡片的开卡/锚定。
+    if (hasSubagentInternalMessages) {
+      const hiddenMedia: ToolMediaItem[] = [];
+      const seenMediaUrls = new Set<string>();
+      for (const message of originalTurnSlice(lo, hi)) {
+        if (message.role !== 'tool_result' || !isSubagentInternalMessage(message)) continue;
+        for (const item of extractToolResultMedia(message.content)) {
+          if (seenMediaUrls.has(item.url)) continue;
+          seenMediaUrls.add(item.url);
+          hiddenMedia.push(item);
+        }
+      }
+      if (hiddenMedia.length > 0) {
+        items.push({
+          type: 'tool_media',
+          key: `subagent-media-${anchorClientId}`,
+          items: hiddenMedia,
+        });
+      }
+    }
+
     const workingDir = opts?.workingDir ?? '';
     if (!workingDir || hi <= lo) return;
-    const slice = messages.slice(lo, hi);
+    const slice = originalTurnSlice(lo, hi);
     const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
       const normalized = pathKey(file.path);
       return !exactPaths.has(normalized) || changeSets.length === 0;
@@ -2611,6 +2713,13 @@ export function MessageStream({
     };
   }, [remoteHostId, sessionId]);
 
+  // 「用户实际看得见的那份序列」。turn 边界与 last-user 这类**可见 UI 派生**统一吃它,
+  // 否则被隐藏的子代理行会被当成 turn 边界或「最后一条 user 消息」,让可见气泡丢掉编辑
+  // 入口与运行态标记(review: codex P2;同族的 isSyntheticTrigger 坑见
+  // findLastUserMessageClientId 注释)。按子代理归属反查的派生(buildSubagentModelMap)
+  // 仍吃原始 messages —— 它要的正是这些被隐藏的行。
+  const visibleMessages = useMemo(() => selectVisibleMessages(messages), [messages]);
+
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
@@ -2624,13 +2733,13 @@ export function MessageStream({
     [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, turnChangeSets, workingDir],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
-    () => collectAssistantsWithFollowingUserBoundary(messages),
-    [messages],
+    () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
+    [visibleMessages],
   );
   // action bar 只挂每个 turn 的收尾 assistant 正文(见 collectTurnFinalAssistantClientIds)。
   const turnFinalAssistantClientIds = useMemo(
-    () => collectTurnFinalAssistantClientIds(messages),
-    [messages],
+    () => collectTurnFinalAssistantClientIds(visibleMessages),
+    [visibleMessages],
   );
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
@@ -3918,7 +4027,7 @@ export function MessageStream({
   // 不挂载组件(卸载时组件自会把 navRailCoversNav 报回 false,chip 兜底回归),
   // 也不做下面的空闲补页。
   const { enabled: navRailEnabled } = useMessageNavRailPreference();
-  const navRailEntries = useMemo(() => deriveNavRailEntries(messages), [messages]);
+  const navRailEntries = useMemo(() => deriveNavRailEntries(visibleMessages), [visibleMessages]);
 
   // 入口去重:导航条**完整覆盖导航**(出场且刻度未截断)时抑制"跳到上一条
   // 提问"chip —— 同一个导航任务只保留一套入口。导航条缺席(短对话 / 窄窗 /
@@ -4051,18 +4160,35 @@ export function MessageStream({
   // edit-last-message: 最后一条 user 消息才显示编辑入口(编辑 = rewind 到该条
   // + 重发,更早的消息会连带丢弃后续轮次,v1 不开放)。与 first 同理用全量
   // messages 判定,不受窗口分页影响。
-  const lastUserMessageClientId = useMemo(() => findLastUserMessageClientId(messages), [messages]);
+  // 走 visibleMessages:子代理内部的 user 行渲染不出来,让它成为"最后一条 user"
+  // 会把编辑入口从真实的最后一条可见气泡上抢走 —— 与该 helper 里 isSyntheticTrigger
+  // 那条同源(review: codex P2)。
+  const lastUserMessageClientId = useMemo(
+    () => findLastUserMessageClientId(visibleMessages),
+    [visibleMessages],
+  );
   // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
-  const lastUserInputClientId = useMemo(() => findLastUserInputClientId(messages), [messages]);
+  // 同样走可见序列:子代理内部的 user 行不是父会话某个 turn 的发起者,算进来会让
+  // 在飞的重连行被"夺走归属"、提前停转。
+  const lastUserInputClientId = useMemo(
+    () => findLastUserInputClientId(visibleMessages),
+    [visibleMessages],
+  );
 
+  // 刻意吃**原始** messages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
+  // 真实花费,过滤掉等于把子代理的账从用量里抹掉(成本失真,比显示问题更糟)。
+  // 归属键 turnFinalAssistantClientIds 已按可见序列算出,聚合区间仍落在正确的 turn 内。
   const userTurnUsageDetailsByAssistantId = useMemo(() => {
     return collectAssistantTurnUsageDetails(messages, turnFinalAssistantClientIds);
   }, [messages, turnFinalAssistantClientIds]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
-  // 知道"是不是最后一条"来跳过重复渲染。
+  // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
+  // 真实的最后一条可见 error 会因为"不是最后一条"而在流内重复渲染一遍。
   const lastMessageClientId =
-    messages.length > 0 ? messages[messages.length - 1].clientId : undefined;
+    visibleMessages.length > 0
+      ? visibleMessages[visibleMessages.length - 1].clientId
+      : undefined;
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
     return collectStableLocalFileRefs(messages, previousLocalFileRefsRef.current);
@@ -4083,7 +4209,12 @@ export function MessageStream({
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
   // context,流式期间 messages 每批 delta 都换引用,不缓存会让全部历史
   // 消息每批 token 重渲一遍(ghostCallMapsEqual 注释有完整推导)。
-  const ghostCallsByUserTurnRaw = useMemo(() => collectGhostCallsByUserTurn(messages), [messages]);
+  // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
+  // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
+  const ghostCallsByUserTurnRaw = useMemo(
+    () => collectGhostCallsByUserTurn(visibleMessages),
+    [visibleMessages],
+  );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
     ghostCallsCacheRef.current = ghostCallsByUserTurnRaw;
@@ -4150,6 +4281,7 @@ export function MessageStream({
               态丢失 / 滚动锚点漂走。 */}
                 <div
                   ref={itemsRef}
+                  data-share-selection-active={shareSelectionActive ? '' : undefined}
                   className={cn(
                     // msg-stream-items:直接子元素(每条 render item 的根节点)带
                     // content-visibility:auto(globals.css)—— 视口外条目跳过布局

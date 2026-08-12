@@ -185,6 +185,7 @@ import {
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
+import { warmStaleProcessProvenance } from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
@@ -232,7 +233,7 @@ import {
 } from './file-browser/remote-file-cache';
 import { sweepStartupDraftImages } from './imageCacheOrphanSweep';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import * as videoCacheStore from './videoCacheStore';
 import { imageSchemePrivilege, registerImageProtocolHandler } from './imageProtocol';
 import { videoSchemePrivilege, registerVideoProtocolHandler } from './videoProtocol';
@@ -289,7 +290,10 @@ import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
 } from './localDb/betterSqliteFactory';
-import { freezeSessionActiveTurnMarkers } from './localDb/sessionActiveTurn';
+import {
+  beginSessionTurnEndedSuppression,
+  freezeSessionActiveTurnMarkers,
+} from './localDb/sessionActiveTurn';
 import { getDrizzleDir } from './localDb/migrate';
 import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
 import {
@@ -349,6 +353,7 @@ import {
 } from './windowFocusClassifier.js';
 import {
   assertTrustedAppRendererEvent,
+  isTrustedAppRendererEvent,
   isTrustedAppRendererWindow,
 } from './security/trustedAppRenderer.js';
 import { isMainShellWindowUrl } from './cindy-brain/scheduleSlot.js';
@@ -470,6 +475,10 @@ import {
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
+import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
+import { createResourceUsageWindow } from './resource-usage-window/window.js';
+import { registerResourceUsageWindowIpc } from './resource-usage-window/ipc.js';
+import { isResourceUsageOpenSender } from './resource-usage-window/open-sender.js';
 import { GhostPanelWindowsController } from './ghost-panel-window/controller.js';
 import { createGhostPanelWindow } from './ghost-panel-window/window.js';
 import { registerGhostPanelWindowIpc } from './ghost-panel-window/ipc.js';
@@ -499,7 +508,7 @@ import {
   withSendToSessionLock,
 } from './maker-ipc/register.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
-import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH } from './maker-ipc/channels.js';
+import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
   preserveLegacyMakerMemoryDisabled,
   readMemorySettings,
@@ -606,7 +615,22 @@ import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
-import { isSecondaryAppWindow, openSessionInNewWindow } from './secondary-windows.js';
+import {
+  isSecondaryAppWindow,
+  openSessionInNewWindow,
+  openSessionInNewWindowIfDroppedOutside,
+} from './secondary-windows.js';
+import {
+  beginSessionDragPreview,
+  consumeNativeSessionDragOpenResult,
+  disposeSessionDragPreview,
+  endSessionDragPreview,
+  prewarmSessionDragReleaseHelper,
+} from './session-drag-preview.js';
+import {
+  parseSessionDragPreviewPalette,
+  truncateSessionDragPreviewLabel,
+} from './sessionDragPreviewHtml.js';
 import {
   isGlobalVoiceInputOverlayVisible,
   registerGlobalVoiceInputIpc,
@@ -625,7 +649,7 @@ import {
 } from './deepLink.js';
 import { registerFolderContextMenu } from './folderContextMenu.js';
 import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
-import { CURRENT_APP_ID } from '../shared/brandRegion.js';
+import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
   writeSwallowActivationClick,
@@ -1031,6 +1055,7 @@ const safeStorageReadLog = createLogger('safe-storage:read');
 const rendererConsoleLog = createLogger('renderer-console');
 const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
+const sessionDragPreviewLog = createLogger('session-drag-preview');
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
@@ -1179,26 +1204,38 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // 的 Maker 上兑现旧 owner 的记忆设置重启(shutdown 触发的会话关闭事件也会
   // 撞上它,先清再关)。
   clearDeferredCodexRestartForOwnerBoundary();
+  // interrupted-turn-resume:shutdown 批量 close 会话会触发 close teardown 的
+  // markSessionTurnEnded,把"边界时还在飞的 turn"伪装成正常收尾 —— 被切换打断的
+  // 任务从此既无中断横幅也无红点,呈现为"卡住且无报错"(与 ⌘Q 的 quit freeze 同款
+  // 问题,quit freeze 只保护退出编排,不覆盖这里)。shutdown 到 DB dispose 期间抑制
+  // ended 写,保住 startedAt > endedAt 的中断痕迹;不覆盖 teardown 前段,边界早段
+  // 自然完成的 turn 照常收尾。释放放 finally:抑制器是进程级计数,泄漏一次就把
+  // 后续 owner 的正常收尾写全部吞掉,中断横幅会在每个正常完成的任务上误弹。
+  const releaseEndedSuppression = beginSessionTurnEndedSuppression();
   try {
-    const maker = getMakerIfReady();
-    if (maker) await maker.shutdown();
-    resetMaker();
-  } catch (err) {
-    authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
-    resetMaker();
+    try {
+      const maker = getMakerIfReady();
+      if (maker) await maker.shutdown();
+      resetMaker();
+    } catch (err) {
+      authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
+      resetMaker();
+    }
+    // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
+    // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
+    // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
+    try {
+      await releaseDeviceLinkOwnershipBeforeLogout();
+    } catch (err) {
+      authBoundaryLog.error(
+        `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
+        err,
+      );
+    }
+    await lifecycleDbClientManager.dispose(reason);
+  } finally {
+    releaseEndedSuppression();
   }
-  // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
-  // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
-  // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
-  try {
-    await releaseDeviceLinkOwnershipBeforeLogout();
-  } catch (err) {
-    authBoundaryLog.error(
-      `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
-      err,
-    );
-  }
-  await lifecycleDbClientManager.dispose(reason);
   agentIslandService?.resetRuntimeState();
 }
 
@@ -1477,6 +1514,22 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
   log: createLogger('ghost-panel-window-controller'),
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
+
+// ── 资源用量独立子窗口 ──────────────────────────────────────────────
+// 单实例轻量子窗口:顶部菜单「资源用量」→ open()。不需要 detach/attach 偏好、
+// 不需要 session 上下文转发。后台预热后常驻复用，普通关窗只隐藏。
+const resourceUsageWindowController = new ResourceUsageWindowController({
+  createWindow: () => createResourceUsageWindow(mainWindowRef),
+  isOpenSender: (sender) =>
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
+});
+registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
+
 setGhostsChangedObserver((ghosts) => {
   ghostPanelWindowsController.reconcile(ghosts);
   if (!isIOSSimulatorPluginActive(ghosts)) clearIOSSimulatorRendererAccess();
@@ -1959,6 +2012,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
   refreshGhostLocalization();
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
@@ -2582,6 +2636,7 @@ if (app.isPackaged) {
 }
 
 const createWindow = () => {
+  let resourceUsagePrewarmTimer: ReturnType<typeof setTimeout> | null = null;
   const platformOptions =
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
@@ -2678,6 +2733,11 @@ const createWindow = () => {
   // 的 BrowserWindow 发 IPC 触发 'Object has been destroyed'。
   setDeepLinkMainWindow(mainWindow);
   mainWindow.once('closed', () => {
+    if (resourceUsagePrewarmTimer) {
+      clearTimeout(resourceUsagePrewarmTimer);
+      resourceUsagePrewarmTimer = null;
+    }
+    resourceUsageWindowController.destroyWindow();
     if (mainWindowRef === mainWindow) mainWindowRef = null;
     setDeepLinkMainWindow(null);
   });
@@ -2744,6 +2804,17 @@ const createWindow = () => {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     if (!app.isPackaged) markDesktopDevWindowReady();
+    // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
+    // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
+    resourceUsagePrewarmTimer = setTimeout(() => {
+      resourceUsagePrewarmTimer = null;
+      if (isQuitting || mainWindowRef !== mainWindow || mainWindow.isDestroyed()) return;
+      resourceUsageWindowController.setLocale(
+        currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
+      );
+      resourceUsageWindowController.prewarm();
+    }, 1_500);
+    resourceUsagePrewarmTimer.unref?.();
     // 日志上报的启动补传:采集 + 脱敏是同步的重活,必须让主窗口先出来(内部再延迟 15s,
     // 避开首帧的 IO 争用)。没有待补传标记时是零成本 no-op。
     scheduleStartupBackfill();
@@ -2933,6 +3004,19 @@ function syncDefaultPluginsForActiveOwner(): void {
   });
 }
 
+function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (trimmed.length === 0 || trimmed.length > 256 || value !== trimmed) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      'deviceLinkDeviceId must be a non-empty, trimmed string of at most 256 characters or null',
+    );
+  }
+  return trimmed;
+}
+
 const registerIpcHandlers = () => {
   // Find the primary app window, skipping transient utility BrowserWindows like
   // the voice-input overlay (minimizable:false, maximizable:false). Electron's
@@ -2993,11 +3077,94 @@ const registerIpcHandlers = () => {
   });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
-  ipcMain.handle(MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW, (_e, sessionId: unknown) => {
-    if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      throwIpcError('INVALID_PARAMS', 'sessionId required');
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW,
+    (event, sessionId: unknown, deviceIdRaw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'sessionId required');
+      }
+      const deviceId = parseOptionalDeviceLinkDeviceId(deviceIdRaw);
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      openSessionInNewWindow(sessionId, sourceWindow ?? mainWindowRef, deviceId);
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.OPEN_SESSION_IN_NEW_WINDOW_IF_DROPPED_OUTSIDE,
+    (event, sessionId: unknown, deviceIdRaw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'sessionId required');
+      }
+      const deviceId = parseOptionalDeviceLinkDeviceId(deviceIdRaw);
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      // The renderer normally ends the preview immediately before invoking
+      // this check. Stop again here so a delayed dragend/IPC cannot leave the
+      // transient card visible after the drop has already been classified.
+      // Keep the owner check so a delayed IPC from one window cannot stop a
+      // newer drag that already started in another window.
+      if (sourceWindow) endSessionDragPreview(sourceWindow);
+      const nativeResult = sourceWindow
+        ? consumeNativeSessionDragOpenResult(sourceWindow, sessionId, deviceId)
+        : null;
+      if (nativeResult !== null) return nativeResult;
+      return openSessionInNewWindowIfDroppedOutside(
+        sessionId,
+        mainWindowRef,
+        sourceWindow,
+        deviceId,
+      );
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.SESSION_DRAG_PREVIEW_START,
+    (event, labelRaw: unknown, sessionId: unknown, deviceIdRaw: unknown, paletteRaw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof labelRaw !== 'string' || typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'label and sessionId required');
+      }
+      const deviceId = parseOptionalDeviceLinkDeviceId(deviceIdRaw);
+      const palette = parseSessionDragPreviewPalette(paletteRaw);
+      if (!palette) {
+        throwIpcError('INVALID_PARAMS', 'invalid session drag preview palette');
+      }
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!sourceWindow || sourceWindow.isDestroyed()) return;
+      beginSessionDragPreview(
+        sourceWindow,
+        truncateSessionDragPreviewLabel(labelRaw),
+        sessionId,
+        deviceId,
+        palette,
+      );
+    },
+  );
+
+  ipcMain.on(MAKER_SEND.SESSION_DRAG_PREVIEW_END, (event, dragEndAtMsRaw: unknown) => {
+    // Fire-and-forget callers cannot receive an IPC error. Drop stale or
+    // untrusted senders instead of throwing through Electron's EventEmitter.
+    if (!isTrustedAppRendererEvent(event)) return;
+    const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!sourceWindow || sourceWindow.isDestroyed()) return;
+    const receivedAtMs = Date.now();
+    endSessionDragPreview(sourceWindow);
+    if (!app.isPackaged) {
+      const dragEndAtMs =
+        typeof dragEndAtMsRaw === 'number' &&
+        Number.isFinite(dragEndAtMsRaw) &&
+        Math.abs(receivedAtMs - dragEndAtMsRaw) <= 60_000
+          ? dragEndAtMsRaw
+          : null;
+      sessionDragPreviewLog.info(
+        JSON.stringify({
+          event: 'sessionDragPreview.end.dispatched',
+          rendererToMainMs: dragEndAtMs === null ? null : Math.max(0, receivedAtMs - dragEndAtMs),
+          hideApiDispatchMs: Date.now() - receivedAtMs,
+        }),
+      );
     }
-    openSessionInNewWindow(sessionId, mainWindowRef);
   });
 
   // E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):仅 CINDY family 启用毛玻璃透壁纸;
@@ -6166,19 +6333,17 @@ async function runSmokeTest(
     const metaCount = (
       db.prepare('SELECT COUNT(*) AS c FROM migration_meta').get() as { c: number }
     ).c;
-    const pluginStorageResult = pluginStorage
-      ? await runPluginStorageSmoke(userId)
-      : undefined;
+    const pluginStorageResult = pluginStorage ? await runPluginStorageSmoke(userId) : undefined;
     const payload = {
-        ok: true,
-        schema_version: schemaVersion,
-        tables: {
-          sessions: sessionsCount,
-          messages: messagesCount,
-          migration_meta: metaCount,
-        },
-        ...(pluginStorageResult ? { plugin_storage: pluginStorageResult } : {}),
-      };
+      ok: true,
+      schema_version: schemaVersion,
+      tables: {
+        sessions: sessionsCount,
+        messages: messagesCount,
+        migration_meta: metaCount,
+      },
+      ...(pluginStorageResult ? { plugin_storage: pluginStorageResult } : {}),
+    };
     const serialized = `${JSON.stringify(payload)}\n`;
     if (resultFile) fs.writeFileSync(resultFile, serialized, { mode: 0o600 });
     process.stdout.write(serialized);
@@ -6520,6 +6685,19 @@ app.on('ready', async () => {
         });
         return;
       }
+      if (dbClientTakeover.mode === 'unchanged') {
+        // 副窗口会再次走 localDb.ensureReady；同 owner 的 lifecycle client 已由首个
+        // onReady 完整启动，因此这里只保留 DB 连接交接，不重复执行账号级启动维护。
+        // worker takeover 会让 ensureReady 为本次副窗口重新打开 main DB，交接完成后立即
+        // 释放该短暂连接，避免它长期占用文件句柄和 optimize 定时器。
+        if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
+          localDbCloseDb({ preserveSchemaMigrationLease: true });
+          dbClientLog.info('[DbClient] duplicate owner ensure released reopened main db', {
+            userId,
+          });
+        }
+        return;
+      }
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
@@ -6558,7 +6736,7 @@ app.on('ready', async () => {
         await sweepLegacyDialogueWorkingDirs({
           db: getDbClient(),
           userDataDir: app.getPath('userData'),
-          legacyUserDataDirNames: BRAND_IDENTITY.legacyUserDataDirNames,
+          legacyUserDataDirNames: legacyDialogueUserDataDirNames(CURRENT_CINDY_REGION),
           currentDialoguesRoot: ownerScopedUserDataPath('dialogues'),
           additionalLegacyDialogueRoots: [path.join(app.getPath('userData'), 'dialogues')],
           log: createLogger('dialogue-workdir-self-heal'),
@@ -6810,8 +6988,18 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  // Local profiles bypass authManager's cloud claim path. Await the same
+  // asynchronous PID provenance scan before the first BrowserWindow exists so
+  // sidebar's synchronous legacy migration reads can consume an exact proof.
+  if (getActiveAppSession().mode === 'local') {
+    await warmStaleProcessProvenance();
+  }
   startupWindowCreationAllowed = true;
   createWindow();
+  // The macOS release watcher stays disarmed until a task drag begins. Start
+  // its tiny helper after the first window exists so drag latency never pays
+  // a dev swiftc compile or process-spawn cost.
+  prewarmSessionDragReleaseHelper();
   // 预热仅服务 dev macOS，延迟执行避免和启动关键路径争用 CPU；失败由入口内部吞掉。
   setTimeout(() => {
     prewarmMacComputerPermissionGuideHelper();
@@ -6930,7 +7118,9 @@ onQuit(
   'sync',
 );
 onQuit('auth-manager', () => authManager.dispose(), 'sync');
+onQuit('resource-usage-window', () => resourceUsageWindowController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
+onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
 // 不阻塞)。不收会一直锁安装目录里的 adb.exe,弄挂增量更新(os error 32)。
 onQuit('android-adb-kill-server', () => disposeAndroidAdb(), 'sync');

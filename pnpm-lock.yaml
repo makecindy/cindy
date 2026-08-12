@@ -100,9 +100,6 @@ importers:
       '@cindy/mcps':
         specifier: workspace:*
         version: link:../../packages/lizi-mcps
-      '@cindy/model-access-protocol':
-        specifier: workspace:*
-        version: link:../../cindy-protocol/packages/model-access-protocol
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
@@ -111,7 +108,7 @@ importers:
         version: link:../../packages/orca-workflow
       '@cindy/plugin-protocol':
         specifier: workspace:*
-        version: link:../../cindy-protocol/packages/plugin-protocol
+        version: link:../../packages/plugin-protocol
       '@cindy/remote-file-service':
         specifier: workspace:*
         version: link:../../packages/remote-file-service
@@ -123,7 +120,7 @@ importers:
         version: link:../../packages/responses-chat-bridge
       '@cindy/slack-hook-protocol':
         specifier: workspace:*
-        version: link:../../cindy-protocol/packages/slack-hook-protocol
+        version: link:../../packages/slack-hook-protocol
       '@cindy/voice-input-core':
         specifier: workspace:*
         version: link:../../packages/voice-input-core
@@ -736,42 +733,6 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
-  cindy-protocol/packages/device-link-protocol:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-
-  cindy-protocol/packages/model-access-protocol:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
-
-  cindy-protocol/packages/plugin-protocol:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
-
-  cindy-protocol/packages/slack-hook-protocol:
-    devDependencies:
-      '@types/node':
-        specifier: '*'
-        version: 25.9.5
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
-
   packages/anthropic-compat-proxy:
     devDependencies:
       '@eslint/js':
@@ -877,7 +838,7 @@ importers:
     dependencies:
       '@cindy/plugin-protocol':
         specifier: workspace:*
-        version: link:../../cindy-protocol/packages/plugin-protocol
+        version: link:../plugin-protocol
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -899,7 +860,7 @@ importers:
     dependencies:
       '@cindy/device-link-protocol':
         specifier: workspace:*
-        version: link:../../cindy-protocol/packages/device-link-protocol
+        version: link:../device-link-protocol
     devDependencies:
       '@types/node':
         specifier: '*'
@@ -910,6 +871,12 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/device-link-protocol:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
 
   packages/embedding-client:
     devDependencies:
@@ -1212,10 +1179,6 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   packages/model-providers:
-    dependencies:
-      '@cindy/model-access-protocol':
-        specifier: workspace:*
-        version: link:../../cindy-protocol/packages/model-access-protocol
     devDependencies:
       '@types/node':
         specifier: '*'
@@ -1257,6 +1220,18 @@ importers:
       typescript-eslint:
         specifier: ^8.0.0
         version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/plugin-protocol:
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 25.9.5
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
@@ -1382,6 +1357,18 @@ importers:
       typescript-eslint:
         specifier: ^8.0.0
         version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/slack-hook-protocol:
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 25.9.5
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)

@@ -3020,6 +3020,46 @@ export class CodexAgent extends BaseAgent {
     // turn id 在同一 thread 内唯一;墓碑随 session handle 释放,不跨 session 泄漏。
     const completedTurnIds = new Set<string>();
     const terminalErroredTurnIds = new Set<string>();
+    // Keep one authoritative interrupt origin per turn until turn/completed.
+    // A host-policy ACK proves only request acceptance, not that the command
+    // stopped; explicit user Stop overrides that provenance and cannot be
+    // reclassified by late blocked-item notifications. Failed policy ACKs stay
+    // provenance-only so output remains visible until completion decides.
+    const turnInterruptOrigins = new Map<
+      string,
+      | {
+          source: 'host-policy';
+          reason: string;
+          itemId: string;
+          acknowledgement: 'pending' | 'acknowledged' | 'failed';
+        }
+      | { source: 'user-stop' }
+    >();
+    // Approval can be declined before execution starts. Codex may still recover
+    // and complete the turn, so this reason only owns abort-shaped completions.
+    // Keep every declined item id: app-server can emit several approval
+    // requests for one turn and may still complete each declined item after the
+    // decline. A single item id would let a later denial overwrite an earlier
+    // one, then make that earlier completion look like recovery progress.
+    const approvalPolicyDeniedTurnReasons = new Map<
+      string,
+      {
+        reason: string;
+        itemIds: Set<string>;
+        // A sibling item may already be running when the denied approval
+        // arrives. Its later update/completion is not recovery progress: the
+        // turn is still in the abort caused by the denial. Snapshot the item
+        // ids seen before the first denial so only genuinely new work clears
+        // the policy attribution.
+        preexistingItemIds: Set<string>;
+      }
+    >();
+    // Item ids observed before an approval-path denial. A turn may have
+    // parallel work in flight when one command is declined; that sibling can
+    // emit updated/completed after the denial without representing a
+    // replacement continuation. The snapshot is per-turn and is discarded
+    // with the turn's denial state at terminal completion.
+    const observedModelItemIdsByTurn = new Map<string, Set<string>>();
     // daemon 后端 retry-loop 的终局升级 (issue #677): 远端摸不到 Codex 后端时
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
@@ -5207,6 +5247,8 @@ export class CodexAgent extends BaseAgent {
       resolve: (decision: ApprovalDecision) => void;
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation';
       settled: boolean;
+      turnId: string | null;
+      itemId?: string;
       /** prompt-each-time 高风险审批: 宽松模式也必须弹 UI, dismissAllPending('allow') 不得放行 */
       forcePrompt?: boolean;
     }
@@ -5438,7 +5480,11 @@ export class CodexAgent extends BaseAgent {
       requestId: string,
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation',
       req: InteractionRequest,
-      opts?: { forcePrompt?: boolean; autoReviewAction?: ReviewableAction },
+      opts?: {
+        forcePrompt?: boolean;
+        autoReviewAction?: ReviewableAction;
+        itemId?: string;
+      },
     ): Promise<ApprovalDecision> {
       const timingPauseId = `approval:${kind}:${requestId}`;
       return withCodexGenerationPaused(requestThreadId, turnId, timingPauseId, async () => {
@@ -5506,12 +5552,13 @@ export class CodexAgent extends BaseAgent {
           } else if (decision.verdict === 'allow') {
             return 'accept';
           } else if (decision.verdict === 'block') {
-            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
-            // 后者按 Auto 本意保持静默。动作两种都仍然 decline。
-            if (decision.unavailable) autoReviewUnavailableNotice.notify();
+            // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默。
+            // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这里。)
             return 'decline';
           } else {
             // Only red-line decisions reach the user and they cannot be remembered.
+            // 审阅器故障降级来的 ask 提示一次,让用户知道为何突然开始被问。
+            if (decision.unavailable) autoReviewUnavailableNotice.notify();
             forcePrompt = true;
           }
         }
@@ -5520,7 +5567,14 @@ export class CodexAgent extends BaseAgent {
             ? { ...req, suggestions: undefined }
             : req;
         return await new Promise<ApprovalDecision>((resolve) => {
-          const entry: PendingEntry = { resolve, kind, settled: false, forcePrompt };
+          const entry: PendingEntry = {
+            resolve,
+            kind,
+            settled: false,
+            turnId,
+            ...(opts?.itemId ? { itemId: opts.itemId } : {}),
+            forcePrompt,
+          };
           pendingApprovals.set(requestId, entry);
           const finalize = (d: ApprovalDecision) => {
             if (entry.settled) return;
@@ -6221,6 +6275,36 @@ export class CodexAgent extends BaseAgent {
           requestId: params.approvalId ?? params.itemId,
           reason: hostPolicy.reason,
         });
+        // The decline is followed by an abort-shaped turn completion. Keep the
+        // policy reason attached to this turn so completion cannot replace it
+        // with a generic cancellation/error message.
+        const existingDenial = approvalPolicyDeniedTurnReasons.get(params.turnId);
+        if (existingDenial) {
+          existingDenial.reason = hostPolicy.reason;
+          existingDenial.itemIds.add(params.itemId);
+        } else {
+          const preexistingItemIds = new Set(
+            observedModelItemIdsByTurn.get(params.turnId) ?? [],
+          );
+          for (const pending of pendingApprovals.values()) {
+            if (pending.turnId === params.turnId && pending.itemId) {
+              preexistingItemIds.add(pending.itemId);
+            }
+          }
+          approvalPolicyDeniedTurnReasons.set(params.turnId, {
+            reason: hostPolicy.reason,
+            itemIds: new Set([params.itemId]),
+            preexistingItemIds,
+          });
+        }
+        // Declining without ever showing the user why renders as a bare failed
+        // command, which is indistinguishable from a cancellation. Surface the
+        // product reason so the denial is attributed to the policy, not the user.
+        eventQueue.push({
+          type: 'error',
+          data: { message: hostPolicy.reason, isTerminal: false },
+          source: 'codex',
+        });
         return { decision: 'decline' };
       }
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
@@ -6246,6 +6330,7 @@ export class CodexAgent extends BaseAgent {
               ? { cwd: opts.workingDir }
               : { cwdUnknown: true }),
         },
+        itemId: params.itemId,
       });
       return { decision };
     };
@@ -6268,7 +6353,10 @@ export class CodexAgent extends BaseAgent {
         description: params.reason ?? undefined,
         suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
-      }, { autoReviewAction: { kind: 'file-write', path: params.grantRoot ?? undefined } });
+      }, {
+        autoReviewAction: { kind: 'file-write', path: params.grantRoot ?? undefined },
+        itemId: params.itemId,
+      });
       return { decision };
     };
 
@@ -6569,7 +6657,7 @@ export class CodexAgent extends BaseAgent {
         description: params.reason ?? undefined,
         suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
-      });
+      }, { itemId: params.itemId ?? undefined });
       if (decision === 'accept') {
         return { permissions: params.permissions as Record<string, unknown>, scope: 'turn' };
       }
@@ -7670,16 +7758,67 @@ export class CodexAgent extends BaseAgent {
      * update_plan 工具行 (避免同一份计划在聊天里出现两次)。
      * 非计划模式不拦截; 普通 Codex turn 也可能产生原生 plan item。
      */
-    function interceptProposedPlanItem(item: unknown): boolean {
+    function interceptProposedPlanItem(turnId: string, item: unknown): boolean {
       if (!currentTurnPlanModeActive) return false;
-      const candidate = item as { type?: unknown; text?: unknown } | null | undefined;
+      const candidate = item as {
+        id?: unknown;
+        type?: unknown;
+        text?: unknown;
+      } | null | undefined;
       if (!candidate || candidate.type !== 'plan') return false;
+      noteObservedModelItem(turnId, candidate);
+      if (typeof candidate.id === 'string') {
+        clearApprovalPolicyDenialOnProgress(turnId, candidate.id);
+      }
       if (typeof candidate.text === 'string') proposedPlanText = candidate.text;
       return true;
     }
 
     function handleTurnCompleted(params: TurnCompletedParams): void {
       const turn = params.turn;
+      // Every branch below represents an authoritative terminal notification,
+      // including the paths that defer UI settlement or return early. Item
+      // history is only needed while approval attribution is still mutable.
+      observedModelItemIdsByTurn.delete(turn.id);
+      const interruptOrigin = turnInterruptOrigins.get(turn.id);
+      turnInterruptOrigins.delete(turn.id);
+      if (
+        interruptOrigin?.source === 'host-policy'
+        && !terminalErroredTurnIds.has(turn.id)
+        && !completedTurnIds.has(turn.id)
+        && turn.status === 'interrupted'
+      ) {
+        // The provider completion is the first proof that the denied command is
+        // actually finished. Close the turn with the policy error and Codex's
+        // required idle tail; the tombstone keeps interrupted from becoming a
+        // user-Stop done(cancelled:true). Completed/failed fall through to the
+        // provider-authoritative path regardless of interrupt ACK state.
+        // This path deliberately tombstones the provider completion, so the
+        // normal interrupted-turn branch below cannot end a plan cycle for us.
+        // Clear it here before the next send inherits stale Plan Mode state.
+        if (currentTurnPlanModeActive) {
+          proposedPlanText = null;
+          planCycleActive = false;
+          currentTurnPlanModeActive = false;
+        }
+        terminalErroredTurnIds.add(turn.id);
+        eventQueue.push({
+          type: 'error',
+          data: {
+            message: interruptOrigin.reason,
+            isTerminal: true,
+            reason: 'host-shell-command-blocked',
+          },
+          source: 'codex',
+        });
+        handleTurnCompleted(params);
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+          source: 'codex',
+        });
+        return;
+      }
       if (reconnectStallCleanupTurnId === turn.id) {
         // The watchdog already published the terminal error and is still
         // waiting for turn/interrupt. Keep the local busy guard until the
@@ -7870,12 +8009,29 @@ export class CodexAgent extends BaseAgent {
       // 已经 return, 所以退避中的正常重投(死 turn 恒有墓碑)不会被误撤。
       revokeOverloadRetryOnTerminalSettle(`turn_${turn.status}`);
 
+      const approvalPolicyDenialReason = approvalPolicyDeniedTurnReasons.get(turn.id)?.reason;
+      const policyDenialReason =
+        (turn.status === 'failed' || turn.status === 'interrupted')
+          ? approvalPolicyDenialReason
+          : undefined;
+      approvalPolicyDeniedTurnReasons.delete(turn.id);
+      if (policyDenialReason !== undefined) {
+        eventQueue.push({
+          type: 'error',
+          data: { message: policyDenialReason, isTerminal: true },
+          source: 'codex',
+        });
+      }
+
       if (turn.status === 'failed' || turn.status === 'interrupted') {
         // 失败 / 中断的 plan turn 不发审批 — 半截计划没有审批意义, 循环就此结束。
         proposedPlanText = null;
         planCycleActive = false;
         currentTurnPlanModeActive = false;
-        if (turn.error?.message) {
+        if (policyDenialReason !== undefined) {
+          // Already reported above as the authoritative terminal outcome; the
+          // interrupt-derived message must not overwrite it.
+        } else if (turn.error?.message) {
           eventQueue.push({
             type: 'error',
             data: { message: turn.error.message, isTerminal: true },
@@ -7985,6 +8141,43 @@ export class CodexAgent extends BaseAgent {
     const itemRepresentsModelWork = (item: { type?: unknown } | null | undefined): boolean => {
       const type = typeof item?.type === 'string' ? item.type : null;
       return type === null || !ITEM_TYPES_WITHOUT_MODEL_WORK.has(type);
+    };
+
+    const noteObservedModelItem = (
+      turnId: string,
+      item: { id?: unknown; type?: unknown } | null | undefined,
+    ): void => {
+      if (
+        !item
+        || !itemRepresentsModelWork(item)
+        || typeof item.id !== 'string'
+        || item.id.length === 0
+      ) {
+        return;
+      }
+      const itemIds = observedModelItemIdsByTurn.get(turnId) ?? new Set<string>();
+      itemIds.add(item.id);
+      observedModelItemIdsByTurn.set(turnId, itemIds);
+    };
+
+    // An approval decline is only attributable to the immediate abort it
+    // causes. Work that was already observed before the denial may still emit
+    // progress while that abort settles; only model work first observed after
+    // the denial clears the policy attribution as a genuine continuation.
+    const clearApprovalPolicyDenialOnProgress = (turnId: string, itemId?: string): void => {
+      const denial = approvalPolicyDeniedTurnReasons.get(turnId);
+      if (!denial) return;
+      // Turn-level progress (diffs, plans, or text deltas without an item id)
+      // cannot prove that a replacement item started after the denial. Keep
+      // the attribution until an item lifecycle event identifies new work.
+      if (itemId === undefined) return;
+      if (
+        denial.itemIds.has(itemId)
+        || denial.preexistingItemIds.has(itemId)
+      ) {
+        return;
+      }
+      approvalPolicyDeniedTurnReasons.delete(turnId);
     };
 
     /** 取消挂起的过载重投（会话关闭 / 用户打断 / 新 turn 覆盖时调用）。 */
@@ -8954,9 +9147,13 @@ export class CodexAgent extends BaseAgent {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
-        if (interceptProposedPlanItem(params.item)) {
+        if (interceptProposedPlanItem(params.turnId, params.item)) {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
+        }
+        if (itemRepresentsModelWork(params.item)) {
+          noteObservedModelItem(params.turnId, params.item);
+          clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
         }
         const shellCommand = shellCommandFromCodexItem(params.item);
         if (shellCommand) {
@@ -8967,18 +9164,67 @@ export class CodexAgent extends BaseAgent {
           });
           if (hostPolicy?.decision === 'deny') {
             discardPendingSpawnLineageIds(reservedChildThreadIds);
+            const existingInterruptOrigin = turnInterruptOrigins.get(params.turnId);
+            // Explicit user Stop owns the terminal attribution until the
+            // authoritative completion. Late blocked items must not reclassify
+            // that cancellation as a policy interruption.
+            if (existingInterruptOrigin?.source === 'user-stop') return;
+            // Deduplicate only the same blocked item while its interrupt RPC is
+            // still in flight. A different blocked item is fresh proof that the
+            // turn is still executing and must issue another bounded interrupt,
+            // even if the previous request has not acknowledged yet.
+            if (
+              existingInterruptOrigin?.acknowledgement === 'pending' &&
+              existingInterruptOrigin.itemId === params.item.id
+            ) {
+              return;
+            }
             log.warn('command execution interrupted by host policy', {
               turnId: params.turnId,
               reason: hostPolicy.reason,
             });
-            void host
-              .request(Method.TurnInterrupt, { threadId, turnId: params.turnId })
-              .catch(() => undefined);
+            const pendingInterrupt: {
+              source: 'host-policy';
+              reason: string;
+              itemId: string;
+              acknowledgement: 'pending' | 'acknowledged' | 'failed';
+            } = {
+              source: 'host-policy',
+              reason: hostPolicy.reason,
+              itemId: params.item.id,
+              acknowledgement: 'pending',
+            };
+            turnInterruptOrigins.set(params.turnId, pendingInterrupt);
+            // Keep the task visibly running until provider completion proves the
+            // command stopped. This non-terminal warning survives the ACK window
+            // without arming Session's terminal-error drain.
             eventQueue.push({
               type: 'error',
-              data: { message: hostPolicy.reason, isTerminal: false },
+              data: {
+                message: pendingInterrupt.reason,
+                isTerminal: false,
+                reason: 'host-shell-command-blocked',
+              },
               source: 'codex',
             });
+            void (async () => {
+              const interrupted = await interruptTurnForPermissionTighten(params.turnId, {
+                suppressFailureEvent: true,
+              });
+              if (turnInterruptOrigins.get(params.turnId) !== pendingInterrupt) return;
+              if (interrupted) {
+                pendingInterrupt.acknowledgement = 'acknowledged';
+                return;
+              }
+              pendingInterrupt.acknowledgement = 'failed';
+              if (closed) return;
+              // The command may still be running. This provenance marker is not
+              // a tombstone, so later output remains visible; completion status
+              // decides whether the interrupt actually took effect.
+              log.error('host policy could not interrupt running command', {
+                turnId: params.turnId,
+              });
+            })();
             return;
           }
         }
@@ -9010,11 +9256,15 @@ export class CodexAgent extends BaseAgent {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
-        if (interceptProposedPlanItem(params.item)) {
+        if (interceptProposedPlanItem(params.turnId, params.item)) {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
-        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
+        if (itemRepresentsModelWork(params.item)) {
+          noteObservedModelItem(params.turnId, params.item);
+          clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
+          producedOutputTurnIds.add(params.turnId);
+        }
         noteActiveToolContext(params.item, params.turnId);
         // updated 也要登记映射,顺序与 started / completed 一致(先登记 → 翻译 → 后发重放帧)。
         // V1 的 spawn 是长跑 item(started → updated* → completed):started 那帧若没到我们手里
@@ -9060,12 +9310,16 @@ export class CodexAgent extends BaseAgent {
           }
           isLateCollabTerminal = true;
         }
-        if (interceptProposedPlanItem(params.item)) {
+        if (interceptProposedPlanItem(params.turnId, params.item)) {
           discardPendingSpawnLineageIds(reservedChildThreadIds);
           return;
         }
         if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
-        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
+        if (itemRepresentsModelWork(params.item)) {
+          noteObservedModelItem(params.turnId, params.item);
+          clearApprovalPolicyDenialOnProgress(params.turnId, params.item.id);
+          producedOutputTurnIds.add(params.turnId);
+        }
         noteActiveToolContext(params.item, params.turnId);
         // This late item belongs to an already-terminal parent. The parent
         // cleanup already cleared its pending tools; touching the shared
@@ -9129,6 +9383,7 @@ export class CodexAgent extends BaseAgent {
           modelWork: true,
         })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         translateAgentMessageDelta(params, eventQueue, { rt: translatorRt, log });
       },
@@ -9143,6 +9398,7 @@ export class CodexAgent extends BaseAgent {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         // thinking 流也算产出：模型已经在这一轮里工作了，整体重放不再等价。
+        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
@@ -9150,6 +9406,7 @@ export class CodexAgent extends BaseAgent {
         // thinking 流同样算产出(与非缓冲路径一致)。
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
       },
@@ -9157,6 +9414,7 @@ export class CodexAgent extends BaseAgent {
         // thinking 流同样算产出(与非缓冲路径一致)。
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        clearApprovalPolicyDenialOnProgress(params.turnId, params.itemId);
         producedOutputTurnIds.add(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
@@ -10456,6 +10714,12 @@ export class CodexAgent extends BaseAgent {
         const hadPendingRetry = overloadRetryPending();
         discardOverloadRetry('aborted');
         if (closed) return;
+        if (currentTurnId) {
+          // User intent wins terminal attribution. Keep an explicit marker
+          // instead of merely deleting policy provenance so late blocked-item
+          // notifications cannot re-arm it before turn/completed arrives.
+          turnInterruptOrigins.set(currentTurnId, { source: 'user-stop' });
+        }
         // 有挂起重投时的 Stop **必须**由这里显式收口逻辑 turn —— desktop 的
         // SessionTurnActivityTracker 只在收到终态事件后才释放派发闩，Codex
         // coordinator 也刻意等这个事件而不自己解锁，hook runner 同样等到一小时硬

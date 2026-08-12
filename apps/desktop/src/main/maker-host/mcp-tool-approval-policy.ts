@@ -22,7 +22,7 @@ import type {
   McpToolApprovalPolicy,
   McpToolApprovalPresentation,
 } from '@cindy/maker-core';
-import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
+import { canAutoApproveContactsMcpTool, canonicalIOSSimulatorToolName } from '@cindy/mcps';
 
 import { t } from '../i18n.js';
 
@@ -88,6 +88,84 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   'cindy_lsp',
 ]);
 
+/**
+ * 按「Host 最终会拿到的那个值」读取 payload。
+ *
+ * `call_tool` 的 `args` 走 `jsonObjectArg`（见 lizi-mcps/json-object-arg.ts）：Claude Code
+ * 的 in-process bridge 会把嵌套 payload 先 `JSON.stringify`（issue #350），入参校验前
+ * 会再 parse 回对象。审批若只看原始字符串，判定的就不是 Host 实际执行的那个值。
+ */
+function readJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 取 iOS Simulator progressive 调用的内层动作。
+ *
+ * 内层名一律过 canonical 化：改名后旧名仍是可调用的隐藏别名，别名必须命中与新名
+ * 完全相同的审批判定，否则旧名就成了绕过设备授权的口子。
+ */
+function readIOSSimulatorInnerCall(
+  context: McpToolApprovalContext,
+): { name: string | undefined; args: unknown } | undefined {
+  if (context.serverName !== 'cindy_ios_simulator') return undefined;
+  // Some Codex app-server versions omit the outer tool name but retain the
+  // validated progressive payload. Preserve the inner action's stricter policy
+  // instead of falling back to a persistable generic server prompt.
+  if (context.toolName !== 'call_tool' && context.toolName !== undefined) {
+    return undefined;
+  }
+  const params = readJsonObject(context.toolParams);
+  const rawName = typeof params?.name === 'string' ? params.name.trim() : '';
+  return {
+    name: rawName ? canonicalIOSSimulatorToolName(rawName) : undefined,
+    args: params?.args,
+  };
+}
+
+/**
+ * 设备级动作必须自带它要操作的那条 owned instance 路由。
+ */
+function hasIOSSimulatorInstanceRoute(args: Record<string, unknown>): boolean {
+  const { instanceId, generation, leaseId } = args;
+  return (
+    typeof instanceId === 'string' &&
+    instanceId.trim() !== '' &&
+    typeof generation === 'number' &&
+    Number.isInteger(generation) &&
+    generation > 0 &&
+    typeof leaseId === 'string' &&
+    leaseId.trim() !== ''
+  );
+}
+
+/**
+ * 只有「能确凿读出、且确实没有 owned 路由」的调用才免掉设备授权卡：那种调用到不了
+ * 任何设备（registry 的严格参数校验先拒，Host 收不到），弹窗纯属噪音 —— 无关任务把
+ * 「打开一个网址」误路由到模拟器时正是这个形状。
+ *
+ * 读不出形状时一律 fail closed 照旧弹窗：判定不能依赖「传输层此刻恰好也会拒」这种
+ * 外部前提，否则哪天入口多加一层 coercion，读不懂就会变成静默放行。
+ */
+function skipsRoutelessDeviceApproval(args: unknown): boolean {
+  const parsed = readJsonObject(args);
+  if (!parsed) return false;
+  return !hasIOSSimulatorInstanceRoute(parsed);
+}
+
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
 function toClaudeToolName(key: string): string {
   const [serverName, toolName] = key.split('::');
@@ -118,22 +196,20 @@ export function getDesktopMcpToolApprovalPolicy(
       ? 'auto-approve'
       : 'prompt-each-time';
   }
-  if (serverName === 'cindy_ios_simulator') {
-    // Some Codex app-server versions omit the outer tool name but retain the
-    // validated progressive payload. Preserve the inner action's stricter
-    // policy instead of falling back to a persistable generic server prompt.
-    if (toolName === 'call_tool' || toolName === undefined) {
-      const innerName =
-        toolParams && typeof toolParams === 'object'
-          ? (toolParams as { name?: unknown }).name
-          : undefined;
-      return innerName === 'build_app' ||
-        innerName === 'open_url' ||
-        innerName === 'create_instance' ||
-        innerName === 'attach_device'
-        ? 'prompt-each-time'
-        : 'auto-approve';
+  const iosSimulatorCall = readIOSSimulatorInnerCall(context);
+  if (iosSimulatorCall) {
+    const innerName = iosSimulatorCall.name;
+    // Taking control of a device is itself the authorization step, so it asks
+    // even before any route exists.
+    if (innerName === 'create_instance' || innerName === 'attach_device') {
+      return 'prompt-each-time';
     }
+    if (innerName === 'build_app' || innerName === 'open_simulator_url') {
+      return skipsRoutelessDeviceApproval(iosSimulatorCall.args)
+        ? 'auto-approve'
+        : 'prompt-each-time';
+    }
+    return 'auto-approve';
   }
   if (TRUSTED_MCP_SERVERS.has(serverName)) {
     return 'auto-approve';
@@ -148,13 +224,7 @@ export function getDesktopMcpToolApprovalPolicy(
 export function getDesktopMcpToolApprovalPresentation(
   context: McpToolApprovalContext,
 ): McpToolApprovalPresentation | undefined {
-  const innerName =
-    context.serverName === 'cindy_ios_simulator' &&
-    (context.toolName === 'call_tool' || context.toolName === undefined) &&
-    context.toolParams &&
-    typeof context.toolParams === 'object'
-      ? (context.toolParams as { name?: unknown }).name
-      : undefined;
+  const innerName = readIOSSimulatorInnerCall(context)?.name;
   if (innerName === 'build_app') {
     return {
       title: t('rightSidebar.iosSimulator.buildApproval.title'),

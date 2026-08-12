@@ -1174,6 +1174,14 @@ body.resizing-pane [data-ghost-webview] {
   contain-intrinsic-size: none;
 }
 
+/* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
+   消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
+   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
 /* 会话切换 shell-first 帧的品牌加载指示(BrandLoadingMark):
    wordmark 低亮常驻 + 亮带经同形 mask 在字标形状内扫过(Codex Desktop
    startup loader 同构表现)。两条硬约束:

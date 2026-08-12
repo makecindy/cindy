@@ -37,7 +37,9 @@ export interface HunkActionAnchor {
   hunk: Hunk;
 }
 
-export const DIFF_ROW_VIRTUAL_THRESHOLD = 500;
+// Keep medium-sized files off the eager DOM path. Two files just below the old
+// 500-row cutoff could otherwise mount roughly a thousand diff rows at once.
+export const DIFF_ROW_VIRTUAL_THRESHOLD = 200;
 export const FILE_LIST_VIRTUAL_THRESHOLD = 100;
 
 function oldEndLine(hunk: Hunk): number {

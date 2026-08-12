@@ -9,6 +9,8 @@ import {
   brandBundleIdPrefix,
   brandExecutableName,
   brandUserDataDirName,
+  legacyBrandUserDataDirNames,
+  legacyDialogueUserDataDirNames,
   resolveCindyRegion,
 } from '../brandIdentity.js';
 
@@ -65,7 +67,9 @@ describe('BRAND_IDENTITY invariants', () => {
 
   it('cn 区域值 = 基线标量字段(dev / legacy 消费点与 cn 构建同一身份)', () => {
     expect(BRAND_IDENTITY.executableNameByRegion.cn).toBe(BRAND_IDENTITY.executableName);
-    expect(BRAND_IDENTITY.userDataDirNameByRegion.cn).toBe(BRAND_IDENTITY.userDataDirName);
+    expect(BRAND_IDENTITY.userDataDirNameByRegion.cn).toBe(
+      BRAND_IDENTITY.userDataDirName,
+    );
   });
 
   it('scheme 符合 RFC 3986(字母开头,字母/数字/+/-/. 组成)且主 scheme 不在 legacy 里', () => {
@@ -104,6 +108,14 @@ describe('BRAND_IDENTITY invariants', () => {
     expect(Object.isFrozen(BRAND_IDENTITY.appIdByRegion)).toBe(true);
     expect(Object.isFrozen(BRAND_IDENTITY.executableNameByRegion)).toBe(true);
     expect(Object.isFrozen(BRAND_IDENTITY.userDataDirNameByRegion)).toBe(true);
+    expect(Object.isFrozen(BRAND_IDENTITY.legacyUserDataDirNamesByRegion)).toBe(true);
+    for (const names of Object.values(BRAND_IDENTITY.legacyUserDataDirNamesByRegion)) {
+      expect(Object.isFrozen(names)).toBe(true);
+    }
+    expect(Object.isFrozen(BRAND_IDENTITY.legacyDialogueUserDataDirNamesByRegion)).toBe(true);
+    for (const names of Object.values(BRAND_IDENTITY.legacyDialogueUserDataDirNamesByRegion)) {
+      expect(Object.isFrozen(names)).toBe(true);
+    }
     expect(Object.isFrozen(BRAND_IDENTITY.legacySchemes)).toBe(true);
     expect(Object.isFrozen(BRAND_IDENTITY.legacyUserDataDirNames)).toBe(true);
     expect(Object.isFrozen(BRAND_IDENTITY.legacyDbFilePrefixes)).toBe(true);
@@ -137,6 +149,7 @@ describe('区域解析与派生', () => {
     expect(brandExecutableName('dev')).toBe('CindyDev');
     expect(brandUserDataDirName()).toBe('CindyGlobal');
     expect(brandUserDataDirName('global')).toBe('CindyGlobal');
+    expect(brandUserDataDirName('cn')).toBe('Cindy');
   });
 });
 
@@ -146,11 +159,22 @@ describe('派生 helper', () => {
   });
 
   it('allUserDataDirNames 本区域目录名恒为首位 + 全部历史值,且不含另一区域', () => {
-    expect(allUserDataDirNames()).toEqual(['CindyGlobal', 'xdt-maker']);
+    expect(allUserDataDirNames()).toEqual(['CindyGlobal']);
     expect(allUserDataDirNames('cn')).toEqual(['Cindy', 'xdt-maker']);
-    // global 的匹配集不含 cn 的 'Cindy':orphan-reaper 按路径认领进程,
-    // 跨区域匹配会误杀另一个安装的进程。
-    expect(allUserDataDirNames('global')).toEqual(['CindyGlobal', 'xdt-maker']);
+    // global 的匹配集不含 cn 的 Cindy / xdt-maker：orphan-reaper 按路径认领
+    // 进程，跨区域匹配会误杀另一个安装的进程。
+    expect(allUserDataDirNames('global')).toEqual(['CindyGlobal']);
+  });
+
+  it('legacyBrandUserDataDirNames 只返回品牌翻转前的共享 mToc 来源', () => {
+    expect(legacyBrandUserDataDirNames()).toEqual(['xdt-maker']);
+  });
+
+  it('dialogue cwd 迁移来源按区域保留旧品牌目录', () => {
+    expect(legacyDialogueUserDataDirNames()).toEqual([]);
+    expect(legacyDialogueUserDataDirNames('cn')).toEqual(['xdt-maker']);
+    expect(legacyDialogueUserDataDirNames('global')).toEqual([]);
+    expect(legacyDialogueUserDataDirNames('dev')).toEqual([]);
   });
 
   it('helper 接受显式档案参数(历史身份回放用)', () => {
@@ -160,6 +184,8 @@ describe('派生 helper', () => {
       legacySchemes: [],
       userDataDirNameByRegion: { cn: 'xdt-maker', global: 'xdt-maker' },
       legacyUserDataDirNames: [],
+      legacyUserDataDirNamesByRegion: { cn: [], global: [], dev: [] },
+      legacyDialogueUserDataDirNamesByRegion: { cn: [], global: [], dev: [] },
       dbFilePrefix: 'xdt-maker',
       legacyDbFilePrefixes: [],
     };
