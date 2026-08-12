@@ -341,6 +341,10 @@ export async function runLegacyShardMigration(
         await fs.rename(shard.dir, targetDir);
         // meta.absPath 更新为 canonical scope key (原值 = 旧 worktree 路径)
         await updateMetaAbsPath(targetDir, shard.canonicalScopeKey, now());
+        // 重建 MEMORY.md — legacy 分片索引可能缺失/过期 (写入与重建之间崩溃
+        // 或人工修复), 不重建的话 canonical 会话 getIndex() 读到 stale 索引,
+        // 记忆进不了 prompt (Codex review on #2519 第十一轮, 与合并路径一致)
+        await rebuildIndexFile(targetDir);
         r.action = 'renamed';
       } else {
         // 慢路径: 逐文件合并

@@ -171,7 +171,7 @@ describe('runLegacyShardMigration — 执行', () => {
     await expect(fs.stat(wtPath)).rejects.toThrow();
   });
 
-  it('canonical 分片不存在 → rename 整个目录 + meta.absPath 更新', async () => {
+  it('canonical 分片不存在 → rename 整个目录 + meta.absPath 更新 + MEMORY.md 重建 (Codex 第十一轮)', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     const worktree = path.join(tmpRoot, 'repo-wt');
     const wtDir = sanitizeWorkdir(worktree);
@@ -190,6 +190,10 @@ describe('runLegacyShardMigration — 执行', () => {
     // 分片文件原样保留
     const rec = await fs.readFile(path.join(target, 'feedback_a.md'), 'utf8');
     expect(rec).toContain('body-a');
+    // MEMORY.md 已重建 (索引缺失/过期时 canonical 会话读到 stale 索引,
+    // 记忆进不了 prompt — 快路径与合并路径一致, Codex review on #2519)
+    const index = await fs.readFile(path.join(target, 'MEMORY.md'), 'utf8');
+    expect(index).toContain('feedback_a.md');
   });
 
   it('canonical 已存在 → 同名同内容跳过, 新文件复制, MEMORY.md 重建', async () => {

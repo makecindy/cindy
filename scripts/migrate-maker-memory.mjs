@@ -216,18 +216,29 @@ async function isHostRunning() {
     if (process.platform === 'win32') {
       const r = await run('tasklist', ['/FO', 'CSV', '/NH']);
       out = r.stdout;
-    } else {
-      const r = await run('ps', ['-eo', 'comm']);
-      out = r.stdout;
+      // Windows: CSV 行 → 精确匹配 "cindy.exe" / "desktop.exe" / "electron.exe"
+      // (image name 字段), 避免子串误命中无关进程
+      const names = new Set(out.toLowerCase().match(/"?[a-z0-9_.\- ]+\.exe"?/g) ?? []);
+      return ['cindy.exe', 'desktop.exe', 'electron.exe'].some((p) => names.has(`"${p}"`));
     }
-    const lower = out.toLowerCase();
-    // Cindy 桌面应用进程名 (跨平台):
-    //  - Windows: tasklist CSV → "cindy.exe" / "desktop.exe" / "electron.exe"
-    //  - macOS/Linux: ps -eo comm → 裸名 "cindy" / "desktop" / "electron"
-    //    (CindyDev / Electron 变体也命中) — 用子串包含而非精确匹配,
-    //    Greptile/Codex review on #2519 第十轮
-    return ['cindy.exe', 'cindydev', 'desktop.exe', 'electron.exe', 'electron', 'desktop'].some(
-      (p) => lower.includes(p),
+    const r = await run('ps', ['-eo', 'comm']);
+    out = r.stdout;
+    // POSIX: ps -eo comm 输出每行一个命令名。精确 basename 匹配 (行级),
+    // 不匹配含 desktop 的无关进程 (xdg-desktop-portal 等, Codex review on
+    // #2519 第十一轮)。Electron 主进程 comm 通常是 electron; Cindy 产物
+    // 可能以 cindy / CindyDev / desktop 为进程名。
+    const commNames = new Set(
+      out
+        .toLowerCase()
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    return (
+      commNames.has('cindy') ||
+      commNames.has('cindydev') ||
+      commNames.has('desktop') ||
+      commNames.has('electron')
     );
   } catch {
     return false; // 检测工具缺失 → 不阻塞
