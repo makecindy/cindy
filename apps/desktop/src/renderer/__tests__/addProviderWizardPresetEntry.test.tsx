@@ -403,6 +403,26 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(keys.pi).toBe('sk-test');
   });
 
+  it('预设显式 Pi 模型全部取消后不从 Claude 重新生成 Pi runtime', async () => {
+    renderWizard('explicit-pi');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Explicit Pi')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const piModel = await screen.findByText('Pi Model');
+    fireEvent.click(piModel.closest('button') as HTMLButtonElement);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes['claude-code']).toEqual({
+      baseUrl: 'https://explicit.example/anthropic',
+      models: [{ id: 'claude-model', name: 'Claude Model' }],
+    });
+    expect(config.runtimes.pi).toBeUndefined();
+    expect(keys.pi).toBeUndefined();
+  });
+
   it('Claude runtime 带自定义请求路径时不自动生成 Pi runtime', async () => {
     renderWizard('claude-request-path');
 

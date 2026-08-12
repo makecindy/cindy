@@ -811,7 +811,7 @@ export function AddProviderWizard({
         }
       }
       const claudeRuntime = runtimes['claude-code'];
-      if (!runtimes.pi && claudeRuntime) {
+      if (!preset.runtimes.pi && !runtimes.pi && claudeRuntime) {
         const piRuntime = derivePiRuntimeFromClaudeRuntime(claudeRuntime);
         if (piRuntime) {
           runtimes.pi = piRuntime;
