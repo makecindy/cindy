@@ -831,7 +831,7 @@ describe('Ghost plugin detail sections', () => {
   });
 
   function stubToolPermissionApi(overrides?: {
-    config?: Record<string, unknown>;
+    config?: Record<string, unknown> | ((id: string) => Record<string, unknown>);
     setToolPermissions?: (id: string, config: unknown) => Promise<unknown>;
   }) {
     const setToolPermissions =
@@ -840,7 +840,12 @@ describe('Ghost plugin detail sections', () => {
       configurable: true,
       value: {
         ghosts: {
-          toolPermissionsSync: () => ({ config: overrides?.config ?? {} }),
+          toolPermissionsSync: (id: string) => ({
+            config:
+              typeof overrides?.config === 'function'
+                ? overrides.config(id)
+                : (overrides?.config ?? {}),
+          }),
           setToolPermissions,
         },
       },
@@ -967,6 +972,57 @@ describe('Ghost plugin detail sections', () => {
         .getByRole('button', { name: 'Always allow' })
         .getAttribute('aria-pressed'),
     ).toBe('true');
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
+  it('does not let a failed save from the previous ghost poison the current config ref', async () => {
+    let rejectPreviousGhost!: (reason?: unknown) => void;
+    const previousSave = new Promise<unknown>((_resolve, reject) => {
+      rejectPreviousGhost = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => previousSave)
+      .mockResolvedValueOnce({ config: {} });
+    stubToolPermissionApi({
+      config: (id) =>
+        id === 'ghost-a'
+          ? { tools: { tool_0: 'blocked' } }
+          : { tools: { tool_2: 'always-allow' } },
+      setToolPermissions,
+    });
+    const { rerender } = render(<ToolsSection ghostId="ghost-a" tools={sevenTools} />);
+
+    const ghostAGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(ghostAGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(1));
+
+    rerender(<ToolsSection ghostId="ghost-b" tools={sevenTools} />);
+    await waitFor(() => {
+      const ghostBSeedGroup = screen.getAllByRole('group', { name: /tool_2/ })[0];
+      expect(
+        within(ghostBSeedGroup)
+          .getByRole('button', { name: 'Always allow' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+    });
+
+    rejectPreviousGhost(new Error('ghost-a write failed after navigation'));
+    await Promise.resolve();
+
+    const ghostBEditGroup = screen.getAllByRole('group', { name: /tool_3/ })[0];
+    fireEvent.click(within(ghostBEditGroup).getByRole('button', { name: 'Blocked' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+    expect(setToolPermissions).toHaveBeenLastCalledWith(
+      'ghost-b',
+      expect.objectContaining({
+        tools: expect.objectContaining({ tool_2: 'always-allow', tool_3: 'blocked' }),
+      }),
+    );
+    const lastConfig = setToolPermissions.mock.calls[1]?.[1] as {
+      tools?: Record<string, unknown>;
+    };
+    expect(lastConfig.tools).not.toHaveProperty('tool_0');
     expect(toastMocks.error).not.toHaveBeenCalled();
   });
 

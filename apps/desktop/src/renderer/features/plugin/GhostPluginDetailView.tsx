@@ -661,6 +661,10 @@ export function ToolsSection({
   // (副作用不能塞进 setState updater:StrictMode 下 updater 会跑两遍,IPC 写会重发。)
   const configRef = useRef(config);
   configRef.current = config;
+  // 保存 Promise 可能在详情页已切到另一个插件后才落定。旧插件的
+  // catch 不得改写新插件下一次点击会使用的 configRef。
+  const currentGhostIdRef = useRef(ghostId);
+  currentGhostIdRef.current = ghostId;
   // IPC invoke 的 Promise 可能乱序落定。只有该 Ghost 的最新一次保存
   // 失败才能回滚；旧请求的 catch 若回滚，会覆盖已经成功落盘的较新状态。
   const persistSequenceRef = useRef(0);
@@ -676,6 +680,7 @@ export function ToolsSection({
     setLoaded({ ghostId, config: next });
     void window.electronAPI.ghosts.setToolPermissions(ghostId, next).catch(() => {
       if (persistSequenceRef.current !== sequence) return;
+      if (currentGhostIdRef.current !== ghostId) return;
       configRef.current = rollbackTo;
       setLoaded((current) =>
         current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,
