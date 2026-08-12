@@ -174,17 +174,22 @@ export class GhostPipeDispatcher {
     }
     // 用户把该工具设成「已阻止」时硬拒,且必须在拉起沙箱之前——被禁用的工具
     // 不该造成任何可观察副作用(进程拉起、OAuth 卡、ledger 落账)。
-    // 读配置抛错按放行处理:授权文件损坏不该让所有插件调用一起瘫,拦截语义由
-    // store 层的 normalize 兜底(读不出来 = 回到默认 needs-approval)。
+    // store 正常读取时会把缺失/损坏配置 normalize 为 needs-approval;但依赖本身
+    // 抛错意味着宿主无法证明当前工具未被 blocked，必须 fail closed。
     let approvalMode: ToolApprovalMode | undefined;
     try {
       approvalMode = this.deps.resolveToolApprovalMode?.(ghostId, tool);
     } catch (error) {
-      this.deps.log?.warn('ghost tool approval lookup failed; continuing', {
+      this.deps.log?.warn('ghost tool approval lookup failed; denying call', {
         ghostId,
         tool,
         error: error instanceof Error ? error.message : String(error),
       });
+      return {
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+        message: `无法读取 ${ghostId} 的工具 ${tool} 授权策略;为了安全未执行该工具,请重试或检查插件设置。`,
+      };
     }
     if (approvalMode === 'blocked') {
       this.deps.log?.info('ghost tool call denied by user policy', { ghostId, tool });

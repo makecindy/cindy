@@ -105,15 +105,22 @@ describe('资格审(结构化错误分类)', () => {
     }
   });
 
-  it('档位查询抛错时不连坐:照常派发并留一条 warn', async () => {
+  it('档位查询抛错 → PERMISSION_DENIED,且不拉起沙箱、不派发', async () => {
     const h = makeHarness({
+      state: 'off',
       resolveToolApprovalMode: () => {
         throw new Error('settings file unreadable');
       },
     });
-    void h.dispatcher.callGhostTool(CALL);
-    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
-    expect(h.deps.log.warn).toHaveBeenCalled();
+    const r = await h.dispatcher.callGhostTool(CALL);
+    expect(r).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(h.deps.spawn).not.toHaveBeenCalled();
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(h.sent).toHaveLength(0);
+    expect(h.deps.log.warn).toHaveBeenCalledWith(
+      'ghost tool approval lookup failed; denying call',
+      expect.objectContaining({ ghostId: 'art', tool: 'gen_image', error: 'settings file unreadable' }),
+    );
   });
 
   it('未注入档位查询时行为不变(老调用方零改动)', async () => {
