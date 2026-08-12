@@ -11692,6 +11692,43 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('invalidates the Codex reviewer cache when the resolved route revision changes', async () => {
+    let routeRevision = 'sha256:route-a';
+    const reviewer = vi.fn()
+      .mockResolvedValueOnce({ verdict: 'allow' as const, reason: 'route A' })
+      .mockResolvedValueOnce({ verdict: 'block' as const, reason: 'route B' });
+    const agent = new CodexAgent(createDeps({}, {
+      reviewAutoPermissionAction: reviewer,
+      resolveAutoReviewRoute: async (request) => ({
+        providerId: request.providerId ?? null,
+        model: request.model,
+        routeRevision,
+      }),
+    }));
+    const host = installFakeHost(agent, (method) => (
+      method === Method.TurnStart ? { turn: { id: 'turn-route-cache' } } : undefined
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'codex-route-revision-cache', model: 'gpt-5.5', providerId: 'xd',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    await handle.send({ type: 'user', content: 'Check this project for type errors' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected command approval');
+    const command = 'pnpm --filter desktop run typecheck';
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-route-cache', itemId: 'route-cache-a',
+      command, cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    routeRevision = 'sha256:route-b';
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-route-cache', itemId: 'route-cache-b',
+      command, cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
   it('never remembers a Codex reviewer allow when the execution cwd is unknown', async () => {
     const add = vi.fn();
     const reviewer = vi.fn(async () => ({ verdict: 'allow' as const }));
@@ -13272,6 +13309,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       behavior: 'allow',
     }));
     handle.setInteractionResolver(resolver);
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
 
     const command = 'API_TOKEN=super-secret open -a Simulator';
     const result = await handlers.commandExecutionApproval({
@@ -13295,9 +13336,585 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     expect(JSON.stringify(warn.mock.calls)).not.toContain('super-secret');
     await handle.close();
+    await collectEvents;
+    // Declining silently is indistinguishable from a user cancellation, so the
+    // product reason has to reach the user.
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'error',
+          data: expect.objectContaining({
+            message: 'use the embedded iOS Simulator',
+            isTerminal: false,
+          }),
+        }),
+      ]),
+    );
   });
 
-  it('interrupts an already-started absolute-path shell bypass as a fail-safe', async () => {
+  it('keeps an approval-path policy denial as the terminal turn reason', async () => {
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent, (method) =>
+      method === Method.TurnInterrupt ? {} : undefined,
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-command-approval-policy-terminal-reason',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval || !handlers.itemCompleted || !handlers.turnCompleted) {
+      throw new Error('expected commandExecutionApproval, itemCompleted and turnCompleted handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-approval-policy',
+        itemId: 'cmd-approval-policy',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    // A declined command may still emit its own completion before the
+    // abort-shaped turn completion. That is not recovery progress and must
+    // not clear the policy reason.
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-approval-policy',
+      item: {
+        id: 'cmd-approval-policy',
+        type: 'commandExecution',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: 'turn-approval-policy',
+        status: 'interrupted',
+        error: { message: 'aborted by user' },
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    const terminal = events.filter(
+      (event) =>
+        (event as { type?: string }).type === 'error' &&
+        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
+    );
+    expect(terminal).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: 'use the embedded iOS Simulator',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
+  });
+
+  it('keeps all declined approval items attached to an interrupted turn', async () => {
+    const policy = vi.fn(({ command }: { command: string }) => ({
+      decision: 'deny' as const,
+      reason: command.startsWith('open ') ? 'first policy reason' : 'latest policy reason',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-approval-policy-multiple-denials',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval || !handlers.itemCompleted || !handlers.turnCompleted) {
+      throw new Error('expected commandExecutionApproval, itemCompleted and turnCompleted handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const turnId = 'turn-approval-policy-multiple-denials';
+    await expect(Promise.all([
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId,
+        itemId: 'cmd-approval-policy-first',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      }),
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId,
+        itemId: 'cmd-approval-policy-second',
+        command: 'xcrun simctl shutdown DEVICE',
+        cwd: '/repo',
+      }),
+    ])).resolves.toEqual([
+      { decision: 'decline' },
+      { decision: 'decline' },
+    ]);
+
+    // Completion of either declined item is not recovery progress. The
+    // interrupted turn must still retain the policy attribution.
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId,
+      item: {
+        id: 'cmd-approval-policy-first',
+        type: 'commandExecution',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: turnId,
+        status: 'interrupted',
+        error: { message: 'aborted by user' },
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    const terminal = events.filter(
+      (event) =>
+        (event as { type?: string }).type === 'error' &&
+        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
+    );
+    expect(terminal).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: 'latest policy reason',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
+  });
+
+  it('keeps an approval denial through late updates from a pre-existing parallel item', async () => {
+    const policy = vi.fn(({ command }: { command: string }) =>
+      command === 'open -a Simulator'
+        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
+        : undefined,
+    );
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-approval-policy-parallel-sibling',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (
+      !handlers?.commandExecutionApproval
+      || !handlers.itemStarted
+      || !handlers.itemUpdated
+      || !handlers.itemCompleted
+      || !handlers.turnDiffUpdated
+      || !handlers.turnCompleted
+    ) {
+      throw new Error('expected approval, item lifecycle and turn diff handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const turnId = 'turn-approval-policy-parallel-sibling';
+    // This item was already running when the other parallel command was
+    // declined. Its late completion must not erase the denial attribution.
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId,
+      item: {
+        id: 'cmd-parallel-sibling',
+        type: 'commandExecution',
+        command: 'printf safe',
+        cwd: '/repo',
+      },
+    });
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId,
+        itemId: 'cmd-denied-parallel',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    handlers.turnDiffUpdated({
+      threadId: 'start-thread-id',
+      turnId,
+      diff: 'diff --git a/safe.txt b/safe.txt\n--- a/safe.txt\n+++ b/safe.txt\n',
+    });
+    handlers.itemUpdated({
+      threadId: 'start-thread-id',
+      turnId,
+      item: {
+        id: 'cmd-parallel-sibling',
+        type: 'commandExecution',
+        command: 'printf safe',
+        cwd: '/repo',
+      },
+    });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId,
+      item: {
+        id: 'cmd-parallel-sibling',
+        type: 'commandExecution',
+        command: 'printf safe',
+        cwd: '/repo',
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: turnId,
+        status: 'interrupted',
+        error: { message: 'aborted by user' },
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    const terminal = events.filter(
+      (event) =>
+        (event as { type?: string }).type === 'error' &&
+        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
+    );
+    expect(terminal).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: 'use the embedded iOS Simulator',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
+  });
+
+  it('keeps an approval denial through an approval item that was already pending', async () => {
+    const policy = vi.fn(({ command }: { command: string }) =>
+      command === 'open -a Simulator'
+        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
+        : undefined,
+    );
+    const decision = deferred<InteractionDecision>();
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-approval-policy-pending-sibling',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+    const interactionResolver = vi.fn(() => decision.promise);
+    handle.setInteractionResolver(interactionResolver);
+    const handlers = host.getThreadHandlers();
+    if (
+      !handlers?.commandExecutionApproval
+      || !handlers.itemStarted
+      || !handlers.itemCompleted
+      || !handlers.turnCompleted
+    ) {
+      throw new Error('expected approval, item lifecycle and turn completion handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const turnId = 'turn-approval-policy-pending-sibling';
+    const pendingApproval = handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId,
+      itemId: 'cmd-pending-sibling',
+      command: 'printf safe',
+      cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
+    // The resolver promise is held, so this approval is present in the pending
+    // map before the policy denial for the parallel command arrives.
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId,
+        itemId: 'cmd-denied-after-pending',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+
+    decision.resolve({ kind: 'permission', behavior: 'allow' });
+    await expect(pendingApproval).resolves.toEqual({ decision: 'accept' });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId,
+      item: {
+        id: 'cmd-pending-sibling',
+        type: 'commandExecution',
+        command: 'printf safe',
+        cwd: '/repo',
+      },
+    });
+    handlers.itemCompleted({
+      threadId: 'start-thread-id',
+      turnId,
+      item: {
+        id: 'cmd-pending-sibling',
+        type: 'commandExecution',
+        command: 'printf safe',
+        cwd: '/repo',
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: turnId,
+        status: 'interrupted',
+        error: { message: 'aborted by user' },
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    const terminal = events.filter(
+      (event) =>
+        (event as { type?: string }).type === 'error' &&
+        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
+    );
+    expect(terminal).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: 'use the embedded iOS Simulator',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
+  });
+
+  it('clears an approval denial when a new native plan item continues the turn', async () => {
+    const policy = vi.fn(({ command }: { command: string }) =>
+      command === 'open -a Simulator'
+        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
+        : undefined,
+    );
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent, (method) =>
+      method === Method.TurnStart ? { turn: { id: 'turn-plan-after-denial' } } : undefined,
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-command-approval-policy-plan-continuation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+      planMode: true,
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval || !handlers.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected approval, itemStarted and turnCompleted handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const turnId = 'turn-plan-after-denial';
+    await handle.send({ type: 'user', content: 'make a plan' });
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId,
+        itemId: 'cmd-denied-before-plan',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId,
+      item: {
+        id: 'plan-after-denial',
+        type: 'plan',
+        text: '1. inspect\n2. edit',
+      },
+    } as never);
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: turnId,
+        status: 'failed',
+        error: { message: 'plan continuation failed' },
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    const terminal = events.filter(
+      (event) =>
+        (event as { type?: string }).type === 'error'
+        && (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
+    );
+    expect(terminal).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: 'plan continuation failed',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(terminal)).not.toContain('use the embedded iOS Simulator');
+  });
+
+  it('lets an approval-path denial recover to a normal completed turn', async () => {
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-approval-policy-recovery',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval || !handlers.turnCompleted) {
+      throw new Error('expected commandExecutionApproval and turnCompleted handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-approval-policy-recovery',
+        itemId: 'cmd-approval-policy-recovery',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: 'turn-approval-policy-recovery',
+        status: 'completed',
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    expect(events.filter((event) => (event as { type?: string }).type === 'error')).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: 'use the embedded iOS Simulator',
+          isTerminal: false,
+        }),
+      }),
+    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'done' }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain('isTerminal":true');
+  });
+
+  it('clears an approval denial once a replacement command continues the turn', async () => {
+    const policy = vi.fn(({ command }: { command: string }) =>
+      command === 'open -a Simulator'
+        ? { decision: 'deny' as const, reason: 'use the embedded iOS Simulator' }
+        : undefined,
+    );
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-approval-policy-replacement-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval || !handlers.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected approval, itemStarted and turnCompleted handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-approval-policy-replacement-failure',
+        itemId: 'cmd-approval-policy-replacement-failure',
+        command: 'open -a Simulator',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-approval-policy-replacement-failure',
+      item: {
+        id: 'cmd-safe-replacement',
+        type: 'commandExecution',
+        command: 'printf safe',
+        cwd: '/repo',
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: 'turn-approval-policy-replacement-failure',
+        status: 'failed',
+        error: { message: 'replacement failed' },
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'error',
+          data: expect.objectContaining({
+            message: 'replacement failed',
+            isTerminal: true,
+          }),
+        }),
+      ]),
+    );
+    const terminalErrors = events.filter(
+      (event) =>
+        (event as { type?: string }).type === 'error'
+        && (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
+    );
+    expect(JSON.stringify(terminalErrors)).not.toContain('use the embedded iOS Simulator');
+  });
+
+  it('interrupts an already-started shell bypass and reports the policy reason', async () => {
     const { logger, warn } = createLoggerSpy();
     const policy = vi.fn(() => ({
       decision: 'deny' as const,
@@ -13805,6 +14422,65 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(handle.isTurnRunning?.()).toBe(false);
     await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
     await handle.close();
+  });
+
+  it('keeps the policy reason as the terminal outcome of the interrupted turn', async () => {
+    const policy = vi.fn(() => ({
+      decision: 'deny' as const,
+      reason: 'use the embedded iOS Simulator',
+    }));
+    const agent = new CodexAgent(createDeps({}, { getShellCommandPolicy: policy }));
+    const host = installFakeHost(agent, (method) =>
+      method === Method.TurnInterrupt ? {} : undefined,
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-policy-terminal-reason',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.turnCompleted) {
+      throw new Error('expected itemStarted and turnCompleted handlers');
+    }
+    const events: AgentEvent[] = [];
+    const collectEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: { id: 'cmd-1', type: 'commandExecution', command: 'open -a Simulator', cwd: '/repo' },
+    });
+    // Codex answers our interrupt with an abort-shaped completion. The renderer
+    // clears a non-terminal error once the turn completes, so the product reason
+    // has to win here or the denial reads as a user action.
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: {
+        id: 'turn-1',
+        status: 'interrupted',
+        error: { message: 'aborted by user' },
+      },
+    } as never);
+
+    await handle.close();
+    await collectEvents;
+    const terminal = events.filter(
+      (event) =>
+        (event as { type?: string }).type === 'error' &&
+        (event as { data?: { isTerminal?: boolean } }).data?.isTerminal === true,
+    );
+    expect(terminal).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: 'use the embedded iOS Simulator',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(terminal)).not.toContain('aborted by user');
   });
 
   it('interrupts a raw function_call exec_command shell bypass as a fail-safe', async () => {

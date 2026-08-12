@@ -53,6 +53,7 @@ function createDeps(options: {
   approvalMemoryStore?: AgentDeps['approvalMemoryStore'];
   mcpProviderNames?: readonly string[];
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+  resolveAutoReviewRoute?: AgentDeps['resolveAutoReviewRoute'];
 } = {}): AgentDeps {
   const auth: AuthAdapter = {
     async getState() { return { authenticated: true, authSource: options.authSource }; },
@@ -65,11 +66,11 @@ function createDeps(options: {
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: noopLogger(),
-    resolveAutoReviewRoute: async (request) => ({
+    resolveAutoReviewRoute: options.resolveAutoReviewRoute ?? (async (request) => ({
       providerId: request.providerId ?? null,
       model: request.model,
       routeRevision: 'sha256:test-reviewer-route',
-    }),
+    })),
     mcpProviders: (options.mcpProviderNames ?? []).map((name) => ({
       name,
       toClaudeSdkConfig: () => ({ type: 'stdio', command: 'true' }),
@@ -147,6 +148,7 @@ async function startSession(
     rejectPermissionModeChange?: boolean;
     mcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
     approvalMemoryStore?: AgentDeps['approvalMemoryStore'];
+    resolveAutoReviewRoute?: AgentDeps['resolveAutoReviewRoute'];
     workingDir?: string;
   } = {},
 ) {
@@ -170,6 +172,7 @@ async function startSession(
     mcpProviderNames: options.mcpProviderNames,
     getMcpToolApprovalPolicy: options.mcpToolApprovalPolicy,
     approvalMemoryStore: options.approvalMemoryStore,
+    resolveAutoReviewRoute: options.resolveAutoReviewRoute,
   }));
   const handle = await agent.startSession({
     sessionId: 'session-auto-review',
@@ -730,6 +733,29 @@ describe('Auto-review wiring: the reviewer routes through the catalog model id',
     expect(reviewedRequest(reviewer, 1)).toMatchObject({
       providerId: 'xd', model: 'claude-sonnet-5',
     });
+    await handle.close();
+  });
+
+  it('invalidates the session reviewer cache when the resolved route revision changes', async () => {
+    let routeRevision = 'sha256:route-a';
+    const reviewer = vi.fn()
+      .mockResolvedValueOnce({ verdict: 'allow' as const, reason: 'route A' })
+      .mockResolvedValueOnce({ verdict: 'block' as const, reason: 'route B' });
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer,
+      resolveAutoReviewRoute: async (request) => ({
+        providerId: request.providerId ?? null,
+        model: request.model,
+        routeRevision,
+      }),
+    });
+    const action = { command: 'pnpm --filter desktop run typecheck' };
+    await expect(canUseTool('Bash', action, { toolUseID: 'route-cache-a' }))
+      .resolves.toMatchObject({ behavior: 'allow' });
+    routeRevision = 'sha256:route-b';
+    await expect(canUseTool('Bash', action, { toolUseID: 'route-cache-b' }))
+      .resolves.toMatchObject({ behavior: 'deny' });
+    expect(reviewer).toHaveBeenCalledTimes(2);
     await handle.close();
   });
 });

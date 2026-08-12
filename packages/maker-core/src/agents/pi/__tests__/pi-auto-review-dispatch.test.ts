@@ -149,6 +149,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
+    resolveAutoReviewRoute?: AgentDeps['resolveAutoReviewRoute'],
   ): AgentDeps {
     return {
       ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
@@ -212,11 +213,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         captured.proxyRegistration = { sessionId, token };
       },
       reviewAutoPermissionAction,
-      resolveAutoReviewRoute: (request) => ({
+      resolveAutoReviewRoute: resolveAutoReviewRoute ?? ((request) => ({
         providerId: 'test-provider',
         model: request.model,
         routeRevision: 'sha256:test-provider-route',
-      }),
+      })),
     };
   }
 
@@ -1217,6 +1218,41 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     // 同 intent 下的同一条灰区命令只审一次 —— 会话级判决缓存。
     expect(review).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates the session reviewer cache when the resolved route revision changes', async () => {
+    let routeRevision = 'sha256:route-a';
+    const review = vi.fn()
+      .mockResolvedValueOnce({ verdict: 'allow' as const })
+      .mockResolvedValueOnce({ verdict: 'block' as const });
+    const agent = new PiAgent(buildDeps(
+      review,
+      false,
+      undefined,
+      (request) => ({
+        providerId: 'test-provider',
+        model: request.model,
+        routeRevision,
+      }),
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'route-revision-cache',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'auto' as never,
+    });
+    const action = { command: 'pnpm --filter desktop run typecheck' };
+    firePermissionRequest('route-cache-a', 'bash', action);
+    expect(await waitForResponse('route-cache-a')).toEqual({
+      type: 'extension_ui_response', id: 'route-cache-a', confirmed: true,
+    });
+    routeRevision = 'sha256:route-b';
+    firePermissionRequest('route-cache-b', 'bash', action);
+    expect(await waitForResponse('route-cache-b')).toEqual({
+      type: 'extension_ui_response', id: 'route-cache-b', confirmed: false,
+    });
+    expect(review).toHaveBeenCalledTimes(2);
+    await handle.close();
   });
 
   /**

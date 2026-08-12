@@ -14300,14 +14300,17 @@ function isHiddenThinkingRow(m: Message): boolean {
 /**
  * 该服务端行**渲染后不会留下可见锚点**(初始页全是这类行时必须继续往前翻页)。
  *
- * 四类:
+ * 五类:
  *   - `tool_result`:配对的 tool_use 父消息可能在更老的页里,MessageStream 会丢弃 orphan;
  *   - 被 `isHiddenThinkingRow` 过滤掉的行:直接不进渲染列表;
  *   - 计划工具调用:MessageStream 会吞掉,只更新 composer 上方的计划胶囊;
  *   - 合成指令行(`isSyntheticTriggerRow`):MessageStream 渲染 null、content 置空,
  *     与 `loadOlderMessages` 的可见锚点判定同口径(见该处「合成指令行渲染 null,不算可见
  *     锚点」)。少了这一类,一页里只要混进一条合成 user 行就会被当成锚点提前停止回填,
- *     而它映射后同样不产生可见内容 —— 症状与完全不回填一样。
+ *     而它映射后同样不产生可见内容 —— 症状与完全不回填一样;
+ *   - 子代理内部行(`isSubagentInternalHistoryRow`):`buildRenderItems` 在入口整体剔除,
+ *     一条都不进渲染列表。子代理密集的会话最新一页可能**全部**是这类行(实测本机库里
+ *     单会话可达上万条),漏登记就会重现上面那种「DB 里有几千条、重开渲染 0 项」的症状。
  *
  * 任何组合占满整页,都会让映射结果为空,而 MessageStream 在 `visibleRenderItems.length === 0`
  * 时不触发自动翻页 —— 结果是 DB 里有几千条消息、重开会话却渲染 0 项,更老的用户/助手消息
@@ -14318,8 +14321,20 @@ function isNonAnchorHistoryRow(m: Message): boolean {
     m.role === 'tool_result' ||
     isHiddenThinkingRow(m) ||
     isAgentPlanHistoryToolUseRow(m) ||
-    isSyntheticTriggerRow(m)
+    isSyntheticTriggerRow(m) ||
+    isSubagentInternalHistoryRow(m)
   );
+}
+
+/**
+ * 服务端行是子代理内部消息(`buildRenderItems` 会整体剔除,见该处 Pass -1)。
+ *
+ * 判据与渲染侧共用同一个形态函数:只认 SDK tool-parent 形态,legacy Claude 导入存在
+ * 同一字段上的普通 transcript 链边不算 —— 否则父会话自己的正文会被当成无锚点行。
+ */
+function isSubagentInternalHistoryRow(m: Message): boolean {
+  const parent = m.agentMeta?.parentUuid;
+  return typeof parent === 'string' && parent.length > 0 && isSubagentParentToolUseId(parent);
 }
 
 function isAgentPlanHistoryToolUseRow(m: Message): boolean {

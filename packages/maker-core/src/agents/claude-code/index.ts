@@ -118,6 +118,7 @@ import {
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
   classifyLocalAutoReviewTier,
+  autoReviewDecisionCacheKey,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewUnavailableNotice,
@@ -2063,7 +2064,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           approvalMemoryGeneration,
         });
       }
-      const key = JSON.stringify(request);
+      const key = autoReviewDecisionCacheKey(request, reviewerRouteSnapshot);
       const cached = autoReviewDecisionCache.get(key);
       if (cached) return cached;
       const localTier = classifyLocalAutoReviewTier(request);

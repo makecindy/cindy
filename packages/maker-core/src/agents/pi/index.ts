@@ -49,6 +49,7 @@ import {
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
   classifyLocalAutoReviewTier,
+  autoReviewDecisionCacheKey,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
@@ -1224,7 +1225,7 @@ export class PiAgent extends BaseAgent {
           approvalMemoryGeneration,
         });
       }
-      const cacheKey = JSON.stringify(request);
+      const cacheKey = autoReviewDecisionCacheKey(request, reviewerRouteSnapshot);
       let pending = autoReviewDecisionCache.get(cacheKey);
       if (!pending) {
         const localTier = classifyLocalAutoReviewTier(request);

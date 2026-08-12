@@ -94,6 +94,21 @@ export async function resolveAutoReviewRouteSnapshot(
 }
 
 /**
+ * 会话级 reviewer cache 也必须绑定宿主解析后的完整路由身份。
+ *
+ * request 只含用户选择的 provider/model；custom provider 配置或 XD effective endpoint
+ * 热更新时它们可以保持不变。若缓存键漏掉 routeRevision，持久批准虽会正确 miss，紧接着的
+ * 会话缓存却仍会复用旧路由的 allow。只放入宿主给出的 opaque revision，不复制 endpoint 或
+ * auth 配置明文。
+ */
+export function autoReviewDecisionCacheKey(
+  request: AutoReviewRequest,
+  reviewerRoute: AutoReviewRouteIdentity,
+): string {
+  return JSON.stringify({ request, reviewerRoute });
+}
+
+/**
  * 「自动审核不可用」的会话级提示错误码。走既有的 `[CODE] fallback text` 约定：
  * harness emit 非终止 error 事件，renderer 的 decodeRemoteErrorMessage 翻成 i18n 文案
  * （见 apps/desktop 的 chat.remoteError.*），不新增协议、不新增事件类型。

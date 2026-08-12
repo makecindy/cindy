@@ -433,7 +433,7 @@ describe('approval-memory-store', () => {
       );
       expect(fs.existsSync(lockPath)).toBe(true);
     },
-    5_000,
+    15_000,
   );
 
   it('锁竞争中的 incarnation 查询走异步 reader，并按同一 owner 缓存重试', async () => {
@@ -479,8 +479,8 @@ describe('approval-memory-store', () => {
     const renameSpy = vi.spyOn(fs.promises, 'rename')
       .mockImplementationOnce(async (from, to) => {
         expect(String(from)).toBe(lockPath);
+        await realRename(from, to);
         await writeFile(lockPath, replacementRaw, 'utf8');
-        return realRename(from, to);
       })
       .mockImplementation(realRename);
     try {

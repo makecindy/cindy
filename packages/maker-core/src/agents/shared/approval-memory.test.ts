@@ -589,6 +589,48 @@ describe('approvalSignature — 可记忆判据', () => {
     }
   });
 
+  it('sort/uniq 的原生文件输出不可记忆，纯 stdout 形态不误报', () => {
+    for (const command of [
+      'sort -o dist/config payload.txt',
+      'sort -odist/config payload.txt',
+      'sort --output=dist/config payload.txt',
+      'sort --outp dist/config payload.txt',
+      'env sort.exe -r -o .\\dist\\config .\\payload.txt',
+      'uniq payload.txt dist/config',
+      'uniq -f 2 payload.txt dist/config',
+      'env uniq.exe .\\payload.txt .\\dist\\config',
+      'cat payload.txt | sort -o dist/config',
+      'head -n 1 payload.txt | uniq - dist/config',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'sort payload.txt',
+      'sort --help',
+      'true && sort -- -payload.txt -o-not-an-option',
+      'uniq payload.txt',
+      'printf fixed | sort -o dist/config',
+      'echo fixed | uniq - dist/config',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+
+    const memory = createApprovalMemory({
+      agentKind: 'pi', workspaceKey: '/repo', platform: 'darwin',
+    });
+    for (const action of [
+      exec('sort -o dist/config payload.txt'),
+      exec('uniq payload.txt dist/config'),
+    ]) {
+      memory.rememberReviewerAllow(action, defaultIntent, roots, reviewerRoute);
+      expect(memory.isRemembered(action, defaultIntent, roots, reviewerRoute)).toBe(false);
+    }
+    expect(memory.size()).toBe(0);
+  });
+
   it('OpenSSL 文件输入变换不可记忆，固定字面量 stdin 不误报', () => {
     for (const command of [
       'openssl base64 -d -in payload.b64 -out dist/config',

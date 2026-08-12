@@ -1041,6 +1041,65 @@ function iconvWritesFile(args: readonly string[]): boolean {
     || /^-o.+/.test(arg));
 }
 
+function nativeOutputFileState(
+  name: string,
+  args: readonly string[],
+): { writesFile: boolean; consumesFile: boolean } {
+  let optionsEnded = false;
+  let outputFile = false;
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (!optionsEnded && arg === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && name === 'sort') {
+      if (arg === '-o' || /^--out(?:p(?:u(?:t)?)?)?$/.test(arg)) {
+        outputFile = true;
+        index += 1;
+        continue;
+      }
+      if (/^-o.+/.test(arg) || /^--out(?:p(?:u(?:t)?)?)?=.+/.test(arg)) {
+        outputFile = true;
+        continue;
+      }
+      if (/^(?:-k|-S|-T)$/.test(arg)
+        || /^--(?:key|buffer-size|temporary-directory|compress-program|batch-size|parallel|random-source)$/.test(arg)) {
+        index += 1;
+        continue;
+      }
+      if (arg !== '-' && arg.startsWith('-')) continue;
+      operands.push(arg);
+      continue;
+    }
+    if (!optionsEnded && name === 'uniq') {
+      if (/^(?:-f|-s|-w)$/.test(arg)
+        || /^--(?:skip-fields|skip-chars|check-chars)$/.test(arg)) {
+        index += 1;
+        continue;
+      }
+      if (arg !== '-' && arg.startsWith('-')) continue;
+      operands.push(arg);
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith('-')) continue;
+    operands.push(arg);
+  }
+  if (name === 'sort') {
+    return { writesFile: outputFile, consumesFile: operands.length > 0 };
+  }
+  return {
+    writesFile: name === 'uniq' && operands.length > 1,
+    consumesFile: name === 'uniq' && operands[0] !== undefined && operands[0] !== '-',
+  };
+}
+
+function nativeOutputConsumesMutableFile(name: string, args: readonly string[]): boolean {
+  const state = nativeOutputFileState(name, args);
+  return state.writesFile && state.consumesFile;
+}
+
 const PIPELINE_FILE_SINK_NAMES: ReadonlySet<string> = new Set(['tee', 'sponge']);
 
 /**
@@ -1144,10 +1203,13 @@ function pipelineHasMutableFileSideEffect(command: string): boolean {
       || (PIPELINE_FILE_SINK_NAMES.has(name) && hasFileOperand(args))
       || (name === 'openssl' && opensslWritesFile(args))
       || (name === 'iconv' && iconvWritesFile(args))
+      || nativeOutputFileState(name, args).writesFile
       || PIPELINE_NETWORK_SINK_NAMES.has(name));
     if (!hasSideEffectSink) continue;
     if (pipeline.some(({ name, args }) =>
-      FILE_PRODUCER_NAMES.has(name) && consumesMutableInput(args))) return true;
+      FILE_PRODUCER_NAMES.has(name)
+      && !nativeOutputFileState(name, args).writesFile
+      && consumesMutableInput(args))) return true;
   }
   return false;
 }
@@ -1217,6 +1279,8 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
   }
   if (invocations.some(({ name, args }) =>
     name === 'openssl' && opensslMayLoadMutableFileState(args))) return true;
+  if (invocations.some(({ name, args }) =>
+    nativeOutputConsumesMutableFile(name, args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;
   return invocations.some(({ name: rawName }) => {
     // 未建模的 wrapper option（例如 env -S/--split-string）代表真实 executable 仍不可见。
