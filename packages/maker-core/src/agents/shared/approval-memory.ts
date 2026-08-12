@@ -994,6 +994,26 @@ const FILE_TRANSFORM_EXECUTABLES: ReadonlySet<string> = new Set([
   'brotli',
 ]);
 
+function iconvMayLoadMutableFileState(args: readonly string[]): boolean {
+  let skipNext = false;
+  for (const arg of args) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (arg === '-f' || arg === '--from-code' || arg === '-t' || arg === '--to-code'
+      || arg === '-o' || arg === '--output') {
+      skipNext = true;
+      continue;
+    }
+    if (/^(?:-o|--output=)/.test(arg)) continue;
+    if (/^(?:-f|--from-code=|-t|--to-code=)/.test(arg)) continue;
+    if (arg.startsWith('-')) continue;
+    return true;
+  }
+  return false;
+}
+
 /**
  * OpenSSL 子命令普遍通过 `-in FILE` 读取输入、通过 `-out FILE` 写出结果。只要输入来自
  * 文件，同一 argv 就能因文件替换产生不同输出；固定字面量 stdin + `-out` 仍可精确复用。
@@ -1011,6 +1031,14 @@ function opensslWritesFile(args: readonly string[]): boolean {
     arg === '-out'
     || arg.startsWith('-out=')
     || (/^-out.+/i.test(arg) && !/^-outform(?:=|$)/i.test(arg)));
+}
+
+function iconvWritesFile(args: readonly string[]): boolean {
+  return args.some((arg) =>
+    arg === '-o'
+    || arg === '--output'
+    || arg.startsWith('--output=')
+    || /^-o.+/.test(arg));
 }
 
 const PIPELINE_FILE_SINK_NAMES: ReadonlySet<string> = new Set(['tee', 'sponge']);
@@ -1115,6 +1143,7 @@ function pipelineHasMutableFileSideEffect(command: string): boolean {
       hasOutputFileRedirection(text)
       || (PIPELINE_FILE_SINK_NAMES.has(name) && hasFileOperand(args))
       || (name === 'openssl' && opensslWritesFile(args))
+      || (name === 'iconv' && iconvWritesFile(args))
       || PIPELINE_NETWORK_SINK_NAMES.has(name));
     if (!hasSideEffectSink) continue;
     if (pipeline.some(({ name, args }) =>
@@ -1182,6 +1211,10 @@ export function isMutableIndirectExecutionCommand(command: string): boolean {
         && mysqlMayLoadMutableScript(args))))) return true;
   if (invocations.some(({ name, args }) =>
     FILE_TRANSFORM_EXECUTABLES.has(name) && hasFileOperand(args))) return true;
+  if (invocations.some(({ name, args }) =>
+    name === 'iconv' && (iconvMayLoadMutableFileState(args) || iconvWritesFile(args)))) {
+    return true;
+  }
   if (invocations.some(({ name, args }) =>
     name === 'openssl' && opensslMayLoadMutableFileState(args))) return true;
   if (commandUsesExplicitExecutablePath(command)) return true;

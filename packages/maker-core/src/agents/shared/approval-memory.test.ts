@@ -567,6 +567,28 @@ describe('approvalSignature — 可记忆判据', () => {
     expect(memory.size()).toBe(0);
   });
 
+  it('iconv 文件输入/输出不可记忆，固定字面量 stdin 不误报', () => {
+    for (const command of [
+      'iconv -f UTF-8 -t UTF-16 payload.txt -o converted.txt',
+      'iconv -f UTF-8 -t UTF-16 payload.txt --output=converted.txt',
+      'iconv -f UTF-8 -t UTF-16 payload.txt -oconverted.txt',
+      'env iconv.exe -f UTF-8 -t UTF-16 .\\payload.txt -o .\\converted.txt',
+      'true && iconv -f UTF-8 -t UTF-16 payload.txt -o converted.txt',
+      'cat payload.txt | iconv -f UTF-8 -t UTF-16 -o converted.txt',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(true);
+      expect(signature(exec(command)), command).toBeNull();
+    }
+
+    for (const command of [
+      'iconv --help',
+      'iconv --version',
+    ]) {
+      expect(isMutableIndirectExecutionCommand(command), command).toBe(false);
+      expect(signature(exec(command)), command).not.toBeNull();
+    }
+  });
+
   it('OpenSSL 文件输入变换不可记忆，固定字面量 stdin 不误报', () => {
     for (const command of [
       'openssl base64 -d -in payload.b64 -out dist/config',

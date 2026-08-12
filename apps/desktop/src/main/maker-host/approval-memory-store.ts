@@ -491,6 +491,40 @@ async function tryAcquireFileLock(lockPath: string, owner: FileLockOwner): Promi
   }
 }
 
+async function acquireTransitionGate(
+  lockPath: string,
+  owner: FileLockOwner,
+  identifyProcess: ProcessIncarnationReader,
+): Promise<(() => Promise<void>) | null> {
+  const gatePath = `${lockPath}.transition`;
+  const ownerRaw = JSON.stringify(owner);
+  for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt++) {
+    try {
+      await fs.writeFile(gatePath, ownerRaw, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      return async () => {
+        if (await fs.readFile(gatePath, 'utf8').catch(() => null) === ownerRaw) {
+          await fs.unlink(gatePath).catch(() => undefined);
+        }
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
+      const gateRaw = await fs.readFile(gatePath, 'utf8').catch(() => null);
+      const gateOwner = gateRaw ? parseLockOwner(gateRaw) : null;
+      let stale = gateOwner !== null && !processIsAlive(gateOwner.pid);
+      if (gateOwner && !stale && gateOwner.incarnation !== 'unknown') {
+        const liveIncarnation = await safelyReadProcessIncarnation(identifyProcess, gateOwner.pid);
+        stale = Boolean(liveIncarnation && liveIncarnation !== gateOwner.incarnation);
+      }
+      if (stale && gateRaw === await fs.readFile(gatePath, 'utf8').catch(() => null)) {
+        await fs.unlink(gatePath).catch(() => undefined);
+        continue;
+      }
+      await wait(LOCK_RETRY_MS);
+    }
+  }
+  return null;
+}
+
 /**
  * Atomically move a stale candidate out of the public lock name before deleting it.
  *
@@ -499,7 +533,10 @@ async function tryAcquireFileLock(lockPath: string, owner: FileLockOwner): Promi
  * private quarantine name first. If a replacement raced ahead, restore that replacement without
  * overwriting any still newer public lock and leave it in force.
  */
-async function reclaimObservedLock(lockPath: string, observed: string): Promise<boolean> {
+async function reclaimObservedLock(
+  lockPath: string,
+  observed: string,
+): Promise<boolean> {
   const quarantinePath = `${lockPath}.${randomUUID()}.reclaim`;
   try {
     // Identity lookup may take measurable time (PowerShell/ps). Narrow the replacement race to
@@ -566,40 +603,49 @@ async function withFileLock<T>(
       ownerId: randomUUID(),
       incarnation: ownerIncarnation,
     };
-    if (!await tryAcquireFileLock(lockPath, owner)) {
-      try {
-        const observed = await fs.readFile(lockPath, 'utf8');
-        const activeOwner = parseLockOwner(observed);
-        if (activeOwner && !processIsAlive(activeOwner.pid)) {
-          if (await reclaimObservedLock(lockPath, observed)) continue;
-        }
-        if (activeOwner && activeOwner.incarnation !== 'unknown') {
-          let liveIncarnationPromise = observedIncarnationCache.get(observed);
-          if (!liveIncarnationPromise) {
-            liveIncarnationPromise = safelyReadProcessIncarnation(identifyProcess, activeOwner.pid);
-            observedIncarnationCache.set(observed, liveIncarnationPromise);
-          }
-          const liveIncarnation = await liveIncarnationPromise;
-          if (liveIncarnation && liveIncarnation !== activeOwner.incarnation) {
-            // The OS reused this PID for a different process. Quarantine the exact observed lock
-            // atomically so a replacement owner cannot be deleted by a read/unlink race.
-            if (await reclaimObservedLock(lockPath, observed)) continue;
-          }
-        }
-        // 旧版本可能留下无法解析 owner 的锁。它也可能来自仍存活但被挂起的进程，无法安全
-        // 回收；保持 fail-closed，等锁消失或本次操作超时，不以 mtime 猜测 owner 生死。
-      } catch (inspectionError) {
-        if ((inspectionError as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
-      }
-      await wait(LOCK_RETRY_MS);
-      continue;
-    }
-
+    const releaseTransition = await acquireTransitionGate(lockPath, owner, identifyProcess);
+    if (!releaseTransition) continue;
+    let shouldRetry = false;
     try {
-      return await task();
+      if (!await tryAcquireFileLock(lockPath, owner)) {
+        try {
+          const observed = await fs.readFile(lockPath, 'utf8');
+          const activeOwner = parseLockOwner(observed);
+          if (activeOwner && !processIsAlive(activeOwner.pid)) {
+            shouldRetry = await reclaimObservedLock(lockPath, observed);
+          }
+          if (activeOwner && activeOwner.incarnation !== 'unknown') {
+            let liveIncarnationPromise = observedIncarnationCache.get(observed);
+            if (!liveIncarnationPromise) {
+              liveIncarnationPromise = safelyReadProcessIncarnation(identifyProcess, activeOwner.pid);
+              observedIncarnationCache.set(observed, liveIncarnationPromise);
+            }
+            const liveIncarnation = await liveIncarnationPromise;
+            if (liveIncarnation && liveIncarnation !== activeOwner.incarnation) {
+              // The OS reused this PID for a different process. Quarantine the exact observed lock
+              // atomically so a replacement owner cannot be deleted by a read/unlink race.
+              shouldRetry = await reclaimObservedLock(lockPath, observed);
+            }
+          }
+          // 旧版本可能留下无法解析 owner 的锁。它也可能来自仍存活但被挂起的进程，无法安全
+          // 回收；保持 fail-closed，等锁消失或本次操作超时，不以 mtime 猜测 owner 生死。
+        } catch (inspectionError) {
+          if ((inspectionError as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            shouldRetry = true;
+          }
+        }
+      } else {
+        try {
+          return await task();
+        } finally {
+          await releaseOwnedLock(lockPath, owner);
+        }
+      }
     } finally {
-      await releaseOwnedLock(lockPath, owner);
+      await releaseTransition();
     }
+    if (shouldRetry) continue;
+    await wait(LOCK_RETRY_MS);
   }
   throw new Error('approval memory lock timed out');
 }
