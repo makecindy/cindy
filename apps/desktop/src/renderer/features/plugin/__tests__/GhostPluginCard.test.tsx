@@ -224,8 +224,9 @@ it('shows an expired OAuth status instead of the up-to-date status', () => {
     render(
       <GhostPluginCard
         item={{ ...commandPlugin, oauthAuthorizationExpired: true }}
-        onPrimary={vi.fn()}
-        onManage={vi.fn()}
+        onConfigure={vi.fn()}
+        onChat={vi.fn()}
+        onOpenDetail={vi.fn()}
       />,
     );
 
