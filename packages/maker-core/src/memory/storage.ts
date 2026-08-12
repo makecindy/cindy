@@ -69,14 +69,16 @@ export function sanitizeWorkdir(absPath: string): string {
  * 裸拼接时 ('/x:/repo','prod') 与 ('/repo','prod:/x') 会撞成同一个 key
  * (review R5 P2);常规 alias 编码前后相同,键仍可读。数据仍存控制端本机,
  * 目录名经 memoryScopeDirName 派生。所有 getStore 调用方 (agent 启动注入 /
- * MCP withStore) 必须统一经本函数取键,不得各自拼接。
+ * MCP withStore) 必须统一取键,不得各自拼接——**统一入口是 async 的
+ * resolveMemoryScopeKey (scope-resolver.ts)**: 它在本地会话上额外做 git
+ * linked-worktree 归一化 (#2379), 本函数保持同步原契约不变。
  */
 export function buildMemoryScopeKey(workingDir: string, remoteHostId?: string | null): string {
   return remoteHostId ? `ssh:${encodeURIComponent(remoteHostId)}:${workingDir}` : workingDir;
 }
 
 /** buildMemoryScopeKey 的远端键前缀。本地键恒为绝对路径, 不会以它开头。 */
-const SSH_SCOPE_KEY_PREFIX = 'ssh:';
+export const SSH_SCOPE_KEY_PREFIX = 'ssh:';
 
 /**
  * scope key → 落盘目录名。本地键沿用 sanitizeWorkdir(既有目录不迁移);远端

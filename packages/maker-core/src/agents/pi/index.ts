@@ -54,7 +54,7 @@ import {
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
-import { buildMemoryScopeKey } from '../../memory/storage.js';
+import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import type {
   Capabilities,
   ManualCompactResult,
@@ -1055,12 +1055,18 @@ export class PiAgent extends BaseAgent {
       (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true &&
       (this.memoryOverride ?? true) === true &&
       !!this.deps.makerMemory;
-    const memoryScopeKey = buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    // scope key: 仅在 memory 开启时解析 (关闭时不付 git 探测开销), 并在
+    // startSession 内 await — 压缩事件随后就到, 写路径不应再异步等 key。
+    // 统一入口 resolveMemoryScopeKey: SSH 走复合键; 本地做 git worktree
+    // 归一化 (#2379)。
+    const memoryScopeKey = compactionMemoryEnabled
+      ? await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)
+      : null;
     const digestSlugBase = slugifyForMemory(opts.sessionId ?? `pi-${process.pid}`, 24);
     let digestSeq = 0;
     const writeCompactionDigest = async (summary: string, reason: string): Promise<void> => {
       const manager = this.deps.makerMemory;
-      if (!compactionMemoryEnabled || !manager) return;
+      if (!compactionMemoryEnabled || !manager || !memoryScopeKey) return;
       const body = truncateToByteBudget(summary, PI_DIGEST_MAX_BODY_BYTES);
       const seq = ++digestSeq;
       // slug 唯一:sessionId 片段 + 递增序号;resume/跨会话用 Date.now 防撞名(create 模式撞名会抛)。
