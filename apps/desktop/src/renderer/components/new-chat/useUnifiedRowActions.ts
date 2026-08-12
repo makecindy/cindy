@@ -32,6 +32,7 @@ import type { ModelMemoryAccessors } from './ModelSelector';
 import type { UnifiedSelectedRow } from './UnifiedModelPanel';
 import {
   anchorKey,
+  wireModelIdOf,
   type UnifiedAnchor,
   type UnifiedEngine,
   type UnifiedRowConfig,
@@ -130,7 +131,15 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       onEffortChangeLive(effort);
       return;
     }
-    modelMemory?.setEffort(config.agent, anchor.providerId, anchor.modelId, effort);
+    // ★ 记忆表(providerModelMemory)的既有消费方全部按 **wire id** 存取(会话恢复、
+    // device-link 镜像、IM /model)。这里写归一化 id 会造出一份谁也读不到的影子记录,
+    // 同时污染那张表。anchor.modelId 只是行身份,不是可以发出去的东西。
+    modelMemory?.setEffort(
+      config.agent,
+      anchor.providerId,
+      config.wireModelId ?? anchor.modelId,
+      effort,
+    );
   };
 
   const applyFast: UnifiedRowActions['applyFast'] = (anchor, entry, config, enabled) => {
@@ -145,7 +154,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       void onFastModeChangeLive(enabled);
       return;
     }
-    modelMemory?.setFast(config.agent, anchor.providerId, anchor.modelId, enabled);
+    // 同上:Fast 槽也按 wire id 存取。
+    modelMemory?.setFast(
+      config.agent,
+      anchor.providerId,
+      config.wireModelId ?? anchor.modelId,
+      enabled,
+    );
   };
 
   const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
@@ -156,11 +171,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 记忆槽没有「删」的语义(providerModelMemory 是 (agent, model) → 值的表);把它写回
     // 目录默认 = 用户看到的就是推荐配置。真正的「跟随服务端新默认」由引擎 override 的删除
     // 承担 —— 深度默认变了,用户下次进浮层看到的仍是自己这次确认过的档,不会被静默改。
+    // 恢复推荐是把**推荐引擎**那一格收回默认,故按推荐引擎的 wire id 写(与该行当前
+    // 生效引擎的 wire id 可能不是同一个 id)。
+    const recommendedWireId = wireModelIdOf(entry, recommendedAgent);
     if (defaultEffort) {
-      modelMemory?.setEffort(recommendedAgent, anchor.providerId, anchor.modelId, defaultEffort);
+      modelMemory?.setEffort(recommendedAgent, anchor.providerId, recommendedWireId, defaultEffort);
     }
     if (config.fast) {
-      modelMemory?.setFast(recommendedAgent, anchor.providerId, anchor.modelId, false);
+      modelMemory?.setFast(recommendedAgent, anchor.providerId, recommendedWireId, false);
     }
   };
 
@@ -188,10 +206,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 跨引擎选择不走普通 onSelect(那条链路只换 model / provider):交给调用方的切换事务
     // (performAgentSwitch —— 确认弹窗、上下文重建、fastMode 不跨引擎带入等语义都在那边)。
     // 草稿场景没有 sessionEngineFilter,换引擎没有代价,恒走 onSelect。
+    // 交出去的一律是**该引擎的 wire id**(建会话 / 切模型 / 写 draft 都用它);
+    // 行的归一化身份另放在 config.rowModelId 里,调用方要记 override / 收藏时用那个。
+    const wireModelId = config.wireModelId ?? anchor.modelId;
     if (sessionEngineFilter && sessionAgent !== undefined && config.agent !== sessionAgent) {
       sessionEngineFilter.onCrossEngineSelect({
         providerId: anchor.providerId,
-        modelId: anchor.modelId,
+        modelId: wireModelId,
         targetAgent: config.agent,
         effort,
       });
@@ -199,10 +220,11 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     }
     // 生效引擎 / Fast / 收藏锚点随选中一起交出去:调用方(M5 新会话)要按它派生
     // newMakerDraft 的 vendor,再重推一遍必然与行上显示的三元组漂移。
-    onSelect(anchor.providerId, anchor.modelId, effort, {
+    onSelect(anchor.providerId, wireModelId, effort, {
       engine: config.engine,
       fast: config.fast,
       favoriteUid: favorite ? favorite.uid : null,
+      rowModelId: anchor.modelId,
     });
   };
 

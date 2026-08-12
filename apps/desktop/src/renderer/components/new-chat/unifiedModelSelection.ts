@@ -22,7 +22,7 @@ import type {
   UnifiedAgentCapability,
   UnifiedModelEntry,
 } from '@cindy/model-providers';
-import { classifyModel } from '@cindy/model-providers';
+import { classifyModel, sortEntriesForAgent } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -62,6 +62,32 @@ export function sameAnchor(a: UnifiedAnchor | null, b: UnifiedAnchor | null): bo
   return anchorKey(a) === anchorKey(b);
 }
 
+/**
+ * 该行在某引擎下要发出去的 wire id;查不到回落行 id(归一化 id)。
+ * 所有「发出去」与「按 wire id 存取既有表」的路径都从这里取,不要各自 `capabilities[x]?.…`。
+ */
+export function wireModelIdOf(entry: UnifiedModelEntry, agent: AgentKind): string {
+  return entry.capabilities[agent]?.wireModelId ?? entry.modelId;
+}
+
+/**
+ * 外部给的 model id 是不是**这一行**。
+ *
+ * 合并行之后这条判定必须两头都认:会话 / 草稿里存的是**wire id**(如 `codex/gpt-5.5`),
+ * 而行身份、收藏与引擎 override 用的是**归一化 id**(`gpt-5.5`)。只比一边,会出现
+ * 「选中的模型在列表里不高亮」或「老收藏整条消失」。
+ */
+export function entryMatchesModelId(
+  entry: UnifiedModelEntry,
+  modelId: string | null | undefined,
+): boolean {
+  if (!modelId) return false;
+  if (entry.modelId === modelId) return true;
+  return Object.values(entry.capabilities).some(
+    (capability) => capability?.wireModelId === modelId,
+  );
+}
+
 /** 一行(或一条收藏)当前**生效**的完整配置。 */
 export interface UnifiedRowConfig {
   engine: UnifiedEngine;
@@ -77,6 +103,20 @@ export interface UnifiedRowConfig {
   /** 用户是否在这一行上留下过与推荐不同的配置(行内三元组提亮 / 浮层底栏三态)。 */
   customized: boolean;
   capability: UnifiedAgentCapability | null;
+  /**
+   * ★该 (行, 生效引擎) **真正要发出去的 wire model id**。
+   *
+   * 行身份(`entry.modelId`)是**归一化 id**:同一个逻辑模型在 cc / codex 下可能是
+   * `gpt-5.5` 与 `codex/gpt-5.5` 两条不同的目录条目,合并成一行后,行 id 只用来做
+   * 稳定身份(anchor / 引擎 override key / 收藏 key)。凡是「发出去」或「与既有按 wire id
+   * 存取的表打交道」的路径 —— 建会话、写 draft、providerModelMemory 的深度 / Fast 槽、
+   * 价格查询 —— 一律用这个字段。混用会造出「界面显示 A、发出去 B」或把归一化 id 写进
+   * 记忆表污染既有消费方。
+   *
+   * 目录里查不到该引擎条目时为 null(理论上不该发生:引擎在候选里就一定有条目),
+   * 调用方回落行 id。
+   */
+  wireModelId: string | null;
 }
 
 export interface ResolveRowConfigArgs {
@@ -156,6 +196,7 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
     fastCapable,
     customized,
     capability,
+    wireModelId: capability?.wireModelId ?? null,
   };
 }
 
@@ -191,6 +232,7 @@ export function resolveFavoriteRowConfig(args: {
     // 收藏条目恒按「收藏配置」呈现(底栏第三态),不参与「已自定义」的提亮语义。
     customized: false,
     capability,
+    wireModelId: capability?.wireModelId ?? null,
   };
 }
 
@@ -263,7 +305,8 @@ export interface UnifiedListRow {
 
 export interface UnifiedListSection {
   key: string;
-  kind: 'favorites' | 'group';
+  /** `defaults` = 服务端标记的新会话默认种子小节(收藏之下、普通分组之上)。 */
+  kind: 'favorites' | 'defaults' | 'group';
   /** 分组行才有(分组标题按 CATEGORY_LABEL_KEY 查 i18n)。 */
   category?: ModelCategory;
   rows: UnifiedListRow[];
@@ -297,8 +340,14 @@ export function buildUnifiedListSections(args: {
   favorites: readonly ModelFavoriteItem[];
   query: string;
   rail: UnifiedRailFilter;
+  /**
+   * 该行是否被服务端目录标记为**新会话默认种子**(`CatalogModel.newSessionDefault`)。
+   * 命中的行提升到独立的「默认」小节(收藏之下、普通分组之上)—— 实测反馈:默认模型
+   * 混在列表中部很难找。判定数据在 renderer 侧(目录条目),故由调用方注入。
+   */
+  isDefaultSeed?: (entry: UnifiedModelEntry) => boolean;
 }): UnifiedListSection[] {
-  const { entries, favorites, rail } = args;
+  const { entries, favorites, rail, isDefaultSeed } = args;
   const q = args.query.trim().toLowerCase();
   const byKey = new Map<string, UnifiedModelEntry>();
   for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
@@ -308,7 +357,14 @@ export function buildUnifiedListSections(args: {
   // ── 收藏区 ── 恒置顶,在任何 rail 视图下都显示;按供应商筛选时只留该来源的收藏。
   const favRows: UnifiedListRow[] = [];
   for (const item of favorites) {
-    const entry = byKey.get(entryKeyOf(item.providerId, item.modelId));
+    // 老收藏可能存的是某个引擎的 wire id(合并行之前的行身份就是 wire id):先按归一化 id
+    // 精确命中,失配再按「任一引擎的 wire id」扫一遍 —— 否则升级后老收藏会整条消失。
+    const entry =
+      byKey.get(entryKeyOf(item.providerId, item.modelId)) ??
+      entries.find(
+        (candidate) =>
+          candidate.providerId === item.providerId && entryMatchesModelId(candidate, item.modelId),
+      );
     // 收藏指向的模型已不可路由(来源断开 / 目录下架)→ 本轮不显示;**不删条目**:
     // 连回来就该回来,静默删掉用户存过的配置是不可逆的。
     if (!entry) continue;
@@ -345,12 +401,30 @@ export function buildUnifiedListSections(args: {
       (rail.kind !== 'provider' || entry.providerId === rail.providerId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );
-  const sorted = [...visible].sort(
+  const byCatalogOrder = [...visible].sort(
     (a, b) =>
       (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
   );
+  // 单引擎视图(会话内的「同引擎」格)把**原生底座 == 该引擎**的行提到前面,仅兼容的
+  // 排后面 —— codex 会话里先看到 GPT 系、claude 会话里先看到 Claude 系,才符合直觉。
+  // 排序是稳定的:两拨各自保持服务端 group / sortOrder 序。
+  // 新会话的全量视图**不动**服务端排序:那里没有"当前引擎"这个参照系,擅自重排等于
+  // 用客户端偏好覆盖服务端的编排。
+  const sorted =
+    rail.kind === 'engine' ? sortEntriesForAgent(byCatalogOrder, rail.agent) : byCatalogOrder;
+  // 服务端默认种子提升到独立小节:**从普通分组里移走**(不像收藏那样两处都留)——
+  // 收藏是配置副本、模型本体仍在原地;默认种子是同一行的位置提升,两处都出现只会让
+  // 用户以为有两个同名模型。
+  const defaultRows: UnifiedListRow[] = [];
   const buckets = new Map<ModelCategory, UnifiedListRow[]>();
   for (const entry of sorted) {
+    if (isDefaultSeed?.(entry)) {
+      defaultRows.push({
+        anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
+        entry,
+      });
+      continue;
+    }
     const category = classifyModel({
       id: entry.modelId,
       ...(entry.group !== undefined ? { group: entry.group } : {}),
@@ -361,6 +435,9 @@ export function buildUnifiedListSections(args: {
       entry,
     });
     buckets.set(category, rows);
+  }
+  if (defaultRows.length > 0) {
+    sections.push({ key: 'defaults', kind: 'defaults', rows: defaultRows });
   }
   for (const [category, rows] of buckets) {
     sections.push({ key: `group:${category}`, kind: 'group', category, rows });
@@ -384,6 +461,13 @@ export interface FlyoutPlacement {
 }
 
 /**
+ * 行与浮层之间的缝隙。压到 4px 是**交互决定不是审美决定**:缝隙越宽,鼠标横穿它的时间
+ * 越长,越容易在半路把浮层收掉(2026-08-13 实测)。宿主还会把这 4px 并进浮层包装的
+ * padding 里,使缝隙本身也是可 hover 区域 —— 两手都做,视觉上仍是 4px 的呼吸。
+ */
+export const UNIFIED_FLYOUT_GAP = 4;
+
+/**
  * 配置浮层的定位(规格 §1.3「跟随行垂直位置、视口夹紧」)。
  *
  * 水平:默认贴在面板**左**外侧(设计稿形态);左边放不下才翻到右侧;两侧都放不下时
@@ -401,7 +485,7 @@ export function computeFlyoutPlacement(args: {
   margin?: number;
   rowOffset?: number;
 }): FlyoutPlacement {
-  const gap = args.gap ?? 10;
+  const gap = args.gap ?? UNIFIED_FLYOUT_GAP;
   const margin = args.margin ?? 8;
   const rowOffset = args.rowOffset ?? 12;
   const { anchor, panel, size, viewport } = args;
@@ -417,6 +501,8 @@ export function computeFlyoutPlacement(args: {
     Math.max(margin, rawLeft),
     Math.max(margin, viewport.width - size.width - margin),
   );
+  // 窗口太窄、两侧都塞不下时上面的钳制会把浮层推到视口边:此时它可能与面板叠一部分,
+  // 这是**有意的**取舍 —— 压住面板边缘还能用,飘到屏幕外就彻底不可用了(§1.3 视口夹紧)。
 
   const maxTop = Math.max(margin, viewport.height - size.height - margin);
   const top = Math.min(Math.max(margin, anchor.top - rowOffset), maxTop);

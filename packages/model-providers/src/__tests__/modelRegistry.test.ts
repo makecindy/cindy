@@ -78,8 +78,16 @@ describe("model registry", () => {
       entry: {
         contextWindow: 1_050_000,
         maxOutputTokens: 128_000,
-        perAgent: { codex: { contextWindow: 372_000 } },
+        // ChatGPT 包月路由下 codex 的真实上限是 272K(Chris 2026-08-13 裁决)。
+        // 372K 是 **XD 网关**路由的值,已随条目拆分搬到独立的 `xd/gpt-5.6-sol`
+        // 条目 —— 带 perAgent 窗口覆盖的条目不得跨包月 / 网关路由共享。
+        perAgent: { codex: { contextWindow: 272_000 } },
       },
+    });
+    expect(
+      findModelRegistryRoute(registry, "xd", "gpt-5.6-sol", "codex"),
+    ).toMatchObject({
+      entry: { id: "xd/gpt-5.6-sol", perAgent: { codex: { contextWindow: 372_000 } } },
     });
     expect(
       resolveModelReferencePrice(registry, "openai", "chatgpt/gpt-5.6-sol", {

@@ -8,6 +8,8 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import type { Effort } from '@/lib/userPreferences.types';
 
+import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
+
 import { agentOptionOf } from './agentOptions';
 // 图标规则(模型条目 icon 优先、缺省回落来源供应商标)只有一份实现,复用它而不是抄一份。
 import { ModelIconMark } from './ModelSelector';
@@ -32,6 +34,8 @@ export function UnifiedModelRow({
   onSelect,
   onStar,
   onRevealForKeyboard,
+  discountLabel,
+  defaultBadge,
 }: {
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
@@ -45,13 +49,18 @@ export function UnifiedModelRow({
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   providers: readonly ProviderView[];
   onReveal: (anchor: UnifiedAnchor, element: HTMLElement) => void;
-  onLeave: () => void;
+  /** pointerleave —— 带事件:调用方按「往哪边走」决定 grace 长短(去浮层的路上要更宽容)。 */
+  onLeave: (event: ReactPointerEvent<HTMLDivElement>) => void;
   /** 焦点离开本行:调用方按「新焦点是否落在浮层里」决定收不收(← 键进浮层不能被收掉)。 */
   onBlurAway: (related: EventTarget | null) => void;
   onSelect: () => void;
   onStar: () => void;
   /** ← 键:打开该行的配置浮层并把焦点送进去(键盘用户的浮层入口,与既有面板同键位)。 */
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
+  /** 已本地化的折扣 / 限免文案;**只在真有折扣时传**(没有就不渲染,别把每行都加宽)。 */
+  discountLabel?: string;
+  /** 已本地化的「默认」标识;仅默认小节的行传。 */
+  defaultBadge?: string;
 }) {
   const { t } = useTranslation();
   const provider = providers.find((item) => item.id === entry.providerId);
@@ -106,6 +115,8 @@ export function UnifiedModelRow({
           dense
         />
         <span
+          // 超长模型名先撑宽面板、到上限才截断(规格 §1.2);截断后靠 title 给全名。
+          title={entry.displayName}
           className={cn(
             'min-w-0 flex-1 truncate text-13 leading-5 text-[var(--model-item-text)]',
             selected ? 'font-medium' : 'font-normal',
@@ -113,6 +124,29 @@ export function UnifiedModelRow({
         >
           {entry.displayName}
         </span>
+        {defaultBadge && (
+          <span
+            data-default-badge
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-[1px] text-10 font-medium text-[var(--text-secondary)]"
+          >
+            {defaultBadge}
+          </span>
+        )}
+        {discountLabel && (
+          <span
+            data-discount-badge
+            title={discountLabel}
+            // 折扣用淡染绿(与档位色表里的 low 同一支绿),不抢模型名的注意力,也不占
+            // 固定宽度 —— 没折扣的行完全不渲染这个节点。
+            className="inline-flex shrink-0 items-center rounded-full px-1.5 py-[1px] text-10 font-semibold"
+            style={{
+              color: EFFORT_TIER_COLORS.low,
+              backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+            }}
+          >
+            {discountLabel}
+          </span>
+        )}
         <button
           type="button"
           disabled={interactionDisabled}
@@ -168,7 +202,11 @@ export function UnifiedModelRow({
         />
       </div>
       {entry.description && (
-        <div className="truncate pl-[26px] pt-px text-12 text-[var(--text-tertiary)]">
+        // 单行截断 + title 全文:英文长描述在窄面板下撑破布局是实测反馈的问题。
+        <div
+          title={entry.description}
+          className="min-w-0 max-w-full truncate pl-[26px] pt-px text-12 text-[var(--text-tertiary)]"
+        >
           {entry.description}
         </div>
       )}

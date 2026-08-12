@@ -67,7 +67,6 @@ import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { getBranchName } from '../../../shared/managedWorktreeBranches';
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
-import { getModelFavorite } from '@/state/modelFavorites';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -647,7 +646,20 @@ export function NewMakerDraftRoute() {
   const chatPrefs = currentPrefs;
   // 统一模型选择器里选中的收藏锚点(规格 §1.5)。组件态:它描述「这次草稿选中的是哪一条
   // 副本」,不是要跨重启保留的偏好 —— 详见 handleUnifiedDraftSelect 里的取舍说明。
-  const [selectedFavoriteUid, setSelectedFavoriteUid] = useState<string | null>(null);
+  //
+  // 存的是**选中那一刻的快照**(uid + 当时写进草稿的 wire model id + 引擎),不是只存 uid 再
+  // 回头查收藏表。数据层把行合并成「归一化 id + 每引擎 wireModelId」之后,收藏条目按**归一化
+  // id** 存(那是行的稳定身份),而草稿里放的是 **wire id**(那才是发得出去的那个)——直接拿
+  // favorite.modelId 去比 draftInitialModel,像 `chatgpt/gpt-5.6-luna` 这类两者本就不相等的
+  // 模型会**每次都判成失配**,刚点上的收藏立刻掉勾。快照比的是「草稿现在还是不是我当初写下的
+  // 那一份」,两边都是 wire id,与收藏表用哪套 id 无关。
+  const [selectedFavoriteAnchor, setSelectedFavoriteAnchor] = useState<{
+    uid: string;
+    /** 选中时写进草稿的 wire model id(≠ 收藏条目里的归一化行 id)。 */
+    wireModelId: string;
+    vendor: MakerVendor;
+  } | null>(null);
+  const selectedFavoriteUid = selectedFavoriteAnchor?.uid ?? null;
   const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
   const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -1912,14 +1924,18 @@ export function NewMakerDraftRoute() {
   // (引擎不可用 coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 ——
   // 留着它面板会在一条不相干的收藏上打勾。锚点本身被删 / 换账号后查无此条的情形,
   // 由面板侧的 activeFavoriteUid 兜底,这里只管「还在,但已经不是它了」。
+  //
+  // 比的是**快照里的 wire id** 与草稿当前的 wire id —— 不去查收藏条目(它按归一化行 id 存,
+  // 与草稿的 wire id 天生可能不等,见 selectedFavoriteAnchor 的说明)。
   useEffect(() => {
-    if (!selectedFavoriteUid) return;
-    const favorite = getModelFavorite(selectedFavoriteUid);
-    if (!favorite) return;
-    if (favorite.modelId !== draftInitialModel || favorite.agent !== draft.vendor) {
-      setSelectedFavoriteUid(null);
+    if (!selectedFavoriteAnchor) return;
+    if (
+      selectedFavoriteAnchor.wireModelId !== draftInitialModel ||
+      selectedFavoriteAnchor.vendor !== draft.vendor
+    ) {
+      setSelectedFavoriteAnchor(null);
     }
-  }, [selectedFavoriteUid, draftInitialModel, draft.vendor]);
+  }, [selectedFavoriteAnchor, draftInitialModel, draft.vendor]);
 
   /**
    * 把草稿转移到一个新的运行目标(设备 + 工作区)——**四条路径唯一的转移动作**。
@@ -2513,10 +2529,16 @@ export function NewMakerDraftRoute() {
   //
   // 深度 / Fast 的每模型记忆已由 ChatInput 按目标引擎槽写过(见 onUnifiedDraftSelect
   // 的 prop 说明);这里只负责草稿自身的四元组 (vendor, model, effort, providerId)。
+  //
+  // **id 口径**:`selection.modelId` 已经是选中引擎的 **wire model id**(上游 ModelSelector
+  // 统一分支按 `capabilities[engine].wireModelId` 交出来的)。草稿里存的、createSession 发出去
+  // 的、providerModelMemory 里当键的,全是它。行的归一化 id 只是面板内部的行身份,**一律不进
+  // 草稿** —— 写错这一格的后果不是显示难看,是首条请求路由到一个不存在的 model id。
   const handleUnifiedDraftSelect = useCallback(
     (selection: {
       vendor: MakerVendor;
       providerId: string;
+      /** 选中引擎的 **wire model id**(不是行的归一化 id)。 */
       modelId: string;
       effort?: Effort;
       fast: boolean;
@@ -2526,7 +2548,16 @@ export function NewMakerDraftRoute() {
       // 保留的偏好(重进首页从模型行重新开始即可)。放这里天然随路由卸载失效,也不必为
       // 切账号 / 切设备再补一条清理 —— 面板侧另有一道兜底:uid 在当前 owner 的收藏里
       // 查不到就自动回落模型行(UnifiedModelPanel.activeFavoriteUid)。
-      setSelectedFavoriteUid(selection.favoriteUid);
+      // 锚点连同**本次写进草稿的 wire id** 一起记,失效判定才有可比的同类值。
+      setSelectedFavoriteAnchor(
+        selection.favoriteUid
+          ? {
+              uid: selection.favoriteUid,
+              wireModelId: selection.modelId,
+              vendor: selection.vendor,
+            }
+          : null,
+      );
       if (selection.vendor !== draft.vendor) switchVendor(selection.vendor, currentPrefs);
       if (isDeviceLinkDraft) {
         dlRuntimeTouchedRef.current = true;

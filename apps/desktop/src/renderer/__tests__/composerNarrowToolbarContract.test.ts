@@ -31,7 +31,14 @@ describe('composer narrow toolbar contract', () => {
     );
     expect(modelSelectorSource).toContain("'w-[148px] min-w-[72px]'");
     expect(modelSelectorSource).toContain("'w-[64px] min-w-[64px]'");
-    expect(modelSelectorSource).toContain('effortLabel && !isCompactToolbar');
+    // 2026-08-12 Chris 裁决(bug7):composer pill 换成「模型名 + 引擎小标 + 深度」后,
+    // 窄工具条下**先截模型名**,小标与档字保留 —— 它们是定宽身份位,截掉等于把
+    // 「现在用哪个引擎、多深」藏起来。只有 ultra-compact(整段文字都收起、只剩图标)
+    // 才一并隐藏。没有引擎小标的旧形态(其余 7 个入口)维持原来的 compact 即隐藏。
+    expect(modelSelectorSource).toContain(
+      'const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;',
+    );
+    expect(modelSelectorSource).toContain('{effortLabel && showTriggerTail && (');
     expect(permissionSelectorSource).toContain(
       'const isIconOnly = iconOnly && !isFieldTrigger;',
     );

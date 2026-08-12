@@ -13,7 +13,10 @@ import { describe, expect, it } from 'vitest';
 import type { UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
 
 import {
+  UNIFIED_FLYOUT_GAP,
   buildUnifiedListSections,
+  entryMatchesModelId,
+  wireModelIdOf,
   buildUnifiedRail,
   computeFlyoutPlacement,
   isRecommendedFavoriteConfig,
@@ -34,8 +37,12 @@ function capability(
 ): UnifiedAgentCapability {
   return {
     agent,
+    // 上游把行改成「归一化 id + 每引擎 wire id」后,wireModelId 是必填:测试夹具给一个
+    // 与 agent 相关的假 id 即可,本层逻辑不解释它(发请求才用)。
+    wireModelId: `wire-${agent}`,
     efforts: ['low', 'medium', 'high'],
     defaultEffort: 'medium',
+    defaultEffortSource: 'catalog',
     supportsFastMode: false,
     contextWindow: 200_000,
     contextWindowVerified: false,
@@ -51,6 +58,7 @@ function entryOf(over: Partial<UnifiedModelEntry> = {}): UnifiedModelEntry {
     sourceConnected: true,
     candidates: ['claude-code'],
     recommended: 'claude-code',
+    nativeAgent: 'claude-code',
     capabilities: { 'claude-code': capability('claude-code') },
     ...over,
   };
@@ -456,7 +464,7 @@ describe('computeFlyoutPlacement', () => {
       viewport,
     });
     expect(placement.side).toBe('left');
-    expect(placement.left).toBe(400 - 10 - 264);
+    expect(placement.left).toBe(400 - UNIFIED_FLYOUT_GAP - 264);
     expect(placement.top).toBe(240 - 12);
   });
 
@@ -468,7 +476,7 @@ describe('computeFlyoutPlacement', () => {
       viewport,
     });
     expect(placement.side).toBe('right');
-    expect(placement.left).toBe(390);
+    expect(placement.left).toBe(380 + UNIFIED_FLYOUT_GAP);
   });
 
   it('垂直方向夹到视口安全区内', () => {
@@ -538,5 +546,165 @@ describe('档位绝对色', () => {
     // 越界坐标钳制到首 / 末档色。
     expect(effortTierColorAt(stops, 9)).toBe(effortTierColor('high'));
     expect(effortTierColorAt([], 0)).toBe(EFFORT_TIER_COLORS.medium);
+  });
+});
+
+/**
+ * 合并行(归一化行身份 + 每引擎 wire id)。这一层最容易做错的是**两个 id 的分工**:
+ * 行身份用来「记住这一行」(anchor / override / 收藏),wire id 用来「发出去 / 读写既有
+ * 按 wire id 索引的表」。混用不会立刻崩,而是悄悄写出一份谁也读不到的记忆、或者让选中的
+ * 模型在列表里不高亮。
+ */
+describe('合并行:行身份 vs wire id', () => {
+  const merged = entryOf({
+    providerId: 'openai',
+    modelId: 'gpt-5.6',
+    displayName: 'GPT-5.6',
+    candidates: ['claude-code', 'codex'],
+    recommended: 'codex',
+    nativeAgent: 'codex',
+    capabilities: {
+      // 同一逻辑模型:codex 上是 root 条目,cc 上是 bridge 壳 —— wire id 不同。
+      codex: capability('codex', { wireModelId: 'gpt-5.6' }),
+      'claude-code': capability('claude-code', { wireModelId: 'chatgpt/gpt-5.6' }),
+    },
+  });
+
+  it('wireModelIdOf 按引擎取真实要发的 id,缺失回落行身份', () => {
+    expect(wireModelIdOf(merged, 'codex')).toBe('gpt-5.6');
+    expect(wireModelIdOf(merged, 'claude-code')).toBe('chatgpt/gpt-5.6');
+    // pi 不在候选 → 没有能力条目 → 回落行身份(调用方不该拿它发请求,但不能崩)。
+    expect(wireModelIdOf(merged, 'pi')).toBe('gpt-5.6');
+  });
+
+  it('entryMatchesModelId 同时认行身份与任一引擎的 wire id', () => {
+    expect(entryMatchesModelId(merged, 'gpt-5.6')).toBe(true);
+    expect(entryMatchesModelId(merged, 'chatgpt/gpt-5.6')).toBe(true);
+    expect(entryMatchesModelId(merged, 'gpt-5.5')).toBe(false);
+    expect(entryMatchesModelId(merged, null)).toBe(false);
+  });
+
+  it('生效配置带上该引擎的 wireModelId(切引擎即换 wire id)', () => {
+    expect(resolveUnifiedRowConfig({ entry: merged }).wireModelId).toBe('gpt-5.6');
+    expect(
+      resolveUnifiedRowConfig({ entry: merged, engineOverride: 'cc' }).wireModelId,
+    ).toBe('chatgpt/gpt-5.6');
+    expect(
+      resolveFavoriteRowConfig({ entry: merged, item: favoriteOf({ agent: 'cc' }) }).wireModelId,
+    ).toBe('chatgpt/gpt-5.6');
+  });
+
+  it('老收藏存的是某引擎的 wire id 时仍能认出这一行(升级不丢收藏)', () => {
+    const legacy = favoriteOf({
+      uid: 'fav-legacy',
+      providerId: 'openai',
+      modelId: 'chatgpt/gpt-5.6',
+      agent: 'cc',
+    });
+    const sections = buildUnifiedListSections({
+      entries: [merged],
+      favorites: [legacy],
+      query: '',
+      rail: { kind: 'all' },
+    });
+    expect(sections[0].kind).toBe('favorites');
+    expect(sections[0].rows[0].entry.modelId).toBe('gpt-5.6');
+  });
+});
+
+describe('默认种子置顶与原生底座排序', () => {
+  const seed = entryOf({
+    providerId: 'xd',
+    modelId: 'deepseek-v4-pro',
+    displayName: 'DeepSeek V4 Pro',
+    group: 'china',
+    sortOrder: 9,
+  });
+  const opus = entryOf({ group: 'anthropic', sortOrder: 1 });
+  const gpt = entryOf({
+    providerId: 'xd',
+    modelId: 'gpt-5.5',
+    displayName: 'GPT-5.5',
+    group: 'gpt',
+    sortOrder: 2,
+    candidates: ['claude-code', 'codex'],
+    recommended: 'claude-code',
+    nativeAgent: 'codex',
+    capabilities: {
+      'claude-code': capability('claude-code'),
+      codex: capability('codex'),
+    },
+  });
+
+  it('默认种子提到独立小节,位置在收藏之下、普通分组之上,且不在原分组里重复', () => {
+    const sections = buildUnifiedListSections({
+      entries: [opus, gpt, seed],
+      favorites: [favoriteOf()],
+      query: '',
+      rail: { kind: 'all' },
+      isDefaultSeed: (entry) => entry.modelId === 'deepseek-v4-pro',
+    });
+    expect(sections.map((section) => section.kind)).toEqual([
+      'favorites',
+      'defaults',
+      'group',
+      'group',
+    ]);
+    expect(sections[1].rows.map((row) => row.entry.modelId)).toEqual(['deepseek-v4-pro']);
+    // 提升 = 位置变了,不是复制一份:普通分组里不该再出现同一行。
+    const grouped = sections.slice(2).flatMap((s) => s.rows.map((r) => r.entry.modelId));
+    expect(grouped).not.toContain('deepseek-v4-pro');
+  });
+
+  it('同引擎视图把原生底座 == 该引擎的行排在仅兼容的行前面', () => {
+    const sections = buildUnifiedListSections({
+      // 入参顺序:opus(native cc)在前,gpt(native codex)在后。
+      entries: [opus, gpt],
+      favorites: [],
+      query: '',
+      rail: { kind: 'engine', agent: 'codex' },
+    });
+    // codex 视图:native=codex 的 GPT 组先出现;opus 的 cc 原生行仅兼容 → 排在后面。
+    // (opus 只有 cc 候选,在 codex 视图里会被准入过滤掉,故这里只剩 GPT 一组。)
+    expect(sections.flatMap((s) => s.rows.map((r) => r.entry.modelId))).toEqual(['gpt-5.5']);
+
+    const bothCandidates = entryOf({
+      providerId: 'xd',
+      modelId: 'claude-opus-5',
+      displayName: 'Opus 5',
+      group: 'anthropic',
+      sortOrder: 1,
+      candidates: ['claude-code', 'codex'],
+      recommended: 'claude-code',
+      nativeAgent: 'claude-code',
+      capabilities: {
+        'claude-code': capability('claude-code'),
+        codex: capability('codex'),
+      },
+    });
+    const mixed = buildUnifiedListSections({
+      entries: [bothCandidates, gpt],
+      favorites: [],
+      query: '',
+      rail: { kind: 'engine', agent: 'codex' },
+    });
+    // sortOrder 上 Opus(1)在 GPT(2)之前,但 codex 会话里原生 codex 的 GPT 该排前面。
+    expect(mixed.flatMap((s) => s.rows.map((r) => r.entry.modelId))).toEqual([
+      'gpt-5.5',
+      'claude-opus-5',
+    ]);
+  });
+
+  it('新会话全量视图不按原生底座重排(服务端编排说了算)', () => {
+    const sections = buildUnifiedListSections({
+      entries: [opus, gpt],
+      favorites: [],
+      query: '',
+      rail: { kind: 'all' },
+    });
+    expect(sections.flatMap((s) => s.rows.map((r) => r.entry.modelId))).toEqual([
+      'claude-opus-5',
+      'gpt-5.5',
+    ]);
   });
 });

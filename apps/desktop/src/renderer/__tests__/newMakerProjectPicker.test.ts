@@ -1599,3 +1599,38 @@ describe('Shared create project picker', () => {
     expect(worktreeChipsSource).toContain("if (source !== 'project') addRecentFolder(path)");
   });
 });
+
+/**
+ * 统一模型选择器合并行之后的 **草稿层 id 口径锁**。
+ *
+ * 数据层把同一模型的多引擎条目合并成一行:行 id 是**归一化 id**,每个引擎真正能发出去的是
+ * 各自的 **wireModelId**。草稿层落盘的每一格(lastByVendor.model → createSession)都必须是
+ * wire id;归一化 id 一旦漏进来,首条请求就路由到一个目标引擎目录里不存在的模型。
+ */
+describe('New Maker 草稿的 wire model id 口径', () => {
+  it('统一面板选中直接把 wire id 写进 vendor 槽,不做任何 id 加工', () => {
+    const handlerStart = newMakerDraftRouteSource.indexOf(
+      'const handleUnifiedDraftSelect = useCallback(',
+    );
+    expect(handlerStart).toBeGreaterThan(-1);
+    const handler = newMakerDraftRouteSource.slice(
+      handlerStart,
+      newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
+    );
+    // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel —— 两条都用
+    // selection.modelId(wire id),一处都不能换成行 id。
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(2);
+    // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
+    expect(handler).not.toContain('rowModelId');
+  });
+
+  it('收藏锚点按 wire id 判失效,不拿收藏条目的归一化 id 去比', () => {
+    // 收藏条目按**归一化行 id** 存(那是行的稳定身份),草稿里放的是 wire id ——
+    // 直接比 favorite.modelId 与 draftInitialModel,像 chatgpt/gpt-5.6-luna 这类两者本就
+    // 不相等的模型会每次都判成失配,刚点上的收藏立刻掉勾。
+    expect(newMakerDraftRouteSource).toContain('selectedFavoriteAnchor.wireModelId !== draftInitialModel');
+    expect(newMakerDraftRouteSource).not.toContain('favorite.modelId !== draftInitialModel');
+    // 快照在选中那一刻记下本次写进草稿的 wire id。
+    expect(newMakerDraftRouteSource).toContain('wireModelId: selection.modelId,');
+  });
+});

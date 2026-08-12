@@ -92,6 +92,42 @@ const providersRef = vi.hoisted(() => ({
       },
     },
     {
+      // 合并行夹具:同一逻辑模型在 codex 上是 root 条目、在 cc 上是 `chatgpt/` bridge 壳,
+      // 两条 wire id 不同 —— 合并成一行后,行身份是归一化 id `gpt-5.6`。
+      id: 'openai',
+      name: 'OpenAI',
+      source: 'builtin',
+      agents: ['claude-code', 'codex'],
+      auth: { method: 'oauth' },
+      routing: { 'claude-code': {}, codex: {} },
+      connected: true,
+      models: {
+        codex: [
+          {
+            id: 'gpt-5.6',
+            name: 'GPT-5.6',
+            group: 'gpt',
+            sortOrder: 3,
+            contextWindow: 400000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'medium',
+            description: 'A very long English description that must stay on one line and never blow up the panel layout in narrow windows',
+          },
+        ],
+        'claude-code': [
+          {
+            id: 'chatgpt/gpt-5.6',
+            name: 'GPT-5.6',
+            group: 'gpt',
+            sortOrder: 3,
+            contextWindow: 272000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'low',
+          },
+        ],
+      },
+    },
+    {
       id: 'xd',
       name: 'Cindy AI',
       source: 'builtin',
@@ -459,5 +495,282 @@ describe('统一面板 · 新会话选中直通', () => {
     expect(
       [...selected].every((el) => el.getAttribute('data-unified-anchor')?.startsWith('model::')),
     ).toBe(true);
+  });
+});
+
+/**
+ * 2026-08-13 沙盒实测回归锁 —— 五个 bug 里与 DOM 契约有关的四个。
+ * 每条都写清「原来错在哪」,避免以后有人把这些属性 / 类当装饰删掉。
+ */
+describe('统一面板 · 实测回归', () => {
+  it('浮层子树带 data-radix-popper-content-wrapper —— 外层收起判定认它是自己人', async () => {
+    // 原 bug:浮层 portal 到 body 后,MorphPopover 的 document pointerdown 把浮层内的
+    // 点击当 outside,点一下深度档整个选择器连浮层一起消失。morph-popover.tsx 的豁免
+    // 判据就是这个属性(`target.closest('[data-radix-popper-content-wrapper]')`)。
+    renderPanel();
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('Opus 5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    const slider = flyout.querySelector('[role="slider"]') as HTMLElement;
+    expect(slider).toBeTruthy();
+    // 浮层内**任意深处**的节点都要能沿祖先链找到这个标记,外层才不会误判 outside。
+    expect(slider.closest('[data-radix-popper-content-wrapper]')).not.toBeNull();
+    expect(flyout.closest('[data-radix-popper-content-wrapper]')).not.toBeNull();
+  });
+
+  it('在浮层里改深度:值落到调用方,浮层与列表都还在', async () => {
+    const onEffortChange = vi.fn();
+    renderPanel({ onEffortChange });
+    // 选中行(Opus 5)的深度是会话实时状态 → 走 onEffortChange。
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('Opus 5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    const slider = flyout.querySelector('[role="slider"]') as HTMLElement;
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    });
+    expect(onEffortChange).toHaveBeenCalledWith('high');
+    // 关键回归点:改完档,浮层与列表都不许消失。
+    expect(screen.queryByTestId('unified-model-config-flyout')).not.toBeNull();
+    expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
+  it('「恢复推荐」删掉 override,行与浮层当场回落推荐引擎', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'codex');
+    renderPanel();
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('codex');
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    expect(flyout.querySelector('[data-engine-capsule="codex"]')?.getAttribute('data-engine-active'))
+      .toBe('true');
+    await act(async () => {
+      fireEvent.click(within(flyout).getByText('恢复推荐'));
+    });
+    // 1) override 表真的删了(不是写了一份「等于推荐」的快照)
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    // 2) 浮层内引擎胶囊回到推荐项,底栏不再是「已自定义」
+    await waitFor(() => {
+      const current = screen.getByTestId('unified-model-config-flyout');
+      expect(current.querySelector('[data-engine-capsule="cc"]')?.getAttribute('data-engine-active'))
+        .toBe('true');
+      expect(within(current).queryByText('恢复推荐')).toBeNull();
+    });
+    // 3) 行内三元组跟着回落
+    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
+    expect(triple?.getAttribute('title')).toContain('Claude');
+  });
+
+  it('浮层贴着面板左外侧,不会飘到远处', async () => {
+    renderPanel();
+    const panel = document.querySelector('[data-unified-model-panel]') as HTMLElement;
+    const row = rowFor('Opus 5');
+    // jsdom 不排版,给面板与行喂真实矩形,才能验证定位算的是**面板**而不是行。
+    panel.getBoundingClientRect = () =>
+      ({ top: 100, bottom: 620, left: 900, right: 1360, width: 460, height: 520 }) as DOMRect;
+    row.getBoundingClientRect = () =>
+      ({ top: 240, bottom: 280, left: 1100, right: 1340, width: 240, height: 40 }) as DOMRect;
+    await act(async () => {
+      fireEvent.pointerEnter(row);
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    const wrapper = flyout.closest('[data-unified-flyout-wrapper]') as HTMLElement;
+    await waitFor(() => {
+      expect(wrapper.style.left).not.toBe('-9999px');
+    });
+    // 面板左缘 900 − 间隙 4 − 浮层宽 264 = 632;若误用行矩形会得到 832,一眼可辨。
+    expect(wrapper.style.left).toBe('632px');
+    expect(wrapper.style.top).toBe('228px');
+  });
+
+  it('列表带 min-h-0(面板高度受限时能收缩并滚到底)', () => {
+    renderPanel();
+    expect(screen.getByRole('listbox').className).toContain('min-h-0');
+    const panel = document.querySelector('[data-unified-model-panel]') as HTMLElement;
+    expect(panel.className).toContain('max-h-[min(560px,calc(100vh-120px))]');
+  });
+
+  it('rail 选中格用反色实心块,一眼看得出当前视图', async () => {
+    addModelFavorite({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc' });
+    renderPanel();
+    const all = screen.getByRole('button', { name: '全部' });
+    expect(all.className).toContain('bg-[var(--accent-cta-bg)]');
+    expect(all.className).toContain('text-[var(--accent-pure-cta-fg)]');
+  });
+});
+
+/**
+ * 合并行接入(归一化行身份 + 每引擎 wire id)。锁的是**两个 id 各走各的路**:
+ * 交出去 / 写记忆表的一律是 wire id,记住这一行(override / 收藏 / 锚点)的一律是行身份。
+ */
+describe('统一面板 · 合并行与 wire id', () => {
+  it('bridge 壳与 root 条目合并成一行,浮层里两个引擎都在候选里', async () => {
+    renderPanel();
+    const list = screen.getByRole('listbox');
+    // 合并前这里会是两行(GPT-5.6 与 chatgpt/GPT-5.6),合并后只剩一行。
+    expect(within(list).getAllByText('GPT-5.6')).toHaveLength(1);
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.6'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    expect(flyout.querySelector('[data-engine-capsule="codex"]')).toBeTruthy();
+    expect(flyout.querySelector('[data-engine-capsule="cc"]')).toBeTruthy();
+  });
+
+  it('选中合并行交出去的是**该引擎的 wire id**,行身份另放在 rowModelId', async () => {
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.6'));
+    });
+    // 推荐引擎 = codex(openai root)→ 发 root 条目的 id。
+    expect(onProviderChange).toHaveBeenCalledWith('openai', 'gpt-5.6', 'medium');
+  });
+
+  it('切到 cc 后交出去的换成 bridge 壳的 wire id(override 仍按行身份记)', async () => {
+    renderPanel();
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.6'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    // override 表的 key 是**归一化行身份**,不是任何一条 wire id。
+    expect(getModelEngineOverride('openai', 'gpt-5.6')).toBe('cc');
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.6'));
+    });
+    expect(onProviderChange).toHaveBeenCalledWith('openai', 'chatgpt/gpt-5.6', 'low');
+  });
+
+  it('深度记忆按 wire id 读写(不把归一化 id 写进记忆表)', async () => {
+    const setEffort = vi.fn();
+    const getEffort = vi.fn(() => undefined);
+    renderPanel({
+      modelMemory: {
+        getEffort,
+        setEffort,
+        getFast: () => undefined,
+        setFast: vi.fn(),
+      },
+    });
+    // 非选中行(选中的是 Opus 5)→ 改深度落全局记忆。
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.6'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    const slider = flyout.querySelector('[role="slider"]') as HTMLElement;
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    });
+    expect(setEffort).toHaveBeenCalledWith('codex', 'openai', 'gpt-5.6', 'high');
+    // 读侧同样按 wire id,且**只问生效引擎那一面**:codex 生效时问 root 条目的 id。
+    expect(getEffort.mock.calls).toContainEqual(['codex', 'openai', 'gpt-5.6']);
+    expect(getEffort.mock.calls).not.toContainEqual(['codex', 'openai', 'chatgpt/gpt-5.6']);
+  });
+
+  it('override 到 cc 后,记忆读写换成 bridge 壳的 wire id', async () => {
+    setModelEngineOverride('openai', 'gpt-5.6', 'cc');
+    const getEffort = vi.fn(() => undefined);
+    renderPanel({
+      modelMemory: { getEffort, setEffort: vi.fn(), getFast: () => undefined, setFast: vi.fn() },
+    });
+    expect(getEffort.mock.calls).toContainEqual(['claude-code', 'openai', 'chatgpt/gpt-5.6']);
+    expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
+  });
+
+  it('长描述单行截断并挂 title,长模型名同理', () => {
+    renderPanel();
+    const row = rowFor('GPT-5.6');
+    const desc = row.querySelector('[title^="A very long English"]') as HTMLElement;
+    expect(desc).toBeTruthy();
+    expect(desc.className).toContain('truncate');
+    const name = within(row).getByText('GPT-5.6');
+    expect(name.getAttribute('title')).toBe('GPT-5.6');
+    expect(name.className).toContain('truncate');
+  });
+
+  it('没有折扣的行不渲染折扣徽标', () => {
+    renderPanel();
+    expect(rowFor('GPT-5.6').querySelector('[data-discount-badge]')).toBeNull();
+  });
+
+  it('服务端默认种子提到顶部「默认」小节并带标识', () => {
+    renderPanel();
+    const groups = screen.getAllByRole('group');
+    // 夹具里没有 newSessionDefault 标记 → 不该凭空造出默认小节。
+    expect(groups.every((group) => group.getAttribute('aria-label') !== '默认')).toBe(true);
+    expect(document.querySelector('[data-default-badge]')).toBeNull();
+  });
+});
+
+/** 行内折扣徽标是纯展示契约:只在调用方给了已本地化文案时渲染,不自己算折扣。 */
+describe('统一面板 · 行内折扣徽标', () => {
+  it('给了文案才渲染,没给就一个节点都不多', async () => {
+    const { UnifiedModelRow } = await import('@/components/new-chat/UnifiedModelRow');
+    const entry = {
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      displayName: 'GPT-5.5',
+      sourceConnected: true,
+      candidates: ['codex' as const],
+      recommended: 'codex' as const,
+      nativeAgent: 'codex' as const,
+      capabilities: {
+        codex: {
+          agent: 'codex' as const,
+          wireModelId: 'gpt-5.5',
+          efforts: ['low', 'high'] as const,
+          defaultEffort: 'high' as const,
+          defaultEffortSource: 'catalog' as const,
+          supportsFastMode: false,
+          contextWindow: 272000,
+          contextWindowVerified: false,
+        },
+      },
+    };
+    const config = {
+      engine: 'codex' as const,
+      agent: 'codex' as const,
+      efforts: ['low', 'high'] as const,
+      effort: 'high' as const,
+      fast: false,
+      fastCapable: false,
+      customized: false,
+      capability: entry.capabilities.codex,
+      wireModelId: 'gpt-5.5',
+    };
+    const common = {
+      entry,
+      anchor: { kind: 'model' as const, providerId: 'xd', modelId: 'gpt-5.5' },
+      config,
+      selected: false,
+      active: false,
+      isFavoriteRow: false,
+      emphasizeTriple: false,
+      justFavorited: false,
+      interactionDisabled: false,
+      effortLabelOf: (_agent: 'claude-code' | 'codex' | 'pi', effort: string) => effort,
+      providers: [],
+      onReveal: vi.fn(),
+      onRevealForKeyboard: vi.fn(),
+      onLeave: vi.fn(),
+      onBlurAway: vi.fn(),
+      onSelect: vi.fn(),
+      onStar: vi.fn(),
+    };
+    const withBadge = render(
+      React.createElement(UnifiedModelRow, { ...common, discountLabel: '立省 60%' }),
+    );
+    const badge = withBadge.container.querySelector('[data-discount-badge]') as HTMLElement;
+    expect(badge?.textContent).toBe('立省 60%');
+    expect(badge.getAttribute('title')).toBe('立省 60%');
+    withBadge.unmount();
+
+    const without = render(React.createElement(UnifiedModelRow, common));
+    expect(without.container.querySelector('[data-discount-badge]')).toBeNull();
   });
 });

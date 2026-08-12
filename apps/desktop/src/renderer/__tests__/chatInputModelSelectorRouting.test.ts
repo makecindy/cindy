@@ -62,11 +62,54 @@ describe('ChatInput model source switching wiring', () => {
       'const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;',
     );
     expect(chatInputSource).toContain(
-      'unifiedModelPanelEnabled && (!inSessionEngineLocked || agentKind !== null)',
+      'unifiedModelPanelEnabled && (!inSessionEngineLocked || lockedSessionAgentKind !== null)',
     );
     expect(chatInputSource).toContain(
+      'lockedSessionAgentKind ? [lockedSessionAgentKind] : unifiedAgents',
+    );
+  });
+
+  /**
+   * bug4 回归锁。锁定分支用的引擎**必须**是已确认身份,不能是 vendorKey 派生的 agentKind:
+   * CCAgentSessionView 的 vendorKey 走 dbToMakerAgentKind(session?.agentKind),session 未到
+   * (冷启动 / 直链 / 远程列表未回流 / sessionService.get 失败被 catch 吞掉)时回退成 'cc';
+   * 同一窗口里 sessionOrcaRole 是 undefined(≠ null)→ sessionAgentSwitchSupported=false →
+   * 没有 sessionEngineFilter → 正好落进锁定分支。两者叠加 = Codex 会话摆出一张纯 Claude
+   * 列表,且此时没有跨引擎兜底,点任意一行都会把 Claude 模型塞进 Codex 会话。
+   */
+  it('never locks the union list to a guessed engine before session identity resolves', () => {
+    expect(chatInputSource).toContain(
+      'const sessionEngineConfirmed = !sessionId || runtimeAgentKind != null;',
+    );
+    expect(chatInputSource).toContain(
+      'inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null',
+    );
+    // 防复活:锁定分支不得再直接读 vendorKey 派生的 agentKind。
+    expect(chatInputSource).not.toContain(
       'inSessionEngineLocked && agentKind ? [agentKind] : unifiedAgents',
     );
+    expect(chatInputSource).not.toContain(
+      '(!inSessionEngineLocked || agentKind !== null)',
+    );
+  });
+
+  /**
+   * bug7:composer pill 不再写 harness 名字文本,改「模型名 + 引擎小标 + 思考深度」。
+   * 引擎取值必须与 agentIdentity 同源 —— 会话身份没加载完就不画,绝不拿 vendorKey 的
+   * Claude Code 回退冒充(那正是 bug4 的病根,同一个回退不能在 pill 上复发)。
+   */
+  it('renders the composer pill engine as a mark sourced from the confirmed identity', () => {
+    const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
+    const selectorBlock = chatInputSource.slice(
+      selectorStart,
+      chatInputSource.indexOf('/>', selectorStart) + 2,
+    );
+    expect(selectorBlock).toContain('engineMarkVendor={composerEngineMarkVendor}');
+    expect(chatInputSource).toContain(
+      "resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??",
+    );
+    // 草稿没有 session 身份可言,当前引擎就是 vendorKey。
+    expect(chatInputSource).toContain(': (vendorKey ?? null);');
   });
 
   it('falls back to the legacy panel only when the controlled device has no provider catalog', () => {
@@ -89,5 +132,52 @@ describe('ChatInput model source switching wiring', () => {
     expect(block).toContain('performAgentSwitchRef.current(');
     expect(block).toContain("effort ? { effort } : undefined");
     expect(block).not.toContain('fastMode');
+  });
+
+  /**
+   * 合并行之后的 **id 口径锁**(数据层把同一模型的多引擎条目合并成一行,行 id 是归一化 id,
+   * 每个引擎真正能发的是各自的 wireModelId)。
+   *
+   * 这条锁的存在理由是"有活错误":拿归一化行 id 去发请求,首条消息就路由到一个目标引擎目录
+   * 里不存在的 model id。接线层的职责很简单 —— **对上游给的 id 零加工**,并且绝不把
+   * rowModelId 当发送 id 用。
+   */
+  it('never uses the normalized row id as a send / memory id', () => {
+    // 1. 跨引擎路径:modelId 原样进切换事务,中间不套任何 id 加工函数。
+    const filterStart = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
+    expect(filterStart).toBeGreaterThan(-1);
+    const filterBlock = chatInputSource.slice(filterStart, chatInputSource.indexOf('}, [', filterStart));
+    expect(filterBlock).toContain('performAgentSwitchRef.current(');
+    expect(filterBlock).toContain('modelId,');
+    expect(filterBlock).not.toContain('rowModelId');
+
+    // 2. 草稿直通路径:记忆键与交给草稿层的 model 都用 selection.modelId(wire id)。
+    const draftStart = chatInputSource.indexOf('const handleUnifiedDraftSelect = useCallback(');
+    expect(draftStart).toBeGreaterThan(-1);
+    const draftBlock = chatInputSource.slice(
+      draftStart,
+      chatInputSource.indexOf('[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]', draftStart),
+    );
+    expect(draftBlock).toContain('modelId: selection.modelId,');
+    // rowModelId 只在类型声明与注释里出现,**不得**出现在任何写入实参上。
+    expect(draftBlock).not.toContain('selection.rowModelId');
+    for (const write of [
+      'modelMemory?.setEffort(',
+      'modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast)',
+    ]) {
+      expect(draftBlock).toContain(write);
+    }
+  });
+
+  it('feeds the selector the session/draft wire id as the selected model', () => {
+    const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
+    const selectorBlock = chatInputSource.slice(
+      selectorStart,
+      chatInputSource.indexOf('/>', selectorStart) + 2,
+    );
+    // activeModel 的三个来源(agentSwitchIntent / pendingRemoteSwitch / initialModel)全是
+    // 会话或草稿持有的 wire id;这里不得改成面板的行 id。
+    expect(selectorBlock).toContain('modelId={activeModel}');
+    expect(selectorBlock).not.toContain('rowModelId');
   });
 });

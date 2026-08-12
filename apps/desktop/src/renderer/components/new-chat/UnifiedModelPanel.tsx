@@ -11,7 +11,10 @@ import {
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
-import type { ModelPricePresentation } from '@/lib/modelPriceFormat';
+import {
+  modelPriceDiscountLabelValues,
+  type ModelPricePresentation,
+} from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
 import { useModelFavorites, type ModelFavoriteItem } from '@/state/modelFavorites';
@@ -31,6 +34,8 @@ import { UnifiedModelRow } from './UnifiedModelRow';
 import {
   anchorKey,
   engineOfAgentKind,
+  entryMatchesModelId,
+  wireModelIdOf,
   buildUnifiedListSections,
   buildUnifiedRail,
   isRecommendedFavoriteConfig,
@@ -46,8 +51,16 @@ import {
 
 /** ☆ 点亮反馈时长(规格 §1.5「点亮 0.7s 反馈后恢复」)。 */
 const FAVORITE_FEEDBACK_MS = 700;
-/** 鼠标跨越行与 portaled 浮层之间缝隙的 grace period(与既有行为一致)。 */
-const FLYOUT_CLOSE_GRACE_MS = 80;
+/**
+ * 鼠标离开行到收起浮层之间的 grace period。
+ *
+ * 80ms 是行内 Radix 子面板的老值(那里行与面板几乎贴着);统一浮层是 portal + fixed,
+ * 鼠标要横穿一段缝隙才够得到它,80ms 会在半路把浮层收掉(2026-08-13 实测)。缝隙本身
+ * 已经并进浮层包装的 padding(见 UnifiedFlyoutHost),这里再给足时间兜住抬手 / 手抖。
+ */
+const FLYOUT_CLOSE_GRACE_MS = 240;
+/** 鼠标是朝浮层那一侧离开行的 —— 明显的「我要去浮层」意图,给更长的窗口。 */
+const FLYOUT_CLOSE_GRACE_TOWARD_MS = 600;
 
 /** 选中一行时回传的生效配置(见 `UnifiedModelPanelProps.onSelect`)。 */
 export interface UnifiedSelectedRow {
@@ -57,6 +70,12 @@ export interface UnifiedSelectedRow {
   fast: boolean;
   /** 选中的是一条收藏副本时给它的锚点 uid;模型行为 null。 */
   favoriteUid: string | null;
+  /**
+   * ★该行的**归一化行身份 id**。回调第二参给的是「要发出去的 wire id」,而引擎 override /
+   * 收藏 / 选中锚点这类**记住这一行**的事情必须用它 —— 同一逻辑模型在两个引擎下是两条
+   * 不同的 wire id,用 wire id 当身份会让「换个引擎再打开」认不出是同一行。
+   */
+  rowModelId: string;
 }
 
 export interface UnifiedModelPanelProps {
@@ -91,11 +110,18 @@ export interface UnifiedModelPanelProps {
   modelMemory?: ModelMemoryAccessors;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode)。 */
   agentFastModeCapable: (agent: AgentKind) => boolean;
+  /** 价格 / 折扣查询。**modelId 传该引擎的 wire id**(报价表按 wire id 索引)。 */
   priceOf: (
     providerId: string,
     modelId: string,
     agent: AgentKind,
   ) => ModelPricePresentation | null;
+  /**
+   * 该行是否被服务端目录标记为新会话默认种子(`CatalogModel.newSessionDefault`)。
+   * 命中的行提升到列表顶部的「默认」小节 —— 实测反馈:默认模型混在中部很难找。
+   * 判定要读目录条目,数据在 ModelSelector 侧,故注入。
+   */
+  isDefaultSeed?: (entry: UnifiedModelEntry) => boolean;
   providerLabel: (providerId: string) => string;
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   listMaxHeight?: number;
@@ -187,6 +213,7 @@ export function UnifiedModelPanel({
   modelMemory,
   agentFastModeCapable,
   priceOf,
+  isDefaultSeed,
   providerLabel,
   effortLabelOf,
   listMaxHeight,
@@ -265,8 +292,15 @@ export function UnifiedModelPanel({
   }, [rail, railItems]);
 
   const sections = useMemo(
-    () => buildUnifiedListSections({ entries, favorites, query, rail }),
-    [entries, favorites, query, rail],
+    () =>
+      buildUnifiedListSections({
+        entries,
+        favorites,
+        query,
+        rail,
+        ...(isDefaultSeed ? { isDefaultSeed } : {}),
+      }),
+    [entries, favorites, isDefaultSeed, query, rail],
   );
 
   // 列表变化时只在选中行跑出可视区时做**最小滚动**(与既有面板同一条规则):
@@ -313,13 +347,35 @@ export function UnifiedModelPanel({
     clearTimeout(closeTimerRef.current);
     closeTimerRef.current = null;
   }, []);
-  const scheduleClose = useCallback(() => {
-    cancelClose();
-    closeTimerRef.current = setTimeout(() => {
-      closeTimerRef.current = null;
-      closeFlyout();
-    }, FLYOUT_CLOSE_GRACE_MS);
-  }, [cancelClose, closeFlyout]);
+  const scheduleClose = useCallback(
+    (delay: number = FLYOUT_CLOSE_GRACE_MS) => {
+      cancelClose();
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null;
+        closeFlyout();
+      }, delay);
+    },
+    [cancelClose, closeFlyout],
+  );
+
+  /**
+   * 行的 pointerleave:判一下**往哪边走**。朝浮层那一侧离开 = 用户正在去浮层的路上,
+   * 给长窗口;朝反方向 / 上下离开 = 正常扫列表,走短窗口。
+   * 只用「离开点落在行的哪半边」这一个信号 —— 不做安全三角形那套几何,够用且不会误伤。
+   */
+  const scheduleCloseFromRow = useCallback(
+    (event: { clientX: number; currentTarget: HTMLElement }) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const flyoutRect = flyoutRef.current?.getBoundingClientRect();
+      const towardFlyout = flyoutRect
+        ? flyoutRect.left < rect.left
+          ? event.clientX <= rect.left + 2
+          : event.clientX >= rect.right - 2
+        : false;
+      scheduleClose(towardFlyout ? FLYOUT_CLOSE_GRACE_TOWARD_MS : FLYOUT_CLOSE_GRACE_MS);
+    },
+    [scheduleClose],
+  );
 
   useEffect(
     () => () => {
@@ -350,7 +406,9 @@ export function UnifiedModelPanel({
   /** 这一行是不是**当前会话 / 草稿正在用的那一行**(来源 + 模型 + 引擎三者都对上)。 */
   const isLiveRow = useCallback(
     (entry: UnifiedModelEntry, config: UnifiedRowConfig): boolean =>
-      entry.modelId === selected.modelId &&
+      // 外部给的是会话 / 草稿里存的 **wire id**,行身份是归一化 id —— 两头都认
+      // (entryMatchesModelId),否则合并行之后选中的模型在列表里不高亮。
+      entryMatchesModelId(entry, selected.modelId) &&
       (selected.providerId === null || selected.providerId === entry.providerId) &&
       (liveAgentKind === null || liveAgentKind === config.agent),
     [liveAgentKind, selected.modelId, selected.providerId],
@@ -368,8 +426,11 @@ export function UnifiedModelPanel({
       const base = resolveUnifiedRowConfig({
         entry,
         engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
-        memoryEffort: (agent) => modelMemory?.getEffort(agent, entry.providerId, entry.modelId),
-        memoryFast: (agent) => modelMemory?.getFast(agent, entry.providerId, entry.modelId),
+        // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
+        memoryEffort: (agent) =>
+          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+        memoryFast: (agent) =>
+          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
         agentFastModeCapable,
         // 会话内:两边都能跑的模型默认落在**当前会话引擎**上(无损直切);用户显式
         // override 仍然优先(见 resolveUnifiedRowConfig 的 pinnedEngine 注释)。
@@ -419,12 +480,13 @@ export function UnifiedModelPanel({
     [favorites, selectedFavoriteUid],
   );
   const isSelectedRow = useCallback(
-    (anchor: UnifiedAnchor): boolean => {
+    (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
       if (anchor.kind === 'fav') return activeFavoriteUid === anchor.uid;
       // 收藏锚点被选中时,模型行不同时打勾(锚点语义:选中的是那一条收藏)。
       if (activeFavoriteUid) return false;
+      // 会话 / 草稿存的是 wire id;按「行 id 或任一引擎 wire id 命中」解析(合并行契约)。
       return (
-        anchor.modelId === selected.modelId &&
+        entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === anchor.providerId)
       );
     },
@@ -511,6 +573,14 @@ export function UnifiedModelPanel({
     });
   };
 
+  /** 小节标题:收藏 / 默认 / 服务端分组。三者都走 i18n,分组名另查 CATEGORY_LABEL_KEY。 */
+  const sectionLabel = (section: (typeof sections)[number]): string =>
+    section.kind === 'favorites'
+      ? t('newChat.modelSelector.unified.favoritesGroup')
+      : section.kind === 'defaults'
+        ? t('newChat.modelSelector.unified.defaultsGroup')
+        : t(CATEGORY_LABEL_KEY[section.category ?? 'ungrouped']);
+
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
 
@@ -532,8 +602,15 @@ export function UnifiedModelPanel({
         aria-label={t('newChat.modelSelector.modelListAria')}
         className={cn(
           'morph-panel-list-scroll -mr-2 flex min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain py-1 pl-1 [scrollbar-gutter:stable]',
+          // min-h-0 是能不能滚到底的关键:flex item 的默认 min-height:auto 会让它按内容
+          // 撑开、拒绝收缩,于是超出面板的部分被外层裁掉且**滚不到**(2026-08-13 实测:
+          // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
+          // 底部的「连接来源」footer 是同级兄弟,始终留在列表下方、不盖住最后一行。
+          'min-h-0',
           railItems.length > 2 && 'pl-2',
         )}
+        // 缺省上限只是「内容很少时别把面板撑太高」的软顶,真正的高度由外层面板给;
+        // 二者相加才既不过高、也不会在窄窗口里滚不到底。
         style={{ maxHeight: `${listMaxHeight ?? 428}px` }}
         onScroll={() => {
           // 滚动不派发 pointerleave,浮层会跟着滚出视口的锚点行漂到菜单外 → 一滚就收起。
@@ -597,27 +674,37 @@ export function UnifiedModelPanel({
             <div
               key={section.key}
               role="group"
-              aria-label={
-                section.kind === 'favorites'
-                  ? t('newChat.modelSelector.unified.favoritesGroup')
-                  : t(CATEGORY_LABEL_KEY[section.category ?? 'ungrouped'])
-              }
+              aria-label={sectionLabel(section)}
             >
               <div className="truncate px-2.5 pb-0.5 pt-1.5 text-11 font-medium text-[var(--text-tertiary)]">
-                {section.kind === 'favorites'
-                  ? t('newChat.modelSelector.unified.favoritesGroup')
-                  : t(CATEGORY_LABEL_KEY[section.category ?? 'ungrouped'])}
+                {sectionLabel(section)}
               </div>
               {section.rows.map((row) => {
                 const config = configOf(row.entry, row.favorite);
                 const key = anchorKey(row.anchor);
+                // 行内折扣徽标:只在真有折扣 / 限免时渲染,别把每一行都加宽。
+                // 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
+                const price = priceOf(
+                  row.entry.providerId,
+                  config.wireModelId ?? row.entry.modelId,
+                  config.agent,
+                );
+                const discountLabel =
+                  price?.kind === 'free'
+                    ? t('newChat.modelSelector.pricing.free')
+                    : price?.kind === 'priced' && price.discount !== undefined
+                      ? t(
+                          'newChat.modelSelector.pricing.discount',
+                          modelPriceDiscountLabelValues(price.discount),
+                        )
+                      : null;
                 return (
                   <UnifiedModelRow
                     key={key}
                     entry={row.entry}
                     anchor={row.anchor}
                     config={config}
-                    selected={isSelectedRow(row.anchor)}
+                    selected={isSelectedRow(row.anchor, row.entry)}
                     active={sameAnchor(flyAnchor, row.anchor)}
                     isFavoriteRow={!!row.favorite}
                     // 三元组提亮一档的两种情形:模型行有自定义配置;收藏条目不是推荐配置
@@ -628,12 +715,16 @@ export function UnifiedModelPanel({
                         : config.customized
                     }
                     justFavorited={justFavorited === key}
+                    {...(discountLabel ? { discountLabel } : {})}
+                    {...(section.kind === 'defaults'
+                      ? { defaultBadge: t('newChat.modelSelector.unified.defaultBadge') }
+                      : {})}
                     interactionDisabled={interactionDisabled}
                     effortLabelOf={effortLabelOf}
                     providers={providers}
                     onReveal={revealFlyout}
                     onRevealForKeyboard={revealFlyoutForKeyboard}
-                    onLeave={scheduleClose}
+                    onLeave={scheduleCloseFromRow}
                     onBlurAway={handleRowBlurAway}
                     onSelect={() => selectRow(row.anchor, config, row.favorite)}
                     onStar={() =>
@@ -656,7 +747,8 @@ export function UnifiedModelPanel({
           flyoutRef={flyoutRef}
           {...(overlayClassName !== undefined ? { className: overlayClassName } : {})}
           onPointerEnter={cancelClose}
-          onPointerLeave={scheduleClose}
+          onPointerLeave={() => scheduleClose()}
+          onDismiss={closeFlyout}
         >
           {(() => {
             const target = flyTarget;
@@ -672,7 +764,11 @@ export function UnifiedModelPanel({
                 config={config}
                 state={state}
                 sourceLabel={providerLabel(target.entry.providerId)}
-                price={priceOf(target.entry.providerId, target.entry.modelId, config.agent)}
+                price={priceOf(
+                  target.entry.providerId,
+                  config.wireModelId ?? target.entry.modelId,
+                  config.agent,
+                )}
                 effortLabelOf={effortLabelOf}
                 justFavorited={justFavorited === anchorKey(target.anchor)}
                 disabled={interactionDisabled}

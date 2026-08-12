@@ -1,34 +1,51 @@
 /**
- * unifiedSelection —— 统一模型选择器(模型优先)的**纯逻辑层**:推荐引擎推导 +
- * 跨引擎联合列表构建。规格见 `docs/product-rules/model-selector-unified.md`
+ * unifiedSelection —— 统一模型选择器(模型优先)的**纯逻辑层**:逻辑模型行合并、
+ * 推荐引擎推导、原生底座排序。规格见 `docs/product-rules/model-selector-unified.md`
  * §2.1(推荐引擎推导)/ §2.2((模型,引擎) 能力)/ §4(特殊情况检查表)。
  *
  * 一句话:用户只选模型,引擎(harness)由本模块从**既有目录结构**推导 —— 不新增任何
  * wire 字段、不新增服务端下发项。
  *
+ * ## ⚠️ 行身份 key 口径(2026-08-13 变更,面板层必读)
+ *
+ * 一行 = 一个**逻辑模型** = `(providerId, 归一化 modelId)`。归一化 = 剥掉 bridge
+ * 命名空间前缀(`chatgpt/` / `xai/`)。同一个模型在不同引擎下的 wire id 可以不同 ——
+ * OpenAI 包月的 GPT-5.6-Luna 在 codex 下是 `gpt-5.6-luna`、在 cc/pi 下是
+ * `chatgpt/gpt-5.6-luna` —— 早先版本按精确 id 建行,用户就看到了**两行同名模型**。
+ *
+ * 现在:合并成一行,每个引擎的真实 wire id 落在 `capabilities[agent].wireModelId`。
+ *   - `UnifiedModelEntry.modelId` = **归一化 id**,是行的稳定身份:引擎 override
+ *     (`xdt:modelEnginePrefs`)、收藏副本(`xdt:modelFavorites`)、选中态都用它做 key。
+ *   - **发请求 / 写 draft / 建会话时必须用 `capabilities[<选中引擎>].wireModelId`**,
+ *     绝不能拿 `modelId` 直接发 —— 那正是「不做假按钮」约束要挡的事(归一化 id 在
+ *     bridge 引擎的目录里根本不存在)。
+ *
+ * **不合并**的两类,刻意保留为独立行:
+ *   - `[1m]` 后缀变体(`claude-opus-5` vs `claude-opus-5[1m]`):它们是窗口不同的两个
+ *     可售条目,合并会让用户选不到长上下文那条;
+ *   - `codex/` 折扣路由前缀(`gpt-5.5` vs `codex/gpt-5.5`):同名但不同价、不同路由,
+ *     是两个真实商品(见 classification.ts `isBudgetModel`)。
+ *
  * ## 三条硬约束
  *
  * 1. **先解析生效来源再查能力**。候选引擎、Fast、上下文、effort 一律按
- *    (provider, agent, model) 三元组现查,**禁止读跨供应商拍平去重后的列表** ——
+ *    (provider, agent, wire id) 三元组现查,**禁止读跨供应商拍平去重后的列表** ——
  *    那只保留首见供应商的值,同 id 多来源时会取到另一条路由的元数据
  *    (registry.ts `modelSupportsFastMode` / CatalogModel.supportsFastMode 明示)。
- *    本模块的来源解析统一走 `effectiveSourceIdForModel`(草稿口径)或
- *    `actualSourceIdForModel`(运行中会话口径,含停用拷贝)。
- * 2. **推荐引擎必须是候选之一**。推荐是要落到一个真能路由的 (provider, agent) 上的;
- *    推荐一个当前不可选的引擎 = 假按钮。所有 root 偏好在不是候选时一律回落。
- * 3. **零 IO、零 any、纯函数**。可见性口径由调用方注入(见 `unifiedModelEntries`
- *    的 `isVisible`)—— 本包不得反向依赖 apps/desktop。
+ * 2. **推荐引擎必须是候选之一**,且每个候选都必须有可发的 wire id。
+ * 3. **零 IO、零 any、纯函数**。可见性口径由调用方注入 —— 本包不得反向依赖 apps/desktop。
  *
  * ## 不在本层处理的事(由调用层负责)
  *
- * - `status:'retired'` 的 **keepSelected 豁免**:运行中会话即便模型已被服务端判死也要
- *   继续显示选中行(modelList.ts 内建准入过滤 + `keepSelected`)。本模块的联合列表走
- *   「新路由准入」口径(`isModelSelectableForNewRoute`),retired / disabled 条目不会
- *   出现;要保留选中行的调用方应把该行**单独**并进结果,并按 `scope:'session'` 查
- *   候选与能力(`actualSourceIdForModel` 不剔除停用拷贝)。
- * - 用户的引擎 override(`xdt:modelEnginePrefs`)与收藏副本:本模块只给「推荐」,
- *   override 覆盖推荐的合成在 renderer store(M2)完成。
- * - 区域 / SSH / device-link 的额外排除:经 `excludeProvider` / `excludeModel` 注入。
+ * - `status:'retired'` 的 **keepSelected 豁免**:本模块走「新路由准入」口径,retired /
+ *   disabled 条目不出现;运行中会话要保留选中行,由调用方单独并入并按 `scope:'session'`
+ *   查候选与能力。
+ * - 用户的引擎 override 与收藏副本:本模块只给「推荐」,override 合成在 renderer store(M2)。
+ * - **effort 落档**:本模块给出的 `defaultEffort` 已应用「缺省回落 medium」(见
+ *   `UnifiedAgentCapability.defaultEffort`),调用方必须把这个**已回落的值**传给
+ *   `effortResolution.resolveEffort` 的 `defaultEffort` 参数。`resolveEffort` 自己的兜底
+ *   仍是 `efforts[0]`(那是全仓共享的历史语义,不在本次改动范围)—— 不传就会出现
+ *   「面板显示 medium、实际落 low」的分裂。
  */
 
 import {
@@ -54,24 +71,32 @@ export const UNIFIED_AGENT_PRIORITY: readonly AgentKind[] = ['claude-code', 'cod
 /**
  * 推荐引擎**永不**主动落在 pi 上:pi 是"什么都能跑"的通用兜底(客户端投影,wire enum
  * 里根本没有 pi,见 modelPlanePolicy.ts 头注),不是任何模型的最佳去处。唯一例外是
- * 它是**唯一候选**(如只配了 pi runtime 的自定义供应商)—— 那时推荐它不是选择,是事实。
+ * 它是**唯一候选** —— 那时推荐它不是选择,是事实。
  */
 const NEVER_RECOMMENDED_UNLESS_SOLE: AgentKind = 'pi';
 
 /**
+ * **bridge 命名空间前缀** —— 同一个逻辑模型被投影进非 root 引擎时套的壳。
+ *   - `chatgpt/`:OpenAI codex root → cc / pi bridge(modelPlanePolicy.ts `toChatgptBridgeModel`,
+ *     builtin.ts OPENAI routing 的 `modelPrefixes`);
+ *   - `xai/`:xAI 订阅直连 bridge(catalog/providers.json 两个 runtime 都声明了 `modelPrefixes`)。
+ * 与 classification.ts 的 `SUBSCRIPTION_DIRECT_MODEL_PREFIXES` 同源(直接引用其常量,
+ * 不另抄字面量)。**`codex/` 不在此列** —— 它是折扣路由的商品命名空间,不是同一模型的壳。
+ */
+const BRIDGE_NAMESPACE_PREFIXES: readonly string[] = [CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX];
+
+/**
  * 内置供应商的 **root agent 偏好表** —— 镜像 host 侧的 `MODEL_PLANE_POLICIES`
  * (apps/desktop/src/main/maker-host/model-plane/modelPlanePolicy.ts:50):
- *   - openai:    roots ['codex']                → 推荐 codex(cc / pi 上的是 `chatgpt/` bridge 投影)
- *   - anthropic: roots ['claude-code']          → 推荐 claude-code(codex 上的是 anthropic-messages bridge)
+ *   - openai:    roots ['codex']                → codex(cc / pi 上的是 `chatgpt/` bridge 投影)
+ *   - anthropic: roots ['claude-code']          → claude-code(codex 上的是 anthropic-messages bridge)
  *   - xai:       roots ['claude-code','codex']  → 双 root,piRoot = claude-code ⇒ 取 claude-code
  *
  * 为什么是抄一份表而不是 import:本包是零依赖的下层(apps/desktop 依赖它,反向依赖是
  * 架构不变量禁止的)。host 那张表还承载实体化 / membership / transforms 三件事,本表只
- * 取其中「canonical root 落在哪个 agent」这一维。两表漂移的后果是推荐档变差(不会变成
- * 假按钮 —— 约束 2 兜底),新增内置供应商时两处都要加。
+ * 取其中「canonical root 落在哪个 agent」这一维。新增内置供应商时两处都要加。
  *
- * **xd 刻意不在表内**,与 host 同因:网关独占存在性,root 概念不适用(见
- * `gatewayRootPreference`)。
+ * **xd 刻意不在表内**,与 host 同因:网关独占存在性,root 概念不适用(见 `gatewayRootPreference`)。
  */
 const BUILTIN_ROOT_PREFERENCE: ReadonlyMap<string, AgentKind> = new Map([
   ['openai', 'codex'],
@@ -80,30 +105,38 @@ const BUILTIN_ROOT_PREFERENCE: ReadonlyMap<string, AgentKind> = new Map([
 ]);
 
 /**
- * 分类用的 id 归一:剥掉 bridge 命名空间前缀(`chatgpt/` / `xai/`)与 `[1m]` 长上下文后缀。
- *
- * 规格 §4:「bridge 条目 id 带前缀…按 id 查推荐 / 能力时先归一」。归一**只用于分类判定**
- * (是不是折扣路由条目),不用于候选集判定 —— 候选必须是目录里真实存在、真能路由的那条
- * (provider, agent, id),见 `candidateAgentsForModel` 的注释。
+ * **行身份 id**:剥掉 bridge 命名空间前缀,得到该逻辑模型的稳定 key。
+ * 刻意**不**剥 `[1m]` 后缀与 `codex/` 前缀(见文件头「不合并」)。
  */
-export function normalizeModelIdForClassification(modelId: string): string {
-  let id = modelId;
-  for (const prefix of [CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX]) {
-    if (id.startsWith(prefix)) id = id.slice(prefix.length);
+export function unifiedModelKeyId(modelId: string): string {
+  for (const prefix of BRIDGE_NAMESPACE_PREFIXES) {
+    if (modelId.startsWith(prefix)) return modelId.slice(prefix.length);
   }
-  return id.replace(/\[1m\]$/, '');
+  return modelId;
 }
 
 /**
- * 目录条目查找的候选 id 列表 —— 与 host 的
- * `getCatalogModelContextWindow`(apps/desktop/src/main/maker-host/active-catalog.ts:750)
- * **同口径**:原 id → 去 `[1m]` 后缀 → 去该路由的 `modelIdRewrite.stripPrefix` → 两者叠加。
- *
- * 用途:会话侧存的是 **wire model id**,可能带 `[1m]` 展示后缀,或被路由的 stripPrefix
- * 包了一层;目录始终存原始 id。归一在这里做一次,消费方不必各自复制一份匹配逻辑。
+ * 分类用的 id 归一:在 `unifiedModelKeyId` 之上再剥 `[1m]` 长上下文后缀。
+ * 只用于「这是不是折扣路由条目」这类**分类判定**,不用于建行、不用于发请求。
+ */
+export function normalizeModelIdForClassification(modelId: string): string {
+  return unifiedModelKeyId(modelId).replace(/\[1m\]$/, '');
+}
+
+/**
+ * 目录条目查找的候选 id 列表 —— 覆盖两类归一:
+ *   1. **bridge 壳**:行身份 id ↔ `chatgpt/` / `xai/` 前缀形态(支撑合并行);
+ *   2. **wire 变体**:`[1m]` 展示后缀 + 该路由的 `modelIdRewrite.stripPrefix`,与 host 的
+ *      `getCatalogModelContextWindow`(apps/desktop/src/main/maker-host/active-catalog.ts:750)
+ *      同口径 —— 会话侧存的是 wire model id,目录始终存原始 id。
+ * 顺序即优先级:精确 id 永远排第一,保证 `[1m]` 这类**独立存在**的条目不被变体顶替。
  */
 export function catalogModelIdCandidates(modelId: string, stripPrefix?: string): string[] {
-  const out = new Set<string>([modelId, modelId.replace(/\[1m\]$/, '')]);
+  const out = new Set<string>([modelId]);
+  const key = unifiedModelKeyId(modelId);
+  out.add(key);
+  for (const prefix of BRIDGE_NAMESPACE_PREFIXES) out.add(`${prefix}${key}`);
+  out.add(modelId.replace(/\[1m\]$/, ''));
   if (stripPrefix && modelId.startsWith(stripPrefix)) {
     const stripped = modelId.slice(stripPrefix.length);
     out.add(stripped);
@@ -113,9 +146,8 @@ export function catalogModelIdCandidates(modelId: string, stripPrefix?: string):
 }
 
 /**
- * 取 (provider, agent) 下的目录条目,精确 id 优先、失配时按 `catalogModelIdCandidates`
- * 归一重试。**注意 `[1m]` 变体若在目录里独立存在就是独立行**(如 `claude-opus-5` 与
- * `claude-opus-5[1m]` 是两个上下文窗口不同的条目),精确优先保证不会互相顶替。
+ * 取 (provider, agent) 下的目录条目,精确 id 优先、失配时按 `catalogModelIdCandidates` 归一重试。
+ * 返回的是**目录里真实那条**,调用方要发请求就用它的 `.id`(= wire id)。
  */
 export function findCatalogModel(
   provider: Provider | ProviderView | undefined,
@@ -123,8 +155,6 @@ export function findCatalogModel(
   agent: AgentKind,
 ): CatalogModel | undefined {
   if (!provider) return undefined;
-  const exact = getModel(provider, modelId, agent);
-  if (exact) return exact;
   const stripPrefix = provider.routing?.[agent]?.modelIdRewrite?.stripPrefix;
   for (const candidate of catalogModelIdCandidates(modelId, stripPrefix)) {
     const found = getModel(provider, candidate, agent);
@@ -134,11 +164,23 @@ export function findCatalogModel(
 }
 
 /**
+ * 该 (provider, agent) 下这个逻辑模型真正要发出去的 **wire model id**;不提供则 null。
+ * 面板选中某引擎后写 draft / 建会话 / 切模型,一律用本函数(或 `capabilities[agent].wireModelId`)
+ * 的结果,不能用行的归一化 `modelId`。
+ */
+export function resolveWireModelId(
+  provider: Provider | ProviderView | undefined,
+  modelId: string,
+  agent: AgentKind,
+): string | null {
+  return findCatalogModel(provider, modelId, agent)?.id ?? null;
+}
+
+/**
  * 来源解析口径:
  *   - `'draft'`(默认)—— `effectiveSourceIdForModel`:新会话 / 切模型 / worker / schedule
  *     等**新路由**场景,剔除停用与 retired;
- *   - `'session'` —— `actualSourceIdForModel`:展示**已在运行的会话**,保留停用拷贝,
- *     与实际路由一致(registry.ts 明示两套口径必须都保留)。
+ *   - `'session'` —— `actualSourceIdForModel`:展示**已在运行的会话**,保留停用拷贝。
  */
 export type SourceResolutionScope = 'draft' | 'session';
 
@@ -152,32 +194,29 @@ export interface CandidateAgentsOptions {
 function resolveSourceId(
   providers: readonly ProviderView[],
   providerId: string | null | undefined,
-  modelId: string,
+  wireModelId: string,
   agent: AgentKind,
   scope: SourceResolutionScope,
 ): string | null {
   const views = [...providers];
   return scope === 'session'
-    ? actualSourceIdForModel(views, providerId, modelId, agent)
-    : effectiveSourceIdForModel(views, providerId, modelId, agent);
+    ? actualSourceIdForModel(views, providerId, wireModelId, agent)
+    : effectiveSourceIdForModel(views, providerId, wireModelId, agent);
 }
 
 /**
- * 该 (provider, model) 的**候选引擎**:在最终目录中,这个模型确实能由这个供应商在该
- * agent 下路由的全部 agent。
+ * 该 (provider, 逻辑模型) 的**候选引擎**:这个模型确实能由这个供应商在该 agent 下路由的全部 agent。
  *
- * 判定方式 = 逐 agent 跑一遍生效来源解析,看解析结果是否就是 `providerId`。这样一次性
- * 吃到 registry 的全部口径:该 agent 的 runtime 是否启用、供应商是否已连接 / 停用、该
- * 条目是不是聊天模型、是否被本地停用或 retired —— 而不是去读拍平去重列表里那条可能
- * 属于别家供应商的行(规格 §2.1 / §4 明令禁止)。
+ * 两步,缺一不可:
+ *   1. **解析 wire id** —— 该引擎的目录里到底有没有这条(bridge 壳 / `[1m]` / stripPrefix 归一后);
+ *   2. **解析生效来源** —— 拿那条 wire id 跑 `effectiveSourceIdForModel`,看解析结果是否就是
+ *      `providerId`。这样一次吃到 registry 的全部口径:runtime 是否启用、供应商是否已连接 /
+ *      停用、条目是不是聊天模型、是否被本地停用或 retired —— 而不是去读拍平去重列表里那条
+ *      可能属于别家供应商的行(规格 §2.1 / §4 明令禁止)。
  *
- * `providerId` 传 `null` / `undefined` = 「跟随默认路由」(草稿未显式选源):此时候选 =
- * 该模型在该 agent 下**存在任何可路由来源**的 agent(解析结果非 null)。
- *
- * **候选按精确 id 判定,不做归一**:候选 = 「选了这个引擎之后,这条 id 真的发得出去」。
- * `chatgpt/gpt-5.5`(openai 在 cc / pi 下的 bridge 条目)与 `gpt-5.5`(openai 在 codex 下的
- * root 条目)是两条不同的 id、两行不同的选择器条目,归一合并会造出「选了 codex 却发一个
- * codex 目录里不存在的 id」的假按钮。归一只用于分类与能力回查(见上面两个 helper)。
+ * `modelId` 传归一化 id 或任一引擎的 wire id 都可以(两者等价寻址到同一行)。
+ * `providerId` 传 `null` / `undefined` = 「跟随默认路由」:候选 = 该模型在该 agent 下**存在
+ * 任何可路由来源**的 agent。
  */
 export function candidateAgentsForModel(
   providers: readonly ProviderView[],
@@ -189,10 +228,17 @@ export function candidateAgentsForModel(
   const allowed = opts.agents;
   return UNIFIED_AGENT_PRIORITY.filter((agent) => {
     if (allowed && !allowed.includes(agent)) return false;
-    const sourceId = resolveSourceId(providers, providerId, modelId, agent, scope);
-    if (sourceId === null) return false;
-    // providerId 缺席 = 跟随默认路由:解析出任何来源即算该引擎可用。
-    return providerId ? sourceId === providerId : true;
+    // providerId 缺席时没有单一 provider 可查 wire id,逐个可能来源试。
+    const wireIds = providerId
+      ? [resolveWireModelId(providers.find((p) => p.id === providerId), modelId, agent)]
+      : providers.map((provider) => resolveWireModelId(provider, modelId, agent));
+    for (const wireId of wireIds) {
+      if (!wireId) continue;
+      const sourceId = resolveSourceId(providers, providerId, wireId, agent, scope);
+      if (sourceId === null) continue;
+      if (!providerId || sourceId === providerId) return true;
+    }
+    return false;
   });
 }
 
@@ -200,15 +246,13 @@ export function candidateAgentsForModel(
  * 网关(XD)的 root 偏好 —— 网关同时服务 cc / codex 两个面,没有 root 概念,按**条目本身**判:
  *   - 折扣路由条目(`codex/` 前缀,或服务端显式下发 `group:'gpt-budget'`)→ codex:
  *     `codex/` 是网关转发给 OpenAI Responses 那条低价路由的命名空间(见 types.ts
- *     `RoutingDescriptor.modelIdRewrite` 的示例与 classification.ts `categorize` 里
- *     「`codex/` 前缀 ⇒ gpt-budget」的判定),归属天然是 Codex 侧;
- *   - 其余 → claude-code:网关的 `/v1/messages` 翻译面覆盖最广,也是服务端未声明
- *     `agents` 时的默认 tab(active-catalog.ts `xdGatewayTargetAgents` 默认 ['claude-code'])。
- *   - 「该模型仅在 codex 下」不需要在这里表达 —— 单候选规则已经吃掉了它。
+ *     `RoutingDescriptor.modelIdRewrite` 示例与 classification.ts `categorize` 的
+ *     「`codex/` 前缀 ⇒ gpt-budget」判定),归属天然是 Codex 侧;
+ *   - 其余 → claude-code:网关 `/v1/messages` 翻译面覆盖最广,也是服务端未声明 `agents`
+ *     时的默认 tab(active-catalog.ts `xdGatewayTargetAgents` 默认 `['claude-code']`)。
  *
  * 折扣判定复用 `isBudgetModel`(数据优先:合法 `group` 说了算,否则 `codex/` 前缀兜底),
- * 而不是自己写一遍前缀判断 —— classification.ts 已经把这条语义收成单点,再抄一份就是
- * 那类会漂移的重复。
+ * 不自己再抄一遍前缀判断。
  */
 function gatewayRootPreference(model: CatalogModel | undefined, modelId: string): AgentKind {
   const id = normalizeModelIdForClassification(modelId);
@@ -221,36 +265,36 @@ function gatewayRootPreference(model: CatalogModel | undefined, modelId: string)
 /**
  * 该供应商是否为「共享网关」形态 —— 数据判定,不是 id 白名单:任一 runtime 的鉴权策略是
  * `gateway-key` 即网关(XD 的三个 runtime 都是,见 builtin.ts XD_PROVIDER.routing)。
- * 将来接入第二家网关时无需改这里。
  */
 function isGatewayProvider(provider: Provider | ProviderView): boolean {
-  return Object.values(provider.routing).some(
-    (routing) => routing?.authStrategy === 'gateway-key',
-  );
+  return Object.values(provider.routing).some((routing) => routing?.authStrategy === 'gateway-key');
 }
 
 /**
- * root 偏好(尚未与候选集求交)。返回 `null` = 没有偏好,直接走候选优先序回落。
+ * **原生底座(native agent)** —— 这个模型"生来跑在哪个引擎上",与候选集**无关**。
  *
- * 顺序有讲究:内置 root 表 → 网关 → 用户自定义供应商。用户自定义供应商**没有** root
- * 偏好:它的"配置了哪些 runtime"已经完整体现在候选集里(buildUserProvider 只为
- * `runtimes` 里配了的 agent 生成 routing + models),多 runtime 时按 cc > codex > pi 取,
- * 这正是 `UNIFIED_AGENT_PRIORITY` 的回落序 —— 所以这里返回 null 而不是抄一份优先序。
+ * 与推荐引擎的区别:推荐必须落在候选内(可选才推),原生底座是模型的固有属性 ——
+ * Claude 模型即便能经 anthropic-messages bridge 在 codex 下跑,原生底座仍是 claude-code。
+ * 排序用它:codex 会话优先展示 GPT 系,claude 会话优先展示 Claude 系,兼容行往下排
+ * (`sortEntriesForAgent`)。
+ *
+ * 取值来源:内置 root 表 → 网关按条目判 → 都不适用(用户自定义供应商)时 null,
+ * 由调用方回落(`unifiedModelEntries` 回落到 `recommended`:BYOM 模型的"原生底座"
+ * 就是用户为它配的那个 runtime)。
  */
-function rootPreference(
-  provider: Provider | ProviderView,
+export function nativeAgentForProviderModel(
+  provider: Provider | ProviderView | undefined,
   modelId: string,
-  candidates: readonly AgentKind[],
 ): AgentKind | null {
+  if (!provider) return null;
   const builtin = BUILTIN_ROOT_PREFERENCE.get(provider.id);
   if (builtin) return builtin;
   if (isGatewayProvider(provider)) {
-    // 能力元数据按「该偏好指向的 agent」现查;查不到就用任一候选条目兜底判分组。
-    const preferredProbe = findCatalogModel(provider, modelId, 'codex');
-    const anyProbe =
-      preferredProbe ??
-      candidates.map((agent) => findCatalogModel(provider, modelId, agent)).find(Boolean);
-    return gatewayRootPreference(anyProbe, modelId);
+    const probe =
+      findCatalogModel(provider, modelId, 'codex') ??
+      findCatalogModel(provider, modelId, 'claude-code') ??
+      findCatalogModel(provider, modelId, 'pi');
+    return gatewayRootPreference(probe, modelId);
   }
   return null;
 }
@@ -261,10 +305,10 @@ function rootPreference(
  *
  * 1. 无候选 → null(没有可推荐的东西,不编);
  * 2. 单候选 → 即它(pi 唯一候选时也推荐 pi);
- * 3. root 偏好命中候选 → 用它(内置表 / 网关按条目判);
+ * 3. 原生底座命中候选 → 用它;
  * 4. 回落:候选里按 cc > codex 取第一个;都没有则 pi。
  *
- * 约束 2(推荐必是候选)由 3、4 共同保证:偏好不是候选就一定回落。
+ * 约束 2(推荐必是候选)由 3、4 共同保证:原生底座不是候选就一定回落。
  */
 export function pickRecommendedAgent(
   provider: Provider | ProviderView | undefined,
@@ -273,10 +317,8 @@ export function pickRecommendedAgent(
 ): AgentKind | null {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0];
-  if (provider) {
-    const preferred = rootPreference(provider, modelId, candidates);
-    if (preferred && candidates.includes(preferred)) return preferred;
-  }
+  const native = nativeAgentForProviderModel(provider, modelId);
+  if (native && candidates.includes(native)) return native;
   const fallback = UNIFIED_AGENT_PRIORITY.find(
     (agent) => agent !== NEVER_RECOMMENDED_UNLESS_SOLE && candidates.includes(agent),
   );
@@ -285,8 +327,7 @@ export function pickRecommendedAgent(
 
 /**
  * 该 (provider, model) 的**推荐引擎**。候选先按 `candidateAgentsForModel` 解析生效来源
- * 得出,再走 `pickRecommendedAgent`。无任何候选(模型不可路由)时返回 `null` ——
- * 调用方不该拿一个不可路由的模型来问推荐,返回 null 比编一个假答案诚实。
+ * 得出,再走 `pickRecommendedAgent`。无任何候选时返回 `null`。
  */
 export function recommendedAgentForModel(
   providers: readonly ProviderView[],
@@ -296,30 +337,86 @@ export function recommendedAgentForModel(
 ): AgentKind | null {
   const candidates = candidateAgentsForModel(providers, providerId, modelId, opts);
   if (candidates.length === 0) return null;
-  // providerId 缺席(跟随默认路由)时,root 偏好按**最高优先候选引擎**下解析出的默认来源判:
-  // 那正是用户不显式选源时真的会路由过去的那家。
-  const sourceId =
-    providerId ?? resolveSourceId(providers, null, modelId, candidates[0], opts.scope ?? 'draft');
-  const provider = sourceId ? providers.find((entry) => entry.id === sourceId) : undefined;
+  const provider = providerId
+    ? providers.find((entry) => entry.id === providerId)
+    : // providerId 缺席(跟随默认路由)时,按**最高优先候选引擎**下解析出的默认来源判:
+      // 那正是用户不显式选源时真会路由过去的那家。
+      providers.find((candidateProvider) => {
+        const wireId = resolveWireModelId(candidateProvider, modelId, candidates[0]);
+        if (!wireId) return false;
+        return (
+          resolveSourceId(providers, null, wireId, candidates[0], opts.scope ?? 'draft') ===
+          candidateProvider.id
+        );
+      });
   return pickRecommendedAgent(provider, modelId, candidates);
 }
 
-/** 某 (provider, model, agent) 已解析的能力三元组(规格 §2.2)。 */
+/** 某 (provider, model, agent) 已解析的能力(规格 §2.2)。 */
 export interface UnifiedAgentCapability {
   agent: AgentKind;
+  /**
+   * ★该引擎下真正要发出去的 model id(bridge 壳已还原)。写 draft / 建会话 / 切模型
+   * 一律用它,不要用行的归一化 `modelId`。
+   */
+  wireModelId: string;
   /** 该 (provider, agent) 条目声明的思考档;空数组 = 不可调。 */
   efforts: readonly Effort[];
+  /**
+   * 默认思考档,**已应用缺省回落**:目录没声明(或声明了 null / 非法值)时,只要
+   * `efforts` 含 `medium` 就回落 `medium`(Chris 2026-08-13 裁决「一般默认 medium」);
+   * `efforts` 为空或不含 medium 则保持 null。`defaultEffortSource` 标明这一档的来历。
+   *
+   * ⚠️ 调用方必须把**本字段**传给 `effortResolution.resolveEffort` 的 `defaultEffort`:
+   * 那个共享函数自己的兜底仍是 `efforts[0]`(全仓历史语义,本次不动),不传就会
+   * 「面板显示 medium、实际落 low」。
+   */
   defaultEffort: Effort | null;
+  defaultEffortSource: 'catalog' | 'fallback-medium' | 'none';
   /**
    * 该 (provider, agent, model) 的 Fast 能力 —— 走 `modelSupportsFastMode` 现查。
-   * **不含 agent 运行时的粗粒度 gate**(`capabilities.hasFastMode`):那是 host 侧的
-   * 运行期事实,本包拿不到,由渲染层叠加(registry.ts 明示)。
+   * **不含 agent 运行时的粗粒度 gate**(`capabilities.hasFastMode`):那是 host 侧运行期
+   * 事实,本包拿不到,由渲染层叠加(registry.ts 明示)。
    */
   supportsFastMode: boolean;
   /** 该 (provider, agent) 下的上下文窗口(同 id 跨 agent 可不同,如 gpt-5.5 cc=1M / codex=272K)。 */
   contextWindow: number;
   /** 该窗口是否为显式声明的真实上限(`CatalogModel.contextWindowVerified`)。 */
   contextWindowVerified: boolean;
+}
+
+/** 默认档缺省回落:目录没给(或给了 null / 非法值)时,efforts 含 medium 就落 medium。 */
+function resolveDefaultEffort(model: CatalogModel): {
+  defaultEffort: Effort | null;
+  defaultEffortSource: UnifiedAgentCapability['defaultEffortSource'];
+} {
+  const declared = model.defaultEffort;
+  if (declared !== null && declared !== undefined && model.efforts.includes(declared)) {
+    return { defaultEffort: declared, defaultEffortSource: 'catalog' };
+  }
+  if (model.efforts.includes('medium')) {
+    return { defaultEffort: 'medium', defaultEffortSource: 'fallback-medium' };
+  }
+  return { defaultEffort: null, defaultEffortSource: 'none' };
+}
+
+function capabilityOf(
+  provider: ProviderView,
+  modelId: string,
+  agent: AgentKind,
+): UnifiedAgentCapability | null {
+  const model = findCatalogModel(provider, modelId, agent);
+  if (!model) return null;
+  return {
+    agent,
+    wireModelId: model.id,
+    efforts: model.efforts,
+    ...resolveDefaultEffort(model),
+    // 按目录里真实那条 id 查 Fast,避免归一命中后误报 false。
+    supportsFastMode: modelSupportsFastMode(provider, model.id, agent),
+    contextWindow: model.contextWindow,
+    contextWindowVerified: model.contextWindowVerified === true,
+  };
 }
 
 /**
@@ -337,27 +434,10 @@ export function resolveAgentCapability(
   return capabilityOf(provider, modelId, agent);
 }
 
-function capabilityOf(
-  provider: ProviderView,
-  modelId: string,
-  agent: AgentKind,
-): UnifiedAgentCapability | null {
-  const model = findCatalogModel(provider, modelId, agent);
-  if (!model) return null;
-  return {
-    agent,
-    efforts: model.efforts,
-    defaultEffort: model.defaultEffort,
-    // 归一命中时按目录里真实那条 id 查 Fast,避免 `[1m]` 变体查不到而误报 false。
-    supportsFastMode: modelSupportsFastMode(provider, model.id, agent),
-    contextWindow: model.contextWindow,
-    contextWindowVerified: model.contextWindowVerified === true,
-  };
-}
-
-/** 联合列表的一行:一个 (provider, model),横跨它能用的所有引擎。 */
+/** 联合列表的一行:一个逻辑模型 (provider, 归一化 modelId),横跨它能用的所有引擎。 */
 export interface UnifiedModelEntry {
   providerId: string;
+  /** ★**归一化 id**(行的稳定身份 / override / 收藏 key)。发请求请用 `capabilities[agent].wireModelId`。 */
   modelId: string;
   /** 展示名 —— 取**推荐引擎**那条目录条目(同 id 跨 agent 元数据可不同)。 */
   displayName: string;
@@ -367,12 +447,18 @@ export interface UnifiedModelEntry {
   sortOrder?: number;
   /** 展示图标 id(`CatalogModel.icon`;缺省由渲染层回落供应商标)。 */
   icon?: string;
-  /** 该行的来源供应商是否已连接(providerScope 放宽时才有区分意义)。 */
+  /** 该行的来源供应商是否已连接。 */
   sourceConnected: boolean;
-  /** 候选引擎,按 `UNIFIED_AGENT_PRIORITY` 序。恒 ≥1(空候选的行不产出)。 */
+  /** 候选引擎,按 `UNIFIED_AGENT_PRIORITY` 序。恒 ≥1。 */
   candidates: AgentKind[];
   /** 推荐引擎,恒 ∈ candidates。 */
   recommended: AgentKind;
+  /**
+   * ★**原生底座**:这个模型生来属于哪个引擎,**不与候选求交**(Claude 模型即便 codex 可跑,
+   * native 仍是 claude-code)。会话内「同引擎视图」按它排序(`sortEntriesForAgent`)。
+   * 用户自定义供应商无 root 概念时回落 `recommended`。
+   */
+  nativeAgent: AgentKind;
   /** 逐候选引擎已解析的能力。键集 = candidates。 */
   capabilities: Partial<Record<AgentKind, UnifiedAgentCapability>>;
 }
@@ -383,8 +469,7 @@ export interface UnifiedModelEntriesOptions {
   agents?: readonly AgentKind[];
   /**
    * 供应商范围,默认 `'connected-for-agent'` —— 与 `visibleModelUnion`(选择器口径)一致,
-   * 也与来源解析对齐:`effectiveSourceIdForModel` 只认已连接来源,放宽 scope 也长不出
-   * 候选,只会产出空候选行(会被丢弃)。要列「去连接引导」清单的调用方自己另走一条派生。
+   * 也与来源解析对齐:`effectiveSourceIdForModel` 只认已连接来源。
    */
   providerScope?: ProviderScope;
   /**
@@ -392,8 +477,7 @@ export interface UnifiedModelEntriesOptions {
    * 是 `<agent>:<providerId>:<modelId>`(见 renderer `isDeviceModelVisible`),同 id 在
    * cc / codex 下可以一显一隐。缺省 = 不过滤。
    *
-   * 刻意做成注入而不是在包里读存储:可见性数据源在 renderer localStorage / 被控端投影,
-   * 本包不得反向依赖 app(架构不变量)。
+   * 注意:传进来的 `model` 是**该引擎下的目录条目**(wire id 形态),不是行的归一化 id。
    */
   isVisible?: (providerId: string, model: CatalogModel, agent: AgentKind) => boolean;
   /** 整供应商排除(SSH 远程排除 chat-bridged Codex 源等)。 */
@@ -404,29 +488,24 @@ export interface UnifiedModelEntriesOptions {
   scope?: SourceResolutionScope;
 }
 
-function entryKey(providerId: string, modelId: string): string {
-  // model id 可含 ':'(命名空间写法很少,但 provider id 受 /^[a-z0-9_-]+$/ 约束不含 ':'),
-  // 故以**首个** ':' 切分即可无歧义还原;这里只做 Map 键,不落盘不过 wire。
-  return `${providerId}:${modelId}`;
+function entryKey(providerId: string, keyModelId: string): string {
+  return `${providerId} ${keyModelId}`;
 }
 
 /**
  * 跨引擎联合列表 —— 统一选择器面板的行数据源(规格 §1.2 / §2.1)。
  *
- * 形状:每个可见 (provider, model) **一行**,行上带候选引擎、推荐引擎与逐引擎能力。
- * 这与旧版「先选引擎再选模型」的分面清单是两种形状:旧版 `selectVisibleModels` 把
- * cc / codex / pi 三份清单按 **model id** 首见去重合并成一列(丢掉了来源与另一引擎的
- * 能力);本函数不去重、按 (provider, model) 聚合,同 id 多来源各出一行(收藏是配置
- * 副本、来源徽章与价格都按行来源判,规格 §1.2 / §4)。
+ * 形状:每个可见**逻辑模型** `(provider, 归一化 id)` 一行,行上带候选引擎、推荐引擎、
+ * 原生底座与逐引擎能力(含各自 wire id)。与旧版「先选引擎再选模型」的分面清单是两种形状:
+ * 旧版 `selectVisibleModels` 把三份清单按 model id 首见去重合并成一列(丢掉来源与另一引擎
+ * 的能力);本函数按 (provider, 归一化 id) 聚合,同名模型多来源各出一行。
  *
- * 顺序契约:引擎按 `UNIFIED_AGENT_PRIORITY` 外层遍历,每个引擎内按标准派生序
- * (供应商 rail 序 = catalog 序,供应商内目录序);行的位置由它**首次出现**的引擎决定。
- * 与 `selectVisibleModels` 的 cc → codex → pi 合并序同构。展示分组/排序另走
- * `groupModelsForDisplay`,本函数**不二次排序**。
+ * 顺序契约:引擎按 `UNIFIED_AGENT_PRIORITY` 外层遍历,每个引擎内按标准派生序(供应商 rail
+ * 序 = catalog 序,供应商内目录序);行的位置由它**首次出现**的引擎决定。展示分组/排序另走
+ * `groupModelsForDisplay` / `sortEntriesForAgent`,本函数**不二次排序**。
  *
  * 准入:复用 `deriveModelList` 的标准派生(非聊天模型 / `disabled` / `retired` 内建过滤),
- * 再叠一层「生效来源必须就是本行来源」的校验(见 `candidateAgentsForModel`)。空候选的
- * 行整行丢弃 —— 一行没有任何能跑它的引擎就不该出现在选择器里。
+ * 再叠一层「生效来源必须就是本行来源」的校验。空候选的行整行丢弃。
  */
 export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedModelEntry[] {
   const {
@@ -443,80 +522,130 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     (agent) => agents === undefined || agents.includes(agent),
   );
 
-  /** key → { 行序位置, 该行被枚举到的引擎集合 } */
-  const seen = new Map<string, { index: number; agents: AgentKind[]; connected: boolean }>();
-  const order: Array<{ providerId: string; modelId: string }> = [];
+  interface Draft {
+    providerId: string;
+    keyModelId: string;
+    /** 该行在各引擎下被枚举到的 wire id。 */
+    wireIds: Partial<Record<AgentKind, string>>;
+    agents: AgentKind[];
+    connected: boolean;
+  }
+  const drafts = new Map<string, Draft>();
+  const order: string[] = [];
 
   for (const agent of activeAgents) {
     const rows = deriveModelList({
       providers,
       agent,
       providerScope,
-      // 同 id 多来源必须各出一行:联合列表按 (provider, model) 聚合,拍平去重会把
-      // 另一来源的能力/徽章张冠李戴(规格 §4「同名模型多来源」)。
+      // 同 id 多来源必须各出一行:联合列表按 (provider, 模型) 聚合,拍平去重会把另一来源
+      // 的能力/徽章张冠李戴(规格 §4「同名模型多来源」)。
       dedupe: 'none',
       ...(isVisible ? { isVisible: (pid, model) => isVisible(pid, model, agent) } : {}),
-      ...(excludeProvider ? { excludeProvider: (provider) => excludeProvider(provider, agent) } : {}),
+      ...(excludeProvider
+        ? { excludeProvider: (provider) => excludeProvider(provider, agent) }
+        : {}),
       ...(excludeModel
         ? { excludeModel: (model, provider) => excludeModel(model, provider, agent) }
         : {}),
     });
     for (const row of rows) {
-      const key = entryKey(row.sourceProviderId, row.id);
-      const hit = seen.get(key);
+      const keyModelId = unifiedModelKeyId(row.id);
+      const key = entryKey(row.sourceProviderId, keyModelId);
+      const hit = drafts.get(key);
       if (hit) {
         if (!hit.agents.includes(agent)) hit.agents.push(agent);
+        // 同一引擎内同一行只可能来自同一条目录条目;首见即定。
+        if (hit.wireIds[agent] === undefined) hit.wireIds[agent] = row.id;
         continue;
       }
-      seen.set(key, {
-        index: order.length,
+      drafts.set(key, {
+        providerId: row.sourceProviderId,
+        keyModelId,
+        wireIds: { [agent]: row.id },
         agents: [agent],
         connected: row.sourceConnected,
       });
-      order.push({ providerId: row.sourceProviderId, modelId: row.id });
+      order.push(key);
     }
   }
 
   const out: UnifiedModelEntry[] = [];
-  for (const { providerId, modelId } of order) {
-    const hit = seen.get(entryKey(providerId, modelId));
-    if (!hit) continue;
-    const provider = providers.find((entry) => entry.id === providerId);
+  for (const key of order) {
+    const draft = drafts.get(key);
+    if (!draft) continue;
+    const provider = providers.find((entry) => entry.id === draft.providerId);
     if (!provider) continue;
     // 枚举到的引擎 ∩ 生效来源解析确认的引擎 —— 两道都过才算候选(约束 1)。
-    const resolved = candidateAgentsForModel(providers, providerId, modelId, {
+    const resolved = candidateAgentsForModel(providers, draft.providerId, draft.keyModelId, {
       scope,
-      agents: hit.agents,
+      agents: draft.agents,
     });
     const candidates = UNIFIED_AGENT_PRIORITY.filter(
-      (agent) => hit.agents.includes(agent) && resolved.includes(agent),
+      (agent) => draft.agents.includes(agent) && resolved.includes(agent),
     );
     if (candidates.length === 0) continue;
-    const recommended = pickRecommendedAgent(provider, modelId, candidates);
+    const recommended = pickRecommendedAgent(provider, draft.keyModelId, candidates);
     if (recommended === null) continue;
     const capabilities: Partial<Record<AgentKind, UnifiedAgentCapability>> = {};
     for (const agent of candidates) {
-      const capability = capabilityOf(provider, modelId, agent);
+      // 优先用枚举时记下的 wire id(它经过了可见性/排除过滤),缺失才回落归一查找。
+      const capability = capabilityOf(provider, draft.wireIds[agent] ?? draft.keyModelId, agent);
       if (capability) capabilities[agent] = capability;
     }
-    // 展示元数据取推荐引擎那条(同 id 跨 agent 元数据可不同);推荐引擎恒是候选,
-    // 其条目必然存在,但仍按 undefined 兜底,不用非空断言。
+    // 展示元数据取推荐引擎那条(同 id 跨 agent 元数据可不同)。
     const display =
-      findCatalogModel(provider, modelId, recommended) ??
-      findCatalogModel(provider, modelId, candidates[0]);
+      findCatalogModel(provider, draft.wireIds[recommended] ?? draft.keyModelId, recommended) ??
+      findCatalogModel(provider, draft.wireIds[candidates[0]] ?? draft.keyModelId, candidates[0]);
     out.push({
-      providerId,
-      modelId,
-      displayName: display?.name ?? modelId,
+      providerId: draft.providerId,
+      modelId: draft.keyModelId,
+      displayName: display?.name ?? draft.keyModelId,
       ...(display?.description !== undefined ? { description: display.description } : {}),
       ...(display?.group !== undefined ? { group: display.group } : {}),
       ...(display?.sortOrder !== undefined ? { sortOrder: display.sortOrder } : {}),
       ...(display?.icon !== undefined ? { icon: display.icon } : {}),
-      sourceConnected: hit.connected,
+      sourceConnected: draft.connected,
       candidates,
       recommended,
+      nativeAgent: nativeAgentForProviderModel(provider, draft.keyModelId) ?? recommended,
       capabilities,
     });
   }
   return out;
+}
+
+/**
+ * 按**原生底座**把行分成两组(会话内「同引擎视图」的排序依据,Chris 2026-08-13 裁决):
+ * codex 会话优先展示 GPT 系,claude 会话优先展示 Claude 系;只是"兼容能跑"的往下排。
+ *
+ * 两组内部**保持入参顺序**(= 服务端 group / sortOrder 的陈列序)。调用方若要再做分组
+ * 展示(`groupModelsForDisplay`),应**分别在两组内**做,不要先分组再排序 —— 那会把
+ * 原生优先的分割打散。
+ */
+export function partitionEntriesByNativeAgent(
+  entries: readonly UnifiedModelEntry[],
+  targetAgent: AgentKind,
+): { native: UnifiedModelEntry[]; compatible: UnifiedModelEntry[] } {
+  const native: UnifiedModelEntry[] = [];
+  const compatible: UnifiedModelEntry[] = [];
+  for (const entry of entries) {
+    (entry.nativeAgent === targetAgent ? native : compatible).push(entry);
+  }
+  return { native, compatible };
+}
+
+/**
+ * `partitionEntriesByNativeAgent` 的拍平形态:原生底座 == 目标引擎的行在前,兼容行在后,
+ * 组内稳定(不改变入参相对序)。
+ *
+ * 注意:本函数**不过滤**候选 —— 「完全不兼容目标引擎的行不显示」由调用方在派生阶段用
+ * `agents: [targetAgent]`(或按 `candidates.includes(targetAgent)`)完成,那是准入不是排序。
+ */
+export function sortEntriesForAgent(
+  entries: readonly UnifiedModelEntry[],
+  targetAgent: AgentKind,
+): UnifiedModelEntry[] {
+  const { native, compatible } = partitionEntriesByNativeAgent(entries, targetAgent);
+  return [...native, ...compatible];
 }

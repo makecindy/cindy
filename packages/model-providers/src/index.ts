@@ -165,14 +165,19 @@ export type { ModelCategory, DisplayModel, ModelBadges } from './classification.
 // 规格 docs/product-rules/model-selector-unified.md §2.1 / §2.2 / §4。
 export {
   UNIFIED_AGENT_PRIORITY,
+  unifiedModelKeyId,
   normalizeModelIdForClassification,
   catalogModelIdCandidates,
   findCatalogModel,
+  resolveWireModelId,
   candidateAgentsForModel,
+  nativeAgentForProviderModel,
   pickRecommendedAgent,
   recommendedAgentForModel,
   resolveAgentCapability,
   unifiedModelEntries,
+  partitionEntriesByNativeAgent,
+  sortEntriesForAgent,
 } from './unifiedSelection.js';
 export type {
   SourceResolutionScope,

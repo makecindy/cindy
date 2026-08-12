@@ -703,10 +703,14 @@ interface ChatInputProps {
    * 跨引擎行上会拿旧引擎的档位表把档清空)。
    *
    * 已建会话不传:那边换引擎有损,跨引擎行走 performAgentSwitch 事务(M6)。
+   *
+   * `modelId` 是**选中引擎的 wire model id**(不是面板行的归一化 id):它会直接落进
+   * `lastByVendor.model` 并原样进 createSession,写错就是首条请求路由到一个不存在的模型。
    */
   onUnifiedDraftSelect?: (selection: {
     vendor: 'cc' | 'codex' | 'pi';
     providerId: string;
+    /** 选中引擎的 **wire model id**。 */
     modelId: string;
     effort?: Effort;
     fast: boolean;
@@ -5653,6 +5657,10 @@ export function ChatInput({
   // 的能力与预设重新解析,旧引擎开着的 Fast 不会被带过去 —— 这正是规格要的语义,
   // 这里若把行上显示的 fast 传下去反而会把它带过引擎。
   // effort 则显式传:面板行(以及收藏副本)已经按目标引擎解析好档位,那是用户看着点下去的值。
+  //
+  // `modelId` 在契约上**已经是目标引擎的 wire model id**(面板按
+  // `capabilities[targetAgent].wireModelId` 交出来)。这里对它零加工直接进切换事务 ——
+  // 任何"顺手归一化 / 加前缀"都会让 SET_MODEL 落一个目标引擎目录里不存在的 id。
   const sessionEngineFilter = useMemo(() => {
     if (!unifiedModelPanelEnabled) return undefined;
     if (!sessionId || !vendorKey || remoteHostId || !sessionAgentSwitchSupported) return undefined;
@@ -5693,18 +5701,40 @@ export function ChatInput({
     confirmAgentBrowseSwitch,
   ]);
 
-  // 会话内拿不到跨引擎切换事务(SSH 远程会话 / 被控端不支持 session-agent-switch)时,
-  // 统一面板**不能**摆出其它引擎的行:useUnifiedRowActions.selectRow 只有在传了
-  // sessionEngineFilter 时才把跨引擎行改道给切换事务,没有它时跨引擎行会被当普通选中
+  // composer pill 尾部引擎小标的取值(model-selector-unified §1.1,Chris 2026-08-12 裁决:
+  // pill 不再写 harness 名字文本)。与 agentIdentity **同一口径**,不另起一套:
+  //   · 已建会话:身份由 session / runtime 确认后才画;切换意图期画目标引擎;
+  //     身份未加载时 resolveModelSelectorAgentIdentity 返回 undefined → 不画
+  //     (绝不拿 vendorKey 的 Claude Code 回退冒充,见 runtimeAgentKind 的 prop 说明);
+  //   · 草稿:没有 session 身份可言,当前引擎就是 vendorKey 本身。
+  const composerEngineMarkVendor = sessionId
+    ? (resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??
+      null)
+    : (vendorKey ?? null);
+
+  // 会话内拿不到跨引擎切换事务(SSH 远程会话 / 被控端不支持 session-agent-switch /
+  // Orca 会话)时,统一面板**不能**摆出其它引擎的行:useUnifiedRowActions.selectRow 只有在
+  // 传了 sessionEngineFilter 时才把跨引擎行改道给切换事务,没有它时跨引擎行会被当普通选中
   // 交给单引擎链路(onProviderChange 只换 model / provider),等于把另一个引擎的模型
   // 直接塞进当前会话。与旧面板同待遇:这类会话把联合列表锁定在当前引擎(旧版本来就是
-  // 单引擎列表);连当前引擎都解析不出的会话直接回落旧面板,不冒险。
+  // 单引擎列表)。
+  //
+  // 锁定用的必须是**已确认**的会话引擎,不能用 vendorKey 派生的 agentKind:
+  // CCAgentSessionView 的 vendorKey 走 dbToMakerAgentKind(session?.agentKind),元数据到达
+  // 前回退成 'cc'。而 sessionOrcaRole 在同一窗口里是 undefined(≠ null)→
+  // sessionAgentSwitchSupported=false → 没有 sessionEngineFilter → 走到这条锁定分支。
+  // 两件事撞在一起的后果不是"闪一下":Codex 会话会摆出一张**纯 Claude** 的列表,而且此时
+  // 没有跨引擎兜底,点任意一行都会把 Claude 模型经 onProviderChange 塞进 Codex 会话
+  // (bug4)。所以身份未确认时不锁 —— 回落旧面板一帧,等 runtimeAgentKind 落地再进统一面板。
+  const sessionEngineConfirmed = !sessionId || runtimeAgentKind != null;
   const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;
+  const lockedSessionAgentKind =
+    inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null;
   const unifiedPanelActive =
-    unifiedModelPanelEnabled && (!inSessionEngineLocked || agentKind !== null);
+    unifiedModelPanelEnabled && (!inSessionEngineLocked || lockedSessionAgentKind !== null);
   const effectiveUnifiedAgents = useMemo<readonly AgentKind[] | undefined>(
-    () => (inSessionEngineLocked && agentKind ? [agentKind] : unifiedAgents),
-    [inSessionEngineLocked, agentKind, unifiedAgents],
+    () => (lockedSessionAgentKind ? [lockedSessionAgentKind] : unifiedAgents),
+    [lockedSessionAgentKind, unifiedAgents],
   );
 
   // ── 统一模型选择器 · 新会话形态(model-selector-unified M5)────────────────────
@@ -5712,14 +5742,28 @@ export function ChatInput({
   // 深度 / Fast 记忆按**目标引擎**槽写:草稿的生效 Fast 是从这份记忆派生的
   // (NewMakerDraftRoute.resolveDraftFast),收藏副本带来的 Fast 只有落进这里才真生效;
   // 不写就会出现「选了收藏的 Opus·Fast,pill 上却没有闪电」。
+  //
+  // ── id 口径(数据层把同一模型的多引擎条目合并成一行之后)────────────────────
+  // 面板的行身份是**归一化 id**(`rowModelId`),而每个引擎真正能发出去的是各自的
+  // **wire id**(`capabilities[engine].wireModelId`,如 cc 侧的 `chatgpt/gpt-5.6-luna`
+  // 对 codex 侧的 `gpt-5.6-luna`)。`selection.modelId` 在契约上**已经是选中引擎的
+  // wire id**,本函数因此对它零加工:
+  //   · 写 providerModelMemory —— 键必须是 wire id(记忆表的既有消费方全按 wire id 存取,
+  //     混进归一化 id 会读不回来,表现为"设过的档下次不认");
+  //   · 交给草稿层 —— 它会落进 lastByVendor.model,并原样进 createSession。
+  // `rowModelId` 只在需要指回"面板上那一行"时有用(收藏锚点等),**绝不能当发送 id**,
+  // 所以这里只接收、不消费,也不往下游传。
   const handleUnifiedDraftSelect = useCallback(
     (selection: {
       providerId: string;
+      /** 选中引擎的 **wire model id** —— 唯一可发送、可当记忆键的那个 id。 */
       modelId: string;
       effort?: Effort;
       engine: 'cc' | 'codex' | 'pi';
       fast: boolean;
       favoriteUid: string | null;
+      /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
+      rowModelId?: string;
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
@@ -7133,6 +7177,10 @@ export function ChatInput({
                   ))}
                 <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
                   <ModelSelector
+                    // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
+                    // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
+                    // 会让"当前选中的那一行"在合并行上错位,也会把归一化 id 顺着
+                    // onProviderChange 漏回会话。
                     modelId={activeModel}
                     effort={activeEffort}
                     onModelChange={handleModelChange}
@@ -7156,6 +7204,11 @@ export function ChatInput({
                     // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
                     // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
                     // GhostErrand / 设置)本版一律不开。
+                    // pill 形态(model-selector-unified §1.1):不写 harness 名字,改成
+                    // 「模型名 + 引擎小标 + 思考深度」。会话内取已确认 / 意图中的引擎
+                    // (agentIdentity 同一口径:身份没加载完就不画,不拿 vendorKey 的
+                    // Claude Code 回退冒充);草稿直接取当前引擎。
+                    engineMarkVendor={composerEngineMarkVendor}
                     unifiedPanel={unifiedPanelActive}
                     // 联合列表只列**运行时已注册**的引擎(撤掉 AgentSelect 后接住它的
                     // hiddenVendors 门禁);未加载时不传 = 不隐藏任何引擎。会话内没有

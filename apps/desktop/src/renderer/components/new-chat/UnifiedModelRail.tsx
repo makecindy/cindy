@@ -70,15 +70,23 @@ export function UnifiedModelRail({
             data-rail-item={key}
             className={cn(
               'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] transition-colors',
+              // 选中态用**反色实心块**(与浮层里的选中分段同一套表达):
+              // 原先的 --surface-chip 在两种主题下都只比底色深一点点,用户看不出当前
+              // 停在哪个视图 —— 会话内「同引擎过滤开着没开着」正是靠这一格判断的
+              // (2026-08-13 实测反馈)。
               isActive
-                ? 'bg-[var(--surface-chip)] text-[var(--model-item-text)]'
-                : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)]',
-              item.kind === 'favorites' && isActive && 'text-[var(--favorite-star)]',
+                ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] shadow-[var(--shadow-menu)]'
+                : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
               interactionDisabled && 'cursor-not-allowed opacity-50',
             )}
           >
             {item.kind === 'favorites' ? (
-              <Star size={15} fill={isActive ? 'currentColor' : 'none'} />
+              // 未选中时 ☆ 用金色描边点出「这是收藏」;选中时整格已反色,跟随 currentColor。
+              <Star
+                size={15}
+                fill={isActive ? 'currentColor' : 'none'}
+                className={isActive ? undefined : 'text-[var(--favorite-star)]'}
+              />
             ) : item.kind === 'engine' && engineOption ? (
               // 同引擎格用**当前会话引擎自己的品牌 mark**(规格 §1.6),用户一眼知道
               // 这个过滤器是按什么筛的。

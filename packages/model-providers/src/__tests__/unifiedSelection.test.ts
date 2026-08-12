@@ -1,9 +1,10 @@
 /**
- * unifiedSelection 单测 —— 统一模型选择器 M1:推荐引擎推导 + 跨引擎联合列表。
+ * unifiedSelection 单测 —— 统一模型选择器 M1:逻辑模型行合并 + wire id 映射 +
+ * 推荐引擎推导 + 原生底座排序 + 默认档回落。
  *
  * 覆盖规格 docs/product-rules/model-selector-unified.md §2.1 / §2.2 与 §4「目录/来源」
- * 全部条目:同名模型多来源、XD 独占、bridge 前缀归一、`[1m]` 后缀、user provider、
- * retired/disabled 的 keepSelected 归属。
+ * 全部条目:同名模型多来源、XD 独占、bridge 前缀归一(合并)、`[1m]` 后缀(不合并)、
+ * user provider、retired/disabled 的 keepSelected 归属。
  *
  * fixture 一律手工构造最小 Provider(不 mock 大对象、不读真实 catalog):形状对齐
  * builtin.ts 的四家内置供应商 + buildUserProvider 的产物。
@@ -16,11 +17,17 @@ import {
   candidateAgentsForModel,
   catalogModelIdCandidates,
   findCatalogModel,
+  nativeAgentForProviderModel,
   normalizeModelIdForClassification,
+  partitionEntriesByNativeAgent,
   pickRecommendedAgent,
   recommendedAgentForModel,
   resolveAgentCapability,
+  resolveWireModelId,
+  sortEntriesForAgent,
   unifiedModelEntries,
+  unifiedModelKeyId,
+  type UnifiedModelEntry,
 } from '../unifiedSelection.js';
 import type { ProviderView } from '../registry.js';
 import type {
@@ -87,13 +94,24 @@ const anthropic = view({
   },
 });
 
-/** OpenAI:codex root(裸 id),cc / pi 是 `chatgpt/` bridge 条目(不同 id ⇒ 不同行)。 */
+/**
+ * OpenAI:codex root(裸 id),cc / pi 是 `chatgpt/` bridge 条目。
+ * `gpt-5.6-luna` 复刻 Chris 实测的双行 bug:codex `gpt-5.6-luna` + cc/pi `chatgpt/gpt-5.6-luna`。
+ */
 const openai = view({
   id: 'openai',
   models: {
-    codex: [m('gpt-5.5', { contextWindow: 272_000, supportsFastMode: true })],
-    'claude-code': [m('chatgpt/gpt-5.5', { contextWindow: 272_000, supportsFastMode: false })],
-    pi: [m('chatgpt/gpt-5.5', { supportsFastMode: false })],
+    codex: [
+      m('gpt-5.6-luna', { name: 'GPT-5.6-Luna', contextWindow: 272_000, supportsFastMode: true }),
+    ],
+    'claude-code': [
+      m('chatgpt/gpt-5.6-luna', {
+        name: 'GPT-5.6-Luna (bridge)',
+        contextWindow: 272_000,
+        supportsFastMode: false,
+      }),
+    ],
+    pi: [m('chatgpt/gpt-5.6-luna', { supportsFastMode: false })],
   },
   routingOverride: {
     'claude-code': { modelPrefixes: ['chatgpt/'] },
@@ -134,29 +152,44 @@ const xd = view({
 
 const alwaysVisible = () => true;
 
-// ── normalizeModelIdForClassification / catalogModelIdCandidates ──────────────
+function find(entries: readonly UnifiedModelEntry[], pid: string, mid: string) {
+  return entries.find((e) => e.providerId === pid && e.modelId === mid);
+}
+
+// ── id 归一 ───────────────────────────────────────────────────────────────────
 
 describe('id 归一', () => {
-  it('剥 bridge 命名空间前缀与 [1m] 后缀(分类用)', () => {
-    expect(normalizeModelIdForClassification('chatgpt/gpt-5.5')).toBe('gpt-5.5');
-    expect(normalizeModelIdForClassification('xai/grok-4.5')).toBe('grok-4.5');
+  it('行身份 id 只剥 bridge 命名空间前缀', () => {
+    expect(unifiedModelKeyId('chatgpt/gpt-5.6-luna')).toBe('gpt-5.6-luna');
+    expect(unifiedModelKeyId('xai/grok-4.5')).toBe('grok-4.5');
+    // `[1m]` 与 `codex/` 保留 —— 它们是独立商品,不是同一模型的壳。
+    expect(unifiedModelKeyId('claude-opus-5[1m]')).toBe('claude-opus-5[1m]');
+    expect(unifiedModelKeyId('codex/gpt-5.5')).toBe('codex/gpt-5.5');
+  });
+
+  it('分类归一在行身份之上再剥 [1m]', () => {
     expect(normalizeModelIdForClassification('claude-opus-5[1m]')).toBe('claude-opus-5');
     expect(normalizeModelIdForClassification('chatgpt/codex/gpt-5.5[1m]')).toBe('codex/gpt-5.5');
-    // 折扣路由前缀**不**在归一范围:它是目录里真实存在的 id 一部分,剥掉就认不出折扣条目。
     expect(normalizeModelIdForClassification('codex/gpt-5.5')).toBe('codex/gpt-5.5');
   });
 
-  it('目录查找候选 id 与 host getCatalogModelContextWindow 同口径', () => {
-    expect(catalogModelIdCandidates('gpt-5.5')).toEqual(['gpt-5.5']);
-    expect(catalogModelIdCandidates('gpt-5.5[1m]')).toEqual(['gpt-5.5[1m]', 'gpt-5.5']);
+  it('目录查找候选 id:精确优先,含 bridge 壳与 host 的 [1m]/stripPrefix 口径', () => {
+    expect(catalogModelIdCandidates('gpt-5.5')).toEqual([
+      'gpt-5.5',
+      'chatgpt/gpt-5.5',
+      'xai/gpt-5.5',
+    ]);
+    expect(catalogModelIdCandidates('chatgpt/gpt-5.5')[0]).toBe('chatgpt/gpt-5.5');
+    expect(catalogModelIdCandidates('chatgpt/gpt-5.5')).toContain('gpt-5.5');
+    expect(catalogModelIdCandidates('gpt-5.5[1m]')).toContain('gpt-5.5');
     expect(catalogModelIdCandidates('codex/gpt-5.5[1m]', 'codex/')).toEqual([
       'codex/gpt-5.5[1m]',
+      'chatgpt/codex/gpt-5.5[1m]',
+      'xai/codex/gpt-5.5[1m]',
       'codex/gpt-5.5',
       'gpt-5.5[1m]',
       'gpt-5.5',
     ]);
-    // 前缀不匹配时不乱剥。
-    expect(catalogModelIdCandidates('gpt-5.5', 'codex/')).toEqual(['gpt-5.5']);
   });
 
   it('findCatalogModel:精确 id 优先,[1m] 变体是独立条目不互相顶替', () => {
@@ -175,11 +208,9 @@ describe('id 归一', () => {
     );
   });
 
-  it('findCatalogModel:目录没有 [1m] 变体时回落到基础 id(会话侧 wire id 归一)', () => {
+  it('findCatalogModel:目录没有 [1m] 变体时回落基础 id(会话侧 wire id 归一)', () => {
     const provider = view({ id: 'p', models: { 'claude-code': [m('claude-opus-5')] } });
-    expect(findCatalogModel(provider, 'claude-opus-5[1m]', 'claude-code')?.id).toBe(
-      'claude-opus-5',
-    );
+    expect(findCatalogModel(provider, 'claude-opus-5[1m]', 'claude-code')?.id).toBe('claude-opus-5');
   });
 
   it('findCatalogModel:按该路由的 stripPrefix 归一(codex/ 折扣路由)', () => {
@@ -189,7 +220,15 @@ describe('id 归一', () => {
       routingOverride: { codex: { modelIdRewrite: { stripPrefix: 'codex/' } } },
     });
     expect(findCatalogModel(provider, 'codex/gpt-5.5', 'codex')?.id).toBe('gpt-5.5');
-    expect(findCatalogModel(provider, 'gpt-5.5', 'claude-code')).toBeUndefined();
+  });
+
+  it('resolveWireModelId:归一化 id → 各引擎真实 wire id', () => {
+    expect(resolveWireModelId(openai, 'gpt-5.6-luna', 'codex')).toBe('gpt-5.6-luna');
+    expect(resolveWireModelId(openai, 'gpt-5.6-luna', 'claude-code')).toBe('chatgpt/gpt-5.6-luna');
+    expect(resolveWireModelId(openai, 'gpt-5.6-luna', 'pi')).toBe('chatgpt/gpt-5.6-luna');
+    // 反向也成立:传 bridge wire id 也能定位 root 条目。
+    expect(resolveWireModelId(openai, 'chatgpt/gpt-5.6-luna', 'codex')).toBe('gpt-5.6-luna');
+    expect(resolveWireModelId(anthropic, 'gpt-5.6-luna', 'codex')).toBeNull();
   });
 });
 
@@ -207,17 +246,20 @@ describe('candidateAgentsForModel', () => {
     expect(UNIFIED_AGENT_PRIORITY).toEqual(['claude-code', 'codex', 'pi']);
   });
 
-  it('bridge 条目按精确 id 判候选:chatgpt/ 前缀行只在 cc / pi 下存在', () => {
-    expect(candidateAgentsForModel(providers, 'openai', 'chatgpt/gpt-5.5')).toEqual([
+  it('bridge 壳与 root 条目寻址同一逻辑模型,候选是并集', () => {
+    expect(candidateAgentsForModel(providers, 'openai', 'gpt-5.6-luna')).toEqual([
       'claude-code',
+      'codex',
       'pi',
     ]);
-    // root 条目是另一行(另一个 id),只在 codex 下 —— 两行不合并。
-    expect(candidateAgentsForModel(providers, 'openai', 'gpt-5.5')).toEqual(['codex']);
+    expect(candidateAgentsForModel(providers, 'openai', 'chatgpt/gpt-5.6-luna')).toEqual([
+      'claude-code',
+      'codex',
+      'pi',
+    ]);
   });
 
   it('同名模型多来源:候选按点名的来源解析,不读拍平去重列表', () => {
-    // claude-opus-5 由 anthropic(cc/codex/pi)与 xd(cc/pi)同时提供。
     expect(candidateAgentsForModel(providers, 'anthropic', 'claude-opus-5')).toEqual([
       'claude-code',
       'codex',
@@ -235,16 +277,18 @@ describe('candidateAgentsForModel', () => {
       'pi',
     ]);
     expect(candidateAgentsForModel(providers, 'xd', 'codex-only-model')).toEqual(['codex']);
-    // 不给 XD 补条目:目录里没有就是没有。
     expect(candidateAgentsForModel(providers, 'xd', 'not-in-gateway')).toEqual([]);
+  });
+
+  it('`codex/` 折扣条目不与同名全价条目合并', () => {
+    expect(candidateAgentsForModel(providers, 'xd', 'gpt-5.5')).toEqual(['claude-code', 'codex']);
+    expect(candidateAgentsForModel(providers, 'xd', 'codex/gpt-5.5')).toEqual(['codex']);
   });
 
   it('未连接 / 已停用的供应商没有候选(草稿口径)', () => {
     const offline = [view({ id: 'anthropic', connected: false, models: anthropic.models })];
     expect(candidateAgentsForModel(offline, 'anthropic', 'claude-opus-5')).toEqual([]);
-    const suspended = [
-      view({ id: 'anthropic', suspended: true, models: anthropic.models }),
-    ];
+    const suspended = [view({ id: 'anthropic', suspended: true, models: anthropic.models })];
     expect(candidateAgentsForModel(suspended, 'anthropic', 'claude-opus-5')).toEqual([]);
   });
 
@@ -259,9 +303,7 @@ describe('candidateAgentsForModel', () => {
         },
       }),
     ];
-    expect(candidateAgentsForModel(providersWithDead, 'anthropic', 'claude-opus-5')).toEqual([
-      'pi',
-    ]);
+    expect(candidateAgentsForModel(providersWithDead, 'anthropic', 'claude-opus-5')).toEqual(['pi']);
     expect(
       candidateAgentsForModel(providersWithDead, 'anthropic', 'claude-opus-5', {
         scope: 'session',
@@ -270,8 +312,12 @@ describe('candidateAgentsForModel', () => {
   });
 
   it('providerId 缺席 = 跟随默认路由:任一来源可服务即算候选', () => {
-    // gpt-5.5 只有 openai(codex)与 xd(cc/codex)提供 ⇒ cc + codex,pi 无。
     expect(candidateAgentsForModel(providers, null, 'gpt-5.5')).toEqual(['claude-code', 'codex']);
+    expect(candidateAgentsForModel(providers, null, 'gpt-5.6-luna')).toEqual([
+      'claude-code',
+      'codex',
+      'pi',
+    ]);
   });
 
   it('agents 选项收窄参与推导的引擎', () => {
@@ -294,13 +340,46 @@ describe('candidateAgentsForModel', () => {
   });
 });
 
+// ── nativeAgentForProviderModel ───────────────────────────────────────────────
+
+describe('nativeAgentForProviderModel(原生底座)', () => {
+  it('内置 root 表:anthropic → cc,openai → codex,xai → cc', () => {
+    expect(nativeAgentForProviderModel(anthropic, 'claude-opus-5')).toBe('claude-code');
+    expect(nativeAgentForProviderModel(openai, 'gpt-5.6-luna')).toBe('codex');
+    expect(nativeAgentForProviderModel(xai, 'grok-4.5')).toBe('claude-code');
+  });
+
+  it('原生底座不与候选求交:Claude 模型只在 codex 下可选时 native 仍是 cc', () => {
+    const codexOnlyClaude = view({ id: 'anthropic', models: { codex: [m('claude-opus-5')] } });
+    expect(nativeAgentForProviderModel(codexOnlyClaude, 'claude-opus-5')).toBe('claude-code');
+    // 但推荐仍必须落在候选内。
+    expect(recommendedAgentForModel([codexOnlyClaude], 'anthropic', 'claude-opus-5')).toBe('codex');
+  });
+
+  it('网关按条目判:codex/ 折扣 → codex,其余 → cc', () => {
+    expect(nativeAgentForProviderModel(xd, 'codex/gpt-5.5')).toBe('codex');
+    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBe('claude-code');
+    expect(nativeAgentForProviderModel(xd, 'claude-opus-5')).toBe('claude-code');
+  });
+
+  it('用户自定义供应商没有 root 概念 → null(由调用方回落 recommended)', () => {
+    const byom = view({
+      id: 'byom',
+      source: 'user',
+      authStrategy: 'api-key-header',
+      models: { codex: [m('my-model', { group: 'custom:byom' })] },
+    });
+    expect(nativeAgentForProviderModel(byom, 'my-model')).toBeNull();
+  });
+});
+
 // ── recommendedAgentForModel ──────────────────────────────────────────────────
 
 describe('recommendedAgentForModel', () => {
   const providers = [anthropic, openai, xai, xd];
 
   it('单候选即推荐(含 pi 唯一候选)', () => {
-    expect(recommendedAgentForModel(providers, 'openai', 'gpt-5.5')).toBe('codex');
+    expect(recommendedAgentForModel(providers, 'xd', 'codex-only-model')).toBe('codex');
     const piOnly = [
       view({
         id: 'byom',
@@ -316,20 +395,30 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(providers, 'anthropic', 'claude-opus-5')).toBe('claude-code');
   });
 
-  it('openai 系 → codex', () => {
-    // 合成 fixture:同一裸 id 同时挂在 codex 与 pi 下,验证 root 表而非回落序生效。
-    const openaiMulti = [
-      view({ id: 'openai', models: { codex: [m('gpt-5.5')], pi: [m('gpt-5.5')] } }),
-    ];
-    expect(recommendedAgentForModel(openaiMulti, 'openai', 'gpt-5.5')).toBe('codex');
+  it('openai 系 → codex;合并行下 bridge id 与 root id 同答案', () => {
+    expect(recommendedAgentForModel(providers, 'openai', 'gpt-5.6-luna')).toBe('codex');
+    expect(recommendedAgentForModel(providers, 'openai', 'chatgpt/gpt-5.6-luna')).toBe('codex');
   });
 
-  it('bridge 条目不改变 root 判定,但推荐必须落在候选内 ⇒ 回落 cc', () => {
-    // openai 的 root 偏好仍是 codex;`chatgpt/gpt-5.5` 在 codex 下不存在 ⇒ 回落 cc(非 pi)。
-    expect(recommendedAgentForModel(providers, 'openai', 'chatgpt/gpt-5.5')).toBe('claude-code');
+  it('只有 bridge 壳、root 引擎缺席时回落 cc(不做假按钮,也不落 pi)', () => {
+    const bridgeOnly = [
+      view({
+        id: 'openai',
+        models: {
+          'claude-code': [m('chatgpt/gpt-legacy')],
+          pi: [m('chatgpt/gpt-legacy')],
+        },
+        routingOverride: {
+          'claude-code': { modelPrefixes: ['chatgpt/'] },
+          pi: { modelPrefixes: ['chatgpt/'] },
+        },
+      }),
+    ];
+    expect(recommendedAgentForModel(bridgeOnly, 'openai', 'gpt-legacy')).toBe('claude-code');
   });
 
   it('xai 双 root → claude-code(piRoot 也是 cc)', () => {
+    expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('claude-code');
     expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
   });
 
@@ -337,10 +426,6 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(providers, 'xd', 'codex/gpt-5.5')).toBe('codex');
     expect(recommendedAgentForModel(providers, 'xd', 'gpt-5.5')).toBe('claude-code');
     expect(recommendedAgentForModel(providers, 'xd', 'claude-opus-5')).toBe('claude-code');
-  });
-
-  it('xd 网关:模型仅在 codex 下 → codex(单候选规则)', () => {
-    expect(recommendedAgentForModel(providers, 'xd', 'codex-only-model')).toBe('codex');
   });
 
   it('xd 网关:服务端显式 group=gpt-budget 也算折扣路由(数据优先,同 isBudgetModel)', () => {
@@ -396,13 +481,6 @@ describe('recommendedAgentForModel', () => {
       view({ id: 'unknown-vendor', models: { codex: [m('vendor-x')], pi: [m('vendor-x')] } }),
     ];
     expect(recommendedAgentForModel(codexAndPi, 'unknown-vendor', 'vendor-x')).toBe('codex');
-    const ccAndPi = [
-      view({
-        id: 'unknown-vendor',
-        models: { 'claude-code': [m('vendor-x')], pi: [m('vendor-x')] },
-      }),
-    ];
-    expect(recommendedAgentForModel(ccAndPi, 'unknown-vendor', 'vendor-x')).toBe('claude-code');
   });
 
   it('无候选时返回 null,不编一个不可路由的推荐', () => {
@@ -415,38 +493,78 @@ describe('recommendedAgentForModel', () => {
   });
 });
 
-// ── resolveAgentCapability ────────────────────────────────────────────────────
+// ── resolveAgentCapability / 默认档回落 ───────────────────────────────────────
 
 describe('resolveAgentCapability', () => {
   const providers = [anthropic, openai, xai, xd];
 
-  it('按 (provider, agent, model) 三元组取能力,同 id 跨 agent 可分叉', () => {
+  it('按 (provider, agent, model) 三元组取能力,带该引擎的 wire id', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')).toEqual({
       agent: 'claude-code',
+      wireModelId: 'claude-opus-5',
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
+      defaultEffortSource: 'catalog',
       supportsFastMode: true,
       contextWindow: 200_000,
       contextWindowVerified: false,
     });
-    // 同 id 在 codex bridge 下 fast 被强制关闭。
     expect(
       resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'codex')?.supportsFastMode,
     ).toBe(false);
   });
 
+  it('归一化 id 查 bridge 引擎时回带 bridge wire id', () => {
+    const cap = resolveAgentCapability(providers, 'openai', 'gpt-5.6-luna', 'claude-code');
+    expect(cap?.wireModelId).toBe('chatgpt/gpt-5.6-luna');
+    expect(cap?.supportsFastMode).toBe(false);
+    expect(resolveAgentCapability(providers, 'openai', 'gpt-5.6-luna', 'codex')?.wireModelId).toBe(
+      'gpt-5.6-luna',
+    );
+  });
+
   it('同名模型多来源:能力先解析来源再查,两家各是各的', () => {
     expect(
-      resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')
-        ?.contextWindow,
+      resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')?.contextWindow,
     ).toBe(200_000);
     expect(
       resolveAgentCapability(providers, 'xd', 'claude-opus-5', 'claude-code')?.contextWindow,
     ).toBe(1_000_000);
     expect(
-      resolveAgentCapability(providers, 'xd', 'claude-opus-5', 'claude-code')
-        ?.contextWindowVerified,
+      resolveAgentCapability(providers, 'xd', 'claude-opus-5', 'claude-code')?.contextWindowVerified,
     ).toBe(true);
+  });
+
+  it('默认档缺省回落 medium(仅当 efforts 含 medium)', () => {
+    const p = view({
+      id: 'xd',
+      authStrategy: 'gateway-key',
+      models: {
+        'claude-code': [
+          m('no-default', { defaultEffort: null }),
+          m('no-medium', { efforts: ['low', 'high'], defaultEffort: null }),
+          m('not-adjustable', { efforts: [], defaultEffort: null }),
+          m('bad-default', { efforts: ['low', 'medium'], defaultEffort: 'ultra' }),
+        ],
+      },
+    });
+    const cap = (id: string) => resolveAgentCapability([p], 'xd', id, 'claude-code');
+    expect(cap('no-default')?.defaultEffort).toBe('medium');
+    expect(cap('no-default')?.defaultEffortSource).toBe('fallback-medium');
+    // efforts 不含 medium ⇒ 不硬塞一个不支持的档。
+    expect(cap('no-medium')?.defaultEffort).toBeNull();
+    expect(cap('no-medium')?.defaultEffortSource).toBe('none');
+    // efforts 为空 = 不可调,保持 null。
+    expect(cap('not-adjustable')?.defaultEffort).toBeNull();
+    // 目录声明了 efforts 里没有的档 ⇒ 按缺省处理,回落 medium。
+    expect(cap('bad-default')?.defaultEffort).toBe('medium');
+    expect(cap('bad-default')?.defaultEffortSource).toBe('fallback-medium');
+  });
+
+  it('目录声明了合法默认档时原样保留,不被 medium 顶掉', () => {
+    expect(
+      resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')?.defaultEffort,
+    ).toBe('high');
   });
 
   it('取不到条目 / 供应商时返回 null', () => {
@@ -460,46 +578,45 @@ describe('resolveAgentCapability', () => {
 describe('unifiedModelEntries', () => {
   const providers = [anthropic, openai, xai, xd];
 
-  function find(entries: ReturnType<typeof unifiedModelEntries>, pid: string, mid: string) {
-    return entries.find((e) => e.providerId === pid && e.modelId === mid);
-  }
-
-  it('每个 (provider, model) 一行,带候选 / 推荐 / 逐引擎能力', () => {
-    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
-    const row = find(entries, 'anthropic', 'claude-opus-5');
-    expect(row).toBeDefined();
-    expect(row?.candidates).toEqual(['claude-code', 'codex', 'pi']);
-    expect(row?.recommended).toBe('claude-code');
-    expect(Object.keys(row?.capabilities ?? {}).sort()).toEqual(
-      ['claude-code', 'codex', 'pi'].sort(),
-    );
-    expect(row?.capabilities['claude-code']?.supportsFastMode).toBe(true);
-    expect(row?.capabilities.codex?.supportsFastMode).toBe(false);
+  it('bridge 壳与 root 条目合并成一行(Chris 实测的双行 bug)', () => {
+    const entries = unifiedModelEntries({ providers: [openai], isVisible: alwaysVisible });
+    expect(entries).toHaveLength(1);
+    const row = entries[0];
+    expect(row.modelId).toBe('gpt-5.6-luna');
+    expect(row.candidates).toEqual(['claude-code', 'codex', 'pi']);
+    expect(row.recommended).toBe('codex');
+    expect(row.nativeAgent).toBe('codex');
+    // 每个引擎发自己的 wire id。
+    expect(row.capabilities.codex?.wireModelId).toBe('gpt-5.6-luna');
+    expect(row.capabilities['claude-code']?.wireModelId).toBe('chatgpt/gpt-5.6-luna');
+    expect(row.capabilities.pi?.wireModelId).toBe('chatgpt/gpt-5.6-luna');
+    // 展示元数据取推荐引擎(codex root)那条。
+    expect(row.displayName).toBe('GPT-5.6-Luna');
   });
 
-  it('推荐引擎恒 ∈ 候选(不做假按钮)', () => {
+  it('每个候选都有 wire id,且 wire id 必在该引擎目录里真实存在', () => {
     const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) {
       expect(entry.candidates.length).toBeGreaterThan(0);
       expect(entry.candidates).toContain(entry.recommended);
       expect(Object.keys(entry.capabilities).sort()).toEqual([...entry.candidates].sort());
+      const provider = providers.find((p) => p.id === entry.providerId);
+      for (const agent of entry.candidates) {
+        const wireId = entry.capabilities[agent]?.wireModelId;
+        expect(provider?.models[agent]?.some((mm) => mm.id === wireId)).toBe(true);
+      }
     }
   });
 
-  it('同名模型多来源:各来源各出一行,不去重', () => {
-    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
-    const rows = entries.filter((e) => e.modelId === 'claude-opus-5');
-    expect(rows.map((e) => e.providerId)).toEqual(['anthropic', 'xd']);
-    expect(find(entries, 'xd', 'claude-opus-5')?.capabilities['claude-code']?.contextWindow).toBe(
-      1_000_000,
-    );
-  });
-
-  it('bridge 前缀条目与 root 条目是两行,各自推荐不同引擎', () => {
-    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
-    expect(find(entries, 'openai', 'chatgpt/gpt-5.5')?.recommended).toBe('claude-code');
-    expect(find(entries, 'openai', 'gpt-5.5')?.recommended).toBe('codex');
+  it('xai 前缀在三个引擎下 id 相同,合并后仍是一行', () => {
+    const entries = unifiedModelEntries({ providers: [xai], isVisible: alwaysVisible });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].modelId).toBe('grok-4.5');
+    expect(entries[0].candidates).toEqual(['claude-code', 'codex', 'pi']);
+    for (const agent of entries[0].candidates) {
+      expect(entries[0].capabilities[agent]?.wireModelId).toBe('xai/grok-4.5');
+    }
   });
 
   it('`[1m]` 变体是独立行,不与基础 id 合并', () => {
@@ -517,9 +634,25 @@ describe('unifiedModelEntries', () => {
     const entries = unifiedModelEntries({ providers: withLongCtx, isVisible: alwaysVisible });
     expect(entries.map((e) => e.modelId)).toEqual(['claude-opus-5', 'claude-opus-5[1m]']);
     expect(entries[1].capabilities['claude-code']?.contextWindow).toBe(1_000_000);
+    expect(entries[1].capabilities['claude-code']?.wireModelId).toBe('claude-opus-5[1m]');
   });
 
-  it('user provider:custom 分组模型不被能力启发式误杀,推荐取配置的 runtime', () => {
+  it('`codex/` 折扣行与全价行不合并', () => {
+    const entries = unifiedModelEntries({ providers: [xd], isVisible: alwaysVisible });
+    expect(find(entries, 'xd', 'gpt-5.5')?.recommended).toBe('claude-code');
+    expect(find(entries, 'xd', 'codex/gpt-5.5')?.recommended).toBe('codex');
+  });
+
+  it('同名模型多来源:各来源各出一行,不去重', () => {
+    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
+    const rows = entries.filter((e) => e.modelId === 'claude-opus-5');
+    expect(rows.map((e) => e.providerId)).toEqual(['anthropic', 'xd']);
+    expect(find(entries, 'xd', 'claude-opus-5')?.capabilities['claude-code']?.contextWindow).toBe(
+      1_000_000,
+    );
+  });
+
+  it('user provider:custom 分组模型不被能力启发式误杀,nativeAgent 回落 recommended', () => {
     const byom = view({
       id: 'byom',
       source: 'user',
@@ -533,6 +666,7 @@ describe('unifiedModelEntries', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].candidates).toEqual(['codex', 'pi']);
     expect(entries[0].recommended).toBe('codex');
+    expect(entries[0].nativeAgent).toBe('codex');
   });
 
   it('XD 独占存在性:网关没有的模型不会被补出来', () => {
@@ -550,6 +684,16 @@ describe('unifiedModelEntries', () => {
     const row = find(entries, 'anthropic', 'claude-opus-5');
     expect(row?.candidates).toEqual(['claude-code', 'pi']);
     expect(row?.capabilities.codex).toBeUndefined();
+  });
+
+  it('隐藏 bridge 壳后合并行只剩 root 引擎,仍是一行', () => {
+    const entries = unifiedModelEntries({
+      providers: [openai],
+      isVisible: (_providerId, model) => !model.id.startsWith('chatgpt/'),
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].candidates).toEqual(['codex']);
+    expect(entries[0].capabilities.codex?.wireModelId).toBe('gpt-5.6-luna');
   });
 
   it('可见性把所有引擎都隐掉时整行消失', () => {
@@ -582,19 +726,16 @@ describe('unifiedModelEntries', () => {
       isVisible: alwaysVisible,
       excludeProvider: (provider, agent) => provider.id === 'openai' && agent === 'codex',
     });
-    // openai 的 codex root 行整条消失;cc/pi 的 bridge 行不受影响。
-    expect(find(byProvider, 'openai', 'gpt-5.5')).toBeUndefined();
-    expect(find(byProvider, 'openai', 'chatgpt/gpt-5.5')?.candidates).toEqual([
-      'claude-code',
-      'pi',
-    ]);
+    // codex root 被排除后,合并行只剩 bridge 引擎,行仍在(不是整行消失)。
+    expect(find(byProvider, 'openai', 'gpt-5.6-luna')?.candidates).toEqual(['claude-code', 'pi']);
+    expect(find(byProvider, 'openai', 'gpt-5.6-luna')?.recommended).toBe('claude-code');
 
     const byModel = unifiedModelEntries({
       providers,
       isVisible: alwaysVisible,
       excludeModel: (model) => model.id.startsWith('chatgpt/'),
     });
-    expect(byModel.some((e) => e.modelId.startsWith('chatgpt/'))).toBe(false);
+    expect(find(byModel, 'openai', 'gpt-5.6-luna')?.candidates).toEqual(['codex']);
   });
 
   it('agents 选项收窄参与联合的引擎', () => {
@@ -612,13 +753,12 @@ describe('unifiedModelEntries', () => {
     expect(entries.map((e) => `${e.providerId}:${e.modelId}`)).toEqual([
       // claude-code 轮:anthropic → openai → xai → xd(各自目录序)
       'anthropic:claude-opus-5',
-      'openai:chatgpt/gpt-5.5',
-      'xai:xai/grok-4.5',
+      'openai:gpt-5.6-luna',
+      'xai:grok-4.5',
       'xd:claude-opus-5',
       'xd:gpt-5.5',
       'xd:xd-only-model',
       // codex 轮新增的行
-      'openai:gpt-5.5',
       'xd:codex/gpt-5.5',
       'xd:codex-only-model',
     ]);
@@ -638,27 +778,53 @@ describe('unifiedModelEntries', () => {
     expect(entries[0].group).toBe('anthropic');
     expect(entries[0].sortOrder).toBe(3);
   });
+});
 
-  it('scope session 保留停用拷贝的候选(运行中会话展示口径)', () => {
-    const withDisabled = view({
-      id: 'anthropic',
-      models: {
-        'claude-code': [m('claude-opus-5')],
-        codex: [m('claude-opus-5', { disabled: true })],
-      },
+// ── 原生底座排序 ──────────────────────────────────────────────────────────────
+
+describe('sortEntriesForAgent(原生底座优先)', () => {
+  const providers = [anthropic, openai, xai, xd];
+
+  it('codex 视图:GPT 系(native=codex)排在 Claude 系之前', () => {
+    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
+    const sorted = sortEntriesForAgent(entries, 'codex');
+    const nativeCodex = entries.filter((e) => e.nativeAgent === 'codex');
+    expect(nativeCodex.length).toBeGreaterThan(0);
+    expect(sorted.slice(0, nativeCodex.length)).toEqual(nativeCodex);
+    expect(sorted.slice(nativeCodex.length).every((e) => e.nativeAgent !== 'codex')).toBe(true);
+    // openai 的 GPT 行原本排在第 2 位,codex 视图里升到首位。
+    expect(sorted[0].providerId).toBe('openai');
+    expect(entries[0].providerId).toBe('anthropic');
+  });
+
+  it('claude 视图:Claude 系在前,GPT 往下排', () => {
+    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
+    const sorted = sortEntriesForAgent(entries, 'claude-code');
+    expect(sorted[0].modelId).toBe('claude-opus-5');
+    const flags = sorted.map((e) => e.nativeAgent === 'claude-code');
+    // true 全部排在 false 之前。
+    expect(flags.indexOf(false) === -1 || flags.lastIndexOf(true) < flags.indexOf(false)).toBe(true);
+  });
+
+  it('组内保持入参顺序(服务端 group/sortOrder 陈列序不被打乱)', () => {
+    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
+    const { native, compatible } = partitionEntriesByNativeAgent(entries, 'codex');
+    const key = (e: UnifiedModelEntry) => `${e.providerId}:${e.modelId}`;
+    const order = entries.map(key);
+    const nativeOrder = native.map(key);
+    const compatOrder = compatible.map(key);
+    expect(nativeOrder).toEqual(order.filter((k) => nativeOrder.includes(k)));
+    expect(compatOrder).toEqual(order.filter((k) => compatOrder.includes(k)));
+  });
+
+  it('排序不做准入过滤:不兼容目标引擎的行由调用方在派生阶段挡', () => {
+    const entries = unifiedModelEntries({ providers: [xd], isVisible: alwaysVisible });
+    expect(sortEntriesForAgent(entries, 'codex')).toHaveLength(entries.length);
+    const codexOnly = unifiedModelEntries({
+      providers: [xd],
+      agents: ['codex'],
+      isVisible: alwaysVisible,
     });
-    // 默认草稿口径:codex 那条被停用 ⇒ 不是候选。
-    expect(
-      unifiedModelEntries({ providers: [withDisabled], isVisible: alwaysVisible })[0].candidates,
-    ).toEqual(['claude-code']);
-    // 注:deriveModelList 的准入过滤同样内建剔除 disabled 行,所以 session 口径下
-    // codex 行也不会被枚举 —— 运行中会话要保留选中行须由调用层显式并入(见模块头注)。
-    expect(
-      unifiedModelEntries({
-        providers: [withDisabled],
-        isVisible: alwaysVisible,
-        scope: 'session',
-      })[0].candidates,
-    ).toEqual(['claude-code']);
+    expect(codexOnly.every((e) => e.candidates.includes('codex'))).toBe(true);
   });
 });

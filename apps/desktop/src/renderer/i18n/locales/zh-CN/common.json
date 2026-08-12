@@ -5564,7 +5564,9 @@
         "effortEndFast": "更高效",
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
-        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容"
+        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
+        "defaultsGroup": "默认",
+        "defaultBadge": "默认"
       }
     },
     "permissionSelector": {

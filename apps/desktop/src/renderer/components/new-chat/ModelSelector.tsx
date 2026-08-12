@@ -45,6 +45,8 @@ import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { agentOptionOf } from './agentOptions';
+import type { SelectableVendor } from '@/lib/agentVendors';
 import { FastModeToggle } from './FastModeToggle';
 import { UnifiedModelPanel, type UnifiedModelPanelProps } from './UnifiedModelPanel';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
@@ -98,6 +100,7 @@ import {
   sourcesForModel,
   visibleModelUnion,
   type ProviderView,
+  type UnifiedModelEntry,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
@@ -623,6 +626,22 @@ interface ModelSelectorProps {
   sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
   /** 语义同 ModelSelectorContentProps.unifiedAgents（参与联合列表的引擎集合）。 */
   unifiedAgents?: readonly AgentKind[];
+  /**
+   * composer pill 尾部的**引擎小标**(model-selector-unified §1.1)。
+   *
+   * 传入 = pill 不再写 harness 名字文本(旧形态「Codex · GPT-5.6-Luna · 最高」),改成
+   * 「模型名 + 引擎图标 + 思考深度」——图标与档字挨在一起收尾,和面板里每一行右侧的
+   * 三元组同构。宽度紧张时**先截模型名**,图标与档字保留(它们是定宽的身份信息,
+   * 截掉等于把「现在用哪个引擎、多深」这件事藏起来)。
+   *
+   * 只有 composer(新会话 / 会话内)传;scheduler / IM / Hook / Subagent / Worker /
+   * GhostErrand / 设置这些入口不传,展示逐像素不变。
+   *
+   * 与 `agentIdentity` 的关系:传了本 prop 就不再渲染 agentIdentity 的名字前缀
+   * (含「即将切到 X」),但 title / aria-label 仍原样保留那份措辞 —— 读屏与 hover
+   * 拿得到的信息不减,只是视觉上换成图标。
+   */
+  engineMarkVendor?: SelectableVendor | null;
   /** 语义同 ModelSelectorContentProps.selectedFavoriteUid（统一面板的收藏锚点选中态）。 */
   selectedFavoriteUid?: string | null;
   /** 语义同 ModelSelectorContentProps.onUnifiedSelect（统一面板选中直通）。 */
@@ -2261,6 +2280,18 @@ function ModelSelectorContentView({
             : (pi.capabilities?.effortLevels ?? []);
       return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
     };
+    // 服务端目录用 `newSessionDefault` 标记新会话默认种子。命中的行提升到列表顶部的
+    // 「默认」小节(实测反馈:默认模型混在中部很难找)。判定按**该行任一候选引擎**的
+    // 目录条目查 —— 标记本身是按 wire agent 下发的(`('claude-code'|'codex')[]`)。
+    const unifiedIsDefaultSeed = (entry: UnifiedModelEntry): boolean => {
+      const provider = providers.find((item) => item.id === entry.providerId);
+      if (!provider) return false;
+      return entry.candidates.some((agent) => {
+        const wireId = entry.capabilities[agent]?.wireModelId ?? entry.modelId;
+        const marked = getModel(provider, wireId, agent)?.newSessionDefault;
+        return Array.isArray(marked) && marked.includes(agent as 'claude-code' | 'codex');
+      });
+    };
     const unifiedAgentFastCapable = (agent: AgentKind): boolean =>
       agent === 'claude-code'
         ? !!cc.capabilities?.hasFastMode
@@ -2274,6 +2305,10 @@ function ModelSelectorContentView({
         data-unified-model-panel="true"
         className={cn(
           'flex min-h-0 flex-col gap-1.5 p-2',
+          // 高度上限必须给在**面板**上:不给的话,列表按内容撑到比视口还高,外层
+          // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
+          // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
+          'max-h-[min(560px,calc(100vh-120px))]',
           // 宽度自适应(规格 §1.2):长模型名先把面板撑宽,到上限才截断,不硬砍名字。
           fluidWidth
             ? 'w-full min-w-0'
@@ -2311,6 +2346,7 @@ function ModelSelectorContentView({
           {...(modelMemory ? { modelMemory } : {})}
           agentFastModeCapable={unifiedAgentFastCapable}
           priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
+          isDefaultSeed={unifiedIsDefaultSeed}
           providerLabel={unifiedProviderLabel}
           effortLabelOf={unifiedEffortLabel}
           {...(constrainedListMaxHeight !== undefined
@@ -2578,6 +2614,7 @@ export function ModelSelector({
   unifiedPanel = false,
   sessionEngineFilter,
   unifiedAgents,
+  engineMarkVendor = null,
   selectedFavoriteUid = null,
   onUnifiedSelect,
   fallbackOption,
@@ -2902,8 +2939,34 @@ export function ModelSelector({
   // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
   const isCompactToolbar = compactToolbar && !isFieldTrigger;
   const isUltraCompactToolbar = ultraCompactToolbar && isCompactToolbar;
+  // ── composer pill 的引擎小标(model-selector-unified §1.1)─────────────────────
+  // 传了 engineMarkVendor 就走新形态:harness 名字文本让位给尾部的一枚 mark,和深度档字
+  // 紧挨着收尾(与面板行右侧三元组同构)。没传的入口一个像素都不变。
+  const engineMarkOption = engineMarkVendor ? agentOptionOf(engineMarkVendor) : null;
+  // 引擎小标 + 深度是 pill 的**定宽身份位**:窄工具条下也要留着,先让模型名截断
+  // (Chris 2026-08-12 裁决)。只有 ultra-compact(整段文字都收起、只剩图标)才一并隐藏。
+  const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;
+  const engineMarkNode = engineMarkOption ? (
+    // aria-hidden:引擎名已经在 button 的 aria-label / title 里(displayIdentityLabel 仍带
+    // agentIdentityLabel),这里再念一遍是重复。data 属性供接线测试定位。
+    <span
+      data-composer-engine-mark={engineMarkVendor}
+      className="flex shrink-0 items-center"
+      aria-hidden="true"
+    >
+      <engineMarkOption.Mark
+        size={isCreateAgentVariant ? 11 : dense ? 11 : 12}
+        className={cn(
+          'ml-1 shrink-0',
+          isCreateAgentVariant
+            ? 'text-[var(--create-agent-control-icon)]'
+            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+        )}
+      />
+    </span>
+  ) : null;
   const agentIdentityPrefix =
-    agentIdentityLabel && !isCompactToolbar ? (
+    agentIdentityLabel && !isCompactToolbar && !engineMarkOption ? (
       <>
         <span
           className={cn(
@@ -3035,6 +3098,9 @@ export function ModelSelector({
                     比 "Select model" 占位更能说明「哪个模型的来源断了」。 */}
             {currentModel?.displayName ?? modelId}
           </span>
+          {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
+              结构位,不靠出错才显示)。 */}
+          {showTriggerTail && engineMarkNode}
           <Unplug
             size={dense ? 11 : 12}
             className="ml-0.5 shrink-0 text-[var(--error-fg)]"
@@ -3098,35 +3164,43 @@ export function ModelSelector({
           >
             {displayLabel}
           </span>
-          {effortLabel && !isCompactToolbar && (
+          {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
+              旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
+              会读成「模型 · 引擎 · 深度」三段,又变回被撤掉的那种堆砌。 */}
+          {showTriggerTail && engineMarkNode}
+          {effortLabel && showTriggerTail && (
             <>
-              <span
-                className={cn(
-                  'shrink-0 font-normal',
-                  isCreateAgentVariant
-                    ? 'text-[var(--create-agent-control-text)]'
-                    : 'text-[var(--model-trigger-meta)]',
-                  isCreateAgentVariant
-                    ? 'shrink-0 text-12'
-                    : dense
+              {!engineMarkOption && (
+                <span
+                  className={cn(
+                    'shrink-0 font-normal',
+                    isCreateAgentVariant
+                      ? 'text-[var(--create-agent-control-text)]'
+                      : 'text-[var(--model-trigger-meta)]',
+                    isCreateAgentVariant
                       ? 'shrink-0 text-12'
-                      : 'shrink-0 text-13',
-                )}
-                aria-hidden="true"
-              >
-                ·
-              </span>
+                      : dense
+                        ? 'shrink-0 text-12'
+                        : 'shrink-0 text-13',
+                  )}
+                  aria-hidden="true"
+                >
+                  ·
+                </span>
+              )}
               <span
                 className={cn(
                   'min-w-0 font-normal',
                   isCreateAgentVariant
                     ? 'text-[var(--create-agent-control-text)]'
                     : 'text-[var(--text-primary)]',
-                  isCreateAgentVariant
-                    ? 'truncate'
-                    : isFieldTrigger
-                      ? 'max-w-[120px] truncate'
-                      : 'shrink-0 whitespace-nowrap',
+                  engineMarkOption
+                    ? 'shrink-0 whitespace-nowrap'
+                    : isCreateAgentVariant
+                      ? 'truncate'
+                      : isFieldTrigger
+                        ? 'max-w-[120px] truncate'
+                        : 'shrink-0 whitespace-nowrap',
                   isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
                 )}
               >
@@ -3134,7 +3208,7 @@ export function ModelSelector({
               </span>
             </>
           )}
-          {triggerFastOn && !isCompactToolbar && (
+          {triggerFastOn && showTriggerTail && (
             <Zap
               size={isCreateAgentVariant ? 11 : dense ? 12 : 13}
               className={cn(

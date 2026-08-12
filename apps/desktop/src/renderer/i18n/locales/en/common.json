@@ -5570,7 +5570,9 @@
         "effortEndFast": "Faster",
         "effortEndSmart": "Smarter",
         "railSameEngine": "{{agent}} only",
-        "crossEngineWarning": "Switching engines rebuilds context and may lose content"
+        "crossEngineWarning": "Switching engines rebuilds context and may lose content",
+        "defaultsGroup": "Default",
+        "defaultBadge": "Default"
       }
     },
     "permissionSelector": {
