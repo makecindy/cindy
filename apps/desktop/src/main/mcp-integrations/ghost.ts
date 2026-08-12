@@ -118,6 +118,11 @@ export interface CindyGhostsHostDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /**
+   * 测试可注入当前工具档位；生产仍然每次经 owner-scoped 存储现读。
+   * 目录/附件确认存在异步等待，不能把一次开始时的判定缓存到出票时。
+   */
+  resolveToolApprovalMode?: typeof resolveToolApprovalMode;
 }
 
 type GhostGrantApprovalSource = 'user' | 'full-access';
@@ -987,6 +992,17 @@ export function getCindyGhostsMcpDeps(
       );
       if (!initialVisibility.ok) return initialVisibility;
       const target = initialVisibility.ghost;
+      const blockedToolVerdict = (
+        declaredTools: typeof target.manifest.tools,
+        isGrantOnly: boolean,
+      ) =>
+        ghostToolBlockVerdict(
+          ghostId,
+          tool,
+          declaredTools,
+          isGrantOnly,
+          hostDeps.resolveToolApprovalMode ?? resolveToolApprovalMode,
+        );
       // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记可读引用
       // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
@@ -1013,12 +1029,7 @@ export function getCindyGhostsMcpDeps(
       // 它按协议忽略 tool 字段,所以判据落在插件层——目标插件的工具被用户全禁时,不存在
       // 任何合法的后续调用,预授权只剩"绕过禁用把文件交出去"这一个用途;显式点名了某个
       // 已声明且被禁的工具时同样拒。
-      const blockedVerdict = ghostToolBlockVerdict(
-        ghostId,
-        tool,
-        target.manifest.tools,
-        grantOnly === true,
-      );
+      const blockedVerdict = blockedToolVerdict(target.manifest.tools, grantOnly === true);
       if (blockedVerdict) return blockedVerdict;
       if (grantOnly && (!attachments || attachments.length === 0)) {
         return {
@@ -1116,8 +1127,7 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () =>
-            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, true),
+          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, true),
           maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
         });
         if (!grant.ok) {
@@ -1174,8 +1184,7 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () =>
-            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, false),
+          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, false),
           maxCount: MAX_GRANT_ATTACHMENTS,
         });
         if (!grant.ok) {
@@ -1200,8 +1209,7 @@ export function getCindyGhostsMcpDeps(
           dirAbs: dir,
           workdirAbs: sessionWorkdir,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () =>
-            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, false),
+          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, false),
         });
         if (!dirConfirm.ok) {
           return {
@@ -1210,6 +1218,11 @@ export function getCindyGhostsMcpDeps(
             message: dirConfirm.message,
           };
         }
+        // 确认卡的返回与出票之间绝不能沿用旧裁决：票据一旦创建可由 sandbox
+        // 在稍后消费，派发器的 blocked 闸已无法撤销它。这里是最后一个无 await
+        // 的拦截点，命中时保证零票据副作用。
+        const dirBlocked = blockedToolVerdict(target.manifest.tools, false);
+        if (dirBlocked) return dirBlocked;
         const deposited = getDirDepositVault().deposit({
           ghostId,
           dirAbs: dirConfirm.userGranted ? dirConfirm.approvedRealPath : dir,
@@ -1234,8 +1247,7 @@ export function getCindyGhostsMcpDeps(
           dirAbs: saveDir,
           workdirAbs: sessionWorkdir,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () =>
-            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, false),
+          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, false),
         });
         if (!saveConfirm.ok) {
           return {
@@ -1244,6 +1256,10 @@ export function getCindyGhostsMcpDeps(
             message: saveConfirm.message,
           };
         }
+        // 与 dir 相同：出票前重新读取当前策略，不能让确认期间后的 blocked
+        // 切换留下仍可消费的本地写入票据。
+        const saveBlocked = blockedToolVerdict(target.manifest.tools, false);
+        if (saveBlocked) return saveBlocked;
         const saveDeposited = getSaveDepositVault().deposit({
           ghostId,
           dirAbs: saveConfirm.userGranted ? saveConfirm.approvedRealPath : saveDir,

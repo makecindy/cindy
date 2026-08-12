@@ -37,15 +37,29 @@ function ancestorsWithin(start: string, root: string): string[] {
 function statsReferToSameFile(
   left: Stats | BigIntStats,
   right: Stats | BigIntStats,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   if (typeof left.ino === "bigint" && typeof right.ino === "bigint") {
-    return left.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
+    if (left.ino === 0n || right.ino === 0n || left.ino !== right.ino) {
+      return false;
+    }
+    // Windows lstat can report dev=0 while handle.stat({ bigint: true })
+    // returns the volume serial. A matching nonzero NTFS FileId is still an
+    // exact identity, but never make this exception for rounded number Stats
+    // or on another platform.
+    return (
+      left.dev === right.dev ||
+      (platform === "win32" && (left.dev === 0n || right.dev === 0n))
+    );
   }
   if (typeof left.ino === "number" && typeof right.ino === "number") {
     return left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
   }
   return false;
 }
+
+/** Narrow pure seams for identity edge-case regression coverage. */
+export const __testing = { statsReferToSameFile };
 
 const PACKAGE_MANIFEST_MAX_BYTES = 256 * 1024;
 

@@ -1,10 +1,19 @@
-import { mkdirSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  promises as fs,
+  rmSync,
+  symlinkSync,
+  type BigIntStats,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  __testing,
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
   resolveReviewReadPath,
@@ -46,6 +55,24 @@ function canCreateSymlink(): boolean {
 const canLink = canCreateSymlink();
 
 describe("review read scope", () => {
+  it("accepts Windows bigint identities when only one dev is missing", () => {
+    const pathStat = {
+      ino: 9_007_199_254_740_993n,
+      dev: 0n,
+    } as unknown as BigIntStats;
+    const handleStat = {
+      ino: 9_007_199_254_740_993n,
+      dev: 42n,
+    } as unknown as BigIntStats;
+
+    expect(
+      __testing.statsReferToSameFile(pathStat, handleStat, "win32"),
+    ).toBe(true);
+    expect(
+      __testing.statsReferToSameFile(pathStat, handleStat, "linux"),
+    ).toBe(false);
+  });
+
   it.runIf(Boolean(process.env.CINDY_REVIEW_REAL_WORKSPACE))(
     "resolves a pnpm-linked source file in an explicitly requested real workspace",
     async () => {

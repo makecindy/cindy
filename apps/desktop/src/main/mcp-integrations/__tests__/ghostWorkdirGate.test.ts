@@ -21,6 +21,7 @@ import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
+import type { CindyGhostsHostDeps } from '../ghost';
 import { t } from '../../i18n';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -189,6 +190,7 @@ function makeDeps(
   agentKind: TestAgentKind = 'claude-code',
   sessionId: string | null = 's1',
   sessionInstanceId: string | null = sessionId ? `${sessionId}-instance` : null,
+  hostDeps: CindyGhostsHostDeps = {},
 ) {
   const ctx = {
     agentKind,
@@ -202,6 +204,7 @@ function makeDeps(
   alsSessionContextMock.mockReturnValue(agentKind === 'claude-code' ? undefined : ctx);
   return getCindyGhostsMcpDeps(agentKind === 'claude-code' ? ctx : undefined, {
     getLiveSessionGrantState: liveGrantStateMock,
+    ...hostDeps,
   });
 }
 
@@ -728,6 +731,45 @@ describe('ghost_call 兜底拒绝', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
     expect(ledgerRefs).toEqual([]);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('dir 确认返回后切换 blocked 时不创建可消费的读取票据', async () => {
+    const dir = path.join(outsideDir, 'blocked-before-dir-deposit');
+    fs.mkdirSync(dir, { recursive: true });
+    let policyReads = 0;
+    const resolveToolApprovalMode = vi.fn(() => {
+      policyReads += 1;
+      // 初始资格审、确认返回时的重判仍允许；第三次恰在 deposit 前变为 blocked。
+      return policyReads >= 3 ? 'blocked' : 'needs-approval';
+    });
+
+    const result = await makeDeps('claude-code', 'blocked-before-dir-deposit', 'instance', {
+      resolveToolApprovalMode,
+    }).callGhostTool({ ghostId: 'art', tool: 'run', args: {}, dir });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(resolveToolApprovalMode).toHaveBeenCalledTimes(3);
+    expect(dirDepositMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('save_dir 确认返回后切换 blocked 时不创建可消费的写入票据', async () => {
+    const dir = path.join(outsideDir, 'blocked-before-save-deposit');
+    fs.mkdirSync(dir, { recursive: true });
+    let policyReads = 0;
+    const resolveToolApprovalMode = vi.fn(() => {
+      policyReads += 1;
+      return policyReads >= 3 ? 'blocked' : 'needs-approval';
+    });
+
+    const result = await makeDeps('claude-code', 'blocked-before-save-deposit', 'instance', {
+      resolveToolApprovalMode,
+    }).callGhostTool({ ghostId: 'art', tool: 'run', args: {}, saveDir: dir });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(resolveToolApprovalMode).toHaveBeenCalledTimes(3);
+    expect(saveDepositMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
