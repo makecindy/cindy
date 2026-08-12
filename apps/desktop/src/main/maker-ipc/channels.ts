@@ -787,9 +787,9 @@ export const MAKER_PUSH = {
   MCP_CHANGED: 'maker:mcp:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
-   * { agent, providerId, code, retryable, status, detail? })。仅「会话显式路由到
-   * user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId,code) 节流。
-   * renderer 据 code 显示 providerError.* i18n toast + 修复引导。
+   * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。
+   * 仅「会话显式路由到 user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId, code) 节流。
+   * renderer 据 code 显示 providerError.* i18n toast + 修复引导;errorType / reqId 供诊断详情。
    */
   PROVIDER_UPSTREAM_ERROR: 'maker:provider:upstream-error',
   /**

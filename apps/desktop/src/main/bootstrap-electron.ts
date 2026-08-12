@@ -299,10 +299,12 @@ import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
 import {
   startEmbeddingHost,
   stopEmbeddingHost,
+  stopEmbeddingHostIfNoPluginVectorConsumer,
   isEmbeddingHostStarted,
   getEmbeddingService,
   isPluginVectorConsumerActive,
   registerEmbeddingHostLazyStart,
+  setEmbeddingSourceSuspended,
   type EmbeddingService,
 } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
@@ -434,6 +436,7 @@ import {
   broadcastClaudeAuthStateChanged,
   broadcastXaiAuthStateChanged,
   refreshProviderAccessAfterAuthChange,
+  setProviderAccessRuntimeRefreshListener,
   restartCodexAfterAuthModeChange,
   waitForInitialCustomMcpRefresh,
 } from './maker-host/index.js';
@@ -441,8 +444,10 @@ import { createDynamicMaker } from './maker-host/dynamic-maker.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
   ensureActiveCatalogLoaded,
+  getDesktopSelectableCatalog,
   refreshCustomProvidersIntoCatalog,
 } from './maker-host/createDesktopProviderService.js';
+import { isCindyEmbeddingModelAvailable } from './maker-host/provider-access-policy.js';
 import { setCustomProviders } from './maker-host/active-catalog.js';
 import { setClaudeSupportedModelsListener } from '@cindy/maker-core';
 import {
@@ -587,6 +592,7 @@ import {
   writeGitSafetyAutoSnapshotEnabled,
 } from './maker-host/git-safety-settings-store.js';
 import {
+  CHAT_EMBED_MODEL_ID,
   setupChatHistoryEmbedder,
   setChatEmbeddingEnabled,
   resetCacheForNewDb as resetChatEmbedderCache,
@@ -930,10 +936,23 @@ const _scheduleIpcRegistered = new WeakSet<object>();
  * 补齐 (否则 setChatEmbeddingEnabled 撞 _deps=null, 聊天嵌入静默不工作)。
  * sqlite-vec 不可用时仍启动 (启动后 Worker 自己 idle 不嵌), 不阻塞 app。
  */
+function isChatEmbeddingAvailable(): boolean {
+  try {
+    return isCindyEmbeddingModelAvailable(
+      getDesktopSelectableCatalog(),
+      CHAT_EMBED_MODEL_ID,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function attemptStartEmbeddingHost(): void {
   // 谁都不要用就别启:插件 consumer 的标记由 ensureEmbeddingServiceForPluginVector
   // 在回调本函数之前打上,所以这里读到的是"含本次请求"的最新意向。
-  const chatEnabled = readChatEmbeddingSettings().enabled;
+  const chatAvailable = isChatEmbeddingAvailable();
+  setEmbeddingSourceSuspended('chat', !chatAvailable);
+  const chatEnabled = chatAvailable && readChatEmbeddingSettings().enabled;
   if (!chatEnabled && !isPluginVectorConsumerActive()) {
     console.log(
       '[bootstrap-electron] no embedding consumer active (chat off, no plugin vector); embeddingHost not started',
@@ -1000,25 +1019,45 @@ function attemptStartEmbeddingHost(): void {
 // DbClient / api key / gateway url 这些只有 bootstrap 有的依赖)。
 registerEmbeddingHostLazyStart(attemptStartEmbeddingHost);
 
+let chatEmbeddingRuntimeReconcile: Promise<void> = Promise.resolve();
+
+function scheduleChatEmbeddingRuntimeReconcile(): void {
+  // Stop new enqueue work before an async host shutdown can run. The queued
+  // reconciliation re-reads the latest catalog so rapid refreshes are last-write-wins.
+  const chatAvailable = isChatEmbeddingAvailable();
+  setEmbeddingSourceSuspended('chat', !chatAvailable);
+  if (!chatAvailable) setChatEmbeddingEnabled(false);
+  chatEmbeddingRuntimeReconcile = chatEmbeddingRuntimeReconcile
+    .then(async () => {
+      if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled) {
+        attemptStartEmbeddingHost();
+      } else {
+        await shutdownChatEmbeddingConsumer();
+      }
+    })
+    .catch((err: unknown) => {
+      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', { error: String(err) });
+    });
+}
+
+setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);
+
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
  * 向量 consumer 时才停 host —— 否则会把另一个 consumer 的能力一起关掉 (插件的
  * embed_text 全变 INTERNAL)。
  *
- * 插件在用时保留 host 的副作用是: chat provider 仍注册着, 已入队的旧 job 会继续做完。
- * 这与 chat-history-embedder 自己的设计一致 (开关只控制入队, 不取消 provider 注册,
- * 旧 pending job 不浪费用户已花的钱)。
+ * 用户手动关闭时,已入队的旧 job 仍可做完;provider access 丢失时 runtime reconcile
+ * 会另外暂停 chat source,旧 job 保持 pending,恢复可用后再续跑。
  */
 async function shutdownChatEmbeddingConsumer(): Promise<void> {
   setChatEmbeddingEnabled(false);
-  if (!isEmbeddingHostStarted()) return;
-  if (isPluginVectorConsumerActive()) {
+  if (!(await stopEmbeddingHostIfNoPluginVectorConsumer())) {
     console.log(
       '[bootstrap-electron] chat embedding off; embeddingHost kept alive for plugin vector consumer',
     );
     return;
   }
-  await stopEmbeddingHost();
   resetChatEmbedderCache();
 }
 
@@ -3454,13 +3493,17 @@ const registerIpcHandlers = () => {
   // SET 路径既落 JSON 也立即把 chat-history-embedder 的运行时 enabled 切换 ——
   // toggle off 后下一条新消息就不再入队, 不需要重启。
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_GET, async () => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     return chatEmbeddingWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET, async (_e, enabled: unknown) => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'chat embedding enabled required (boolean)');
+    }
+    if (enabled && !isChatEmbeddingAvailable()) {
+      throwIpcError(
+        'UNSUPPORTED_CAPABILITY',
+        'Chat embedding is not available for this account or region.',
+      );
     }
     // 先落盘 setting (即使后续 host 启停失败, 用户偏好已记下, 下次启动会用)
     writeChatEmbeddingEnabled(enabled);
@@ -3477,7 +3520,6 @@ const registerIpcHandlers = () => {
     return chatEmbeddingWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET, async () => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     const settings = resetChatEmbeddingSettings();
     if (settings.enabled) {
       attemptStartEmbeddingHost();
@@ -7415,10 +7457,11 @@ function compactionWire() {
 
 function chatEmbeddingWire() {
   const state = readChatEmbeddingSettingsState();
+  const available = isChatEmbeddingAvailable();
   return {
-    enabled: state.value.enabled,
+    enabled: available && state.value.enabled,
     isCustomized: state.isCustomized,
-    defaultEnabled: state.defaults.enabled,
+    defaultEnabled: available && state.defaults.enabled,
   };
 }
 

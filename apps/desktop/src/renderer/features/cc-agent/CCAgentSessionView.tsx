@@ -1207,6 +1207,18 @@ export function CCAgentSessionView({
     });
   }, [handoffFrom?.dispatcherSessionId, navigate, ownsWindowRoute, sessionId]);
 
+  // #2194: 只有本端 composer 发出的 user 消息才强制回底；IM / 手机端 /
+  // 定时任务注入的按普通新内容处理（贴底才跟随）。useCallback 稳定引用——
+  // MessageStream 的未读 diff effect 依赖它，内联箭头会让父组件每次
+  // re-render 都重跑一遍 O(n) diff（Copilot review nit）。sessionId 不可用
+  // 的极短窗口按**非本端发送**处理：该窗口内本端发送会被 guard 早返、根本
+  // 发不出去，能到达的 user 消息必然来自外部（Copilot review nit）。
+  const isLocalUserSend = useCallback(
+    (clientId: string) =>
+      sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : false,
+    [sessionId],
+  );
+
   const handleOpenForkOrigin = useCallback(() => {
     if (!canNavigateSession) {
       log.info('fork origin navigation ignored by embedded sidebar view', { sessionId });
@@ -3693,6 +3705,7 @@ export function CCAgentSessionView({
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
+      isLocalUserSend={isLocalUserSend}
     />
   );
 

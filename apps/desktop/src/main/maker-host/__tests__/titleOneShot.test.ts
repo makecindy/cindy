@@ -56,6 +56,7 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 import {
   buildTitleTarget,
   generateTitleViaProvider,
+  generateTitleViaProviderResult,
   parseResponsesSse,
   type TitleOneShotDeps,
 } from '../title-one-shot.js';
@@ -337,6 +338,53 @@ describe('generateTitleViaProvider — provider 解析', () => {
     expect(title).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+});
+
+describe('generateTitleViaProviderResult — 手动重命名失败语义', () => {
+  it('direct custom DeepSeek 没有受支持的标题 wire → unsupported-provider', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { choices: [{ message: { content: '不应出现' } }] },
+    }));
+
+    await expect(
+      generateTitleViaProviderResult(
+        { sessionId: 's-deepseek', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      ),
+    ).resolves.toEqual({ status: 'unsupported-provider' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // 自动起名的旧入口仍折叠为 null，保持启发式 fallback 契约。
+    await expect(
+      generateTitleViaProvider(
+        { sessionId: 's-deepseek', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('XD 结构上受支持但实时目录暂无聊天模型 → failed', async () => {
+    setXdGatewayModels([]);
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-xd-empty', agentKind: 'claude-code', prompt: 'x' },
+      {
+        readSessionProviderId: async () => 'xd',
+        listConnectedProviders: async () => [providerStub('xd')],
+        readGatewayKey: () => 'gk',
+      },
+    );
+
+    expect(result).toEqual({ status: 'failed' });
+  });
+
 });
 
 // ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────

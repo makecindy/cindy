@@ -2429,7 +2429,8 @@
       "toast": {
         "enabled": "Chat semantic indexing enabled",
         "disabled": "Chat semantic indexing stopped",
-        "toggleFailed": "Failed to toggle chat embedding"
+        "unavailable": "Chat semantic indexing is unavailable for this account or region",
+        "toggleFailed": "Failed to toggle chat semantic indexing"
       }
     },
     "messageNavRail": {

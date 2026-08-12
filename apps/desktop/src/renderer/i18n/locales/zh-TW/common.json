@@ -2427,7 +2427,8 @@
       "toast": {
         "enabled": "對話記錄語義索引已啟用",
         "disabled": "對話記錄語義索引已停止",
-        "toggleFailed": "切換對話嵌入失敗"
+        "unavailable": "目前帳號或地區暫不支援對話記錄語義索引",
+        "toggleFailed": "切換對話記錄語義索引失敗"
       }
     },
     "messageNavRail": {

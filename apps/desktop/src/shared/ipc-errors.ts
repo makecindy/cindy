@@ -52,6 +52,9 @@ export type IpcErrorCode =
   | 'BUDGET_MODEL_REQUIRES_API_MODE'
   | 'NO_PROVIDER_FOR_AGENT'
   | 'PROVIDER_ROUTE_UNAVAILABLE'
+  // AI 重新命名：仅暴露用户可以采取明确行动的失败原因。
+  | 'TITLE_NO_MATERIAL'
+  | 'TITLE_PROVIDER_UNSUPPORTED'
   // 会话内 /goal
   | 'GOAL_ALREADY_ACTIVE'
   | 'GOAL_NOT_FOUND'
@@ -257,6 +260,8 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'BUDGET_MODEL_REQUIRES_API_MODE',
   'NO_PROVIDER_FOR_AGENT',
   'PROVIDER_ROUTE_UNAVAILABLE',
+  'TITLE_NO_MATERIAL',
+  'TITLE_PROVIDER_UNSUPPORTED',
   'GOAL_ALREADY_ACTIVE',
   'GOAL_NOT_FOUND',
   'LEARN_BUSY',
@@ -388,6 +393,20 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
 
 export function isIpcErrorCode(code: unknown): code is IpcErrorCode {
   return typeof code === 'string' && IPC_ERROR_CODES.has(code as IpcErrorCode);
+}
+
+/**
+ * 标准 IpcError 构造器 —— main 的 throwIpcError 与 renderer 侧预检共用同一形状
+ * (`[code] message` + err.code),避免两处手写漂移。isIpcError 按 err.code 判定,
+ * 不依赖 err.name。
+ */
+export function createIpcError(
+  code: IpcErrorCode,
+  message: string,
+): Error & { code: IpcErrorCode } {
+  const err = new Error(`[${code}] ${message}`) as Error & { code: IpcErrorCode };
+  err.code = code;
+  return err;
 }
 
 export function isIpcError(err: unknown): err is Error & { code: IpcErrorCode } {

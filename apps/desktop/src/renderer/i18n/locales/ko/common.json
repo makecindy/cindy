@@ -2428,7 +2428,8 @@
       "toast": {
         "enabled": "채팅 기록 의미 색인이 활성화됨",
         "disabled": "채팅 기록 의미 색인이 중지됨",
-        "toggleFailed": "채팅 임베딩 전환 실패"
+        "unavailable": "이 계정 또는 지역에서는 채팅 기록 의미 색인을 사용할 수 없습니다",
+        "toggleFailed": "채팅 기록 의미 색인 전환 실패"
       }
     },
     "messageNavRail": {
