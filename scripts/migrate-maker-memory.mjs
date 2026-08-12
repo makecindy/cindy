@@ -37,8 +37,13 @@ const HELP = `migrate-maker-memory — 存量 worktree 分片迁移 (P0 第二�
 
 选项:
   --dry-run              只输出迁移计划, 不修改任何文件 (默认)
-  --apply                真正执行迁移
-  --backup-dir <path>    执行前把受影响分片备份到该目录 (建议提供)
+  --apply                真正执行迁移 (默认自动备份; --no-backup 显式放弃)
+  --backup-dir <path>    指定备份目录 (默认 <memory-root> 的父目录下自动生成)
+  --no-backup            显式放弃备份 — 冲突/未识别文件仍保留源目录, 但
+                         无冲突分片删除后将不可回滚 (慎用)
+  --force                宿主 (Cindy 桌面应用) 正在运行时也继续执行 —
+                         默认检测到宿主进程即拒绝 (迁移会移动/删除用户
+                         记忆文件, 宿主持有 Store/SQLite 句柄会冲突)
   --json                 只输出 RESULT JSON (供 agent / 脚本消费)
   --help                 显示本说明
 
@@ -46,14 +51,23 @@ const HELP = `migrate-maker-memory — 存量 worktree 分片迁移 (P0 第二�
   - 空分片直接删除; 有内容分片合并进 canonical (主仓) 分片
   - 同名不同内容 = 冲突: 不自动覆盖, 源目录保留供人工处理
   - SSH 分片 / 无 meta.json 目录不碰
+  - 执行前检测宿主进程; 迁移是可恢复的数据操作, 默认必带备份
 
 示例:
   node --import tsx scripts/migrate-maker-memory.mjs --memory-root "%APPDATA%/cindy/maker-memory" --dry-run
-  node --import tsx scripts/migrate-maker-memory.mjs --memory-root "%APPDATA%/cindy/maker-memory" --apply --backup-dir "%APPDATA%/cindy/maker-memory-backup"
+  node --import tsx scripts/migrate-maker-memory.mjs --memory-root "%APPDATA%/cindy/maker-memory" --apply
+  node --import tsx scripts/migrate-maker-memory.mjs --memory-root "%APPDATA%/cindy/maker-memory" --apply --no-backup
 `;
 
 function parseArgs(argv) {
-  const out = { memoryRoot: null, dryRun: true, backupDir: null, json: false };
+  const out = {
+    memoryRoot: null,
+    dryRun: true,
+    backupDir: null,
+    noBackup: false,
+    force: false,
+    json: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--help' || a === '-h') {
@@ -67,6 +81,10 @@ function parseArgs(argv) {
       out.dryRun = true;
     } else if (a === '--backup-dir') {
       out.backupDir = argv[++i] ?? null;
+    } else if (a === '--no-backup') {
+      out.noBackup = true;
+    } else if (a === '--force') {
+      out.force = true;
     } else if (a === '--json') {
       out.json = true;
     } else {
@@ -123,9 +141,30 @@ async function main() {
     return;
   }
 
-  // --apply
+  // --apply: 先做安全前置检查 (排他 + 备份契约, 见 #2529 行动项 2/3)
+  if (!opts.noBackup && !opts.backupDir) {
+    // 默认备份: <memory-root> 同级自动生成备份目录
+    opts.backupDir = path.join(
+      path.dirname(memoryRoot),
+      `maker-memory-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`,
+    );
+  }
+  if (!opts.noBackup && opts.backupDir) {
+    process.stdout.write(`备份目录: ${path.resolve(opts.backupDir)}\n`);
+  } else {
+    process.stdout.write('⚠️ --no-backup: 无冲突分片删除后不可回滚\n');
+  }
+  if (!opts.force && (await isHostRunning())) {
+    process.stderr.write(
+      '❌ 检测到宿主 (Cindy 桌面应用) 正在运行 — 迁移会移动/删除用户记忆文件, ' +
+        '宿主持有的 Store/SQLite 句柄会与迁移冲突 (#2529)。\n' +
+        '请先退出 Cindy 再运行; 确认无活动会话时可用 --force 继续。\n',
+    );
+    process.exit(3);
+  }
+
   const result = await runLegacyShardMigration(plan, {
-    ...(opts.backupDir ? { backupRoot: path.resolve(opts.backupDir) } : {}),
+    ...(opts.noBackup ? {} : { backupRoot: path.resolve(opts.backupDir) }),
   });
 
   const lines = result.results.map((r) => ({
@@ -157,6 +196,36 @@ async function main() {
   process.stdout.write(
     `RESULT ${JSON.stringify({ mode: 'apply', backupDir: opts.backupDir ?? null, shards: lines, conflicts })}\n`,
   );
+}
+
+/**
+ * 宿主 (Cindy 桌面应用) 运行检测 (#2529 行动项 2: 排他契约)。
+ * 迁移会移动/删除用户记忆文件, 宿主进程持有 MakerMemoryStore 与 SQLite
+ * 句柄 — 迁移期间活动会话向旧目录写入会 ENOENT, Windows 上打开的文件还
+ * 可能让 rename 本身失败。检测到宿主在跑 → 默认拒绝 apply。
+ *
+ * 进程名匹配 (跨平台): 检测失败 (无 tasklist/ps 等) 保守返回 false —
+ * 不因检测工具缺失而阻塞正常使用, 文档/--force 兜底。
+ */
+async function isHostRunning() {
+  try {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = promisify(execFile);
+    let out = '';
+    if (process.platform === 'win32') {
+      const r = await run('tasklist', ['/FO', 'CSV', '/NH']);
+      out = r.stdout;
+    } else {
+      const r = await run('ps', ['-eo', 'comm']);
+      out = r.stdout;
+    }
+    const lower = out.toLowerCase();
+    // Cindy 桌面应用: 主进程名 (cindy / desktop), Electron 子进程 (electron)
+    return ['cindy.exe', 'cindy ', 'desktop.exe', 'electron.exe'].some((p) => lower.includes(p));
+  } catch {
+    return false; // 检测工具缺失 → 不阻塞
+  }
 }
 
 main().catch((e) => {
