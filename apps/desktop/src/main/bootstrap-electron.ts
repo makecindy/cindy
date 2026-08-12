@@ -1036,7 +1036,7 @@ function scheduleChatEmbeddingRuntimeReconcile(): void {
       }
     })
     .catch((err: unknown) => {
-      console.error('[bootstrap-electron] chat embedding runtime reconcile failed:', err);
+      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', { error: String(err) });
     });
 }
 
