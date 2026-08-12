@@ -108,10 +108,11 @@ function serializeUntrustedPayload(value: unknown): string {
  */
 export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): string {
   assertReviewableActionSize(request.action);
-  // workspaceRoots 位置语义(与 maker-core reviewAction 同契约):首元素是唯一可写的
-  // 工作目录,其余是只读引用目录(additionalDirectories)。prompt 必须保留这一区分,
-  // 否则「workspace edits 倾向 allow」会把写只读引用目录的灰区命令一并放行。
-  const [workspaceRoot, ...referenceRoots] = request.workspaceRoots;
+  // P1 caller 仍只授权 primaryRoot 可写，因此 prompt 保持既有单主工作区语义；权限来源改为
+  // 显式 rootAccess，避免靠数组位置猜读写。后续若启用额外 writableRoots，必须同步扩展 prompt 契约。
+  const workspaceRoot = request.rootAccess.primaryRoot;
+  const writableRoots = new Set(request.rootAccess.writableRoots);
+  const referenceRoots = request.rootAccess.readRoots.filter((root) => !writableRoots.has(root));
   const payload = {
     userIntent: compactText(request.userIntent, MAX_USER_INTENT_CHARS),
     action: request.action,

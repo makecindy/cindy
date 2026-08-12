@@ -53,7 +53,7 @@ import {
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
-import type { ReviewableAction } from '../shared/auto-review.js';
+import type { ReviewableAction, WorkspaceRootAccess } from '../shared/auto-review.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
 import type {
   Capabilities,
@@ -1165,7 +1165,11 @@ export class PiAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         action,
-        workspaceRoots: [opts.workingDir, ...mutableExtraDirs],
+        rootAccess: {
+          primaryRoot: opts.workingDir,
+          readRoots: [opts.workingDir, ...mutableExtraDirs],
+          writableRoots: [opts.workingDir],
+        },
         platform: opts.remoteHostId ? 'linux' as const : process.platform,
       };
       const cacheKey = JSON.stringify(request);
@@ -1311,8 +1315,11 @@ export class PiAgent extends BaseAgent {
             this.handleExtensionUiRequest(event, proc, () => ({
               resolver: interactionResolver,
               permissionMode,
-              workspaceRoots: [opts.workingDir],
-              readRoots: [opts.workingDir, ...mutableExtraDirs],
+              rootAccess: {
+                primaryRoot: opts.workingDir,
+                readRoots: [opts.workingDir, ...mutableExtraDirs],
+                writableRoots: [opts.workingDir],
+              },
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
               registeredMcpServerNames,
@@ -2465,8 +2472,7 @@ export class PiAgent extends BaseAgent {
     getPermissionCtx: () => {
       resolver: InteractionResolver | null;
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
-      workspaceRoots: string[];
-      readRoots: string[];
+      rootAccess: WorkspaceRootAccess;
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
@@ -2555,8 +2561,7 @@ export class PiAgent extends BaseAgent {
       const {
         resolver,
         permissionMode,
-        workspaceRoots,
-        readRoots,
+        rootAccess,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
         registeredMcpServerNames,
@@ -2766,8 +2771,7 @@ export class PiAgent extends BaseAgent {
           const action = normalizePiToolForAutoReview({
             toolName,
             input,
-            workspaceRoots,
-            readRoots,
+            rootAccess,
           });
           const decision = await reviewAutoAction(action);
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,

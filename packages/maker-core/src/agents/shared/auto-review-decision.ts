@@ -4,6 +4,7 @@ import {
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
+  type WorkspaceRootAccess,
 } from './auto-review.js';
 
 /** Auto 对用户可见行为的最终三态；只有 `ask` 才允许弹用户确认。 */
@@ -90,12 +91,8 @@ export interface AutoReviewRequest {
   model: string;
   userIntent: string;
   action: ReviewableAction;
-  /**
-   * 位置语义(reviewAction 同契约):`[0]` 是唯一可写的工作目录,其余是只读引用目录
-   * (additionalDirectories)。所有 agent 一律传 `[workingDir, ...extraDirs]`;host 侧
-   * reviewer prompt 依赖该顺序区分可写/只读,不得打乱或拍平。
-   */
-  workspaceRoots: string[];
+  /** 显式目录权限；host prompt 与确定性 core 必须消费同一份读写边界。 */
+  rootAccess: WorkspaceRootAccess;
   platform: NodeJS.Platform;
 }
 
@@ -207,7 +204,7 @@ export function classifyLocalAutoReviewTier(
 ): LocalAutoReviewTier {
   const verdict = reviewAction(
     request.action,
-    request.workspaceRoots,
+    request.rootAccess,
     { platform: request.platform },
   );
   return verdict === 'prompt' ? 'needs-review' : verdict;

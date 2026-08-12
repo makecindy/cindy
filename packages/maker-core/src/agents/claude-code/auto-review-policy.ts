@@ -12,6 +12,7 @@ import {
   isSensitiveCredentialPath,
   type ReviewableAction,
   type ReviewVerdict,
+  type WorkspaceRootAccess,
 } from '../shared/auto-review.js';
 
 export type BuiltinAutoReviewVerdict = ReviewVerdict;
@@ -21,8 +22,8 @@ export interface BuiltinAutoReviewContext {
   toolName: string;
   /** 工具入参(SDK 透传的原始对象)。 */
   input: unknown;
-  /** 会话的工作区根:cwd + additionalDirectories,绝对路径。远端会话是远端路径(纯字符串判定)。 */
-  workspaceRoots: string[];
+  /** 会话的显式读写根。远端会话是远端路径(纯字符串判定)。 */
+  rootAccess: WorkspaceRootAccess;
   /** 会话所在平台(决定是否抹平 macOS firmlink /private)。缺省用本进程 process.platform;远端会话应传远端 OS。 */
   platform?: NodeJS.Platform;
 }
@@ -96,7 +97,7 @@ export function classifyBuiltinToolForAutoReview(
 ): BuiltinAutoReviewVerdict {
   const action = normalizeBuiltinToolForAutoReview(ctx.toolName, ctx.input);
   const opts = ctx.platform ? { platform: ctx.platform } : undefined;
-  return reviewAction(action, ctx.workspaceRoots, opts);
+  return reviewAction(action, ctx.rootAccess, opts);
 }
 
 /** 把 Claude 内置工具翻译成共享动作；判定与 AI fallback 都复用这一份归一化结果。 */

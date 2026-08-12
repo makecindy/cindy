@@ -11496,7 +11496,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       model: 'qwen/qwen3-coder',
       userIntent: 'Check this project for type errors',
       action: { kind: 'exec', command: 'npx tsc --noEmit', cwd: '/repo' },
-      workspaceRoots: ['/repo'],
+      rootAccess: {
+        primaryRoot: '/repo',
+        readRoots: ['/repo'],
+        writableRoots: ['/repo'],
+      },
       platform: process.platform,
     }));
     expect(reviewAutoPermissionAction.mock.calls[0]?.[0]).not.toHaveProperty('transcript');
