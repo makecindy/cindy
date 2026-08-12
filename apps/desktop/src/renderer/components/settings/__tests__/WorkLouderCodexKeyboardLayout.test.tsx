@@ -54,6 +54,30 @@ describe('WorkLouderCodexKeyboardLayout', () => {
     expect(screen.getByRole('button', { name: /旋钮/ })).toBeTruthy();
   });
 
+  it('puts the encoder and the stick in the corners they occupy on the device', () => {
+    const settings = createWorkLouderCodexDefaultSettings();
+    const { container } = render(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots()}
+        labels={LABELS}
+        onEditKeycap={vi.fn()}
+      />,
+    );
+
+    // Encoder top-left, stick top-right. Naming alone never caught these being
+    // swapped, so assert the order they appear in the first row.
+    const firstRow = container.querySelector('[data-testid] > div');
+    const labels = Array.from(firstRow?.children ?? []).map((child) =>
+      child.matches('[aria-label]')
+        ? child.getAttribute('aria-label')
+        : child.querySelector('[aria-label]')?.getAttribute('aria-label'),
+    );
+    expect(labels).toHaveLength(4);
+    expect(labels[0]).toMatch(/旋钮/);
+    expect(labels[3]).toMatch(/摇杆/);
+  });
+
   it('prints no lettering on the keys — the real keycaps carry artwork only', () => {
     const settings = createWorkLouderCodexDefaultSettings();
     const { container } = render(

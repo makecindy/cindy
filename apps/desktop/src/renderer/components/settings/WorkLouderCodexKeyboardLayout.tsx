@@ -123,19 +123,8 @@ export function WorkLouderCodexKeyboardLayout({
       data-testid="worklouder-codex-keyboard-layout"
       style={WORKLOUDER_CODEX_BOARD_TOKENS}
     >
-      {/* Row 1 — analog stick, two agent keys, encoder. */}
+      {/* Row 1 — encoder, two agent keys, analog stick. */}
       <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
-        <BoardPart
-          part="analog"
-          hint={hintFor?.('analog') ?? { legend: labels.analogStick }}
-          disabled={disabled}
-          onEdit={editHandlerFor('analog')}
-          rounded="full"
-          className="bg-transparent shadow-none"
-        >
-          <AnalogStick label={labels.analogStick} />
-        </BoardPart>
-        {agentKeys.slice(0, 2).map((slot, index) => renderAgentKey(slot, index))}
         <BoardPart
           part="encoder"
           hint={hintFor?.('encoder') ?? { legend: labels.encoder }}
@@ -145,6 +134,16 @@ export function WorkLouderCodexKeyboardLayout({
           className="bg-transparent shadow-none"
         >
           <Encoder label={labels.encoder} />
+        </BoardPart>
+        {agentKeys.slice(0, 2).map((slot, index) => renderAgentKey(slot, index))}
+        <BoardPart
+          part="analog"
+          hint={hintFor?.('analog') ?? { legend: labels.analogStick }}
+          disabled={disabled}
+          onEdit={editHandlerFor('analog')}
+          className="bg-transparent shadow-none"
+        >
+          <AnalogStick label={labels.analogStick} />
         </BoardPart>
       </div>
 
@@ -205,8 +204,9 @@ export const WORKLOUDER_CODEX_BOARD_TOKENS = {
   '--wl-command-shadow':
     'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
   '--wl-command-glyph': 'rgb(236 236 236)',
-  // The encoder is the darkest part of the board — a near-black wheel.
-  '--wl-encoder': '#0b0b0d',
+  // The stick: a keycap-sized housing with a small black thumb cap in it.
+  '--wl-stick-housing': '#23252c',
+  '--wl-stick-cap': '#111111',
 } as CSSProperties;
 
 /**
@@ -279,8 +279,24 @@ function KeyHint({ hint }: { hint: WorkLouderCodexKeyHint }) {
   );
 }
 
-/** The stick reads as a dome: one lit face, one shadowed. */
+/**
+ * The stick sits in a square housing the size of a keycap, with a small black
+ * thumb cap in the middle — it is not a bare circle like the encoder.
+ */
 function AnalogStick({ label }: { label: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      title={label}
+      className="flex size-full items-center justify-center rounded-xl bg-[var(--wl-stick-housing)] shadow-[var(--wl-command-shadow)]"
+    >
+      <span className="block size-[72%] rounded-full bg-[var(--wl-stick-cap)] shadow-[inset_0_-1px_2px_rgb(255_255_255/0.12),0_1px_2px_rgb(0_0_0/0.28)]" />
+    </span>
+  );
+}
+
+/** The encoder is a round wheel that stands proud of the board. */
+function Encoder({ label }: { label: string }) {
   return (
     <span
       aria-hidden="true"
@@ -289,17 +305,6 @@ function AnalogStick({ label }: { label: string }) {
     >
       <span className="block size-full bg-gradient-to-br from-white/[0.14] to-transparent" />
     </span>
-  );
-}
-
-/** The encoder is a recessed wheel — the darkest part of the board. */
-function Encoder({ label }: { label: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      title={label}
-      className="block size-full rounded-full bg-[var(--wl-encoder)] shadow-[inset_0_2px_5px_rgb(0_0_0/0.7),0_1px_2px_rgb(0_0_0/0.4)]"
-    />
   );
 }
 

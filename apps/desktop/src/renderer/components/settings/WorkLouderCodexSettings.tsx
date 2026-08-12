@@ -956,10 +956,13 @@ function CodexMicroKeyPreview() {
       style={WORKLOUDER_CODEX_BOARD_TOKENS}
       aria-hidden="true"
     >
-      <span className={cn('rounded-full bg-[var(--wl-command-cap)]')} />
+      {/* Encoder left, stick right — the same corners as the board below. */}
+      <span className="rounded-full bg-[var(--wl-command-cap)]" />
       <span className={cap} />
       <span className={cap} />
-      <span className="rounded-full bg-[var(--wl-encoder)]" />
+      <span className="flex items-center justify-center rounded-[3px] bg-[var(--wl-stick-housing)]">
+        <span className="block size-[72%] rounded-full bg-[var(--wl-stick-cap)]" />
+      </span>
       {Array.from({ length: 4 }, (_, index) => (
         <span key={index} className={cap} />
       ))}
