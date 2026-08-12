@@ -34,6 +34,7 @@ export interface WorkLouderCodexSettingsIpcDeps {
   resetSettings(): WorkLouderCodexSettings;
   applySettings(settings: WorkLouderCodexSettings): void;
   openInputMonitoringSettings(): Promise<void>;
+  probeDevice(): void;
 }
 
 function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
@@ -243,6 +244,17 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
     async openInputMonitoringSettings(event: unknown): Promise<void> {
       deps.assertTrustedSender(event);
       await deps.openInputMonitoringSettings();
+    },
+
+    /**
+     * Re-check whether the device is still attached, and return the state that
+     * results. Fire-and-forget at the host layer, so the caller polls this to
+     * notice an unplug rather than waiting for a push that never comes.
+     */
+    probe(event: unknown): WorkLouderCodexState {
+      deps.assertTrustedSender(event);
+      deps.probeDevice();
+      return deps.getState();
     },
   };
 }

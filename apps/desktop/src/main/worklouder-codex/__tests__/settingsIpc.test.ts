@@ -47,6 +47,7 @@ function makeIpc(options?: {
     return { ...settings };
   });
   const openInputMonitoringSettings = vi.fn(async () => undefined);
+  const probeDevice = vi.fn();
   const ipc = createWorkLouderCodexSettingsIpc({
     assertTrustedSender,
     getState,
@@ -54,6 +55,7 @@ function makeIpc(options?: {
     resetSettings,
     applySettings,
     openInputMonitoringSettings,
+    probeDevice,
   });
   return {
     ipc,
@@ -63,6 +65,7 @@ function makeIpc(options?: {
     resetSettings,
     applySettings,
     openInputMonitoringSettings,
+    probeDevice,
   };
 }
 
@@ -126,6 +129,22 @@ describe('Work Louder Codex settings IPC business body', () => {
       lightingAutoDim: 'off',
       singleTapAgentKeys: false,
     });
+  });
+
+  it('re-checks the device on probe and refuses untrusted callers', () => {
+    const { ipc, probeDevice, assertTrustedSender } = makeIpc();
+
+    const state = ipc.probe(EVENT);
+
+    expect(probeDevice).toHaveBeenCalledOnce();
+    expect(state.settings).toBeTruthy();
+
+    assertTrustedSender.mockImplementationOnce(() => {
+      throw new Error('untrusted');
+    });
+    expect(() => ipc.probe(EVENT)).toThrow('untrusted');
+    // Rejected before reaching the device.
+    expect(probeDevice).toHaveBeenCalledOnce();
   });
 
   it('still accepts a layout saved before voiceButtonMode was removed', () => {

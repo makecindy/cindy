@@ -5,6 +5,7 @@ export const WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL = 'worklouder-codex:set-setti
 export const WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL = 'worklouder-codex:reset-settings';
 export const WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL =
   'worklouder-codex:open-input-monitoring-settings';
+export const WORKLOUDER_CODEX_PROBE_CHANNEL = 'worklouder-codex:probe';
 export const WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL = 'worklouder-codex:state-changed';
 export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
 

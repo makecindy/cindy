@@ -17,7 +17,24 @@ export interface WorkLouderCodexViewState {
   reload(): Promise<void>;
 }
 
-export function useWorkLouderCodex(): WorkLouderCodexViewState {
+export interface WorkLouderCodexOptions {
+  /**
+   * Poll the device while this view is on screen.
+   *
+   * The Work Louder SDK has no disconnect event, so an unplugged keyboard keeps
+   * reading as connected until something tries to talk to it. Anywhere that
+   * shows connection state has to ask. Only the settings page opts in: polling
+   * wakes the device, which costs battery over Bluetooth, and nowhere else is
+   * showing a status the user is watching.
+   */
+  watchConnection?: boolean;
+}
+
+/** How often the settings page re-checks the device while it is in view. */
+const CONNECTION_PROBE_MS = 2_000;
+
+export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLouderCodexViewState {
+  const { watchConnection = false } = options;
   const [state, setState] = useState<WorkLouderCodexState | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -71,6 +88,47 @@ export function useWorkLouderCodex(): WorkLouderCodexViewState {
       unsubscribe?.();
     };
   }, [reload]);
+
+  /**
+   * Poll for an unplug while the caller is showing connection state.
+   *
+   * Pauses whenever the window is hidden or in the background: an unattended
+   * app has no reason to keep waking the keyboard, and whoever comes back gets
+   * a fresh reading immediately because visibility change probes right away.
+   */
+  useEffect(() => {
+    if (!watchConnection) return;
+    const api = window.electronAPI?.workLouderCodex;
+    if (!api?.probe) return;
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const probe = (): void => {
+      void api.probe().catch(() => {
+        // A failed probe is itself inconclusive; the next one decides.
+      });
+    };
+    const start = (): void => {
+      if (timer) return;
+      probe();
+      timer = setInterval(probe, CONNECTION_PROBE_MS);
+    };
+    const stop = (): void => {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = null;
+    };
+    const sync = (): void => {
+      if (document.visibilityState === 'visible') start();
+      else stop();
+    };
+
+    sync();
+    document.addEventListener('visibilitychange', sync);
+    return () => {
+      document.removeEventListener('visibilitychange', sync);
+      stop();
+    };
+  }, [watchConnection]);
 
   const setSettings = useCallback(
     async (patch: WorkLouderCodexSettingsPatch) => {

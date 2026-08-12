@@ -9,6 +9,7 @@ import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
   WORKLOUDER_CODEX_GET_STATE_CHANNEL,
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
+  WORKLOUDER_CODEX_PROBE_CHANNEL,
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
@@ -104,6 +105,7 @@ export function registerWorkLouderCodexSettingsIpc(): void {
         'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent',
       );
     },
+    probeDevice: () => hostClient.probe(),
   });
 
   ipcMain.handle(WORKLOUDER_CODEX_GET_STATE_CHANNEL, (event) => handlers.get(event));
@@ -114,6 +116,7 @@ export function registerWorkLouderCodexSettingsIpc(): void {
   ipcMain.handle(WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL, (event) =>
     handlers.openInputMonitoringSettings(event),
   );
+  ipcMain.handle(WORKLOUDER_CODEX_PROBE_CHANNEL, (event) => handlers.probe(event));
 
   workLouderCodexLightingController.subscribeState((state) => {
     broadcastState(state);

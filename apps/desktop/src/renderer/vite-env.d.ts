@@ -1819,6 +1819,8 @@ interface ElectronAPI {
     setSettings: (patch: WorkLouderCodexSettingsPatch) => Promise<WorkLouderCodexState>;
     resetSettings: () => Promise<WorkLouderCodexState>;
     openInputMonitoringSettings: () => Promise<void>;
+    /** Re-check whether the device is still attached; the SDK never says so itself. */
+    probe: () => Promise<WorkLouderCodexState>;
     onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
     onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
   };

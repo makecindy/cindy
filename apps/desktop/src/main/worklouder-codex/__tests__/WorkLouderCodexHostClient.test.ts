@@ -74,6 +74,26 @@ describe('WorkLouderCodexHostClient', () => {
     expect(child.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
   });
 
+  it('probes a running host but never starts one just to probe', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    // Nothing running yet: probing must not spin up the host, or merely opening
+    // settings would start it on a machine with no such keyboard.
+    client.probe();
+    expect(fork).not.toHaveBeenCalled();
+
+    client.setAgentKeyPressHandler(vi.fn());
+    client.probe();
+
+    expect(child.postMessage).toHaveBeenLastCalledWith({ kind: 'probe' });
+  });
+
   it('asks the host to turn lighting off before shutdown', async () => {
     const child = new FakeChild();
     const client = new WorkLouderCodexHostClient({

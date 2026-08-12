@@ -45,6 +45,11 @@ export type WorkLouderCodexHostRequest =
   | { kind: 'init'; sdkEntry: string }
   | { kind: 'listen' }
   | { kind: 'apply'; frame: WorkLouderCodexLightingFrame }
+  // Ask the host to verify the device is still there. The SDK has no
+  // disconnect event, so unplugging goes unnoticed until something tries to
+  // talk to the device — this is that something, driven by whoever is
+  // currently showing connection state.
+  | { kind: 'probe' }
   | { kind: 'stop' };
 
 export type WorkLouderCodexHostMessage =

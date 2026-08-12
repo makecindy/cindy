@@ -225,6 +225,29 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
   }
 
+  /**
+   * Ask the host to re-check the device.
+   *
+   * Used while something is showing connection state: the SDK never reports a
+   * disconnect, so an unplugged device otherwise keeps reading as connected
+   * until the next lighting write.
+   *
+   * Reuses the running host only — probing must not spin one up on its own,
+   * or merely opening settings would start the process on a machine that has
+   * no such keyboard.
+   */
+  probe(): void {
+    if (this.disposed || !this.child) return;
+    try {
+      const request: WorkLouderCodexHostRequest = { kind: 'probe' };
+      this.child.postMessage(request);
+    } catch (error) {
+      this.deps.log.debug('failed to probe the Work Louder host', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private requestHidListening(): void {
     if (this.disposed || !this.wantsHidInput) return;
     const child = this.ensureChild();

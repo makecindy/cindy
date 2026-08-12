@@ -82,6 +82,9 @@ let stopping = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastLoggedError: string | null = null;
 let lastActivityPostedAt = 0;
+/** Which device the current `api` handle belongs to, so probes can refresh it. */
+let connectedDevice: { deviceType: 'codex-micro' | 'creator-micro-2'; isUsb: boolean } | null =
+  null;
 
 if (parentPort) {
   parentPort.on('message', (event) => {
@@ -94,6 +97,8 @@ if (parentPort) {
     } else if (request?.kind === 'apply') {
       latestFrame = request.frame;
       requestApply();
+    } else if (request?.kind === 'probe') {
+      void probeConnection();
     } else if (request?.kind === 'stop') {
       void stop();
     }
@@ -209,6 +214,56 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
   }
 }
 
+/**
+ * Check the device is still physically there.
+ *
+ * Nothing in the SDK reports a disconnect, and a cached `api` handle keeps
+ * looking valid after the cable is pulled — so the only way to find out is to
+ * ask the device something and see whether it answers. `getDeviceStatus` is
+ * that question: it is the cheapest round trip that reaches the hardware, and
+ * its answer doubles as fresh battery and firmware values.
+ *
+ * Callers drive the cadence. This runs only while something is actually
+ * showing connection state, so an idle app is not waking the device on a timer.
+ */
+async function probeConnection(): Promise<void> {
+  if (stopping) return;
+  const connectedApi = api;
+  if (!connectedApi) {
+    // Not connected as far as we know — see whether it has come back.
+    try {
+      const deviceApi = await ensureConnected();
+      if (!deviceApi) {
+        post({ kind: 'state', status: 'not-detected' });
+        return;
+      }
+      lastLoggedError = null;
+      post({ kind: 'state', status: 'connected' });
+      // Reconnected: re-arm whatever the host was doing before it dropped.
+      if (hidListeningRequested) requestListen();
+      if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
+    } catch {
+      post({ kind: 'state', status: 'not-detected' });
+    }
+    return;
+  }
+  if (typeof connectedApi.getDeviceStatus !== 'function') return;
+  try {
+    // Call it directly rather than through postDeviceStatus, which swallows
+    // failures — swallowing here would make every probe "succeed" and defeat
+    // the whole point. Same round trip also keeps battery and firmware fresh.
+    const status = await connectedApi.getDeviceStatus();
+    const device = connectedDevice;
+    if (device) postDeviceState(device.deviceType, device.isUsb, status);
+    post({ kind: 'state', status: 'connected' });
+  } catch (error) {
+    // The handle is stale: drop it so the next probe rediscovers the device.
+    hostLog('debug', `probe found the device gone: ${safeErrorMessage(error)}`);
+    await disconnect();
+    post({ kind: 'state', status: 'not-detected' });
+  }
+}
+
 async function listenForAgentKeys(): Promise<void> {
   try {
     const deviceApi = await ensureConnected();
@@ -283,6 +338,10 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
     unsubscribeJoystick = typeof unsubscribe === 'function' ? unsubscribe : null;
   }
   api = nextApi;
+  connectedDevice = {
+    deviceType: candidate.deviceType,
+    isUsb: candidate.device.isUsbConnection === true,
+  };
   await postDeviceStatus(nextApi, candidate.deviceType, candidate.device.isUsbConnection === true);
   return nextApi;
 }
@@ -307,6 +366,15 @@ async function postDeviceStatus(
       hostLog('warn', `device status unavailable: ${safeErrorMessage(error)}`);
     }
   }
+  postDeviceState(deviceType, isUsbConnection, status);
+}
+
+/** Publish a device snapshot, clamping whatever the SDK handed back. */
+function postDeviceState(
+  deviceType: 'codex-micro' | 'creator-micro-2',
+  isUsbConnection: boolean,
+  status: WorkLouderDeviceStatus,
+): void {
   post({
     kind: 'device',
     device: {
@@ -356,6 +424,7 @@ function clearRetry(): void {
 }
 
 async function disconnect(): Promise<void> {
+  connectedDevice = null;
   const unsubscribe = unsubscribeHid;
   unsubscribeHid = null;
   if (unsubscribe) {

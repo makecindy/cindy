@@ -108,7 +108,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     resetSettings,
     openInputMonitoringSettings,
     reload,
-  } = useWorkLouderCodex();
+    // This page shows a live connection status, so it is the one place that
+    // polls the device — the entry row above it does not.
+  } = useWorkLouderCodex({ watchConnection: true });
   const { skills, bootstrapped, refresh: refreshSkills } = useSkillhub();
   const [brightnessDraft, setBrightnessDraft] = useState(100);
   const [editingSlot, setEditingSlot] = useState<WorkLouderCodexCommandSlot | null>(null);
