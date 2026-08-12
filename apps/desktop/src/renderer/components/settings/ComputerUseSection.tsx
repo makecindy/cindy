@@ -633,9 +633,9 @@ export function ComputerUseSection({
 
   // driver 已安装时安静地查一次是否有新版本。失败或无更新都不渲染任何 UI,
   // 不弹 toast、不做启动检查、不后台轮询 —— 更新入口只是设置里的一个可选项。
-  // 更新期间订阅 main 广播的下载进度;phase='done' 或组件卸载时清空。
+  // 更新或首次安装期间订阅 main 广播的下载进度;phase='done' 或组件卸载时清空。
   useEffect(() => {
-    if (!driverUpdatePending) {
+    if (!driverUpdatePending && !computerInstallPending) {
       setDriverUpdateProgress(null);
       return;
     }
@@ -643,7 +643,7 @@ export function ComputerUseSection({
       setDriverUpdateProgress(progress.phase === 'done' ? null : progress);
     });
     return unsubscribe;
-  }, [driverUpdatePending]);
+  }, [driverUpdatePending, computerInstallPending]);
 
   // 等待 main 侧更新安装完成并刷新本地展示。更新的 in-flight 托管在 main:
   // 面板关闭它照常跑完;面板重开后本函数 join 同一个安装 Promise。
@@ -1527,7 +1527,7 @@ export function ComputerUseSection({
               />
             </button>
           </div>
-          {driverUpdatePending &&
+          {(driverUpdatePending || computerInstallPending) &&
           driverUpdateProgress?.phase === 'downloading' &&
           driverUpdateProgress.downloadedBytes !== null &&
           driverUpdateProgress.totalBytes ? (
