@@ -21,6 +21,7 @@
 
 import {
   actualSourceIdForModel,
+  resolveCodexCompatibilityWireProtocol,
   type AgentKind,
   type Provider,
   type ProviderView,
@@ -28,10 +29,7 @@ import {
 } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
-import {
-  getActiveCatalog,
-  isXdCodexAnthropicBridgeModel,
-} from './active-catalog.js';
+import { getActiveCatalog } from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getSessionProvider } from './session-provider-store.js';
 
@@ -413,11 +411,20 @@ function providerRoutingForModel(
   agent: AgentKind,
   wireModel: string | undefined,
 ): RoutingDescriptor | null {
+  const catalogModelId = wireModel?.replace(/\[1m\]$/, '');
+  const catalogModel = catalogModelId
+    ? provider.models[agent]?.find((model) => model.id === catalogModelId)
+    : undefined;
+  const compatibilityWire = resolveCodexCompatibilityWireProtocol(
+    provider,
+    agent,
+    catalogModel,
+  );
   if (
     provider.id === 'xd'
     && agent === 'codex'
     && wireModel
-    && isXdCodexAnthropicBridgeModel(wireModel)
+    && compatibilityWire === 'anthropic-messages'
   ) {
     const claudeRouting = provider.routing['claude-code'];
     if (!claudeRouting) return null;
@@ -426,7 +433,10 @@ function providerRoutingForModel(
       wireProtocol: 'anthropic-messages',
     };
   }
-  return provider.routing[agent] ?? null;
+  const routing = provider.routing[agent];
+  return routing && compatibilityWire
+    ? { ...routing, wireProtocol: compatibilityWire }
+    : routing ?? null;
 }
 
 /**

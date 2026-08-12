@@ -695,6 +695,9 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
+          ...(agent === 'codex' && gm.id.startsWith('x-ai/grok-')
+            ? { codexCompatibilityWireProtocol: 'openai-chat' as const }
+            : {}),
         };
         models[agent]!.push(merged);
       }

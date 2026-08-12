@@ -170,6 +170,13 @@ describe('XD 网关权威模型清单重建', () => {
     expect(isXdCodexAnthropicBridgeModel('codex-native-only')).toBe(false);
   });
 
+  it('marks XD Gateway Grok models for the Codex Chat bridge', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([{ id: 'x-ai/grok-4.5', agents: ['codex'] }]);
+
+    expect(xdModels('codex')[0]?.codexCompatibilityWireProtocol).toBe('openai-chat');
+  });
+
   it('perAgent 覆盖块按 tab 应用(cc 无 Fast + 1M 窗口;codex 保持基线)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([

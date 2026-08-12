@@ -401,6 +401,33 @@ function stripGuardianProviderSearchTools(
   return next;
 }
 
+// Chat Completions cannot execute xAI server-side search. Remove only Codex's explicit
+// disabled declaration; enabled search stays visible to the bridge and fails closed.
+function stripDisabledWebSearchTool(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(body.tools)) return body;
+  const tools = body.tools.filter(
+    (tool) => !isPlainObject(tool)
+      || tool.type !== 'web_search'
+      || tool.external_web_access !== false,
+  );
+  if (tools.length === body.tools.length) return body;
+
+  const next = { ...body };
+  if (tools.length > 0) {
+    next.tools = tools;
+    if (isPlainObject(next.tool_choice) && next.tool_choice.type === 'web_search') {
+      next.tool_choice = 'auto';
+    }
+  } else {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+  }
+  return next;
+}
+
 function createProviderAwareGuardianReviewerTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
 ): RequestTransform {
@@ -612,7 +639,31 @@ function createChatBridgeDecision(
   requestModelOverride?: string,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
+  const isXdGatewayBridge =
+    route.providerId === 'xd' && route.routing.authStrategy === 'gateway-key';
+  const gatewayKey = isXdGatewayBridge ? _readGatewayKey() : null;
+  const upstreamBase = isXdGatewayBridge
+    ? buildCodexGatewayBaseUrl()
+    : route.routing.upstream;
+  if (isXdGatewayBridge && !gatewayKey) {
+    return {
+      localHandler: async ({ res }) => {
+        res.writeHead(503, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(JSON.stringify({
+          error: {
+            type: 'authentication_error',
+            code: 'cindy_gateway_credentials_unavailable',
+            message: 'Cindy AI credentials are not ready for this bridged model.',
+          },
+        }));
+      },
+    };
+  }
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
+  if (gatewayKey) headers.authorization = `Bearer ${gatewayKey}`;
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
   const realModel = rewriteChatBridgeModel(wireModel, stripPrefix);
   // localHandler 绕过 proxy 的 responseObserver,自定义(user)供应商的上游错误不会被
@@ -635,7 +686,7 @@ function createChatBridgeDecision(
     }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
   const capabilities = chatBridgeCapabilitiesForRoute(
-    route.routing.upstream,
+    upstreamBase,
     realModel,
     baseCapabilities,
   );
@@ -645,7 +696,7 @@ function createChatBridgeDecision(
       }
     : undefined;
   const handler = createResponsesChatHandler({
-    upstreamBase: route.routing.upstream,
+    upstreamBase,
     ...(route.routing.requestPath ? { chatCompletionsPath: route.routing.requestPath } : {}),
     buildHeaders: async () => headers,
     rewriteModel: (model: string) => rewriteChatBridgeModel(model, stripPrefix),
@@ -663,7 +714,7 @@ function createChatBridgeDecision(
         requestModelOverride,
         bridge: 'chat',
         providerId,
-        upstreamBase: route.routing.upstream,
+        upstreamBase,
       });
       return handler.handle({ parsedBody: body, res });
     },
@@ -726,6 +777,15 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
           ? [...existing, { type: 'input_text', text: `\n\n${opts.instructions}` }]
           : [existingText, opts.instructions].filter(Boolean).join('\n\n'),
     };
+  }
+  if (
+    opts.bridge === 'chat'
+    && opts.providerId === 'xd'
+    && isPlainObject(body)
+    && typeof body.model === 'string'
+    && body.model.startsWith('x-ai/grok-')
+  ) {
+    body = stripDisabledWebSearchTool(body);
   }
   const historySafe = isChatGptUpstreamBase(opts.upstreamBase)
     ? null
@@ -1002,7 +1062,12 @@ function createLocalBridgeDecision(
       requestModelOverride,
     );
     if (decision) {
-      recordCodexThreadUpstreamForDiagnostics(threadId, route.routing.upstream);
+      recordCodexThreadUpstreamForDiagnostics(
+        threadId,
+        route.providerId === 'xd' && route.routing.authStrategy === 'gateway-key'
+          ? buildCodexGatewayBaseUrl()
+          : route.routing.upstream,
+      );
     }
     return decision;
   }
@@ -1369,24 +1434,17 @@ const XAI_SUPPORTED_TOOL_TYPES = new Set([
   'shell',
 ]);
 
-function sanitizeXaiTools(
-  body: Record<string, unknown>,
-  dropDisabledWebSearch = false,
-): Record<string, unknown> | null {
+function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown> | null {
   if (!Array.isArray(body.tools)) return null;
 
   let changed = false;
-  const tools: Record<string, unknown>[] = [];
+  const tools: unknown[] = [];
   for (const tool of body.tools) {
     if (!isPlainObject(tool) || typeof tool.type !== 'string' || !XAI_SUPPORTED_TOOL_TYPES.has(tool.type)) {
       changed = true;
       continue;
     }
     if (tool.type === 'web_search') {
-      if (dropDisabledWebSearch && tool.external_web_access === false) {
-        changed = true;
-        continue;
-      }
       const nextTool: Record<string, unknown> = { type: 'web_search' };
       for (const key of ['filters', 'enable_image_understanding', 'enable_image_search']) {
         if (key in tool) nextTool[key] = tool[key];
@@ -1400,49 +1458,9 @@ function sanitizeXaiTools(
   if (!changed) return null;
 
   const next: Record<string, unknown> = { ...body };
-  if (tools.length > 0) {
-    next.tools = tools;
-    if (toolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
-  } else {
-    delete next.tools;
-    delete next.tool_choice;
-    delete next.parallel_tool_calls;
-  }
+  if (tools.length > 0) next.tools = tools;
+  else delete next.tools;
   return next;
-}
-
-function isXdGatewayGrokRequest(
-  body: Record<string, unknown>,
-  ctx: RequestTransformCtx,
-  frozenAuthInjection?: CodexProxyAuthInjection,
-): boolean {
-  if (typeof body.model !== 'string' || !body.model.startsWith('x-ai/grok-')) return false;
-  const path = ctx.url.split('?', 1)[0] ?? ctx.url;
-  if (ctx.method !== 'POST' || (!path.endsWith('/responses') && path !== '/responses')) return false;
-
-  const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
-  const sessionId = sessionIdFromTransformCtx(ctx);
-  const canUseExplicitSessionRoute = Boolean(sessionId && (
-    authInjection === 'oauth-bearer'
-    || isUserProviderSession(sessionId)
-    || isHostInjectedAuthSession(sessionId, 'codex')
-  ));
-  const routing = canUseExplicitSessionRoute && sessionId
-    ? getSessionRoutingDescriptor(sessionId, 'codex', body.model)
-    : null;
-  const gatewayKey = _readGatewayKey();
-  const resolvedRoute = routing && sessionId
-    && (authInjection === 'oauth-bearer' || authInjection === 'provider-oauth')
-    ? resolveSessionRouteDecision(sessionId, 'codex', gatewayKey, body.model)
-    : null;
-
-  if (routing) {
-    return routing.authStrategy === 'gateway-key'
-      && (routing.wireProtocol ?? 'openai-responses') === 'openai-responses'
-      && (authInjection === 'env-key' || resolvedRoute !== null);
-  }
-  return authInjection === 'env-key'
-    || (authInjection === 'provider-oauth' && gatewayDefaultRouteDecision('codex', gatewayKey) !== null);
 }
 
 /**
@@ -1530,7 +1548,7 @@ function isByteDanceSeedRequest(
   return isByteDanceSeedModel(body.model) || isVolcengineArkResponsesRouting(ctx, body.model);
 }
 
-function toolChoiceReferencesRemovedTool(
+function seedToolChoiceReferencesRemovedTool(
   toolChoice: unknown,
   tools: Record<string, unknown>[],
 ): boolean {
@@ -1575,7 +1593,7 @@ function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<strin
   const next: Record<string, unknown> = { ...body };
   if (tools.length > 0) {
     next.tools = tools;
-    if (toolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
+    if (seedToolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
   } else {
     delete next.tools;
     delete next.tool_choice;
@@ -1784,14 +1802,9 @@ function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
   };
 }
 
-function createXaiResponsesCompatTransform(
-  frozenAuthInjection?: CodexProxyAuthInjection,
-): RequestTransform {
+function createXaiResponsesCompatTransform(): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
-    // XD Gateway 的 Grok 只复用已由 422 证明必要的 tools schema 清理；直连 xAI 的
-    // instructions/history/reasoning/search 改写没有网关运行证据，不能扩大到这条路由。
-    if (isXdGatewayGrokRequest(body, ctx, frozenAuthInjection)) return sanitizeXaiTools(body, true);
     const sessionId = sessionIdFromTransformCtx(ctx);
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const inferredProviderId =
@@ -2223,6 +2236,11 @@ export function createModelRoutingTransform(
     const selectedUsesLocalBridge =
       ctx.method === 'POST'
       && Boolean(model)
+      && !(
+        selectedRouting?.wireProtocol === 'openai-chat'
+        && selectedRouting.authStrategy === 'gateway-key'
+        && !gatewayKey
+      )
       && (
         selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
@@ -2344,7 +2362,7 @@ function createTransformRequestChain(
     // 后续针对具体供应商的 input 归一化才能稳定处理。
     createCrossProviderCompactionCompatTransform(),
     createStrictGatewayHistoryCompatTransform(),
-    createXaiResponsesCompatTransform(frozenAuthInjection),
+    createXaiResponsesCompatTransform(),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),
