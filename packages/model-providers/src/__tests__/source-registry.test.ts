@@ -388,6 +388,45 @@ describe('loadCatalog', () => {
     expect(bundled).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
   });
 
+  it('only backfills Pi metadata for proven legacy snapshots across local, remote, and cache', async () => {
+    const bundledPreset = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
+    if (!bundledPreset) throw new Error('missing bundled DeepSeek preset');
+    const { pi: _missing, ...legacyRuntimes } = bundledPreset.runtimes;
+    const legacy = JSON.stringify({
+      version: '2',
+      providers: MINIMAL.providers,
+      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
+    });
+    const current = JSON.stringify({
+      version: BUNDLED_CATALOG.version,
+      providers: MINIMAL.providers,
+      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
+    });
+    const local = await loadCatalogWithSource(
+      { localPath: '/repo/providers.json' },
+      { readFile: vi.fn(async () => legacy) },
+    );
+    const remote = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => legacy) },
+    );
+    const cache = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json', remoteBudgetMs: 0 },
+      { readCache: vi.fn(async () => legacy) },
+    );
+    for (const loaded of [local, remote, cache]) {
+      expect(loaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+        .toEqual(bundledPreset.runtimes.pi);
+    }
+
+    const currentLoaded = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => current) },
+    );
+    expect(currentLoaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+      .toBeUndefined();
+  });
+
   it('persists a valid remote snapshot and uses its source-scoped LKG after failure', async () => {
     const url = 'https://catalog.example.test/providers.json';
     const writeCache = vi.fn(async (_scope: string, _text: string) => undefined);

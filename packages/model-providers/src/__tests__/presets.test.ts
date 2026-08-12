@@ -322,7 +322,7 @@ describe('mergeWithBundled presets 兜底', () => {
       expect(bundled?.runtimes.pi).toBeDefined();
       const { pi: _missing, ...remoteRuntimes } = bundled!.runtimes;
       const remote = { ...bundled!, name: `Remote ${id}`, runtimes: remoteRuntimes };
-      const merged = mergeWithBundled(minimalCatalog({ presets: [remote] }));
+      const merged = mergeWithBundled(minimalCatalog({ version: '2', presets: [remote] }));
       const resolved = merged.presets?.find((preset) => preset.id === id);
       expect(resolved?.name).toBe(`Remote ${id}`);
       expect(resolved?.runtimes.pi).toEqual(bundled?.runtimes.pi);
@@ -339,6 +339,19 @@ describe('mergeWithBundled presets 兜底', () => {
       presets: [{ ...bundled!, runtimes: { ...bundled!.runtimes, pi: remotePi } }],
     }));
     expect(merged.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi).toEqual(remotePi);
+  });
+
+  it('当前或未知目录版本缺少 Pi runtime 时保持缺失，不静默复活 bundled runtime', () => {
+    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
+    const { pi: _missing, ...remoteRuntimes } = bundled!.runtimes;
+    for (const version of ['3', '4', 'test']) {
+      const merged = mergeWithBundled(minimalCatalog({
+        version,
+        presets: [{ ...bundled!, runtimes: remoteRuntimes }],
+      }));
+      expect(merged.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+        .toBeUndefined();
+    }
   });
 
   it('旧远端同 id preset 缺少 nameZhTW 时从 bundled 回填，显式远端值仍优先', () => {

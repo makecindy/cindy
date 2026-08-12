@@ -28,6 +28,9 @@ export const CATALOG_CFG_PATH = '/cfg/providers.json';
 /** 整条远端 Catalog fallback 链共享的默认启动等待预算。 */
 export const DEFAULT_REMOTE_CATALOG_BUDGET_MS = 15_000;
 
+/** Only numeric catalog snapshots older than v3 predate the Pi preset metadata contract. */
+const PI_RUNTIME_METADATA_CATALOG_VERSION = 3;
+
 export interface CatalogSourceConfig {
   /** 完整覆盖源 URL（env XDT_MODELS_URL）；缺省使用公共 catalog API。 */
   url?: string;
@@ -127,6 +130,15 @@ function remoteErrorForLog(error: unknown, remoteUrl: string, logUrl: string): s
   return String(error).split(remoteUrl).join(logUrl);
 }
 
+function numericCatalogVersion(version: string): number | null {
+  return /^\d+$/.test(version) ? Number(version) : null;
+}
+
+function allowsLegacyPiRuntimeBackfill(primary: Catalog): boolean {
+  const version = numericCatalogVersion(primary.version);
+  return version !== null && version < PI_RUNTIME_METADATA_CATALOG_VERSION;
+}
+
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
 function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access'] {
   if (primary.auth.method !== bundled.auth.method) return undefined;
@@ -166,6 +178,7 @@ function allowsBundledImageInheritance(
 function backfillPresetMetadata(
   primary: ProviderPreset,
   bundled: ProviderPreset,
+  allowLegacyPiBackfill: boolean,
 ): ProviderPreset {
   let changed = primary.nameZhTW === undefined && bundled.nameZhTW !== undefined;
   const runtimes: ProviderPreset['runtimes'] = { ...primary.runtimes };
@@ -192,7 +205,11 @@ function backfillPresetMetadata(
   // Pi runtime 是 2026-08 后新增的预设能力槽。旧远端目录没有表达“显式禁用 Pi”的
   // 字段，缺席只代表旧 schema；对随包已核实的官方预设回填整段，避免远端 LKG 把
   // DeepSeek/Kimi 的推理档位与视觉能力遮掉。远端一旦自行提供 Pi，仍完整优先。
-  if (primary.runtimes.pi === undefined && bundled.runtimes.pi !== undefined) {
+  if (
+    allowLegacyPiBackfill
+    && primary.runtimes.pi === undefined
+    && bundled.runtimes.pi !== undefined
+  ) {
     runtimes.pi = bundled.runtimes.pi;
     changed = true;
   }
@@ -282,11 +299,12 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // 远端独有项按远端原序追加。避免旧远端的非空 presets 整段遮掉新版客户端内置条目。
   const primaryPresets = primary.presets ?? [];
   const bundledPresets = BUNDLED_CATALOG.presets ?? [];
+  const allowLegacyPiBackfill = allowsLegacyPiRuntimeBackfill(primary);
   const primaryPresetsById = new Map(primaryPresets.map((preset) => [preset.id, preset]));
   const bundledPresetIds = new Set(bundledPresets.map((preset) => preset.id));
   const presets = bundledPresets.map((bundled) => {
     const remote = primaryPresetsById.get(bundled.id);
-    return remote ? backfillPresetMetadata(remote, bundled) : bundled;
+    return remote ? backfillPresetMetadata(remote, bundled, allowLegacyPiBackfill) : bundled;
   });
   for (const preset of primaryPresets) {
     if (!bundledPresetIds.has(preset.id)) presets.push(preset);
