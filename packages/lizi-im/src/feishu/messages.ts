@@ -16,6 +16,11 @@ export const messages = {
     welcome:
       '🎉 已绑定为本 bot 的 owner~\n之后只有你能跟我聊天。如需更换 owner，请到 desktop 的 Settings 页清除 bot 凭证后重新保存。',
   },
+  group: {
+    /** 非 owner 在群里 @bot 的礼貌回应(per-user 冷却防刷屏, 与 telegram 同语义)。 */
+    strangerNotice:
+      '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.',
+  },
   // (inbound.skipped removed — orchestrator owns the wording for "pure
   // unsupported" / "mixed unsupported" replies; @cindy/im just emits the raw
   // entries via IMMessageEvent.unsupported.)
