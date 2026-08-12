@@ -79,7 +79,15 @@ function parseArgs(argv) {
     } else if (a === '--dry-run') {
       out.dryRun = true;
     } else if (a === '--keep-digests') {
-      out.keepDigests = Number(argv[++i]);
+      const raw = argv[++i];
+      const n = Number(raw);
+      // 边界校验 (Greptile P1 on #2561): 0 / 负数 / 小数 / 非数字都要明确拒绝,
+      // 不能靠 truthy 或 slice 语义静默误解释。0 合法 (全清 digest)。
+      if (raw == null || raw === '' || !Number.isInteger(n) || n < 0) {
+        process.stderr.write(`--keep-digests 必须是 >=0 的整数, 收到 "${raw}"\n`);
+        process.exit(2);
+      }
+      out.keepDigests = n;
     } else if (a === '--backup-dir') {
       out.backupDir = argv[++i] ?? null;
     } else if (a === '--force') {
@@ -105,7 +113,8 @@ async function main() {
   const shard = path.resolve(opts.shard);
 
   const plan = await planMemoryCleanup(shard, {
-    ...(opts.keepDigests ? { keepDigests: opts.keepDigests } : {}),
+    // 注意: keepDigests 为 0 是合法值 (全清 digest), 用 !== null 而非 truthy。
+    ...(opts.keepDigests !== null ? { keepDigests: opts.keepDigests } : {}),
   });
 
   const summarize = (p) => ({
@@ -115,6 +124,10 @@ async function main() {
     nearDuplicates: p.nearDuplicates,
     stale: p.stale.map((s) => ({ filename: s.filename, matchedSignal: s.matchedSignal })),
     staleByAge: p.staleByAge.map((s) => ({ filename: s.filename, updatedAt: s.updatedAt })),
+    staleByWeakSignal: p.staleByWeakSignal.map((s) => ({
+      filename: s.filename,
+      matchedSignal: s.matchedSignal,
+    })),
     digests: p.digests,
     archiveCount: p.archiveItems.length,
   });
@@ -139,6 +152,12 @@ async function main() {
       process.stdout.write(`\n仅时间过期 (低置信, ${summary.staleByAge.length} 条, 仅报告不归档):\n`);
       for (const s of summary.staleByAge) {
         process.stdout.write(`  - ${s.filename} (updatedAt ${s.updatedAt})\n`);
+      }
+      process.stdout.write(
+        `\n弱信号 (英文 broad 词, ${summary.staleByWeakSignal.length} 条, 仅报告不归档):\n`,
+      );
+      for (const s of summary.staleByWeakSignal) {
+        process.stdout.write(`  - ${s.filename} (命中 "${s.matchedSignal}")\n`);
       }
       process.stdout.write(
         `\ndigest 精简: 保留 ${summary.digests.keep.length}, 归档 ${summary.digests.archive.length}\n`,

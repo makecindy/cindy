@@ -85,21 +85,32 @@ describe('planMemoryCleanup', () => {
     expect(plan.archiveItems).toHaveLength(0);
   });
 
-  it('flags project/reference entries matching a stale signal', async () => {
+  it('flags strong stale signals and archives only those', async () => {
     await shard('project_done.md', 'project', 'Done project', 'hook', '这个项目已归档',
       '2026-01-01T00:00:00.000Z');
+    // 弱信号 (英文 broad 词) 只报告不归档。
     await shard('reference_stale.md', 'reference', 'Stale ref', 'hook', 'deprecated 接口',
       '2026-01-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    expect(plan.stale.map((s) => s.filename).sort()).toEqual([
-      'project_done.md',
-      'reference_stale.md',
-    ]);
-    expect(plan.archiveItems.map((i) => i.filename).sort()).toEqual([
-      'project_done.md',
-      'reference_stale.md',
-    ]);
+    expect(plan.stale.map((s) => s.filename)).toEqual(['project_done.md']);
+    expect(plan.staleByWeakSignal.map((s) => s.filename)).toEqual(['reference_stale.md']);
+    // 只有强信号进归档集合。
+    expect(plan.archiveItems.map((i) => i.filename)).toEqual(['project_done.md']);
+  });
+
+  it('does not treat negated/questioned/reference context as terminal', async () => {
+    // 否定/疑问/引用前缀 → 都不是本条目自身的终态声明。
+    await shard('project_q.md', 'project', 'Q', 'hook', '是否已关闭需要再确认',
+      '2026-01-01T00:00:00.000Z');
+    await shard('project_r.md', 'project', 'R', 'hook', '替换 deprecated 接口',
+      '2026-01-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 「是否已关闭」被前缀排除; 「替换 deprecated」里 deprecated 是弱信号。
+    expect(plan.stale).toHaveLength(0);
+    expect(plan.archiveItems).toHaveLength(0);
+    expect(plan.staleByWeakSignal.map((s) => s.filename)).toEqual(['project_r.md']);
   });
 
   it('reports age-only stale as low-confidence and does not archive', async () => {
@@ -174,5 +185,21 @@ describe('runMemoryCleanup', () => {
     const archived = await archiveContents();
     expect(archived).toContain('feedback_a.md'); // 旧归档保留
     expect(archived.some((f) => f.startsWith('feedback_a.md.'))).toBe(true); // 新归档加后缀
+  });
+
+  it('suffixes backup filename on collision instead of overwriting', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+    const backupRoot = path.join(dir, 'backup');
+    // 预置一个同名旧备份, 制造碰撞。
+    await mkdir(backupRoot, { recursive: true });
+    await writeFile(path.join(backupRoot, 'feedback_a.md'), 'previous backup', 'utf8');
+
+    await runMemoryCleanup(await planMemoryCleanup(dir), { backupRoot });
+
+    const backup = await readdir(backupRoot);
+    // 旧备份保留, 新备份加时间戳后缀。
+    expect(await readFile(path.join(backupRoot, 'feedback_a.md'), 'utf8')).toBe('previous backup');
+    expect(backup.some((f) => f.startsWith('feedback_a.md.'))).toBe(true);
   });
 });

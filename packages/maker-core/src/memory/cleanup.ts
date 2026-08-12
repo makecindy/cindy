@@ -35,14 +35,14 @@ import type { MemoryRecord } from './types.js';
 export const ARCHIVE_DIR_NAME = '.archive';
 
 /**
- * 高置信「已终态」信号词 — 命中 body 或 description 且 type 为
- * project/reference 时建议归档 (#2379 正文「4 条已终态项目归档」的判定依据;
- * 其中一条描述自己写着「当前状态需重新查询 GitHub」)。
+ * 强终态信号 — 中文的明确状态短语, 命中 body/description 且 type 为
+ * project/reference 时**建议归档** (#2379 正文「4 条已终态项目归档」的判定
+ * 依据; 其中一条描述自己写着「当前状态需重新查询 GitHub」)。
  *
- * 只用强终态措辞, 避免误伤仍活跃的项目条目; 命中的只是「建议」, run 时归档
- * 是可逆的 (进 .archive), 不是删除。
+ * 命中前先做否定/疑问/引用前缀排除 (STALE_NEGATE_PREFIX), 避免把「是否已
+ * 关闭」「尚未结束」这类非终态表述误归档 (Greptile P1 / Codex P2 on #2561)。
  */
-export const STALE_SIGNALS: ReadonlyArray<string> = [
+export const STALE_STRONG_SIGNALS: ReadonlyArray<string> = [
   '已归档',
   '已结束',
   '已终态',
@@ -55,12 +55,33 @@ export const STALE_SIGNALS: ReadonlyArray<string> = [
   '已过期',
   '已取消',
   '已移除',
-  'archived',
+  '不再活跃',
+];
+
+/**
+ * 弱终态信号 — 英文 broad 形容词, 常作引用/修饰语出现
+ * ("read the archived logs" / "use X instead of deprecated Y"), 单靠子串匹配
+ * 无法区分「本条目标记自身终态」与「引用某个已废弃的东西」。
+ *
+ * 因此命中只进 report-only (staleByWeakSignal), **不自动归档**, 交人工或
+ * memory_review 判断 (Codex P2 on #2561: bare terms should be report-only)。
+ */
+export const STALE_WEAK_SIGNALS: ReadonlyArray<string> = [
   'deprecated',
+  'archived',
   'obsolete',
   'no longer maintained',
   'no longer active',
+  'no longer in use',
 ];
+
+/**
+ * 信号词紧邻的否定/疑问/引用前缀 — 命中说明该词是「尚未/是否/替换」上下文,
+ * 不是本条目自身的终态声明, 应跳过 (Greptile P1 on #2561)。
+ * `\\s*$` 锚定 prefix 末尾, 只排除**紧邻**信号词的前缀, 不误伤窗口内远处出现的词。
+ */
+const STALE_NEGATE_PREFIX =
+  /(?:尚未|还未|是否|没有|不是|无需|不必|避免|别再|替换|改用|替代|改为|换成|迁移|升级|参考|参见|读取)\s*$/;
 
 /** age 归档默认阈值 (天): updatedAt 早于该时间的 project 条目列入低置信候选。 */
 export const DEFAULT_STALE_AGE_DAYS = 90;
@@ -100,9 +121,13 @@ export interface NearDuplicateGroup {
 /** 过期归档候选。 */
 export interface StaleCandidate {
   filename: string;
-  /** signal = 命中终态信号词 (高置信, run 归档); age = 仅时间过期 (低置信, 只报告)。 */
-  reason: 'signal' | 'age';
-  /** 命中的信号词 (reason === 'signal' 时)。 */
+  /**
+   * signal = 命中强终态信号词 (高置信, run 归档);
+   * weak-signal = 命中英文 broad 词 (低置信, 只报告);
+   * age = 仅时间过期 (低置信, 只报告)。
+   */
+  reason: 'signal' | 'weak-signal' | 'age';
+  /** 命中的信号词 (reason 为 signal / weak-signal 时)。 */
   matchedSignal?: string;
   updatedAt: string;
 }
@@ -125,10 +150,12 @@ export interface CleanupPlan {
   duplicates: DuplicateGroup[];
   /** 近似重复组 (只报告)。 */
   nearDuplicates: NearDuplicateGroup[];
-  /** 高置信过期 (signal 词命中, run 归档)。 */
+  /** 高置信过期 (强 signal 词命中, run 归档)。 */
   stale: StaleCandidate[];
   /** 低置信过期 (仅时间, 只报告)。 */
   staleByAge: StaleCandidate[];
+  /** 低置信过期 (英文 broad 弱信号, 只报告)。 */
+  staleByWeakSignal: StaleCandidate[];
   /** digest 保留策略。 */
   digests: DigestRetention;
   /** 汇总: run 将执行的归档动作 (duplicates + stale + digests 三者并集)。 */
@@ -175,6 +202,7 @@ export async function planMemoryCleanup(
     nearDuplicates: [],
     stale: [],
     staleByAge: [],
+    staleByWeakSignal: [],
     digests: { keep: [], archive: [] },
     archiveItems: [],
   };
@@ -242,7 +270,8 @@ export async function planMemoryCleanup(
     if (type !== 'project' && type !== 'reference') continue;
 
     const haystack = `${rec.frontmatter.description}\n${rec.body}`.toLowerCase();
-    const signal = STALE_SIGNALS.find((s) => haystack.includes(s.toLowerCase()));
+    // 强信号: 中文明确状态短语, 但先排除否定/疑问/引用前缀 (「是否已关闭」等)。
+    const signal = findStrongStaleSignal(haystack);
     if (signal) {
       plan.stale.push({
         filename: rec.filename,
@@ -254,6 +283,17 @@ export async function planMemoryCleanup(
         filename: rec.filename,
         reason: 'stale',
         detail: `matches stale signal "${signal}"`,
+      });
+      continue;
+    }
+    // 弱信号: 英文 broad 形容词, 只报告不归档 (Codex P2 on #2561)。
+    const weakSignal = STALE_WEAK_SIGNALS.find((s) => haystack.includes(s.toLowerCase()));
+    if (weakSignal) {
+      plan.staleByWeakSignal.push({
+        filename: rec.filename,
+        reason: 'weak-signal',
+        matchedSignal: weakSignal,
+        updatedAt: rec.frontmatter.updatedAt,
       });
       continue;
     }
@@ -307,10 +347,17 @@ export async function runMemoryCleanup(
       const srcStat = await fs.stat(src).catch(() => null);
       if (!srcStat) continue;
 
-      // 可选真备份: 归档前复制一份到 backupRoot (数据保全)。
+      // 可选真备份: 归档前复制一份到 backupRoot (数据保全)。同名冲突时加
+      // 时间戳后缀, 绝不覆盖已有备份 — 重复使用同一 backup-dir 或依次清理
+      // 多个含同名记忆的分片时, 旧备份不能被静默覆盖 (Greptile P1 / Codex
+      // P1 on #2561)。
       if (opts.backupRoot) {
         await fs.mkdir(opts.backupRoot, { recursive: true });
-        await fs.copyFile(src, path.join(opts.backupRoot, item.filename));
+        const backupDst = path.join(opts.backupRoot, item.filename);
+        const finalBackupDst = (await pathExists(backupDst))
+          ? `${backupDst}.${now().replace(/[:.]/g, '-')}`
+          : backupDst;
+        await fs.copyFile(src, finalBackupDst);
       }
 
       await fs.mkdir(archiveDir, { recursive: true });
@@ -338,6 +385,22 @@ export async function runMemoryCleanup(
   }
 
   return result;
+}
+
+/**
+ * 在 haystack 中查找强终态信号词, 命中且**不是**否定/疑问/引用上下文时返回。
+ * 前缀排除 (STALE_NEGATE_PREFIX) 处理「是否已关闭」「替换 deprecated 接口」等
+ * 非终态表述 (Greptile P1 on #2561)。未命中返回 undefined。
+ */
+function findStrongStaleSignal(haystack: string): string | undefined {
+  for (const signal of STALE_STRONG_SIGNALS) {
+    const idx = haystack.indexOf(signal.toLowerCase());
+    if (idx < 0) continue;
+    const prefix = haystack.slice(Math.max(0, idx - 12), idx);
+    if (STALE_NEGATE_PREFIX.test(prefix)) continue;
+    return signal;
+  }
+  return undefined;
 }
 
 /** 归一化内容 hash — 忽略 updatedAt 与 frontmatter 排版差异, 只比语义内容。 */
