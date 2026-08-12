@@ -108,6 +108,39 @@ describe('buildCodexEnv', () => {
     },
   );
 
+  it.runIf(process.platform === 'win32')(
+    'prioritizes pwsh.exe from a quoted PATH entry',
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-pwsh-quoted-'));
+      const shimDir = path.join(root, 'shim');
+      const executableDir = path.join(root, 'PowerShell', '7');
+      const quotedExecutableDir = `"${executableDir}"`;
+
+      try {
+        await mkdir(shimDir, { recursive: true });
+        await mkdir(executableDir, { recursive: true });
+        await writeFile(path.join(shimDir, 'pwsh.cmd'), '@echo off\r\n');
+        await writeFile(path.join(executableDir, 'pwsh.exe'), 'test executable placeholder');
+
+        for (const key of Object.keys(process.env)) {
+          if (key.toLowerCase() === 'path') delete process.env[key];
+        }
+        process.env.Path = [shimDir, quotedExecutableDir].join(path.delimiter);
+
+        const env = await buildCodexEnv(createAuthAdapter(), {});
+        const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+
+        expect(pathKey).toBeDefined();
+        expect(env[pathKey!]?.split(path.delimiter)).toEqual([
+          quotedExecutableDir,
+          shimDir,
+        ]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('defaults command output to plain text across common CLI color controls', async () => {
     delete process.env.NO_COLOR;
     delete process.env.CLICOLOR;

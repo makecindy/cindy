@@ -48,12 +48,16 @@ function prioritizeWindowsPwshExecutable(env: Record<string, string>): void {
   const entries = env[pathKey].split(path.delimiter);
   const executableIndex = entries.findIndex((entry) => {
     const trimmed = entry.trim();
-    if (trimmed.length === 0) return false;
+    const directory =
+      trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
+        ? trimmed.slice(1, -1).trim()
+        : trimmed;
+    if (directory.length === 0) return false;
 
-    const normalized = path.win32.normalize(trimmed).replace(/[\\/]+$/, '').toLowerCase();
+    const normalized = path.win32.normalize(directory).replace(/[\\/]+$/, '').toLowerCase();
     if (normalized.endsWith('\\microsoft\\windowsapps')) return false;
 
-    return existsSync(path.join(trimmed, 'pwsh.exe'));
+    return existsSync(path.join(directory, 'pwsh.exe'));
   });
   if (executableIndex <= 0) return;
 
