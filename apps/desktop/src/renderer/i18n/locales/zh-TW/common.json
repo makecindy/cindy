@@ -3236,6 +3236,124 @@
       "recording": "按下新快捷鍵…",
       "editAria": "修改 {{name}} 的快捷鍵",
       "workLouderCodex": {
+        "commands": {
+          "composer.toggleFastMode": {
+            "name": "切換快速模式",
+            "description": "在目前輸入框中開啟或關閉快速模式"
+          },
+          "approval.approve": {
+            "name": "核准請求",
+            "description": "核准目前等待確認的請求"
+          },
+          "approval.decline": {
+            "name": "拒絕請求",
+            "description": "拒絕目前等待確認的請求"
+          },
+          "forkTask": {
+            "name": "在新任務中繼續",
+            "description": "以目前任務為基礎建立新任務"
+          },
+          "composer.submit": {
+            "name": "傳送訊息",
+            "description": "傳送輸入框中的訊息"
+          },
+          "feedback": {
+            "name": "傳送意見回饋",
+            "description": "將產品意見回饋傳送給 Cindy 團隊"
+          },
+          "toggleTerminal": {
+            "name": "開啟終端機",
+            "description": "開啟終端機面板"
+          },
+          "copyConversationMarkdown": {
+            "name": "複製為 Markdown",
+            "description": "將目前任務的對話複製為 Markdown"
+          },
+          "archiveTask": {
+            "name": "封存任務",
+            "description": "封存目前任務"
+          },
+          "newTask": {
+            "name": "新增任務",
+            "description": "開始一個新任務"
+          },
+          "openBrowserTab": {
+            "name": "開啟瀏覽器分頁",
+            "description": "開啟一個新的瀏覽器分頁"
+          },
+          "toggleTaskPin": {
+            "name": "切換釘選",
+            "description": "釘選或取消釘選目前任務"
+          },
+          "toggleReviewTab": {
+            "name": "切換複核",
+            "description": "顯示或隱藏目前任務的複核"
+          },
+          "composer.addPhotos": {
+            "name": "新增圖片",
+            "description": "將圖片新增至輸入框"
+          },
+          "settings": {
+            "name": "設定",
+            "description": "開啟 Cindy 設定"
+          },
+          "manageTasks": {
+            "name": "管理排程任務",
+            "description": "建立或管理排程任務"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "提高推理強度",
+            "description": "提高目前輸入框的推理強度"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "降低推理強度",
+            "description": "降低目前輸入框的推理強度"
+          },
+          "openFolder": {
+            "name": "開啟資料夾",
+            "description": "將本機專案新增至 Cindy"
+          },
+          "composer.addFiles": {
+            "name": "附加檔案和資料夾",
+            "description": "將檔案和資料夾附加到輸入框"
+          },
+          "openSkills": {
+            "name": "前往技能",
+            "description": "瀏覽已安裝和推薦的技能"
+          },
+          "composer.togglePlanMode": {
+            "name": "切換計畫模式",
+            "description": "在目前輸入框中開啟或關閉計畫模式"
+          },
+          "navigateForward": {
+            "name": "前進",
+            "description": "在瀏覽記錄中前進"
+          },
+          "toggleSidebar": {
+            "name": "切換側邊欄",
+            "description": "顯示或隱藏側邊欄"
+          },
+          "navigateBack": {
+            "name": "返回",
+            "description": "在瀏覽記錄中返回"
+          },
+          "composer.focus": {
+            "name": "聚焦輸入框",
+            "description": "將游標移至輸入框"
+          },
+          "conversation.scrollUp": {
+            "name": "向上捲動",
+            "description": "向上捲動對話"
+          },
+          "conversation.scrollDown": {
+            "name": "向下捲動",
+            "description": "向下捲動對話"
+          },
+          "conversation.scrollBottom": {
+            "name": "跳到最新",
+            "description": "捲動到最新一則訊息"
+          }
+        },
         "title": "Work Louder Codex Micro",
         "entryDescription": "用 6 個 Agent 鍵開啟 Cindy 最近的任務，並用燈光顯示任務狀態。",
         "openAria": "開啟 Work Louder Codex Micro 設定",
@@ -3301,6 +3419,7 @@
           }
         },
         "agentKeys": {
+          "customDescription": "來源設為自訂時，這個任務鍵開啟什麼。",
           "title": "Agent 鍵",
           "source": {
             "label": "任務順序",
@@ -3323,12 +3442,10 @@
           "slotAria": "AG{{slot}} 開啟最近第 {{position}} 個任務"
         },
         "commandKeys": {
-          "title": "命令鍵",
-          "keycap": "選擇鍵帽",
+          "builtInDescription": "保持鍵帽內建的動作，或將這個鍵改綁到其他動作。",
           "builtIn": "使用鍵帽預設動作"
         },
         "microphone": {
-          "title": "麥克風",
           "mode": {
             "label": "麥克風模式",
             "description": "選擇麥克風鍵使用按住說話，或切換語音對話。",
@@ -3382,6 +3499,7 @@
         },
         "layout": {
           "editor": {
+            "done": "完成",
             "title": "編輯鍵帽",
             "description": "選擇這個實體按鍵上顯示的鍵帽。",
             "searchPlaceholder": "搜尋鍵帽",
@@ -3389,14 +3507,12 @@
             "cancel": "取消",
             "save": "儲存",
             "assignedShortcut": "已分配動作",
-            "noAssignment": "未分配動作",
             "selectKeycap": "選擇鍵帽 {{keycap}}"
           },
           "keyboard": {
+            "indicator": "狀態指示燈",
             "title": "配置",
             "description": "點選鍵帽，選擇它的標籤和預設動作。",
-            "editHint": "選擇一個按鍵來編輯鍵帽。",
-            "codexMicro": "Codex Micro",
             "analogStick": "搖桿",
             "encoder": "旋鈕"
           },

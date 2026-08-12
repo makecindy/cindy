@@ -3236,6 +3236,124 @@
       "recording": "새 단축키를 누르세요…",
       "editAria": "{{name}} 단축키 변경",
       "workLouderCodex": {
+        "commands": {
+          "composer.toggleFastMode": {
+            "name": "빠른 모드 전환",
+            "description": "현재 입력창에서 빠른 모드를 켜거나 끕니다"
+          },
+          "approval.approve": {
+            "name": "요청 승인",
+            "description": "확인 대기 중인 요청을 승인합니다"
+          },
+          "approval.decline": {
+            "name": "요청 거부",
+            "description": "확인 대기 중인 요청을 거부합니다"
+          },
+          "forkTask": {
+            "name": "새 작업에서 계속",
+            "description": "현재 작업을 바탕으로 새 작업을 만듭니다"
+          },
+          "composer.submit": {
+            "name": "메시지 보내기",
+            "description": "입력창의 메시지를 보냅니다"
+          },
+          "feedback": {
+            "name": "피드백 보내기",
+            "description": "제품 피드백을 Cindy 팀에 보냅니다"
+          },
+          "toggleTerminal": {
+            "name": "터미널 열기",
+            "description": "터미널 패널을 엽니다"
+          },
+          "copyConversationMarkdown": {
+            "name": "Markdown으로 복사",
+            "description": "현재 작업의 대화를 Markdown으로 복사합니다"
+          },
+          "archiveTask": {
+            "name": "작업 보관",
+            "description": "현재 작업을 보관합니다"
+          },
+          "newTask": {
+            "name": "새 작업",
+            "description": "새 작업을 시작합니다"
+          },
+          "openBrowserTab": {
+            "name": "브라우저 탭 열기",
+            "description": "새 브라우저 탭을 엽니다"
+          },
+          "toggleTaskPin": {
+            "name": "고정 전환",
+            "description": "현재 작업을 고정하거나 고정을 해제합니다"
+          },
+          "toggleReviewTab": {
+            "name": "검토 전환",
+            "description": "현재 작업의 검토를 표시하거나 숨깁니다"
+          },
+          "composer.addPhotos": {
+            "name": "사진 추가",
+            "description": "입력창에 사진을 추가합니다"
+          },
+          "settings": {
+            "name": "설정",
+            "description": "Cindy 설정을 엽니다"
+          },
+          "manageTasks": {
+            "name": "예약 작업 관리",
+            "description": "예약 작업을 만들거나 관리합니다"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "추론 강도 높이기",
+            "description": "현재 입력창의 추론 강도를 높입니다"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "추론 강도 낮추기",
+            "description": "현재 입력창의 추론 강도를 낮춥니다"
+          },
+          "openFolder": {
+            "name": "폴더 열기",
+            "description": "로컬 프로젝트를 Cindy에 추가합니다"
+          },
+          "composer.addFiles": {
+            "name": "파일 및 폴더 첨부",
+            "description": "입력창에 파일과 폴더를 첨부합니다"
+          },
+          "openSkills": {
+            "name": "스킬로 이동",
+            "description": "설치된 스킬과 추천 스킬을 살펴봅니다"
+          },
+          "composer.togglePlanMode": {
+            "name": "계획 모드 전환",
+            "description": "현재 입력창에서 계획 모드를 켜거나 끕니다"
+          },
+          "navigateForward": {
+            "name": "앞으로",
+            "description": "탐색 기록에서 앞으로 이동합니다"
+          },
+          "toggleSidebar": {
+            "name": "사이드바 전환",
+            "description": "사이드바를 표시하거나 숨깁니다"
+          },
+          "navigateBack": {
+            "name": "뒤로",
+            "description": "탐색 기록에서 뒤로 이동합니다"
+          },
+          "composer.focus": {
+            "name": "입력창에 포커스",
+            "description": "커서를 입력창으로 옮깁니다"
+          },
+          "conversation.scrollUp": {
+            "name": "위로 스크롤",
+            "description": "대화를 위로 스크롤합니다"
+          },
+          "conversation.scrollDown": {
+            "name": "아래로 스크롤",
+            "description": "대화를 아래로 스크롤합니다"
+          },
+          "conversation.scrollBottom": {
+            "name": "최신으로 이동",
+            "description": "최신 메시지로 스크롤합니다"
+          }
+        },
         "title": "Work Louder Codex Micro",
         "entryDescription": "6개의 Agent 키로 Cindy의 최근 작업을 열고 조명으로 상태를 표시합니다.",
         "openAria": "Work Louder Codex Micro 설정 열기",
@@ -3301,6 +3419,7 @@
           }
         },
         "agentKeys": {
+          "customDescription": "소스를 사용자 지정으로 설정했을 때 이 작업 키가 여는 대상입니다.",
           "title": "Agent 키",
           "source": {
             "label": "작업 순서",
@@ -3323,12 +3442,10 @@
           "slotAria": "AG{{slot}}로 최근 {{position}}번째 작업 열기"
         },
         "commandKeys": {
-          "title": "명령 키",
-          "keycap": "키캡 선택",
+          "builtInDescription": "키캡 기본 동작을 유지하거나 다른 동작에 연결합니다.",
           "builtIn": "키캡 기본 동작 사용"
         },
         "microphone": {
-          "title": "마이크",
           "mode": {
             "label": "마이크 모드",
             "description": "마이크 키를 눌러 말하기로 사용할지, 음성 채팅 전환으로 사용할지 선택합니다.",
@@ -3382,6 +3499,7 @@
         },
         "layout": {
           "editor": {
+            "done": "완료",
             "title": "키캡 편집",
             "description": "이 물리 키에 표시할 키캡을 선택합니다.",
             "searchPlaceholder": "키캡 검색",
@@ -3389,14 +3507,12 @@
             "cancel": "취소",
             "save": "저장",
             "assignedShortcut": "할당된 동작",
-            "noAssignment": "할당된 동작 없음",
             "selectKeycap": "키캡 {{keycap}} 선택"
           },
           "keyboard": {
+            "indicator": "상태 표시등",
             "title": "배치",
             "description": "키캡을 클릭해 레이블과 기본 동작을 선택합니다.",
-            "editHint": "키를 선택해 키캡을 편집합니다.",
-            "codexMicro": "Codex Micro",
             "analogStick": "조이스틱",
             "encoder": "인코더"
           },

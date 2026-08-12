@@ -3236,6 +3236,124 @@
       "recording": "按下新快捷键…",
       "editAria": "修改 {{name}} 的快捷键",
       "workLouderCodex": {
+        "commands": {
+          "composer.toggleFastMode": {
+            "name": "切换快速模式",
+            "description": "在当前输入框中开启或关闭快速模式"
+          },
+          "approval.approve": {
+            "name": "批准请求",
+            "description": "批准当前等待确认的请求"
+          },
+          "approval.decline": {
+            "name": "拒绝请求",
+            "description": "拒绝当前等待确认的请求"
+          },
+          "forkTask": {
+            "name": "在新任务中继续",
+            "description": "基于当前任务创建一个新任务"
+          },
+          "composer.submit": {
+            "name": "发送消息",
+            "description": "发送输入框中的消息"
+          },
+          "feedback": {
+            "name": "发送反馈",
+            "description": "把产品反馈发给 Cindy 团队"
+          },
+          "toggleTerminal": {
+            "name": "打开终端",
+            "description": "打开终端面板"
+          },
+          "copyConversationMarkdown": {
+            "name": "复制为 Markdown",
+            "description": "把当前任务的对话复制为 Markdown"
+          },
+          "archiveTask": {
+            "name": "归档任务",
+            "description": "归档当前任务"
+          },
+          "newTask": {
+            "name": "新建任务",
+            "description": "开始一个新任务"
+          },
+          "openBrowserTab": {
+            "name": "打开浏览器标签页",
+            "description": "打开一个新的浏览器标签页"
+          },
+          "toggleTaskPin": {
+            "name": "切换置顶",
+            "description": "置顶或取消置顶当前任务"
+          },
+          "toggleReviewTab": {
+            "name": "切换复核",
+            "description": "显示或隐藏当前任务的复核"
+          },
+          "composer.addPhotos": {
+            "name": "添加图片",
+            "description": "把图片添加到输入框"
+          },
+          "settings": {
+            "name": "设置",
+            "description": "打开 Cindy 设置"
+          },
+          "manageTasks": {
+            "name": "管理定时任务",
+            "description": "创建或管理定时任务"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "提高推理强度",
+            "description": "提高当前输入框的推理强度"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "降低推理强度",
+            "description": "降低当前输入框的推理强度"
+          },
+          "openFolder": {
+            "name": "打开文件夹",
+            "description": "把本地项目添加到 Cindy"
+          },
+          "composer.addFiles": {
+            "name": "附加文件和文件夹",
+            "description": "把文件和文件夹附加到输入框"
+          },
+          "openSkills": {
+            "name": "前往技能",
+            "description": "浏览已安装和推荐的技能"
+          },
+          "composer.togglePlanMode": {
+            "name": "切换计划模式",
+            "description": "在当前输入框中开启或关闭计划模式"
+          },
+          "navigateForward": {
+            "name": "前进",
+            "description": "在浏览历史中前进"
+          },
+          "toggleSidebar": {
+            "name": "切换侧边栏",
+            "description": "显示或隐藏侧边栏"
+          },
+          "navigateBack": {
+            "name": "后退",
+            "description": "在浏览历史中后退"
+          },
+          "composer.focus": {
+            "name": "聚焦输入框",
+            "description": "把光标移到输入框"
+          },
+          "conversation.scrollUp": {
+            "name": "向上滚动",
+            "description": "向上滚动对话"
+          },
+          "conversation.scrollDown": {
+            "name": "向下滚动",
+            "description": "向下滚动对话"
+          },
+          "conversation.scrollBottom": {
+            "name": "跳到最新",
+            "description": "滚动到最新一条消息"
+          }
+        },
         "title": "Work Louder Codex Micro",
         "entryDescription": "用 6 个 Agent 键打开 Cindy 最近的任务，并用灯光显示任务状态。",
         "openAria": "打开 Work Louder Codex Micro 设置",
@@ -3301,6 +3419,7 @@
           }
         },
         "agentKeys": {
+          "customDescription": "来源设为自定义时，这个任务键打开什么。",
           "title": "Agent 键",
           "source": {
             "label": "任务顺序",
@@ -3323,12 +3442,10 @@
           "slotAria": "AG{{slot}} 打开最近第 {{position}} 个任务"
         },
         "commandKeys": {
-          "title": "命令键",
-          "keycap": "选择键帽",
+          "builtInDescription": "保持键帽自带的动作，或把这个键改绑到别的动作。",
           "builtIn": "使用键帽预置动作"
         },
         "microphone": {
-          "title": "麦克风",
           "mode": {
             "label": "麦克风模式",
             "description": "选择麦克风键使用按住说话，还是切换语音对话。",
@@ -3382,6 +3499,7 @@
         },
         "layout": {
           "editor": {
+            "done": "完成",
             "title": "编辑键帽",
             "description": "选择这个实体按键上显示的键帽。",
             "searchPlaceholder": "搜索键帽",
@@ -3389,14 +3507,12 @@
             "cancel": "取消",
             "save": "保存",
             "assignedShortcut": "已分配动作",
-            "noAssignment": "未分配动作",
             "selectKeycap": "选择键帽 {{keycap}}"
           },
           "keyboard": {
+            "indicator": "状态指示灯",
             "title": "布局",
             "description": "点击键帽，选择它的标签和预置动作。",
-            "editHint": "选择一个按键来编辑键帽。",
-            "codexMicro": "Codex Micro",
             "analogStick": "摇杆",
             "encoder": "旋钮"
           },

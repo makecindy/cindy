@@ -17,8 +17,16 @@ import { cn } from '@/lib/utils';
 import {
   WorkLouderCodexKeyboardLayout,
   WorkLouderCodexKeycapPicker,
+  WorkLouderCodexPartEditor,
+  type WorkLouderCodexAgentKey,
+  type WorkLouderCodexControlPart,
   type WorkLouderCodexEditableKey,
+  type WorkLouderCodexKeyHint,
 } from './WorkLouderCodexKeyboardLayout';
+import {
+  workLouderCodexCommandDescription,
+  workLouderCodexCommandName,
+} from './workLouderCodexCommandCopy';
 import {
   WORKLOUDER_CODEX_AGENT_SOURCES,
   WORKLOUDER_CODEX_ANALOG_DIRECTIONS,
@@ -107,6 +115,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   const [editingSlot, setEditingSlot] = useState<WorkLouderCodexCommandSlot | null>(null);
   const [editingKeycapId, setEditingKeycapId] = useState<WorkLouderCodexKeycapId | null>(null);
   const [keycapQuery, setKeycapQuery] = useState('');
+  const [editingPart, setEditingPart] = useState<
+    WorkLouderCodexAgentKey | WorkLouderCodexControlPart | null
+  >(null);
   const settings = state?.settings ?? WORKLOUDER_CODEX_DEFAULT_SETTINGS;
   const enabledSkills = useMemo(
     () => skills.filter((skill) => skill.kind === 'skill' && !skill.parseError),
@@ -156,12 +167,20 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     });
   };
 
-  const openKeycapEditor = (key: WorkLouderCodexEditableKey): void => {
-    if (!key.startsWith('ACT')) return;
-    const slot = key as WorkLouderCodexCommandSlot;
-    setEditingSlot(slot);
-    setEditingKeycapId(settings.layout.slots[slot].keycapId);
-    setKeycapQuery('');
+  /**
+   * Every part of the board is configured by clicking it. A command key opens
+   * the keycap library; the other parts open a small editor of their own. That
+   * is why the panel below carries no per-key rows.
+   */
+  const openPartEditor = (key: WorkLouderCodexEditableKey): void => {
+    if (key.startsWith('ACT')) {
+      const slot = key as WorkLouderCodexCommandSlot;
+      setEditingSlot(slot);
+      setEditingKeycapId(settings.layout.slots[slot].keycapId);
+      setKeycapQuery('');
+      return;
+    }
+    setEditingPart(key as WorkLouderCodexAgentKey | WorkLouderCodexControlPart);
   };
 
   const closeKeycapEditor = (): void => {
@@ -171,6 +190,54 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   };
 
   const editingAssignment = editingSlot ? settings.layout.slots[editingSlot] : null;
+  /** The microphone slots double as the voice-input control, so they get its options too. */
+  const editingMicrophone =
+    editingSlot === 'ACT10' || editingSlot === 'ACT11' || editingSlot === 'ACT10_ACT11';
+
+  const hintFor = (key: WorkLouderCodexEditableKey): WorkLouderCodexKeyHint | null => {
+    if (key.startsWith('AG')) {
+      const index = Number(key.slice(2));
+      const slot = state?.agentSlots[index];
+      return {
+        legend: key,
+        name: slot?.title ?? t('settings.shortcuts.workLouderCodex.agentKeys.newTask'),
+        description: t('settings.shortcuts.workLouderCodex.agentKeys.source.description'),
+      };
+    }
+    if (key === 'analog') {
+      return {
+        legend: t('settings.shortcuts.workLouderCodex.layout.keyboard.analogStick'),
+        name: t('settings.shortcuts.workLouderCodex.analog.description'),
+      };
+    }
+    if (key === 'encoder') {
+      return {
+        legend: t('settings.shortcuts.workLouderCodex.layout.keyboard.encoder'),
+        name: t(
+          `settings.shortcuts.workLouderCodex.encoder.mode.options.${settings.layout.encoderMode}`,
+        ),
+        description: t('settings.shortcuts.workLouderCodex.encoder.mode.description'),
+      };
+    }
+    const slot = key as WorkLouderCodexCommandSlot;
+    const assignment = settings.layout.slots[slot];
+    const action = assignment.action;
+    if (action?.type === 'command') {
+      return {
+        legend: assignment.keycapId,
+        name: workLouderCodexCommandName(t, action.commandId),
+        description: workLouderCodexCommandDescription(t, action.commandId),
+      };
+    }
+    if (action?.type === 'skill') {
+      return { legend: assignment.keycapId, name: action.name };
+    }
+    // No override: the keycap runs whatever Cindy has wired to it by default.
+    return {
+      legend: assignment.keycapId,
+      name: t('settings.shortcuts.workLouderCodex.commandKeys.builtIn'),
+    };
+  };
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -250,13 +317,13 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
           layout={settings.layout}
           agentSlots={state?.agentSlots ?? []}
           disabled={!state || saving}
-          footer={t('settings.shortcuts.workLouderCodex.layout.keyboard.editHint')}
           labels={{
             analogStick: t('settings.shortcuts.workLouderCodex.layout.keyboard.analogStick'),
             encoder: t('settings.shortcuts.workLouderCodex.layout.keyboard.encoder'),
-            codexMicro: t('settings.shortcuts.workLouderCodex.layout.keyboard.codexMicro'),
+            indicator: t('settings.shortcuts.workLouderCodex.layout.keyboard.indicator'),
           }}
-          onEditKeycap={openKeycapEditor}
+          hintFor={hintFor}
+          onEditKeycap={openPartEditor}
         />
       </SettingsCard>
 
@@ -274,11 +341,6 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
         onSave={() => {
           if (editingSlot && editingKeycapId) changeCommandKeycap(editingSlot, editingKeycapId);
         }}
-        assignedAction={
-          editingAssignment?.action
-            ? actionValue(editingAssignment.action)
-            : t('settings.shortcuts.workLouderCodex.layout.editor.noAssignment')
-        }
         copy={{
           title: t('settings.shortcuts.workLouderCodex.layout.editor.title'),
           description: t('settings.shortcuts.workLouderCodex.layout.editor.description'),
@@ -288,10 +350,211 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
           close: t('settings.shortcuts.workLouderCodex.layout.editor.close'),
           cancel: t('settings.shortcuts.workLouderCodex.layout.editor.cancel'),
           save: t('settings.shortcuts.workLouderCodex.layout.editor.save'),
-          assignedShortcut: t('settings.shortcuts.workLouderCodex.layout.editor.assignedShortcut'),
-          noAssignment: t('settings.shortcuts.workLouderCodex.layout.editor.noAssignment'),
         }}
-      />
+      >
+        <div className="flex flex-col gap-3">
+          <SettingsRow
+            label={t('settings.shortcuts.workLouderCodex.layout.editor.assignedShortcut')}
+            description={t('settings.shortcuts.workLouderCodex.commandKeys.builtInDescription')}
+            control={
+              <ActionSelect
+                action={editingAssignment?.action ?? null}
+                state={state}
+                skills={enabledSkills}
+                disabled={!state || saving || !editingSlot}
+                emptyLabel={t('settings.shortcuts.workLouderCodex.commandKeys.builtIn')}
+                onChange={(action) => {
+                  if (!editingSlot) return;
+                  patchLayout((layout) => {
+                    layout.slots[editingSlot].action = action;
+                  });
+                }}
+              />
+            }
+          />
+          {editingMicrophone && (
+            <>
+              <SettingsDivider />
+              <MicrophoneControls
+                settings={settings}
+                state={state}
+                saving={saving}
+                patchLayout={patchLayout}
+              />
+            </>
+          )}
+        </div>
+      </WorkLouderCodexKeycapPicker>
+
+      {/* Agent keys carry a task, not a keycap, so they get their own editor. */}
+      <WorkLouderCodexPartEditor
+        open={editingPart !== null && editingPart.startsWith('AG')}
+        onOpenChange={(open) => {
+          if (!open) setEditingPart(null);
+        }}
+        title={t('settings.shortcuts.workLouderCodex.agentKeys.title')}
+        description={t('settings.shortcuts.workLouderCodex.agentKeys.source.description')}
+        closeLabel={t('settings.shortcuts.workLouderCodex.layout.editor.done')}
+      >
+        <div className="flex flex-col gap-3">
+          <SettingsRow
+            label={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
+            description={t('settings.shortcuts.workLouderCodex.agentKeys.source.description')}
+            control={
+              <SelectControl
+                value={settings.agentSource}
+                disabled={!state || saving}
+                ariaLabel={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
+                onChange={(value) =>
+                  void setSettings({ agentSource: value as WorkLouderCodexAgentSource })
+                }
+              >
+                {WORKLOUDER_CODEX_AGENT_SOURCES.map((source) => (
+                  <option key={source} value={source}>
+                    {t(`settings.shortcuts.workLouderCodex.agentKeys.source.options.${source}`)}
+                  </option>
+                ))}
+              </SelectControl>
+            }
+          />
+          <SettingsDivider />
+          <SettingsRow
+            label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.label')}
+            description={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.description')}
+            control={
+              <Switch
+                checked={settings.singleTapAgentKeys}
+                disabled={!state || saving}
+                onCheckedChange={(checked) => void setSettings({ singleTapAgentKeys: checked })}
+                aria-label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria')}
+              />
+            }
+          />
+          {settings.agentSource === 'custom' && editingPart?.startsWith('AG') && (
+            <>
+              <SettingsDivider />
+              <SettingsRow
+                label={editingPart}
+                description={t('settings.shortcuts.workLouderCodex.agentKeys.customDescription')}
+                control={
+                  <ActionSelect
+                    action={settings.customAgentKeys[Number(editingPart.slice(2))] ?? null}
+                    state={state}
+                    skills={enabledSkills}
+                    disabled={!state || saving}
+                    emptyLabel={t('settings.shortcuts.workLouderCodex.agentKeys.newTask')}
+                    allowTasks
+                    allowKeycaps
+                    onChange={(action) => {
+                      const index = Number(editingPart.slice(2));
+                      const customAgentKeys = settings.customAgentKeys.map((item) =>
+                        item ? { ...item } : null,
+                      );
+                      customAgentKeys[index] = action;
+                      void setSettings({ customAgentKeys });
+                    }}
+                  />
+                }
+              />
+            </>
+          )}
+        </div>
+      </WorkLouderCodexPartEditor>
+
+      <WorkLouderCodexPartEditor
+        open={editingPart === 'analog'}
+        onOpenChange={(open) => {
+          if (!open) setEditingPart(null);
+        }}
+        title={t('settings.shortcuts.workLouderCodex.analog.title')}
+        description={t('settings.shortcuts.workLouderCodex.analog.description')}
+        closeLabel={t('settings.shortcuts.workLouderCodex.layout.editor.done')}
+      >
+        <div className="flex flex-col gap-3">
+          {WORKLOUDER_CODEX_ANALOG_DIRECTIONS.map((direction, index) => (
+            <div key={direction}>
+              {index > 0 && <SettingsDivider />}
+              <SettingsRow
+                label={t(`settings.shortcuts.workLouderCodex.analog.directions.${direction}`)}
+                description={t('settings.shortcuts.workLouderCodex.analog.description')}
+                control={
+                  <ActionSelect
+                    action={settings.layout.analogStick[direction]}
+                    state={state}
+                    skills={enabledSkills}
+                    disabled={!state || saving}
+                    emptyLabel={t('settings.shortcuts.workLouderCodex.actions.none')}
+                    onChange={(action) =>
+                      patchLayout((layout) => {
+                        layout.analogStick[direction] = action;
+                      })
+                    }
+                  />
+                }
+              />
+            </div>
+          ))}
+        </div>
+      </WorkLouderCodexPartEditor>
+
+      <WorkLouderCodexPartEditor
+        open={editingPart === 'encoder'}
+        onOpenChange={(open) => {
+          if (!open) setEditingPart(null);
+        }}
+        title={t('settings.shortcuts.workLouderCodex.encoder.title')}
+        description={t('settings.shortcuts.workLouderCodex.encoder.mode.description')}
+        closeLabel={t('settings.shortcuts.workLouderCodex.layout.editor.done')}
+      >
+        <div className="flex flex-col gap-3">
+          <SettingsRow
+            label={t('settings.shortcuts.workLouderCodex.encoder.mode.label')}
+            description={t('settings.shortcuts.workLouderCodex.encoder.mode.description')}
+            control={
+              <SelectControl
+                value={settings.layout.encoderMode}
+                disabled={!state || saving}
+                ariaLabel={t('settings.shortcuts.workLouderCodex.encoder.mode.label')}
+                onChange={(value) =>
+                  patchLayout((layout) => {
+                    layout.encoderMode = value as WorkLouderCodexLayout['encoderMode'];
+                  })
+                }
+              >
+                {WORKLOUDER_CODEX_ENCODER_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {t(`settings.shortcuts.workLouderCodex.encoder.mode.options.${mode}`)}
+                  </option>
+                ))}
+              </SelectControl>
+            }
+          />
+          {settings.layout.encoderMode === 'custom' &&
+            WORKLOUDER_CODEX_ENCODER_ACTIONS.map((gesture) => (
+              <div key={gesture}>
+                <SettingsDivider />
+                <SettingsRow
+                  label={t(`settings.shortcuts.workLouderCodex.encoder.gestures.${gesture}`)}
+                  description={t('settings.shortcuts.workLouderCodex.encoder.customDescription')}
+                  control={
+                    <ActionSelect
+                      action={settings.layout.encoder[gesture]}
+                      state={state}
+                      skills={enabledSkills}
+                      disabled={!state || saving}
+                      emptyLabel={t('settings.shortcuts.workLouderCodex.actions.none')}
+                      onChange={(action) =>
+                        patchLayout((layout) => {
+                          layout.encoder[gesture] = action;
+                        })
+                      }
+                    />
+                  }
+                />
+              </div>
+            ))}
+        </div>
+      </WorkLouderCodexPartEditor>
 
       {error && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--error-border)] bg-[var(--error-bg)] px-4 py-3 text-12 text-[var(--error-fg)]">
@@ -327,250 +590,6 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
           />
         </SettingsGroup>
       )}
-
-      <SettingsGroup title={t('settings.shortcuts.workLouderCodex.agentKeys.title')}>
-        <SettingsRow
-          label={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
-          description={t('settings.shortcuts.workLouderCodex.agentKeys.source.description')}
-          control={
-            <SelectControl
-              value={settings.agentSource}
-              disabled={!state || saving}
-              ariaLabel={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
-              onChange={(value) =>
-                void setSettings({ agentSource: value as WorkLouderCodexAgentSource })
-              }
-            >
-              {WORKLOUDER_CODEX_AGENT_SOURCES.map((source) => (
-                <option key={source} value={source}>
-                  {t(`settings.shortcuts.workLouderCodex.agentKeys.source.options.${source}`)}
-                </option>
-              ))}
-            </SelectControl>
-          }
-        />
-        <SettingsDivider />
-        <SettingsRow
-          label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.label')}
-          description={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.description')}
-          control={
-            <Switch
-              checked={settings.singleTapAgentKeys}
-              disabled={!state || saving}
-              onCheckedChange={(checked) => void setSettings({ singleTapAgentKeys: checked })}
-              aria-label={t('settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria')}
-            />
-          }
-        />
-        <SettingsDivider />
-        <div className="grid grid-cols-2 gap-2 py-1 max-sm:grid-cols-1">
-          {Array.from({ length: state?.agentSlotCount ?? 6 }, (_, index) => {
-            const slot = state?.agentSlots[index];
-            return (
-              <div
-                key={index}
-                className="flex min-w-0 flex-col gap-2 rounded-lg border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] px-3 py-2.5"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-11 font-medium tracking-wide text-[var(--text-tertiary)]">
-                    AG{String(index).padStart(2, '0')}
-                  </span>
-                  {settings.agentSource !== 'custom' && (
-                    <span className="max-w-[180px] truncate text-12 font-medium text-[var(--text-primary)]">
-                      {slot?.title ?? t('settings.shortcuts.workLouderCodex.agentKeys.newTask')}
-                    </span>
-                  )}
-                </div>
-                {settings.agentSource === 'custom' && (
-                  <ActionSelect
-                    action={settings.customAgentKeys[index] ?? null}
-                    state={state}
-                    skills={enabledSkills}
-                    disabled={!state || saving}
-                    emptyLabel={t('settings.shortcuts.workLouderCodex.agentKeys.newTask')}
-                    allowTasks
-                    allowKeycaps
-                    onChange={(action) => {
-                      const customAgentKeys = settings.customAgentKeys.map((item) =>
-                        item ? { ...item } : null,
-                      );
-                      customAgentKeys[index] = action;
-                      void setSettings({ customAgentKeys });
-                    }}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.shortcuts.workLouderCodex.commandKeys.title')}>
-        <div className="flex flex-col gap-1">
-          {visibleCommandSlots.map((slot, index) => {
-            const assignment = settings.layout.slots[slot];
-            const double = slot === 'ACT10_ACT11';
-            const keycaps = WORKLOUDER_CODEX_KEYCAP_IDS.filter((keycap) =>
-              double ? DOUBLE_KEYCAPS.has(keycap) : !DOUBLE_KEYCAPS.has(keycap),
-            );
-            return (
-              <div key={slot}>
-                {index > 0 && <SettingsDivider />}
-                <div className="flex flex-wrap items-center gap-3 py-2">
-                  <span className="w-[88px] shrink-0 text-12 font-medium text-[var(--text-secondary)]">
-                    {slot === 'ACT10_ACT11' ? 'ACT10 + 11' : slot}
-                  </span>
-                  <SelectControl
-                    value={assignment.keycapId}
-                    disabled={!state || saving}
-                    ariaLabel={t('settings.shortcuts.workLouderCodex.commandKeys.keycap')}
-                    onChange={(value) =>
-                      changeCommandKeycap(slot, value as WorkLouderCodexKeycapId)
-                    }
-                    className="min-w-[110px] flex-1"
-                  >
-                    {keycaps.map((keycap) => (
-                      <option key={keycap} value={keycap}>
-                        {keycap}
-                      </option>
-                    ))}
-                  </SelectControl>
-                  <ActionSelect
-                    action={assignment.action}
-                    state={state}
-                    skills={enabledSkills}
-                    disabled={!state || saving}
-                    emptyLabel={t('settings.shortcuts.workLouderCodex.commandKeys.builtIn')}
-                    onChange={(action) =>
-                      patchLayout((layout) => {
-                        layout.slots[slot].action = action;
-                      })
-                    }
-                    className="min-w-[210px] flex-[2]"
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.shortcuts.workLouderCodex.microphone.title')}>
-        <SettingsRow
-          label={t('settings.shortcuts.workLouderCodex.microphone.mode.label')}
-          description={t('settings.shortcuts.workLouderCodex.microphone.mode.description')}
-          control={
-            <SelectControl
-              value={settings.layout.voiceButtonMode}
-              disabled={!state || saving}
-              ariaLabel={t('settings.shortcuts.workLouderCodex.microphone.mode.label')}
-              onChange={(value) =>
-                patchLayout((layout) => {
-                  layout.voiceButtonMode = value as WorkLouderCodexLayout['voiceButtonMode'];
-                })
-              }
-            >
-              {WORKLOUDER_CODEX_VOICE_BUTTON_MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(`settings.shortcuts.workLouderCodex.microphone.mode.options.${mode}`)}
-                </option>
-              ))}
-            </SelectControl>
-          }
-        />
-        <SettingsDivider />
-        <SettingsRow
-          label={t('settings.shortcuts.workLouderCodex.microphone.separate.label')}
-          description={t('settings.shortcuts.workLouderCodex.microphone.separate.description')}
-          control={
-            <Switch
-              checked={settings.layout.separateMicrophoneKeys}
-              disabled={!state || saving}
-              onCheckedChange={(checked) =>
-                patchLayout((layout) => {
-                  layout.separateMicrophoneKeys = checked;
-                })
-              }
-              aria-label={t('settings.shortcuts.workLouderCodex.microphone.separate.label')}
-            />
-          }
-        />
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.shortcuts.workLouderCodex.analog.title')}>
-        {WORKLOUDER_CODEX_ANALOG_DIRECTIONS.map((direction, index) => (
-          <div key={direction}>
-            {index > 0 && <SettingsDivider />}
-            <SettingsRow
-              label={t(`settings.shortcuts.workLouderCodex.analog.directions.${direction}`)}
-              description={t('settings.shortcuts.workLouderCodex.analog.description')}
-              control={
-                <ActionSelect
-                  action={settings.layout.analogStick[direction]}
-                  state={state}
-                  skills={enabledSkills}
-                  disabled={!state || saving}
-                  emptyLabel={t('settings.shortcuts.workLouderCodex.actions.none')}
-                  onChange={(action) =>
-                    patchLayout((layout) => {
-                      layout.analogStick[direction] = action;
-                    })
-                  }
-                />
-              }
-            />
-          </div>
-        ))}
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.shortcuts.workLouderCodex.encoder.title')}>
-        <SettingsRow
-          label={t('settings.shortcuts.workLouderCodex.encoder.mode.label')}
-          description={t('settings.shortcuts.workLouderCodex.encoder.mode.description')}
-          control={
-            <SelectControl
-              value={settings.layout.encoderMode}
-              disabled={!state || saving}
-              ariaLabel={t('settings.shortcuts.workLouderCodex.encoder.mode.label')}
-              onChange={(value) =>
-                patchLayout((layout) => {
-                  layout.encoderMode = value as WorkLouderCodexLayout['encoderMode'];
-                })
-              }
-            >
-              {WORKLOUDER_CODEX_ENCODER_MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(`settings.shortcuts.workLouderCodex.encoder.mode.options.${mode}`)}
-                </option>
-              ))}
-            </SelectControl>
-          }
-        />
-        {settings.layout.encoderMode === 'custom' &&
-          WORKLOUDER_CODEX_ENCODER_ACTIONS.map((gesture) => (
-            <div key={gesture}>
-              <SettingsDivider />
-              <SettingsRow
-                label={t(`settings.shortcuts.workLouderCodex.encoder.gestures.${gesture}`)}
-                description={t('settings.shortcuts.workLouderCodex.encoder.customDescription')}
-                control={
-                  <ActionSelect
-                    action={settings.layout.encoder[gesture]}
-                    state={state}
-                    skills={enabledSkills}
-                    disabled={!state || saving}
-                    emptyLabel={t('settings.shortcuts.workLouderCodex.actions.none')}
-                    onChange={(action) =>
-                      patchLayout((layout) => {
-                        layout.encoder[gesture] = action;
-                      })
-                    }
-                  />
-                }
-              />
-            </div>
-          ))}
-      </SettingsGroup>
 
       <SettingsGroup title={t('settings.shortcuts.workLouderCodex.lighting.title')}>
         <SettingsRow
@@ -648,6 +667,67 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   );
 }
 
+/**
+ * Voice options live with the microphone key because that key is the control:
+ * how it listens, and whether the board splits it into two single-width keys.
+ */
+function MicrophoneControls({
+  settings,
+  state,
+  saving,
+  patchLayout,
+}: {
+  settings: WorkLouderCodexState['settings'];
+  state: WorkLouderCodexState | null;
+  saving: boolean;
+  patchLayout(update: (layout: WorkLouderCodexLayout) => void): void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-3">
+      <SettingsRow
+        label={t('settings.shortcuts.workLouderCodex.microphone.mode.label')}
+        description={t('settings.shortcuts.workLouderCodex.microphone.mode.description')}
+        control={
+          <SelectControl
+            value={settings.layout.voiceButtonMode}
+            disabled={!state || saving}
+            ariaLabel={t('settings.shortcuts.workLouderCodex.microphone.mode.label')}
+            onChange={(value) =>
+              patchLayout((layout) => {
+                layout.voiceButtonMode = value as WorkLouderCodexLayout['voiceButtonMode'];
+              })
+            }
+          >
+            {WORKLOUDER_CODEX_VOICE_BUTTON_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {t(`settings.shortcuts.workLouderCodex.microphone.mode.options.${mode}`)}
+              </option>
+            ))}
+          </SelectControl>
+        }
+      />
+      <SettingsDivider />
+      <SettingsRow
+        label={t('settings.shortcuts.workLouderCodex.microphone.separate.label')}
+        description={t('settings.shortcuts.workLouderCodex.microphone.separate.description')}
+        control={
+          <Switch
+            checked={settings.layout.separateMicrophoneKeys}
+            disabled={!state || saving}
+            onCheckedChange={(checked) =>
+              patchLayout((layout) => {
+                layout.separateMicrophoneKeys = checked;
+              })
+            }
+            aria-label={t('settings.shortcuts.workLouderCodex.microphone.separate.label')}
+          />
+        }
+      />
+    </div>
+  );
+}
+
 function ActionSelect({
   action,
   state,
@@ -691,7 +771,7 @@ function ActionSelect({
       <optgroup label={t('settings.shortcuts.workLouderCodex.actions.commands')}>
         {WORKLOUDER_CODEX_COMMAND_IDS.map((commandId) => (
           <option key={commandId} value={`command:${commandId}`}>
-            {formatCommandLabel(commandId)}
+            {workLouderCodexCommandName(t, commandId)}
           </option>
         ))}
       </optgroup>
@@ -924,14 +1004,6 @@ function parseActionValue(
     return { type: 'external-url', url };
   }
   return null;
-}
-
-function formatCommandLabel(commandId: string): string {
-  return commandId
-    .split('.')
-    .at(-1)!
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/^./, (character) => character.toUpperCase());
 }
 
 export type { WorkLouderCodexSettingsPatch };

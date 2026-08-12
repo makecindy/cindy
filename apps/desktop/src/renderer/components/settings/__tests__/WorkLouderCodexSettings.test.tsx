@@ -96,11 +96,11 @@ describe('WorkLouderCodexSettings', () => {
     ).toBeTruthy();
   });
 
-  it('shows the six recent-task slots and writes each supported setting', () => {
+  it('shows the six task keys and writes the settings that remain on the panel', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    expect(screen.getByRole('img', { name: /AG00/ })).toBeTruthy();
-    expect(screen.getByRole('img', { name: /AG05/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /AG00/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /AG05/ })).toBeTruthy();
 
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',
@@ -116,13 +116,47 @@ describe('WorkLouderCodexSettings', () => {
       { target: { value: '10-minutes' } },
     );
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingAutoDim: '10-minutes' });
+  });
 
+  it('keeps the task-key options behind the task key itself', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    // The panel no longer lists these; they live behind a click on the key.
+    expect(
+      screen.queryByRole('switch', {
+        name: 'settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria',
+      }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /AG00/ }));
     fireEvent.click(
       screen.getByRole('switch', {
         name: 'settings.shortcuts.workLouderCodex.agentKeys.singleTap.aria',
       }),
     );
     expect(mocks.setSettings).toHaveBeenCalledWith({ singleTapAgentKeys: true });
+  });
+
+  it('opens the analog stick and encoder editors from the board', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /settings\.shortcuts\.workLouderCodex\.layout\.keyboard\.analogStick/,
+      }),
+    );
+    // One select per direction; the first is "up".
+    const [up] = screen.getAllByRole('combobox', {
+      name: 'settings.shortcuts.workLouderCodex.actions.choose',
+    });
+    fireEvent.change(up, { target: { value: 'command:toggleSidebar' } });
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        analogStick: expect.objectContaining({
+          up: { type: 'command', commandId: 'toggleSidebar' },
+        }),
+      }),
+    });
   });
 
   it('restores all device settings to their defaults', () => {
@@ -136,7 +170,7 @@ describe('WorkLouderCodexSettings', () => {
   it('saves a graphical keycap choice and swaps a duplicate assignment', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'ACT06 FAST' }));
+    fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
     fireEvent.click(screen.getByRole('button', { name: 'APPR' }));
     fireEvent.click(
       screen.getByRole('button', {
@@ -157,7 +191,7 @@ describe('WorkLouderCodexSettings', () => {
   it('cancels graphical keycap editing without writing settings', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'ACT06 FAST' }));
+    fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
     fireEvent.click(screen.getByRole('button', { name: 'GIT' }));
     fireEvent.click(
       screen.getByRole('button', {

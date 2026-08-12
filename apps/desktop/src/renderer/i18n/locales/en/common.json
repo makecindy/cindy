@@ -3237,6 +3237,124 @@
       "recording": "Press new shortcut…",
       "editAria": "Change shortcut for {{name}}",
       "workLouderCodex": {
+        "commands": {
+          "composer.toggleFastMode": {
+            "name": "Toggle Fast mode",
+            "description": "Turn Fast mode on or off in the current composer"
+          },
+          "approval.approve": {
+            "name": "Approve request",
+            "description": "Approve the active request"
+          },
+          "approval.decline": {
+            "name": "Decline request",
+            "description": "Decline the active request"
+          },
+          "forkTask": {
+            "name": "Continue in new task",
+            "description": "Create a new task from the current one"
+          },
+          "composer.submit": {
+            "name": "Send message",
+            "description": "Send the current composer message"
+          },
+          "feedback": {
+            "name": "Send feedback",
+            "description": "Send product feedback to the Cindy team"
+          },
+          "toggleTerminal": {
+            "name": "Open terminal",
+            "description": "Open the terminal panel"
+          },
+          "copyConversationMarkdown": {
+            "name": "Copy as Markdown",
+            "description": "Copy the current task as Markdown"
+          },
+          "archiveTask": {
+            "name": "Archive task",
+            "description": "Archive the current task"
+          },
+          "newTask": {
+            "name": "New task",
+            "description": "Start a new task"
+          },
+          "openBrowserTab": {
+            "name": "Open browser tab",
+            "description": "Open a new browser tab"
+          },
+          "toggleTaskPin": {
+            "name": "Toggle pin",
+            "description": "Pin or unpin the current task"
+          },
+          "toggleReviewTab": {
+            "name": "Toggle review",
+            "description": "Show or hide review for the current task"
+          },
+          "composer.addPhotos": {
+            "name": "Add photos",
+            "description": "Add photos to the composer"
+          },
+          "settings": {
+            "name": "Settings",
+            "description": "Open Cindy settings"
+          },
+          "manageTasks": {
+            "name": "Manage scheduled tasks",
+            "description": "Create or manage scheduled tasks"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "Increase reasoning effort",
+            "description": "Raise the reasoning effort for the current composer"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "Decrease reasoning effort",
+            "description": "Lower the reasoning effort for the current composer"
+          },
+          "openFolder": {
+            "name": "Open folder",
+            "description": "Add a local project to Cindy"
+          },
+          "composer.addFiles": {
+            "name": "Attach files and folders",
+            "description": "Attach files and folders to the composer"
+          },
+          "openSkills": {
+            "name": "Go to skills",
+            "description": "Browse installed and recommended skills"
+          },
+          "composer.togglePlanMode": {
+            "name": "Toggle plan mode",
+            "description": "Turn plan mode on or off in the current composer"
+          },
+          "navigateForward": {
+            "name": "Forward",
+            "description": "Go forward in navigation history"
+          },
+          "toggleSidebar": {
+            "name": "Toggle sidebar",
+            "description": "Show or hide the sidebar"
+          },
+          "navigateBack": {
+            "name": "Back",
+            "description": "Go back in navigation history"
+          },
+          "composer.focus": {
+            "name": "Focus composer",
+            "description": "Move the cursor into the composer"
+          },
+          "conversation.scrollUp": {
+            "name": "Scroll up",
+            "description": "Scroll the conversation up"
+          },
+          "conversation.scrollDown": {
+            "name": "Scroll down",
+            "description": "Scroll the conversation down"
+          },
+          "conversation.scrollBottom": {
+            "name": "Jump to latest",
+            "description": "Scroll to the latest message"
+          }
+        },
         "title": "Work Louder Codex Micro",
         "entryDescription": "Open the six most recent Cindy tasks with the Agent keys and mirror their status with lighting.",
         "openAria": "Open Work Louder Codex Micro settings",
@@ -3302,6 +3420,7 @@
           }
         },
         "agentKeys": {
+          "customDescription": "What this agent key opens when the source is set to custom.",
           "title": "Agent keys",
           "source": {
             "label": "Task order",
@@ -3324,12 +3443,10 @@
           "slotAria": "AG{{slot}} opens recent task {{position}}"
         },
         "commandKeys": {
-          "title": "Command keys",
-          "keycap": "Choose a keycap",
+          "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
           "builtIn": "Use the keycap's built-in action"
         },
         "microphone": {
-          "title": "Microphone",
           "mode": {
             "label": "Microphone mode",
             "description": "Choose whether the microphone key is push-to-talk or a voice-chat toggle.",
@@ -3383,6 +3500,7 @@
         },
         "layout": {
           "editor": {
+            "done": "Done",
             "title": "Edit keycap",
             "description": "Choose the keycap shown on this physical key.",
             "searchPlaceholder": "Search keycaps",
@@ -3390,14 +3508,12 @@
             "cancel": "Cancel",
             "save": "Save",
             "assignedShortcut": "Assigned action",
-            "noAssignment": "No action assigned",
             "selectKeycap": "Select keycap {{keycap}}"
           },
           "keyboard": {
+            "indicator": "Status lights",
             "title": "Layout",
             "description": "Click a keycap to choose its label and built-in action.",
-            "editHint": "Select a key to edit its keycap.",
-            "codexMicro": "Codex Micro",
             "analogStick": "Joystick",
             "encoder": "Encoder"
           },
