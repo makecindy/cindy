@@ -1195,7 +1195,7 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, true),
+          recheckPolicy: () => blockedToolVerdict(grantVisibility.ghost.manifest.tools, true),
           maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
         });
         if (!grant.ok) {
