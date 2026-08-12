@@ -60,6 +60,12 @@ export interface RsbWindowControllerDeps {
 /** ensureOpenForAutomation 等 renderer ready 握手的超时。 */
 const READY_TIMEOUT_MS = 8000;
 const MAX_DEFERRED_SESSIONS = 8;
+/**
+ * 单会话 deferred 队列上限。正常路径远达不到(passive 命令种类有限且有合并
+ * 规则);达到时丢最旧一条并记 warn —— 不能静默,登记类命令被丢意味着这次
+ * 登记在窗口打开前不再有落点(#2409 的溢出策略要求)。
+ */
+const MAX_DEFERRED_COMMANDS_PER_SESSION = 32;
 
 /**
  * command 的宿主桶 session —— 裁决可见性与 deferred 排队都以它为准。
@@ -68,6 +74,19 @@ const MAX_DEFERRED_SESSIONS = 8;
  */
 function commandHostSessionId(cmd: RsbWindowCommand): string {
   return cmd.type === 'open-turn-review' ? (cmd.hostSessionId ?? cmd.sessionId) : cmd.sessionId;
+}
+
+/**
+ * 队列里最近一条 close-orca-workers-tab **之后**的段。ensure 合并判定只能在
+ * 这个段里做:close 是语义屏障,[显式 ensure, close, generic ensure] 里最后的
+ * generic ensure 是「close 之后重新打开」的最新意图,匹配屏障前的历史 ensure
+ * 会让 flush 终态停在 close、丢掉重开。
+ */
+function segmentAfterLastOrcaClose(queue: readonly RsbWindowCommand[]): readonly RsbWindowCommand[] {
+  for (let i = queue.length - 1; i >= 0; i -= 1) {
+    if (queue[i].type === 'close-orca-workers-tab') return queue.slice(i + 1);
+  }
+  return queue;
 }
 
 export class RsbWindowController {
@@ -82,8 +101,17 @@ export class RsbWindowController {
     timeout: NodeJS.Timeout;
   }> = [];
   private lastContext: RsbWindowContext | null = null;
-  /** allowOpen=false 时每个 session 只保留最终有效命令，避免 remote memory intent 丢失。 */
-  private deferredCommands = new Map<string, RsbWindowCommand>();
+  /**
+   * allowOpen=false 时按宿主 session 保序排队的 deferred 命令。
+   *
+   * 每会话保留**一组有序 intent** 而不是一条(#2409):此前同会话后到的
+   * passive 命令直接覆盖先到的,登记类命令(如历史挂载的 subagent 页签静默
+   * 登记)会被随后的 Orca ensure/close intent 顶掉,窗口再打开时这次登记
+   * 没有落点——renderer 侧按设计只在 attached 结果下写本地 store,队列是
+   * queued 命令唯一的交付路径。语义不同的命令保序全量下发;完全等价的重复
+   * 帧与「generic ensure 不得顶掉更具体的 Orca intent」在 enqueue 时合并。
+   */
+  private deferredCommands = new Map<string, RsbWindowCommand[]>();
   private closeWaiters: Array<() => void> = [];
 
   constructor(private readonly deps: RsbWindowControllerDeps) {}
@@ -283,23 +311,80 @@ export class RsbWindowController {
     // 按宿主桶排队:跨会话 open-turn-review 属于 lead 的桶,须由 lead 上下文
     // flush;按 worker sessionId 入队会在 context 保持 lead 时永远刷不出来。
     const hostSessionId = commandHostSessionId(command);
-    const previous = this.deferredCommands.get(hostSessionId);
+    const queue = this.deferredCommands.get(hostSessionId);
+    // Orca 既有优先规则:队列里已有 ensure-orca intent(带定位与否都算)时,
+    // 后到的**无定位** generic ensure 忽略 —— 它既是重复帧去重,也保护更具体
+    // 的旧 intent(focusWorkerSessionId / searchJump)不被稀释。判定止于最近的
+    // close 屏障(segmentAfterLastOrcaClose),不匹配屏障前的历史 ensure。
     if (
       command.type === 'ensure-orca-workers-tab' &&
-      previous?.type === 'ensure-orca-workers-tab' &&
       command.focusWorkerSessionId === undefined &&
-      command.searchJump === undefined
+      command.searchJump === undefined &&
+      queue &&
+      segmentAfterLastOrcaClose(queue).some(
+        (queued) => queued.type === 'ensure-orca-workers-tab',
+      )
     ) {
       return;
     }
-    if (
-      !this.deferredCommands.has(hostSessionId) &&
-      this.deferredCommands.size >= MAX_DEFERRED_SESSIONS
-    ) {
+    // 完全等价的重复登记只做**相邻**合并(幂等帧,如同一挂载路径的重复静默
+    // 登记必然连续到达)。隔着其他命令的等价帧不合并 —— 中间命令(如 close)
+    // 可能已改变重放语义。
+    const serialized = JSON.stringify(command);
+    if (queue && queue.length > 0 && JSON.stringify(queue[queue.length - 1]) === serialized) {
+      return;
+    }
+    if (!queue && this.deferredCommands.size >= MAX_DEFERRED_SESSIONS) {
       const oldest = this.deferredCommands.keys().next().value as string | undefined;
       if (oldest) this.deferredCommands.delete(oldest);
     }
-    this.deferredCommands.set(hostSessionId, command);
+    let next = queue ?? [];
+    // open-turn-review 是同目标 last-write-wins 的载荷帧(同 session 的 review
+    // tab 是单例):同目标旧帧被新帧**取代**而不是并存 —— flush 后 renderer 对
+    // 命令是并发处理的,两帧同时在途时完成顺序不保证,旧载荷可能覆盖新载荷;
+    // 队列里同目标只留最新一帧,竞态源头即消失。
+    if (command.type === 'open-turn-review') {
+      next = next.filter(
+        (queued) =>
+          !(queued.type === 'open-turn-review' && queued.sessionId === command.sessionId),
+      );
+    }
+    if (next.length >= MAX_DEFERRED_COMMANDS_PER_SESSION) {
+      const dropped = next.shift();
+      this.deps.log.warn(
+        `right-sidebar deferred queue overflow, dropping oldest command type=${dropped?.type ?? 'unknown'}`,
+      );
+    }
+    next.push(command);
+    this.deferredCommands.set(hostSessionId, next);
+  }
+
+  /**
+   * 按入队顺序全量下发当前 context 会话的 deferred 队列。`isHostAlive` 逐条
+   * 复查目标存活:批量下发中途窗口可能被销毁,剩余命令放回队列头等待下一个
+   * host ready,不发往死窗口也不静默丢弃。
+   */
+  private flushDeferredCommands(
+    isHostAlive: () => boolean,
+    send: (command: RsbWindowCommand) => void,
+  ): void {
+    const sessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
+    if (!sessionId) return;
+    const queue = this.deferredCommands.get(sessionId);
+    if (!queue || queue.length === 0) return;
+    this.deferredCommands.delete(sessionId);
+    for (let i = 0; i < queue.length; i += 1) {
+      if (!isHostAlive()) {
+        const remainder = queue.slice(i);
+        const requeued = this.deferredCommands.get(sessionId);
+        this.deferredCommands.set(
+          sessionId,
+          requeued ? [...remainder, ...requeued] : remainder,
+        );
+        return;
+      }
+      send(queue[i]);
+    }
   }
 
   private flushDeferredCommandsToDetachedHost(): void {
@@ -312,24 +397,20 @@ export class RsbWindowController {
     ) {
       return;
     }
-    const sessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
-    if (!sessionId) return;
-    const command = this.deferredCommands.get(sessionId);
-    if (!command) return;
-    this.deferredCommands.delete(sessionId);
-    this.deps.sendToWindow(this.winRef, this.deps.commandChannel, command);
+    this.flushDeferredCommands(
+      () => Boolean(this.winRef && !this.winRef.isDestroyed() && !this.closing),
+      (command) => this.deps.sendToWindow(this.winRef!, this.deps.commandChannel, command),
+    );
   }
 
   private flushDeferredCommandsToAttachedHost(): void {
     if (this.deps.settings.read().detached) return;
-    const sessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
-    if (!sessionId) return;
-    const command = this.deferredCommands.get(sessionId);
-    if (!command) return;
     const main = this.deps.getMainWindow();
     if (!main || main.isDestroyed()) return;
-    this.deferredCommands.delete(sessionId);
-    this.deps.sendToWindow(main, this.deps.commandChannel, command);
+    this.flushDeferredCommands(
+      () => !main.isDestroyed(),
+      (command) => this.deps.sendToWindow(main, this.deps.commandChannel, command),
+    );
   }
 
   private waitUntilClosed(): Promise<void> {

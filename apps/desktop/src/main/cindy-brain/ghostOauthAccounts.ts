@@ -44,7 +44,12 @@ import {
   type GhostOauthFlowError,
   type GhostOauthLogger,
 } from './ghostOauthFlow.js';
-import { isOfficialGhostId, type GhostSecretOauthDecl } from '../../shared/ghost.js';
+import {
+  changedBuiltinOauthClientSecretKeys,
+  isOfficialGhostId,
+  type GhostManifest,
+  type GhostSecretOauthDecl,
+} from '../../shared/ghost.js';
 
 /** 每个 oauth 凭证槽最多可连账号数(防清单无限膨胀;超出连接被拒)。 */
 export const GHOST_OAUTH_MAX_ACCOUNTS = 8;
@@ -177,6 +182,8 @@ interface AccountRow {
   /** 人类可读展示名(identity.displayTemplate 渲染;纯展示,不参与合并判定)。 */
   displayLabel: string | null;
   status: GhostOauthAccountStatus;
+  /** 仅标记由插件内置 OAuth clientId 迁移触发的过期，供宿主精确提示。 */
+  expiredReason?: 'oauth_client_changed';
   createdAt: number;
   /** 本次浏览器授权 URL 实际携带的 scope 面；旧账号没有该快照。 */
   authScopes?: string[];
@@ -227,6 +234,9 @@ function parseManifest(raw: string | null): AccountsManifest {
         displayLabel:
           typeof r.displayLabel === 'string' && r.displayLabel.length > 0 ? r.displayLabel : null,
         status: r.status === 'expired' ? 'expired' : 'connected',
+        ...(r.expiredReason === 'oauth_client_changed'
+          ? { expiredReason: r.expiredReason }
+          : {}),
         createdAt:
           typeof r.createdAt === 'number' && Number.isFinite(r.createdAt) ? r.createdAt : 0,
         ...(Array.isArray(r.authScopes) && r.authScopes.every((scope) => typeof scope === 'string')
@@ -373,6 +383,35 @@ export class GhostOauthAccountManager {
     for (const key of this.tokenCache.keys()) {
       if (key.startsWith(`${ghostId} ${secretKey} `)) this.tokenCache.delete(key);
     }
+  }
+
+  /**
+   * 插件原位升级后，对比同一 OAuth 凭证槽的新旧内置 clientId。发生变化时
+   * 旧 refresh token 已不能由新客户端续期，因此保留凭证但将账号标为过期，
+   * 并清掉旧 access token 缓存，让设置页立即引导用户重新连接。
+   * 用户自定义了 clientId 时实际客户端未随 manifest 改变，不做处理。
+   */
+  expireAccountsForChangedClients(
+    previousManifest: GhostManifest,
+    currentManifest: GhostManifest,
+  ): number {
+    let expiredCount = 0;
+    for (const secretKey of changedBuiltinOauthClientSecretKeys(
+      previousManifest,
+      currentManifest,
+    )) {
+      if (this.clientCustomized(currentManifest.id, secretKey)) continue;
+      expiredCount += this.expireAllAccounts(currentManifest.id, secretKey);
+    }
+    return expiredCount;
+  }
+
+  /** 返回仍未完成重新授权的 clientId 迁移账号数；普通撤销授权不计入。 */
+  clientMigrationExpiredAccountCount(ghostId: string, secretKey: string): number {
+    return parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey))).accounts.filter(
+      (account) =>
+        account.status === 'expired' && account.expiredReason === 'oauth_client_changed',
+    ).length;
   }
 
   /**
@@ -664,12 +703,20 @@ export class GhostOauthAccountManager {
         ) {
           return { ok: false, error: 'VAULT_WRITE_FAILED' };
         }
+      } else if (existing.expiredReason === 'oauth_client_changed') {
+        // 新 client 的授权响应没有 refresh token 时，不能继续保留旧 client
+        // 签发的 token；当前 access token 过期后按无 refresh token 正常引导重连。
+        this.deps.vault.remove(ghostId, refreshTokenKey(secretKey, existing.id));
       }
       // 重连顺带刷新展示名:老账号(displayTemplate 上线前连的)或用户改过
       // 显示名/workspace 名的,这里追上最新值。
       let manifestDirty = false;
       if (existing.status !== 'connected') {
         existing.status = 'connected';
+        manifestDirty = true;
+      }
+      if (existing.expiredReason !== undefined) {
+        delete existing.expiredReason;
         manifestDirty = true;
       }
       if (display !== null && existing.displayLabel !== display) {
@@ -805,6 +852,11 @@ export class GhostOauthAccountManager {
     if (!resolvedId) return { ok: false, error: 'NO_ACCOUNT' };
     const row = manifest.accounts.find((a) => a.id === resolvedId);
     if (!row) return { ok: false, error: 'NO_ACCOUNT' };
+    // 旧 refresh token 与新的内置 clientId 不成对；必须重新走浏览器授权，
+    // 不能先拿新 client 尝试刷新再把仍需保留的旧 token 当 invalid_grant 删除。
+    if (row.status === 'expired' && row.expiredReason === 'oauth_client_changed') {
+      return { ok: false, error: 'AUTH_EXPIRED' };
+    }
 
     const key = this.cacheKey(ghostId, secretKey, resolvedId);
     const cached = this.tokenCache.get(key);
@@ -1046,10 +1098,41 @@ export class GhostOauthAccountManager {
     if (changed) this.notifyStatusChanged(ghostId, secretKey, 'expired');
   }
 
+  private expireAllAccounts(ghostId: string, secretKey: string): number {
+    const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
+    const connected = manifest.accounts.filter((account) => account.status === 'connected');
+    if (connected.length > 0) {
+      for (const account of connected) {
+        account.status = 'expired';
+        account.expiredReason = 'oauth_client_changed';
+      }
+      if (!this.deps.vault.store(ghostId, accountsKey(secretKey), JSON.stringify(manifest))) {
+        this.deps.logger?.warn?.('ghost oauth client 变化后账号状态写入失败', {
+          ghostId,
+          secretKey,
+        });
+        throw new Error('Unable to persist OAuth client migration state');
+      }
+    }
+    for (const key of this.tokenCache.keys()) {
+      if (key.startsWith(`${ghostId} ${secretKey} `)) this.tokenCache.delete(key);
+    }
+    if (connected.length > 0) {
+      this.notifyStatusChanged(ghostId, secretKey, 'expired');
+      this.deps.logger?.info?.('ghost oauth client 已变化，旧账号需要重新连接', {
+        ghostId,
+        secretKey,
+        accountCount: connected.length,
+      });
+    }
+    return connected.length;
+  }
+
   private markConnected(ghostId: string, secretKey: string, accountId: string): void {
     const changed = this.patchAccount(ghostId, secretKey, accountId, (row) => {
-      if (row.status === 'connected') return false;
+      if (row.status === 'connected' && row.expiredReason === undefined) return false;
       row.status = 'connected';
+      delete row.expiredReason;
       return true;
     });
     if (changed) this.notifyStatusChanged(ghostId, secretKey, 'connected');

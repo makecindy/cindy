@@ -59,6 +59,7 @@ hostCapability: null,
   hasSetupRequirements: false,
   setupReady: true,
   setupState: 'ready',
+  oauthAuthorizationExpired: false,
 };
 
 const panelPlugin: GhostPluginListItem = {
@@ -219,7 +220,20 @@ describe('GhostPluginCard', () => {
     expect(onOpenDetail).not.toHaveBeenCalled();
   });
 
-  it('blocks the update corner badge while a market operation is running', () => {
+it('shows an expired OAuth status instead of the up-to-date status', () => {
+    render(
+      <GhostPluginCard
+        item={{ ...commandPlugin, oauthAuthorizationExpired: true }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
+    expect(screen.queryByText(/upToDate/)).toBeNull();
+  });
+
+  it('blocks the update pill while a market operation is running', () => {
     render(
       <GhostPluginCard
         item={commandPlugin}

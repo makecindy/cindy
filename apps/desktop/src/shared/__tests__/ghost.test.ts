@@ -6,6 +6,7 @@ import {
   GHOST_CINDY_EMBED_MAX_TEXTS,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SLOTS,
+  changedBuiltinOauthClientSecretKeys,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostAppContextLocale,
@@ -2237,6 +2238,41 @@ describe('ghost · 逐项权限清单', () => {
     expect(d.added).toEqual([]);
     expect(d.removed).toEqual([]);
     expect(d.unchanged.length).toBe(7);
+    expect(d.builtinOauthClientChanged).toBe(false);
+  });
+
+  it('diff:同一凭证槽的内置直连 OAuth clientId 变化会标记授权失效风险', () => {
+    const oauthManifest = (clientId: string): GhostManifest => ({
+      schemaVersion: 2,
+      id: 'oauth-plugin',
+      name: 'OAuth Plugin',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: ['network'],
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'account',
+            label: 'Account',
+            source: 'oauth',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+            oauth: {
+              authorizeUrl: 'https://accounts.example.com/authorize',
+              tokenUrl: 'https://accounts.example.com/token',
+              clientId,
+            },
+          },
+        ],
+      },
+    });
+    const previous = oauthManifest('old-client');
+    const current = oauthManifest('new-client');
+
+    expect(changedBuiltinOauthClientSecretKeys(previous, current)).toEqual(['account']);
+    expect(diffGhostPermissionItems(previous, current).builtinOauthClientChanged).toBe(true);
+    expect(changedBuiltinOauthClientSecretKeys(oauthManifest(''), current)).toEqual([]);
   });
 });
 

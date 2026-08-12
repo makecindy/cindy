@@ -2569,3 +2569,104 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
     expect(r2).not.toContain('Bash_210_dup2');
   });
 });
+
+describe('streaming response validity gate (#2242)', () => {
+  const SSE_HEADERS = { 'content-type': 'text/event-stream; charset=utf-8' };
+  const SSE_BODY = 'event: message_start\ndata: {"type":"message_start"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
+
+  it('流式请求收到空 2xx → 结构化 502(empty_stream_response)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, SSE_HEADERS);
+      res.end();
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    const parsed = JSON.parse(result.text) as { error: { type: string; code?: string } };
+    expect(parsed.error.type).toBe('proxy_error');
+    expect(parsed.error.code).toBe('empty_stream_response');
+  });
+
+  it('流式请求收到非 SSE 2xx → 502(non_sse_stream_response)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'gateway_hiccup', message: 'nope' } }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect((JSON.parse(result.text) as { error: { code?: string } }).error.code)
+      .toBe('non_sse_stream_response');
+  });
+
+  it('零事件 SSE(只有注释/心跳)正常结束 → 502(sse_without_events)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, SSE_HEADERS);
+      res.write(': ping\n\n');
+      res.end(': bye\n\n');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect((JSON.parse(result.text) as { error: { code?: string } }).error.code)
+      .toBe('sse_without_events');
+  });
+
+  it('合法 SSE 原样透传,事件前的注释心跳不丢', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, SSE_HEADERS);
+      res.write(': keepalive\n\n');
+      res.end(SSE_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(200);
+    expect(result.text).toBe(`: keepalive\n\n${SSE_BODY}`);
+  });
+
+  it('压缩 SSE 不按明文扫行:首字节提交并透传', async () => {
+    const gz = gzipSync(Buffer.from(SSE_BODY, 'utf8'));
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { ...SSE_HEADERS, 'content-encoding': 'gzip' });
+      res.end(gz);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(200);
+    expect(result.text).toBe(SSE_BODY);
+  });
+
+  it('非流式请求不受门控:空 200 照旧字节透传(行为保持)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end();
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model' });
+    expect(result).toEqual({ status: 200, text: '' });
+  });
+
+  it('已提交后的截断保持连接失败语义,不补成正常结束', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, SSE_HEADERS);
+      res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
+      setTimeout(() => res.destroy(), 30);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    await expect(post(proxy.url, { model: 'test-model', stream: true })).rejects.toThrow();
+  });
+});

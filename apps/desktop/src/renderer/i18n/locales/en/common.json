@@ -3316,6 +3316,7 @@
         "reauthAria": "Re-authenticate {{name}}",
         "agentInvoked": "Invoked by Agent",
         "upToDate": "Up to date",
+        "oauthAuthorizationExpired": "Authorization expired — reconnect required",
         "installAria": "Install {{name}}"
       },
       "market": {
@@ -3741,6 +3742,7 @@
       "updateConfirm": {
         "title": "Update plugin \"{{name}}\"?",
         "body": "Version {{from}} → {{to}}. This replaces the installed version; enabled state and panel position are preserved.",
+        "oauthClientChanged": "This update changes the OAuth client. Connected accounts using the plugin's built-in authorization will expire after the update and must be reconnected.",
         "confirm": "Update",
         "cancel": "Cancel"
       },
@@ -9394,7 +9396,8 @@
     },
     "currentSubscription": {
       "title": "Current subscription",
-      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
+      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan.",
+      "purchaseBlockedUntilPeriodEnd": "Your current plan ends {{date}}. You can purchase a new plan after it ends."
     },
     "subscriptionStatus": {
       "INCOMPLETE": "Awaiting payment",

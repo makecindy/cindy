@@ -734,9 +734,22 @@ function availableGhosts(): InstalledGhost[] {
 
 function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
   try {
-    const suggest = getGhostOauthReauthSuggest(withRuntimeFiloGoogleClient(ghost.manifest));
+    const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+    const oauthManager = getGhostOauthAccountManager();
+    const expiredAccountCount = (runtimeManifest.network?.secrets ?? []).reduce(
+      (count, secret) =>
+        secret.source === 'oauth' && secret.oauth
+          ? count +
+            oauthManager.clientMigrationExpiredAccountCount(runtimeManifest.id, secret.key)
+          : count,
+      0,
+    );
+    const suggest = getGhostOauthReauthSuggest(runtimeManifest);
     return {
       ...ghost,
+      ...(expiredAccountCount > 0
+        ? { oauthAuthorizationExpired: { expiredAccountCount } }
+        : {}),
       ...(suggest
         ? {
             oauthScopeStale: {
@@ -747,8 +760,8 @@ function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
         : {}),
     };
   } catch (error) {
-    // 详情页角标是提示面，保险库异常不能让插件清单整体消失。
-    log.warn('ghost oauth scope stale projection omitted', {
+    // OAuth 展示投影是提示面，保险库异常不能让插件清单整体消失。
+    log.warn('ghost oauth renderer projection omitted', {
       ghostId: ghost.manifest.id,
       errorType: error instanceof Error ? error.name : typeof error,
     });
@@ -3383,9 +3396,13 @@ function getGhostOauthReauthSuggest(
   runtimeManifest: GhostManifest,
 ): GhostSetupReauthSuggest | undefined {
   const oauthManager = getGhostOauthAccountManager();
-  return findGhostOauthReauthSuggest(runtimeManifest, (secretKey, decl) =>
-    oauthManager.defaultMissingScopes(runtimeManifest.id, secretKey, decl),
-  );
+  return findGhostOauthReauthSuggest(runtimeManifest, (secretKey, decl) => {
+    const defaultAccount = oauthManager
+      .listAccounts(runtimeManifest.id, secretKey)
+      .find((account) => account.isDefault);
+    if (defaultAccount?.status === 'expired') return [];
+    return oauthManager.defaultMissingScopes(runtimeManifest.id, secretKey, decl);
+  });
 }
 
 /**
@@ -3954,9 +3971,10 @@ async function installOrUpdateMarketGhostPackageLocked(
             )
           : [];
       const needsReview =
-        expected.permissionPolicy.mode === 'manual'
+        permissionDiff?.builtinOauthClientChanged === true ||
+        (expected.permissionPolicy.mode === 'manual'
           ? permissionDiff === null || permissionDiff.added.length > 0
-          : unreviewed.length > 0;
+          : unreviewed.length > 0);
       if (needsReview && expected.approvedPackageSha256 === undefined) {
         const reviewKeys =
           expected.permissionPolicy.mode === 'manual'
@@ -3974,6 +3992,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           ghostId: expected.ghostId,
           mode: expected.permissionPolicy.mode,
           keys: reviewKeys,
+          builtinOauthClientChanged: permissionDiff?.builtinOauthClientChanged === true,
         });
         throw new GhostPackagePermissionReviewRequiredError(review);
       }
@@ -4022,6 +4041,12 @@ async function installOrUpdateMarketGhostPackageLocked(
       result = await manager.update(cindyFilePath, {
         expectedPackageSha256: inspected.packageSha256,
         ...(trustOverride ? { trustOverride } : {}),
+        beforePackageCommit: () => {
+          getGhostOauthAccountManager().expireAccountsForChangedClients(
+            withRuntimeFiloGoogleClient(installed.manifest),
+            withRuntimeFiloGoogleClient(inspected.canonicalManifest),
+          );
+        },
         onPackagePlaced: () => {
           packagePlaced = true;
           expected.onPackagePlacedInLock?.();
@@ -5501,6 +5526,16 @@ export function registerGhostIpc(): void {
         try {
           result = await manager.update(lizFilePath, {
             expectedPackageSha256,
+            ...(previousGhost
+              ? {
+                  beforePackageCommit: () => {
+                    getGhostOauthAccountManager().expireAccountsForChangedClients(
+                      withRuntimeFiloGoogleClient(previousGhost.manifest),
+                      withRuntimeFiloGoogleClient(inspected.canonicalManifest),
+                    );
+                  },
+                }
+              : {}),
             onPackagePlaced: () => {
               packagePlaced = true;
             },

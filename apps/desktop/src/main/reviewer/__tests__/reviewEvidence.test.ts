@@ -250,6 +250,47 @@ function binaryReviewData(repoRoot: string, filePath: string): ReviewData {
   };
 }
 
+/** A dirty workspace whose only change is a staged binary file (#2460). */
+function stagedBinaryReviewData(repoRoot: string, filePath: string): ReviewData {
+  const data = cappedReviewData(repoRoot, filePath);
+  return {
+    ...data,
+    status: {
+      ...data.status!,
+      files: [
+        {
+          ...data.status!.files[0],
+          indexStatus: 'modified' as const,
+          worktreeStatus: null,
+          sources: ['staged' as const],
+          rawXY: 'M ',
+        },
+      ],
+      stagedCount: 1,
+      unstagedCount: 0,
+    },
+    diffs: {
+      staged: [
+        {
+          ...branchFileDiff(filePath),
+          id: `staged:${filePath}`,
+          source: 'staged' as const,
+          kind: 'binary' as const,
+          isBinary: true,
+          rawHeader: '',
+          rawPatch: '',
+          additions: 0,
+          deletions: 0,
+          error: 'Binary file',
+        },
+      ],
+      unstaged: [],
+      capped: { staged: null, unstaged: null },
+    },
+    summary: { ...data.summary, stagedFiles: 1, unstagedFiles: 0 },
+  };
+}
+
 /** A Git workspace with everything committed, which is when branch review applies. */
 function cleanGitReviewData(repoRoot: string): ReviewData {
   const scope = {
@@ -386,6 +427,60 @@ describe('readReviewWorkspaceSnapshot', () => {
 
     expect(after?.workspace).toEqual(before?.workspace);
     expect(after?.fingerprint).not.toBe(before?.fingerprint);
+  });
+
+  it('binds the staged index identity into the fingerprint (#2460)', async () => {
+    // Swapping the index blob for different bytes while restoring the worktree
+    // leaves status and metadata identical; only the index object identity can
+    // tell the two states apart.
+    const repoRoot = await tempDir();
+    const relativePath = 'assets/logo.png';
+    const file = path.join(repoRoot, relativePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, Buffer.from([1, 2, 3, 4]));
+    readReviewDataMock.mockResolvedValue(stagedBinaryReviewData(repoRoot, relativePath));
+
+    const before = await readReviewWorkspaceSnapshot('source', {
+      readStagedIndexIdentity: async () => [`100644 0 ${'a'.repeat(40)}\t${relativePath}`],
+    });
+    const after = await readReviewWorkspaceSnapshot('source', {
+      readStagedIndexIdentity: async () => [`100644 0 ${'b'.repeat(40)}\t${relativePath}`],
+    });
+
+    expect(after?.workspace).toEqual(before?.workspace);
+    expect(before?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(after?.fingerprint).not.toBe(before?.fingerprint);
+  });
+
+  it('fails closed when the staged index identity cannot be read (#2460)', async () => {
+    const repoRoot = await tempDir();
+    const relativePath = 'assets/logo.png';
+    const file = path.join(repoRoot, relativePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, Buffer.from([1, 2, 3, 4]));
+    readReviewDataMock.mockResolvedValue(stagedBinaryReviewData(repoRoot, relativePath));
+    const failure = new Error('git ls-files failed');
+
+    await expect(
+      readReviewWorkspaceSnapshot('source', {
+        readStagedIndexIdentity: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it('does not read the index identity when there is no staged evidence (#2460)', async () => {
+    const repoRoot = await tempDir();
+    const relativePath = 'large.ts';
+    await fs.writeFile(path.join(repoRoot, relativePath), 'aaa111zzz');
+    readReviewDataMock.mockResolvedValue(cappedReviewData(repoRoot, relativePath));
+    const readStagedIndexIdentity = vi.fn(async () => []);
+
+    await expect(
+      readReviewWorkspaceSnapshot('source', { readStagedIndexIdentity }),
+    ).resolves.toBeTruthy();
+    expect(readStagedIndexIdentity).not.toHaveBeenCalled();
   });
 
   it('does not hand a dirty submodule to the file fingerprinter', async () => {

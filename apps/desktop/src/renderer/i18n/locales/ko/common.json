@@ -3315,6 +3315,7 @@
         "reauthAria": "{{name}} 재인증",
         "agentInvoked": "Agent가 자동 호출",
         "upToDate": "최신 상태",
+        "oauthAuthorizationExpired": "인증 만료 · 다시 연결 필요",
         "installAria": "{{name}} 설치"
       },
       "market": {
@@ -3740,6 +3741,7 @@
       "updateConfirm": {
         "title": "플러그인 \"{{name}}\"을(를) 업데이트할까요?",
         "body": "버전 {{from}} → {{to}}. 설치된 버전을 교체합니다. 활성 상태와 패널 위치는 유지됩니다.",
+        "oauthClientChanged": "이번 업데이트에서 OAuth 클라이언트가 변경됩니다. 플러그인의 기본 인증을 사용하는 연결된 계정은 업데이트 후 만료되며 다시 연결해야 합니다.",
         "confirm": "업데이트",
         "cancel": "취소"
       },
@@ -9380,7 +9382,8 @@
     },
     "currentSubscription": {
       "title": "현재 구독",
-      "purchaseBlocked": "종료되지 않은 구독이 있습니다. 기존 구독을 처리한 후 새 요금제를 구매하세요."
+      "purchaseBlocked": "종료되지 않은 구독이 있습니다. 기존 구독을 처리한 후 새 요금제를 구매하세요.",
+      "purchaseBlockedUntilPeriodEnd": "현재 요금제는 {{date}}에 종료됩니다. 종료 후 새 요금제를 구매할 수 있습니다."
     },
     "subscriptionStatus": {
       "INCOMPLETE": "결제 대기",
