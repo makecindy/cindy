@@ -106,14 +106,16 @@ export function WorkLouderCodexKeyboardLayout({
   return (
     <div
       className={cn(
-        'flex w-full max-w-[420px] flex-col gap-2 rounded-[20px] p-3',
+        // The board is a fixed-size object, so it sizes to its keys rather than
+        // stretching to whatever container it happens to sit in.
+        'flex w-fit flex-col gap-2 rounded-[20px] p-3',
         'bg-[var(--wl-board)] shadow-[var(--wl-board-shadow)]',
       )}
       data-testid="worklouder-codex-keyboard-layout"
       style={BOARD_TOKENS}
     >
       {/* Row 1 — analog stick, two agent keys, encoder. */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
         <BoardPart
           part="analog"
           hint={hintFor?.('analog') ?? { legend: labels.analogStick }}
@@ -138,17 +140,17 @@ export function WorkLouderCodexKeyboardLayout({
       </div>
 
       {/* Row 2 — the remaining four agent keys. */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
         {agentKeys.slice(2).map((slot, index) => renderAgentKey(slot, index + 2))}
       </div>
 
       {/* Row 3 — the four command keys. */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
         {(['ACT06', 'ACT07', 'ACT08', 'ACT09'] as const).map((slot) => renderCommandKey(slot))}
       </div>
 
       {/* Row 4 — status lights, the microphone key (double width unless split), Codex. */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
         <div className="flex items-center gap-2 px-1" role="img" aria-label={labels.indicator}>
           <StatusLights />
           <span
@@ -166,19 +168,30 @@ export function WorkLouderCodexKeyboardLayout({
 }
 
 /**
- * Board colours live here rather than in globals.css: they describe one physical
- * object, not a surface other components share. Both themes are real values —
- * the board lightens with the app instead of staying locked to its dark shell.
+ * Board colours describe one physical object, so they are fixed values rather
+ * than semantic tokens: the task keys ship with translucent white caps and the
+ * command keys with dark ones, and that contrast has to survive in both themes.
+ * Routing them through `--surface-*` inverted the board in dark mode, which is
+ * exactly backwards from the hardware. Only the shell tracks the app theme.
  */
 const BOARD_TOKENS = {
+  // One key tall. Keys are square, so this is their width too; the double-width
+  // microphone key spans two columns without getting any taller.
+  '--wl-key-size': '64px',
   '--wl-board': 'var(--surface-chip)',
   '--wl-board-shadow': 'inset 0 0 0 1px var(--border-default)',
-  '--wl-agent-cap': 'var(--surface-elevated)',
-  '--wl-agent-shadow': 'inset 0 0 0 1px var(--border-default), 0 1px 2px rgb(0 0 0 / 0.14)',
+  // Task keys: pale translucent caps, the lightest thing on the board.
+  '--wl-agent-cap': 'rgb(214 214 214 / 0.92)',
+  '--wl-agent-shadow':
+    'inset 0 0 0 1px rgb(255 255 255 / 0.5), inset 0 1px 2px rgb(255 255 255 / 0.6), 0 1px 3px rgb(0 0 0 / 0.35)',
   '--wl-agent-dot': '#8177c8',
-  '--wl-command-cap': 'var(--surface)',
-  '--wl-command-shadow': 'inset 0 0 0 1px var(--border-default), 0 1px 2px rgb(0 0 0 / 0.14)',
-  '--wl-command-glyph': 'var(--text-primary)',
+  // Command keys: dark caps with light artwork.
+  '--wl-command-cap': '#2a2b30',
+  '--wl-command-shadow':
+    'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
+  '--wl-command-glyph': 'rgb(236 236 236)',
+  // The encoder is the darkest part of the board — a near-black wheel.
+  '--wl-encoder': '#0b0b0d',
 } as CSSProperties;
 
 /**
@@ -205,8 +218,11 @@ function BoardPart({
 }) {
   const label = [hint.legend, hint.name].filter(Boolean).join(' ');
   const classes = cn(
-    'flex aspect-square min-w-0 items-center justify-center transition-transform',
-    rounded === 'full' ? 'rounded-full' : 'rounded-xl',
+    'flex min-w-0 items-center justify-center transition-transform',
+    // Every part is one key tall. A double-width key spans two columns but must
+    // not grow taller with them, so height is fixed rather than an aspect ratio.
+    'h-[var(--wl-key-size)]',
+    rounded === 'full' ? 'aspect-square rounded-full' : 'rounded-xl',
     onEdit && !disabled && 'cursor-pointer active:scale-[0.97]',
     onEdit &&
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
@@ -256,18 +272,18 @@ function AnalogStick({ label }: { label: string }) {
       title={label}
       className="block size-full overflow-hidden rounded-full bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]"
     >
-      <span className="block size-full bg-gradient-to-br from-white/20 to-transparent" />
+      <span className="block size-full bg-gradient-to-br from-white/[0.14] to-transparent" />
     </span>
   );
 }
 
-/** The encoder is a recessed wheel, darker than any keycap around it. */
+/** The encoder is a recessed wheel — the darkest part of the board. */
 function Encoder({ label }: { label: string }) {
   return (
     <span
       aria-hidden="true"
       title={label}
-      className="block size-full rounded-full bg-[var(--text-primary)] opacity-90 shadow-[inset_0_2px_4px_rgb(0_0_0/0.5)]"
+      className="block size-full rounded-full bg-[var(--wl-encoder)] shadow-[inset_0_2px_5px_rgb(0_0_0/0.7),0_1px_2px_rgb(0_0_0/0.4)]"
     />
   );
 }
