@@ -354,6 +354,11 @@ export async function runLegacyShardMigration(
         // 或人工修复), 不重建的话 canonical 会话 getIndex() 读到 stale 索引,
         // 记忆进不了 prompt (Codex review on #2519 第十一轮, 与合并路径一致)
         await rebuildIndexFile(targetDir);
+        // 丢弃 legacy 的 fts.db 与 sidecar — FTS 曾有更新失败时文件新但行数
+        // 碰巧匹配, sanityCheck() 只对比行数 → memory_search 一直返回 stale
+        // 行。删除后下次打开由 sanity check 以文件为 source of truth 重建
+        // (Codex review on #2519 第十六轮)。
+        await dropStaleFts(targetDir);
         r.action = 'renamed';
       } else {
         // 慢路径: 逐文件合并
@@ -479,6 +484,23 @@ async function mergeFilesInto(
 async function rebuildIndexFile(targetDir: string): Promise<void> {
   const storage = new MemoryStorage(targetDir);
   await storage.rebuildIndex();
+}
+
+/**
+ * 丢弃分片目录中的 FTS 文件 (fts.db + SQLite sidecar)。rename 快路径把
+ * legacy fts.db 原样带入 canonical — FTS 曾有更新失败时文件内容新但行数
+ * 碰巧匹配, sanityCheck() 只对比行数, memory_search 持续返回 stale 行。
+ * 删除后下次打开由 sanity check 以文件为 source of truth 重建 (Codex
+ * review on #2519 第十六轮)。文件不存在时静默。
+ */
+async function dropStaleFts(dir: string): Promise<void> {
+  for (const name of ['fts.db', 'fts.db-wal', 'fts.db-shm']) {
+    try {
+      await fs.rm(path.join(dir, name), { force: true });
+    } catch {
+      // 删除失败不阻塞迁移 (下次 sanity check 会重建/告警)
+    }
+  }
 }
 
 /** 更新目标分片 meta.json 的 absPath 为 canonical scope key。 */

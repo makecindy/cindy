@@ -196,6 +196,28 @@ describe('runLegacyShardMigration — 执行', () => {
     expect(index).toContain('feedback_a.md');
   });
 
+  it('rename 快路径丢弃 legacy fts.db (Codex 第十六轮: stale FTS 不带入 canonical)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtPath = await makeShard(wtDir, { absPath: worktree, files: { 'feedback_a.md': 'X' } });
+    // legacy 分片带 stale fts.db (模拟 FTS 更新失败残留)
+    await fs.writeFile(path.join(wtPath, 'fts.db'), Buffer.from('stale-fts'));
+    await fs.writeFile(path.join(wtPath, 'fts.db-wal'), Buffer.from('wal'));
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    const result = await runLegacyShardMigration(plan);
+    expect(result.results[0].action).toBe('renamed');
+
+    const target = path.join(memoryRoot, mainDir);
+    // fts.db 与 sidecar 被丢弃 (下次打开由 sanity check 重建)
+    await expect(fs.stat(path.join(target, 'fts.db'))).rejects.toThrow();
+    await expect(fs.stat(path.join(target, 'fts.db-wal'))).rejects.toThrow();
+    // 分片文件仍在
+    expect(await fs.readFile(path.join(target, 'feedback_a.md'), 'utf8')).toContain('X');
+  });
+
   it('canonical 已存在 → 同名同内容跳过, 新文件复制, MEMORY.md 重建', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     const worktree = path.join(tmpRoot, 'repo-wt');
