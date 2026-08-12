@@ -108,15 +108,31 @@ describe('planLegacyShardMigration — 计划生成', () => {
     expect(plan.emptyToDelete).toHaveLength(0);
   });
 
-  it('SSH 分片 (目录名 ssh- 前缀) 一律跳过不迁移', async () => {
+  it('SSH 分片 (meta.absPath 为 ssh: 复合键) 一律跳过不迁移', async () => {
     const sshDir = `ssh-host-${'a'.repeat(16)}`;
-    await makeShard(sshDir, { absPath: '/remote/repo', files: { 'feedback_a.md': 'x' } });
+    // 真实 SSH 分片: manager 存 absWorkdir = scopeKey = ssh:<host>:<path>
+    await makeShard(sshDir, {
+      absPath: 'ssh:my-host:/remote/repo',
+      files: { 'feedback_a.md': 'x' },
+    });
 
     const plan = await planLegacyShardMigration(memoryRoot);
     expect(plan.skipped).toHaveLength(1);
     expect(plan.skipped[0].dir.endsWith(sshDir)).toBe(true);
     expect(plan.mergeCandidates).toHaveLength(0);
     expect(plan.emptyToDelete).toHaveLength(0);
+  });
+
+  it('本地路径 sanitize 后恰好以 ssh- 开头的目录 → 按 meta 判定为本地分片, 不误跳 (Codex 第五轮)', async () => {
+    // /ssh/proj → sanitizeWorkdir = ssh-proj; meta.absPath 是本地路径非 ssh: 键
+    const localDir = 'ssh-proj';
+    const localPath = path.join('/', 'ssh', 'proj');
+    await makeShard(localDir, { absPath: localPath, files: { 'feedback_a.md': 'x' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot);
+    expect(plan.skipped).toHaveLength(0);
+    expect(plan.all).toHaveLength(1);
+    expect(plan.all[0].isLegacy).toBe(false); // 本地路径, resolver 回落自身 → 非 legacy
   });
 
   it('无 meta.json 的目录 → skipped (不猜不删)', async () => {
@@ -428,5 +444,72 @@ describe('runLegacyShardMigration — 执行', () => {
     const target = path.join(memoryRoot, mainDir);
     expect(await fs.readFile(path.join(target, 'project_late.md'), 'utf8')).toContain('LATE');
     await expect(fs.stat(wtPath)).rejects.toThrow();
+  });
+
+  it('非 Markdown 遗留内容 (notes.txt/data.yaml) → 保留源目录不删 (Greptile 第五轮)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X' },
+    });
+    // 非 Markdown 遗留内容
+    await fs.writeFile(path.join(wtPath, 'notes.txt'), '手写笔记 txt', 'utf8');
+    await fs.writeFile(path.join(wtPath, 'data.yaml'), 'key: value', 'utf8');
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan.mergeCandidates).toHaveLength(1);
+    const result = await runLegacyShardMigration(plan);
+    expect(result.results[0].error).toContain('unrecognized');
+    // 源目录保留, 非 Markdown 内容完好
+    expect(await fs.readFile(path.join(wtPath, 'notes.txt'), 'utf8')).toContain('txt');
+    expect(await fs.readFile(path.join(wtPath, 'data.yaml'), 'utf8')).toContain('value');
+    // 合法分片照常合并进目标
+    const target = path.join(memoryRoot, mainDir);
+    expect(await fs.readFile(path.join(target, 'feedback_a.md'), 'utf8')).toContain('X');
+  });
+
+  it('复制后已有分片被更新 → 内容对比兜底, 源目录保留 (Greptile 第五轮)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    // 模拟存量会话更新已有记忆: 复制发生时源是 X (同目标, same-skipped),
+    // 之后被改写成 X2 — 数量复查 (countShardFiles) 检测不到, 内容对比兜底。
+    // patch 只对「源路径」的读生效: 第 1 次 (mergeFilesInto 比较) 返 X,
+    // 之后 (findChangedAfterMerge 内容复查) 返 X2; 目标路径正常读。
+    const origReadFile = fs.readFile.bind(fs);
+    let srcReads = 0;
+    // @ts-expect-error 测试注入
+    fs.readFile = async (...args) => {
+      const [p] = args;
+      if (typeof p === 'string' && p.startsWith(wtPath + path.sep) && p.endsWith('feedback_a.md')) {
+        srcReads += 1;
+        // mergeFilesInto 读源 (第 1 次) → 真实内容 (与目标一致, same-skipped);
+        // findChangedAfterMerge 内容复查 (第 2 次起) → 改写的 X2 → 源 ≠ 目标
+        return srcReads === 1 ? origReadFile(...args) : Buffer.from('X2');
+      }
+      return origReadFile(...args);
+    };
+    try {
+      const result = await runLegacyShardMigration(plan);
+      expect(result.results[0].error).toContain('updated after copy');
+      // 源目录保留
+      await expect(fs.stat(wtPath)).resolves.toBeTruthy();
+    } finally {
+      fs.readFile = origReadFile;
+    }
   });
 });

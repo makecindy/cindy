@@ -34,11 +34,8 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
-import { MemoryStorage, memoryScopeDirName, parseFilename } from './storage.js';
+import { MemoryStorage, SSH_SCOPE_KEY_PREFIX, memoryScopeDirName, parseFilename } from './storage.js';
 import { resolveMemoryScopeKey } from './scope-resolver.js';
-
-/** 目标分片目录名前缀 — SSH 分片不迁移 (#2379 约束 3)。 */
-const SSH_DIR_PREFIX = 'ssh-';
 
 /** meta.json 内容 (storage.ts MemoryStorageMeta 同形)。 */
 interface ShardMeta {
@@ -143,17 +140,22 @@ export async function planLegacyShardMigration(
     }
     if (!stat.isDirectory()) continue;
 
-    // SSH 分片不迁移 (#2379 约束 3)。
-    if (entry.startsWith(SSH_DIR_PREFIX)) {
-      plan.skipped.push(await buildSkippedInfo(dir, entry));
-      continue;
-    }
-
     let meta: ShardMeta | null = null;
     try {
       meta = JSON.parse(await fs.readFile(path.join(dir, 'meta.json'), 'utf8')) as ShardMeta;
     } catch {
-      // 无 meta.json → 不猜不删, 跳过并报告
+      // 无 meta.json → 不猜不删, 跳过并报告 (目录名以 ssh- 开头时同样跳过)
+      plan.skipped.push(await buildSkippedInfo(dir, entry));
+      continue;
+    }
+
+    // SSH 分片不迁移 (#2379 约束 3)。判定依据是 scope key 形态 (meta.absPath
+    // 以 `ssh:` 开头 — storage 层只对远端会话生成 ssh: 复合键), 而不是目录名
+    // 前缀: sanitizeWorkdir 允许本地路径 (如 /ssh/proj) 恰好产出 ssh- 开头的
+    // 目录名, 按前缀误判会把本地 legacy 分片跳过成孤儿 (Codex review on
+    // #2519 第五轮)。
+    const isRemote = (meta.absPath ?? '').startsWith(SSH_SCOPE_KEY_PREFIX);
+    if (isRemote) {
       plan.skipped.push(await buildSkippedInfo(dir, entry));
       continue;
     }
@@ -348,17 +350,23 @@ export async function runLegacyShardMigration(
         // 源目录此刻只剩 MEMORY.md / meta.json / fts.db → 整个删掉。
         // 保留源目录的情形 (数据保全, 人工处理前数据必须仍在磁盘上):
         //  1. 有冲突 — 同名不同内容绝不静默覆盖 (#2400)
-        //  2. 有未识别文件 — 不符合 <type>_<slug>.md 规则但仍含内容的 .md,
-        //     不参与合并, 删掉源目录会永久丢失 (Greptile review on #2519)
+        //  2. 有未识别文件 — 不参与合并的任何遗留内容 (含非 Markdown),
+        //     删掉源目录会永久丢失 (Greptile review on #2519)
         //  3. 快照后新增合法分片 — mergeFilesInto 快照源文件名之后才复制,
         //     期间新写入的 <type>_<slug>.md 既没被复制也不算未识别,
         //     直接删会丢 (Codex review on #2519 第四轮)
+        //  4. 复制后已有分片被更新 — 存量会话在复制后、删源前改写了同名
+        //     记忆, 数量复查检测不到, 内容对比兜底 (Greptile review on
+        //     #2519 第五轮)
         const hasConflict = merged.some((m) => m.outcome === 'conflict-skipped');
         const unrecognized = await findUnrecognizedMdFiles(shard.dir);
         // 新增合法分片 = 当前合法数 − 快照时合法数 (merged.length); 源目录的
         // 合法文件在合并后仍保留 (删除是最后的整目录 rm), 只有超出快照数的
         // 部分才是 mergeFilesInto 期间新写入的。
         const gainedValid = (await countShardFiles(shard.dir)) - merged.length;
+        // 内容复查: 已合并的合法分片, 源与目标逐字节对比 — 源文件在复制后
+        // 被存量会话更新过则源 ≠ 目标, 保留源目录 (目标保留的是旧数据)。
+        const contentChanged = await findChangedAfterMerge(shard.dir, targetDir, merged);
         if (unrecognized.length > 0) {
           r.action = 'merged';
           r.error = `unrecognized files kept in source dir for manual review: ${unrecognized.join(', ')}`;
@@ -368,6 +376,12 @@ export async function runLegacyShardMigration(
         if (gainedValid > 0) {
           r.action = 'merged';
           r.error = `${gainedValid} valid shard file(s) appeared after merge snapshot, source dir kept`;
+          result.results.push(r);
+          continue;
+        }
+        if (contentChanged.length > 0) {
+          r.action = 'merged';
+          r.error = `shard file(s) updated after copy, source dir kept: ${contentChanged.join(', ')}`;
           result.results.push(r);
           continue;
         }
@@ -477,18 +491,45 @@ async function countShardFiles(dir: string): Promise<number> {
 }
 
 /**
- * 找出目录中「不符合 <type>_<slug>.md 规则但仍保存内容的 .md 文件」
- * (排除 MEMORY.md / meta.json / fts.db)。存在即数据保全风险:
- * 这些文件不参与合并, 删掉源目录会永久丢失 (Greptile review on #2519)。
+ * 找出「复制后被改写」的已合并分片 — 对 merged 中 outcome 为 copied /
+ * same-skipped 的文件, 逐字节对比源目录与目标目录 (Greptile review on
+ * #2519 第五轮: 存量会话在复制后、删源前更新已有记忆, 数量复查检测不到)。
+ * 返回源 ≠ 目标的文件名列表; 源文件已消失 (并发删除) 视为未变化。
+ */
+async function findChangedAfterMerge(
+  srcDir: string,
+  targetDir: string,
+  merged: MergeFileResult[],
+): Promise<string[]> {
+  const changed: string[] = [];
+  for (const m of merged) {
+    if (m.outcome !== 'copied' && m.outcome !== 'same-skipped') continue;
+    const src = path.join(srcDir, m.filename);
+    const dst = path.join(targetDir, m.filename);
+    let srcBuf: Buffer;
+    let dstBuf: Buffer;
+    try {
+      [srcBuf, dstBuf] = await Promise.all([fs.readFile(src), fs.readFile(dst)]);
+    } catch {
+      continue; // 任一缺失 → 跳过 (源被并发删/目标异常, 交给别处兜底)
+    }
+    if (!srcBuf.equals(dstBuf)) changed.push(m.filename);
+  }
+  return changed;
+}
+
+/**
+ * 找出目录中「不参与合并但仍保存内容的遗留文件」— 排除系统文件
+ * (MEMORY.md / meta.json / fts.db) 与合法分片 (<type>_<slug>.md) 之外
+ * 的**一切文件**, 含未识别的 .md (手写笔记) 与非 Markdown 遗留内容
+ * (notes.txt / data.yaml 等)。存在即数据保全风险: 删掉源目录会永久丢失
+ * (Greptile review on #2519)。
  */
 async function findUnrecognizedMdFiles(dir: string): Promise<string[]> {
   try {
     const files = await fs.readdir(dir);
     return files.filter(
-      (f) =>
-        f.endsWith('.md') &&
-        f !== 'MEMORY.md' &&
-        !parseFilename(f),
+      (f) => f !== 'MEMORY.md' && f !== 'meta.json' && f !== 'fts.db' && !parseFilename(f),
     );
   } catch {
     return [];
