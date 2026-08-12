@@ -192,10 +192,27 @@ async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): 
   // linked worktree: 子路径映射回主仓根下 (该路径在主仓可以不存在 —
   // scope key 只是身份字符串, 落盘目录名经 memoryScopeDirName 派生)。
   const rel = path.relative(toplevel, cwd);
-  if (rel === '') return mainRoot;
+  if (rel === '') return matchSeparatorStyle(workingDir, mainRoot);
   // cwd 不在 toplevel 下 (symlink/大小写风格不一致等) — 不猜, 回落。
   if (rel.startsWith('..') || path.isAbsolute(rel)) return workingDir;
-  return path.join(mainRoot, rel);
+  const mapped = path.join(mainRoot, rel);
+  // Windows: Desktop 存正斜杠路径 (C:/repo), 但 path.normalize/join 在
+  // Windows 上产反斜杠 (C:\repo)。两者 sanitize 到同一磁盘目录, 而
+  // MakerMemoryManager 按 raw scope key 缓存 Store — 主 checkout 会话
+  // (正斜杠 key) 与 worktree 会话 (反斜杠 key) 会开两个实例指向同一
+  // SQLite/索引, 一侧写入后另一侧 MEMORY.md 缓存过期 (Codex review on
+  // #2519 第八轮)。返回与输入同拼写风格的结果, 保证同一目录只一个 key。
+  return matchSeparatorStyle(workingDir, mapped);
+}
+
+/** 让 result 的分隔符风格与参考路径 (workingDir) 一致。Windows 专用。 */
+function matchSeparatorStyle(reference: string, result: string): string {
+  if (process.platform !== 'win32') return result;
+  // 仅当参考路径是 Windows 盘符正斜杠形态 (C:/repo — Desktop 存储的归一化
+  // 拼写) 时把结果转正斜杠, 与主 checkout 会话的 scope key 拼写一致;
+  // POSIX 风格路径 (/fake/...) 与反斜杠输入保持 path.join 默认行为。
+  if (/^[A-Za-z]:\//.test(reference)) return result.replace(/\\/g, '/');
+  return result;
 }
 
 /** git rev-parse 输出 → 绝对路径。空输出返 null (调用方回落)。 */

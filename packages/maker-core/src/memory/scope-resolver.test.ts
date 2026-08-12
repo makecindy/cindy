@@ -164,7 +164,12 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
     const second = await resolveMemoryScopeKey(abs('/repo/.cindy-worktrees/feat/apps/a'), null, {
       execGit: probe,
     });
-    expect(first).toBe(path.join(abs('/repo'), 'apps', 'a'));
+    // Windows 上输入是盘符正斜杠形态 (C:/...) — 输出保持正斜杠拼写, 与
+    // Desktop 主 checkout 会话的 scope key 一致 (Codex on #2519 第八轮),
+    // 不能是 path.join 默认的反斜杠 (会与主 checkout 缓存成两个 Store)。
+    expect(first).toBe(
+      process.platform === 'win32' ? 'C:/repo/apps/a' : path.join(abs('/repo'), 'apps', 'a'),
+    );
     expect(second).toBe(first);
     expect(calls).toBe(2); // rev-parse + worktree list 各一次, 第二轮全缓存
   });
@@ -211,6 +216,24 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
         execGit: probe,
       });
       expect(key).toBe('C:\\repo\\apps\\a');
+    },
+  );
+
+  it.skipIf(process.platform !== 'win32')(
+    'Windows 正斜杠输入 → 正斜杠输出 (scope key 拼写与 Desktop 一致, Codex on #2519 第八轮)',
+    async () => {
+      // Desktop 存正斜杠路径; 反斜杠输出会与主 checkout 会话 (正斜杠 key)
+      // 缓存成两个 Store 实例指向同一磁盘目录
+      const probe = probeFor(
+        'C:/repo/.cindy-worktrees/feat',
+        'C:/repo/.git/worktrees/feat',
+        'C:/repo/.git',
+        'C:/repo',
+      );
+      const key = await resolveMemoryScopeKey('C:/repo/.cindy-worktrees/feat/apps/a', null, {
+        execGit: probe,
+      });
+      expect(key).toBe('C:/repo/apps/a');
     },
   );
 });
