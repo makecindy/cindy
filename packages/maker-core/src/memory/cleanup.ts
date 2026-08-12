@@ -347,20 +347,17 @@ export async function runMemoryCleanup(
       const srcStat = await fs.stat(src).catch(() => null);
       if (!srcStat) continue;
 
-      // 可选真备份: 归档前复制一份到 backupRoot (数据保全)。目标路径用循环
-      // 递增后缀保证排他, 绝不覆盖已有备份 — 重复使用同一 backup-dir、同
-      // clock rerun 或依次清理多分片时, 旧备份不能被静默覆盖 (Greptile P1 /
-      // Codex P1 on #2561)。
+      // 可选真备份: 归档前复制一份到 backupRoot (数据保全)。用 COPYFILE_EXCL
+      // 原子预留目标, 同名冲突 (重复 backup-dir / 同 clock rerun / 并发) 递增
+      // 后缀重试, 绝不覆盖已有备份 (Greptile P1 / Codex P1 on #2561)。
       if (opts.backupRoot) {
-        await fs.mkdir(opts.backupRoot, { recursive: true });
-        const backupDst = await uniqueTargetPath(opts.backupRoot, item.filename, stamp);
-        await fs.copyFile(src, backupDst);
+        await copyExclusive(src, opts.backupRoot, item.filename, stamp);
       }
 
-      await fs.mkdir(archiveDir, { recursive: true });
-      // 归档目录同名冲突 (历史归档 / 同 clock rerun) → 循环递增后缀, 排他。
-      const finalDst = await uniqueTargetPath(archiveDir, item.filename, stamp);
-      await fs.rename(src, finalDst);
+      // 归档 = 排他复制进 .archive + 删源。复制+删除在崩溃时最多留两份
+      // (安全方向), 而 COPYFILE_EXCL 保证并发/同名下绝不覆盖已有归档。
+      await copyExclusive(src, archiveDir, item.filename, stamp);
+      await fs.unlink(src);
       result.archived.push(item);
     } catch (e) {
       result.failed.push({ filename: item.filename, error: String(e) });
@@ -393,25 +390,30 @@ function contentHash(rec: MemoryRecord): string {
 }
 
 /**
- * 找不冲突的目标路径 — 循环递增后缀直到路径确实不存在。
- * 单次 `pathExists` 检查在「时间戳后缀已存在」(同 clock rerun / 共享 backup-dir
- * 多分片) 时仍会选中同一路径; 循环探测 + 计数后缀保证最终目标排他
- * (Greptile P1 / Codex P1 on #2561)。
+ * 排他复制 src 到 dir 下 (同名冲突时递增后缀), 返回最终目标路径。
+ *
+ * 用 `COPYFILE_EXCL` **原子预留**目标: 目标已存在时 copyFile 抛 EEXIST, 递增
+ * 后缀重试。相比「先 pathExists 探测再非排他 copyFile」, 消除了并发 TOCTOU
+ * 竞态 — 两个进程不会同时观察到同一路径不存在并覆盖对方 (Greptile P1 /
+ * Codex P1 on #2561: 并发目标路径未排他预留)。
  */
-async function uniqueTargetPath(dir: string, filename: string, stamp: string): Promise<string> {
+async function copyExclusive(
+  src: string,
+  dir: string,
+  filename: string,
+  stamp: string,
+): Promise<string> {
+  await fs.mkdir(dir, { recursive: true });
   const base = path.join(dir, filename);
-  if (!(await pathExists(base))) return base;
-  for (let i = 1; ; i += 1) {
-    const candidate = path.join(dir, `${filename}.${stamp}.${i}`);
-    if (!(await pathExists(candidate))) return candidate;
+  for (let attempt = 0; ; attempt += 1) {
+    const target = attempt === 0 ? base : path.join(dir, `${filename}.${stamp}.${attempt}`);
+    try {
+      await fs.copyFile(src, target, fs.constants.COPYFILE_EXCL);
+      return target;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      // EEXIST → 目标已被占用 (同名历史 / 并发写入), 递增后缀重试。
+    }
   }
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
