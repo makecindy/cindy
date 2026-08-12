@@ -295,17 +295,19 @@ describe('WorkLouderCodexLightingController', () => {
     const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
     controller.start();
 
-    // Clockwise is the same direction `custom` mode maps to `right`.
+    // The knob follows the sidebar list: turning right walks down it, turning
+    // left walks up. ENC_CW is the clockwise/right direction, the same one
+    // `custom` mode maps to `right`.
     hidRef.current?.({ key: 'ENC_CW', act: 2 });
     expect(dispatch).toHaveBeenLastCalledWith({
       type: 'command',
-      commandId: 'session.selectNext',
+      commandId: 'session.selectPrevious',
     });
 
     hidRef.current?.({ key: 'ENC_CC', act: 2 });
     expect(dispatch).toHaveBeenLastCalledWith({
       type: 'command',
-      commandId: 'session.selectPrevious',
+      commandId: 'session.selectNext',
     });
   });
 

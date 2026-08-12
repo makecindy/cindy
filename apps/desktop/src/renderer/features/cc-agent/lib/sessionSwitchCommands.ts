@@ -38,31 +38,42 @@ export function onRequestSessionSwitch(listener: Listener): () => void {
 }
 
 /**
- * The task one step from `activeId` in display order.
+ * Where one step of the knob lands: an existing task, or the "new task" row
+ * that sits above the list — turning up from the first task lands there rather
+ * than stopping.
+ */
+export type SessionSwitchTarget = { kind: 'session'; sessionId: string } | { kind: 'new-task' };
+
+/**
+ * The stop one step from where the user is, in the order the sidebar shows.
+ *
+ * The list the knob walks is the new-task row followed by the visible tasks,
+ * so `previous` moves up it and `next` moves down.
  *
  * Stops at both ends rather than wrapping: the encoder is a continuous control,
- * and wrapping from the last task back to the first would move the user
- * somewhere far away with no way to feel where the list ended.
+ * and wrapping from the last task back to the top would move the user somewhere
+ * far away with no way to feel where the list ended.
  *
- * Returns null when there is nowhere to go — no list, already at the end, or
- * the active task is not in the visible list at all (filtered out by search or
- * a status filter), in which case moving would be a guess.
+ * Returns null when there is nowhere to go — already at an end, or the active
+ * task is not in the visible list at all (filtered out by search or a status
+ * filter), in which case moving relative to it would be a guess.
  */
 export function pickAdjacentSessionId(
   visibleSessionIds: readonly string[],
   activeId: string | null,
   direction: SessionSwitchDirection,
-): string | null {
-  if (visibleSessionIds.length === 0) return null;
-  if (!activeId) {
-    // Nothing selected: start at whichever end the user turned toward.
-    return direction === 'next'
-      ? (visibleSessionIds[0] ?? null)
-      : (visibleSessionIds[visibleSessionIds.length - 1] ?? null);
-  }
-  const index = visibleSessionIds.indexOf(activeId);
+): SessionSwitchTarget | null {
+  // One list: the new-task row, then every visible task under it.
+  const stops: SessionSwitchTarget[] = [
+    { kind: 'new-task' },
+    ...visibleSessionIds.map((sessionId) => ({ kind: 'session' as const, sessionId })),
+  ];
+  // `activeId === null` means the new-task page is open, which is stop 0.
+  const index = activeId
+    ? stops.findIndex((stop) => stop.kind === 'session' && stop.sessionId === activeId)
+    : 0;
   if (index < 0) return null;
-  const target = direction === 'next' ? index + 1 : index - 1;
-  if (target < 0 || target >= visibleSessionIds.length) return null;
-  return visibleSessionIds[target] ?? null;
+  const target = index + (direction === 'next' ? 1 : -1);
+  if (target < 0 || target >= stops.length) return null;
+  return stops[target] ?? null;
 }

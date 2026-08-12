@@ -2109,24 +2109,31 @@ function ExpandedView({
     },
     [handleSessionClick],
   );
-  /* Codex Micro 旋钮:左转上一个任务,右转下一个。序号口径与 mod+1..9 完全相同
-   * —— 都取 getVisibleSidebarSessionIds 的真实渲染顺序,所以分组、置顶区、折叠
-   * 与搜索过滤天然一致,所见即所得。到头停住不回绕:旋钮是连续控件,从末尾绕回
-   * 开头会把用户甩到看不见的地方,还感觉不到列表已经到边。 */
+  /* Codex Micro 旋钮:左转沿侧栏列表往上,右转往下 —— 跟着屏幕上的列表走,
+   * 不是抽象的"上一个/下一个"。序号口径与 mod+1..9 完全相同:都取
+   * getVisibleSidebarSessionIds 的真实渲染顺序,所以分组、置顶区、折叠与搜索
+   * 过滤天然一致,所见即所得。「新建」是列表最上面那一站(它在 SidebarTopNav
+   * 里、不是会话行,所以由 pickAdjacentSessionId 单独补进序列)。到头停住不
+   * 回绕:旋钮是连续控件,从末尾绕回开头会把用户甩到看不见的地方,还感觉不到
+   * 列表已经到边。 */
+  const onNewMakerMatchRef = useRef(onNewMakerMatch);
+  onNewMakerMatchRef.current = onNewMakerMatch;
   useEffect(() => {
     if (!sessionSwitchEnabled) return;
     return onRequestSessionSwitch((direction) => {
       const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
-      const targetId = pickAdjacentSessionId(
-        visibleIds,
-        activeSessionIdRef.current ?? null,
-        direction,
-      );
-      if (!targetId) return;
+      // 已经停在新建页时按"第 0 站"计,这样右转能进入列表第一条。
+      const activeId = onNewMakerMatchRef.current ? null : (activeSessionIdRef.current ?? null);
+      const target = pickAdjacentSessionId(visibleIds, activeId, direction);
+      if (!target) return;
+      if (target.kind === 'new-task') {
+        navigate('/cc-agent/new');
+        return;
+      }
       // 同样复用行点击唯一入口,继承清通知 / 同对话去重 / Orca 角色路由。
-      void handleSessionClick(targetId);
+      void handleSessionClick(target.sessionId);
     });
-  }, [handleSessionClick, sessionSwitchEnabled]);
+  }, [handleSessionClick, navigate, sessionSwitchEnabled]);
 
   useAppShortcut('switch-session-1', () => handleSwitchSessionSlot(0), {
     enabled: sessionSwitchEnabled,

@@ -326,9 +326,14 @@ export class WorkLouderCodexLightingController {
           });
           break;
         case 'session-switch':
+          // The knob follows the list on screen: left walks up the sidebar,
+          // right walks down. Note ENC_CW is the *up* direction on this
+          // hardware — `conversation-scroll` above maps it to scrollUp for the
+          // same reason. The firmware's naming is not a guide to which way the
+          // user is actually turning.
           this.dispatchRendererAction({
             type: 'command',
-            commandId: clockwise ? 'session.selectNext' : 'session.selectPrevious',
+            commandId: clockwise ? 'session.selectPrevious' : 'session.selectNext',
           });
           break;
         case 'composer-navigation':
