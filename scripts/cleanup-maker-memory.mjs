@@ -80,7 +80,7 @@ function parseArgs(argv) {
       process.stdout.write(HELP);
       process.exit(0);
     } else if (a === '--shard') {
-      out.shard = argv[++i] ?? null;
+      out.shard = requireOperand(argv, ++i, '--shard');
     } else if (a === '--apply') {
       out.dryRun = false;
     } else if (a === '--dry-run') {
@@ -98,7 +98,7 @@ function parseArgs(argv) {
       }
       out.keepDigests = n;
     } else if (a === '--backup-dir') {
-      out.backupDir = argv[++i] ?? null;
+      out.backupDir = requireOperand(argv, ++i, '--backup-dir');
     } else if (a === '--force') {
       out.force = true;
     } else if (a === '--json') {
@@ -110,6 +110,21 @@ function parseArgs(argv) {
     }
   }
   return out;
+}
+
+/**
+ * 取值型选项的操作数校验 — 拒绝缺失或「把下一个 flag 当值」的情况
+ * (Codex P1 on #2561: `--apply --backup-dir --json` 会把 backupRoot 设成
+ * `<repo>/--json`, 导致记忆被复制进 Git worktree)。操作数以 `-` 开头且不是
+ * 负数即视为 flag, 报错退出。调用处先 `++i` 把索引推进到操作数再传入。
+ */
+function requireOperand(argv, idx, flag) {
+  const v = argv[idx];
+  if (v == null || (v.startsWith('-') && Number.isNaN(Number(v)))) {
+    process.stderr.write(`${flag} 缺少参数 (收到 "${v ?? ''}")\n`);
+    process.exit(2);
+  }
+  return v;
 }
 
 async function main() {
