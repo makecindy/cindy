@@ -15,6 +15,7 @@ import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
 import { cn } from '@/lib/utils';
 import {
+  WORKLOUDER_CODEX_BOARD_TOKENS,
   WorkLouderCodexKeyboardLayout,
   WorkLouderCodexKeycapPicker,
   WorkLouderCodexPartEditor,
@@ -923,20 +924,35 @@ function ConnectionStatus({
   );
 }
 
+/**
+ * Thumbnail of the device for the connection card. It is the same object as the
+ * editable board below — 4×4, stick in one corner, encoder in the other — so
+ * the two read as one device rather than two different products. Numbered
+ * squares used to stand in here, which matched no hardware that ships.
+ */
 function CodexMicroKeyPreview() {
+  const cap = 'rounded-[3px] bg-[var(--wl-agent-cap)]';
+  const command = 'rounded-[3px] bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]';
   return (
     <div
-      className="grid size-[76px] shrink-0 grid-cols-3 gap-1 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] p-2"
+      className="grid size-[76px] shrink-0 grid-cols-4 grid-rows-4 gap-[3px] rounded-xl border border-[var(--wl-edge)] bg-[var(--wl-board)] p-2 shadow-[var(--wl-board-shadow)]"
+      style={WORKLOUDER_CODEX_BOARD_TOKENS}
       aria-hidden="true"
     >
-      {Array.from({ length: 6 }, (_, index) => (
-        <span
-          key={index}
-          className="flex items-center justify-center rounded-md border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] text-10 font-medium text-[var(--text-tertiary)]"
-        >
-          {index + 1}
-        </span>
+      <span className={cn('rounded-full bg-[var(--wl-command-cap)]')} />
+      <span className={cap} />
+      <span className={cap} />
+      <span className="rounded-full bg-[var(--wl-encoder)]" />
+      {Array.from({ length: 4 }, (_, index) => (
+        <span key={index} className={cap} />
       ))}
+      {Array.from({ length: 4 }, (_, index) => (
+        <span key={index} className={command} />
+      ))}
+      <span />
+      {/* The microphone key spans two columns, as it does on the board. */}
+      <span className={cn('col-span-2', command)} />
+      <span className={command} />
     </div>
   );
 }

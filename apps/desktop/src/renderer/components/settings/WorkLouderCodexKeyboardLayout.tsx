@@ -109,10 +109,10 @@ export function WorkLouderCodexKeyboardLayout({
         // The board is a fixed-size object, so it sizes to its keys rather than
         // stretching to whatever container it happens to sit in.
         'flex w-fit flex-col gap-2 rounded-[20px] p-3',
-        'bg-[var(--wl-board)] shadow-[var(--wl-board-shadow)]',
+        'border border-[var(--wl-edge)] bg-[var(--wl-board)] shadow-[var(--wl-board-shadow)]',
       )}
       data-testid="worklouder-codex-keyboard-layout"
-      style={BOARD_TOKENS}
+      style={WORKLOUDER_CODEX_BOARD_TOKENS}
     >
       {/* Row 1 — analog stick, two agent keys, encoder. */}
       <div className="grid grid-cols-[repeat(4,var(--wl-key-size))] gap-2">
@@ -173,13 +173,19 @@ export function WorkLouderCodexKeyboardLayout({
  * command keys with dark ones, and that contrast has to survive in both themes.
  * Routing them through `--surface-*` inverted the board in dark mode, which is
  * exactly backwards from the hardware. Only the shell tracks the app theme.
+ *
+ * Exported so the connection card's thumbnail draws the same device from the
+ * same values instead of keeping its own copy of them.
  */
-const BOARD_TOKENS = {
+export const WORKLOUDER_CODEX_BOARD_TOKENS = {
   // One key tall. Keys are square, so this is their width too; the double-width
   // microphone key spans two columns without getting any taller.
   '--wl-key-size': '64px',
   '--wl-board': 'var(--surface-chip)',
-  '--wl-board-shadow': 'inset 0 0 0 1px var(--border-default)',
+  // The rim reads as the edge of a case: a lit top edge, a shadow under it.
+  '--wl-edge': 'var(--border-default)',
+  '--wl-board-shadow':
+    'inset 0 1px 0 rgb(255 255 255 / 0.06), inset 0 0 0 1px rgb(0 0 0 / 0.12), 0 2px 8px rgb(0 0 0 / 0.22)',
   // Task keys: pale translucent caps, the lightest thing on the board.
   '--wl-agent-cap': 'rgb(214 214 214 / 0.92)',
   '--wl-agent-shadow':
